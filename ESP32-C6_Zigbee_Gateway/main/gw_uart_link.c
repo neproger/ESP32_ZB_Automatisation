@@ -324,7 +324,11 @@ static uint8_t resolve_endpoint_for_cluster(const gw_device_uid_t *uid, uint16_t
     if (!uid || uid->uid[0] == '\0') {
         return 0;
     }
-    gw_zb_endpoint_t eps[GW_ZB_MAX_ENDPOINTS] = {0};
+    gw_zb_endpoint_t *eps = (gw_zb_endpoint_t *)calloc(GW_ZB_MAX_ENDPOINTS, sizeof(gw_zb_endpoint_t));
+    if (!eps) {
+        ESP_LOGW(TAG, "resolve ep: no mem for endpoints uid=%s", uid->uid);
+        return 0;
+    }
     size_t ep_count = gw_zb_model_list_endpoints(uid, eps, GW_ZB_MAX_ENDPOINTS);
     uint8_t selected = 0;
     for (size_t i = 0; i < ep_count; i++) {
@@ -336,6 +340,7 @@ static uint8_t resolve_endpoint_for_cluster(const gw_device_uid_t *uid, uint16_t
     if (selected == 0 && ep_count > 0) {
         selected = eps[0].endpoint;
     }
+    free(eps);
     return selected;
 }
 
@@ -888,7 +893,7 @@ esp_err_t gw_uart_link_start(void)
     if (xTaskCreate(uart_tx_task, "uart_tx", 4096, NULL, 6, &s_tx_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(uart_snapshot_task, "uart_snap", 6144, NULL, 6, &s_snapshot_task) != pdPASS) {
+    if (xTaskCreate(uart_snapshot_task, "uart_snap", 9216, NULL, 6, &s_snapshot_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(uart_rx_task, "uart_rx", 4096, NULL, 6, &s_rx_task) != pdPASS) {
