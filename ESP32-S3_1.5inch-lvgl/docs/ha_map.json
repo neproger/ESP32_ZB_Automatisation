@@ -1,0 +1,43 @@
+{
+  "version": 3,
+  "spaces": [
+    {
+      "id": "kitchen",
+      "title": "Кухня",
+      "devices": [
+        {
+          "id": "kitchen.light",
+          "type": "switch",
+          "name": "Основной свет",
+          "fields": [
+            { "key": "state", "kind": "bool", "default": false },
+            { "key": "brightness", "kind": "int", "min": 0, "max": 255 }
+          ]
+        },
+        {
+          "id": "kitchen.sensor_env",
+          "type": "sensor",
+          "name": "Климат",
+          "fields": [
+            { "key": "temperature", "kind": "float", "unit": "°C" },
+            { "key": "humidity", "kind": "float", "unit": "%" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hallway",
+      "title": "Коридор",
+      "devices": [
+        {
+          "id": "hallway.motion",
+          "type": "sensor",
+          "name": "Датчик движения",
+          "fields": [
+            { "key": "motion", "kind": "bool" }
+          ]
+        }
+      ]
+    }
+  ]
+}

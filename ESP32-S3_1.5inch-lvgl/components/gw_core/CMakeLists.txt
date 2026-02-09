@@ -1,0 +1,30 @@
+idf_component_register(
+    SRCS
+        "src/storage.c"
+        "src/device_storage.c"
+        "src/device_storage_bridge.c"
+        "src/event_bus.c"
+        "src/device_registry.c"
+        "src/automation_store.c"
+        "src/automation_compiled.c"
+        "src/zb_model.c"
+        "src/zb_classify.c"
+        "src/sensor_store.c"
+        "src/state_store.c"
+        "src/runtime_sync.c"
+        "src/rules_engine.c"
+        "src/action_exec.c"
+        "src/cbor.c"
+        "src/gw_uart_proto.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_REQUIRES
+        esp_event
+        esp_timer
+        log
+        nvs_flash
+        spiffs
+        gw_zigbee
+        json
+)
+

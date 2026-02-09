@@ -1,0 +1,30 @@
+menu "GW Zigbee UART Backend"
+
+config GW_ZIGBEE_UART_PORT
+    int "UART port for C6 link"
+    range 0 2
+    default 1
+
+config GW_ZIGBEE_UART_TX_PIN
+    int "UART TX pin (S3 -> C6 RX)"
+    default 39
+
+config GW_ZIGBEE_UART_RX_PIN
+    int "UART RX pin (S3 <- C6 TX)"
+    default 40
+
+config GW_ZIGBEE_UART_BAUD
+    int "UART baudrate"
+    range 9600 2000000
+    default 115200
+
+config GW_ZIGBEE_UART_RSP_TIMEOUT_MS
+    int "Command response timeout (ms)"
+    range 100 10000
+    default 1200
+
+config GW_ZIGBEE_UART_TRACE
+    bool "Enable UART TX/RX trace logs"
+    default n
+
+endmenu

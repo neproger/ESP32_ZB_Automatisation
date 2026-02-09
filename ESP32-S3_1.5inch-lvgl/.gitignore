@@ -1,0 +1,63 @@
+**/node_modules/
+
+# ===== ESP-IDF =====
+# Root build directory
+/build/
+
+# Any nested build directories
+*/build/
+**/build/
+**/managed_components/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/project_description.json
+**/compile_commands.json
+**/sdkconfig.old
+**/sdkconfig.ci.*
+
+# Firmware artifacts
+**/*.bin
+**/*.elf
+**/*.map
+
+# ===== PlatformIO =====
+**/.pio/
+**/.pioenvs/
+**/.piolibdeps/
+**/.gcc-flags.json
+**/.clangd
+
+# ===== Arduino =====
+*.ino.bin
+*.ino.elf
+*.ino.hex
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ===== IDE / Editors =====
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ===== OS files =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Logs / Temp =====
+*.log
+*.tmp
+*.bak
+*.swp

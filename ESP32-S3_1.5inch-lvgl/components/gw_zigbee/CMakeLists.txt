@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/gw_zigbee_uart.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_REQUIRES
+        log
+        esp_timer
+        esp_event
+        driver
+        freertos
+        gw_core
+)

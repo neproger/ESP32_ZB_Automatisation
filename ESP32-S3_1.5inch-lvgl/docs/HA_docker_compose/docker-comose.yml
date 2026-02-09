@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - /opt/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Europe/Almaty
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+      - /dev/ttyUSB0:/dev/ttyUSB0
+
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/homeassistant/mosquitto/config:/mosquitto/config
+      - /opt/homeassistant/mosquitto/data:/mosquitto/data
+      - /opt/homeassistant/mosquitto/log:/mosquitto/log
+
+  nodered:
+    container_name: nodered
+    image: nodered/node-red:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=Europe/Almaty
+    volumes:
+      - /opt/homeassistant/nodered_data:/data
+    user: "1000:1000"

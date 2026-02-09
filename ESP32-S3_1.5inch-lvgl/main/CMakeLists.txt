@@ -1,0 +1,31 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "gw_wifi.c"
+        "devices/devices_init.cpp"
+        "devices/display_init.cpp"
+        "devices/lvgl_init.cpp"
+        "devices/input_init.cpp"
+        "devices/touch_init.cpp"
+        "ui/ui_app.cpp"
+    INCLUDE_DIRS
+        "."
+        "devices"
+        "ui"
+    REQUIRES
+        freertos
+        esp_timer
+        driver
+        esp_lcd
+        esp_lcd_touch
+        espressif__esp_lcd_touch_cst816s
+        esp_lcd_sh8601
+        esp_lvgl_port
+        esp_wifi
+        esp_netif
+        esp_event
+        nvs_flash
+        gw_core
+        gw_http
+        gw_zigbee
+)
