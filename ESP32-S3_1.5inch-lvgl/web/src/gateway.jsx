@@ -54,6 +54,8 @@ export function GatewayProvider({ children }) {
 
 	const wsRef = useRef(null)
 	const reconnectTimerRef = useRef(null)
+	const devicesReloadTimerRef = useRef(null)
+	const automationsReloadTimerRef = useRef(null)
 
 	const applyDeviceList = useCallback((list) => {
 		const safeList = Array.isArray(list) ? list : []
@@ -158,6 +160,20 @@ export function GatewayProvider({ children }) {
 							},
 						}))
 					}
+					if (type === 'gateway.event') {
+						const evType = String(data?.event_type ?? '')
+						if (evType === 'device.changed') {
+							if (devicesReloadTimerRef.current) clearTimeout(devicesReloadTimerRef.current)
+							devicesReloadTimerRef.current = setTimeout(() => {
+								loadDevices().catch(() => {})
+							}, 250)
+						} else if (evType === 'automation.changed') {
+							if (automationsReloadTimerRef.current) clearTimeout(automationsReloadTimerRef.current)
+							automationsReloadTimerRef.current = setTimeout(() => {
+								loadAutomations().catch(() => {})
+							}, 250)
+						}
+					}
 				} catch {
 					// ignore parse errors
 				}
@@ -180,9 +196,17 @@ export function GatewayProvider({ children }) {
 		return () => {
 			cancelled = true
 			cleanup()
+			if (devicesReloadTimerRef.current) {
+				clearTimeout(devicesReloadTimerRef.current)
+				devicesReloadTimerRef.current = null
+			}
+			if (automationsReloadTimerRef.current) {
+				clearTimeout(automationsReloadTimerRef.current)
+				automationsReloadTimerRef.current = null
+			}
 			setWsStatus('disconnected')
 		}
-	}, [])
+	}, [loadAutomations, loadDevices])
 
 	useEffect(() => {
 		loadAutomations().catch(() => {})

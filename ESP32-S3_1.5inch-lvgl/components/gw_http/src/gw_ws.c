@@ -371,7 +371,7 @@ static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
         data_kind = DATA_DEVICE_EVENT;
         device_event_name = "leave";
     } else if (strncmp(e->type, "zigbee.", 7) == 0 || strncmp(e->type, "zigbee_", 7) == 0 ||
-               strncmp(e->type, "device.", 7) == 0) {
+               strncmp(e->type, "device.", 7) == 0 || strncmp(e->type, "automation.", 11) == 0) {
         out_type = "gateway.event";
         data_kind = DATA_GENERIC;
     } else {

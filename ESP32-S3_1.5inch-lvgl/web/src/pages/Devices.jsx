@@ -60,13 +60,12 @@ export default function Devices() {
 			setStatus(kick ? 'Removing + kicking...' : 'Removing...')
 			try {
 				await postCbor('/api/devices/remove', { device_uid: u, kick: Boolean(kick) })
-				await loadDevices()
-				setStatus(kick ? 'Removed + kick requested' : 'Removed')
+				setStatus(kick ? 'Removed + kick requested (waiting WS sync)' : 'Removed (waiting WS sync)')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
 		},
-		[loadDevices],
+		[],
 	)
 
 	const renameDevice = useCallback(
@@ -79,13 +78,12 @@ export default function Devices() {
 			setStatus('Renaming...')
 			try {
 				await postCbor('/api/devices', { device_uid: u, name: String(next) })
-				await loadDevices()
-				setStatus('Renamed')
+				setStatus('Renamed (waiting WS sync)')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
 		},
-		[loadDevices],
+		[],
 	)
 
 	return (

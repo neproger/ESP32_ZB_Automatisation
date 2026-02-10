@@ -994,12 +994,11 @@ export default function Automations() {
 			const enabled = Boolean(draft?.enabled)
 			console.log('Saving automation', { id, name, enabled, draft })
 			await postCbor('/api/automations', { id, name, enabled, automation: draft })
-			await load()
-			setDraftStatus('Saved')
+			setDraftStatus('Saved (waiting WS sync)')
 		} catch (e) {
 			setDraftStatus(String(e?.message ?? e))
 		}
-	}, [draft, load])
+	}, [draft, validateDraft])
 
 	const testActions = useCallback(async () => {
 		if (!draft) return
@@ -1022,7 +1021,7 @@ export default function Automations() {
 			const id = String(a?.id ?? '')
 			if (!id) return
 			await patchCbor(`/api/automations/${encodeURIComponent(id)}`, { enabled: !Boolean(a?.enabled) })
-			await load()
+			setStatus('Updated (waiting WS sync)')
 		} catch (e) {
 			setStatus(String(e?.message ?? e))
 		}
@@ -1035,7 +1034,7 @@ export default function Automations() {
 		setStatus('')
 		try {
 			await deleteCbor(`/api/automations/${encodeURIComponent(id)}`)
-			await load()
+			setStatus('Removed (waiting WS sync)')
 			if (String(draft?.id ?? '') === id) setDraft(null)
 		} catch (e) {
 			setStatus(String(e?.message ?? e))

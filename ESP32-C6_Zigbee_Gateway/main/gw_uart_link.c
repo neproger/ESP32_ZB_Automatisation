@@ -828,6 +828,18 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
         case GW_UART_CMD_SYNC_DEVICE_FB:
             device_fb_request_async();
             return ESP_OK;
+        case GW_UART_CMD_SET_DEVICE_NAME: {
+            if (!has_uid) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            char name_buf[sizeof(req->value_text)] = {0};
+            strlcpy(name_buf, req->value_text, sizeof(name_buf));
+            esp_err_t err = gw_device_registry_set_name(&uid, name_buf);
+            if (err == ESP_OK) {
+                device_fb_request_async();
+            }
+            return err;
+        }
 
         default:
             return ESP_ERR_NOT_SUPPORTED;

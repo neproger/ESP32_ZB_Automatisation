@@ -182,6 +182,8 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "SYNC_SNAPSHOT";
         case GW_UART_CMD_SYNC_DEVICE_FB:
             return "SYNC_DEVICE_FB";
+        case GW_UART_CMD_SET_DEVICE_NAME:
+            return "SET_DEVICE_NAME";
         default:
             return "UNKNOWN";
     }
@@ -941,6 +943,18 @@ esp_err_t gw_zigbee_sync_device_fb(void)
         return err;
     }
     return request_device_fb_sync();
+}
+
+esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name)
+{
+    if (!uid || !uid->uid[0] || !name) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_SET_DEVICE_NAME;
+    fill_uid(req.device_uid, uid);
+    strlcpy(req.value_text, name, sizeof(req.value_text));
+    return send_cmd_wait_rsp(&req);
 }
 
 esp_err_t gw_zigbee_permit_join(uint8_t seconds)
