@@ -1,6 +1,7 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage_bridge.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 esp_err_t gw_device_registry_init(void)
@@ -15,6 +16,11 @@ esp_err_t gw_device_registry_upsert(const gw_device_t *device)
     }
 
     gw_device_full_t full_device = {0};
+    gw_device_full_t existing = {0};
+    if (gw_device_storage_get(&device->device_uid, &existing) == ESP_OK) {
+        full_device.endpoint_count = existing.endpoint_count;
+        memcpy(full_device.endpoints, existing.endpoints, sizeof(full_device.endpoints));
+    }
     full_device.device_uid = device->device_uid;
     full_device.short_addr = device->short_addr;
     strlcpy(full_device.name, device->name, sizeof(full_device.name));
@@ -60,7 +66,12 @@ size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
     if (!out_devices || max_devices == 0) {
         return 0;
     }
-    gw_device_full_t full_devices[GW_DEVICE_MAX_DEVICES];
+
+    gw_device_full_t *full_devices = (gw_device_full_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_full_t));
+    if (!full_devices) {
+        return 0;
+    }
+
     size_t count = gw_device_storage_list(full_devices, GW_DEVICE_MAX_DEVICES);
     if (count > max_devices) {
         count = max_devices;
@@ -73,6 +84,7 @@ size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
         out_devices[i].has_onoff = full_devices[i].has_onoff;
         out_devices[i].has_button = full_devices[i].has_button;
     }
+    free(full_devices);
     return count;
 }
 

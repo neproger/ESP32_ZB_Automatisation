@@ -19,7 +19,6 @@
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
 #include "gw_core/zb_classify.h"
-#include "gw_core/zb_model.h"
 #include "gw_zigbee/gw_zigbee.h"
 
 
@@ -272,7 +271,7 @@ static esp_err_t cbor_write_endpoints(gw_cbor_writer_t *w, const gw_device_uid_t
         return ESP_ERR_NO_MEM;
     }
 
-    size_t count = gw_zb_model_list_endpoints(uid, eps, max_eps);
+    size_t count = gw_device_registry_list_endpoints(uid, eps, max_eps);
     esp_err_t rc = gw_cbor_writer_array(w, count);
     if (rc != ESP_OK) {
         free(eps);

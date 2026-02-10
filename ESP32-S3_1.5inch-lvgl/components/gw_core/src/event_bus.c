@@ -42,7 +42,13 @@ static bool event_should_go_to_out_queue(const char *type)
     if (strcmp(type, "device.join") == 0 || strcmp(type, "device.leave") == 0) {
         return true;
     }
+    if (strcmp(type, "device.changed") == 0 || strcmp(type, "automation.changed") == 0) {
+        return true;
+    }
     if (strncmp(type, "zigbee.", 7) == 0 || strncmp(type, "zigbee_", 7) == 0) {
+        return true;
+    }
+    if (strncmp(type, "automation.", 11) == 0) {
         return true;
     }
     return false;
@@ -234,9 +240,34 @@ static void gw_event_bus_publish_internal(const char *type,
     }
 
     // Duplicate event log + ring insert for UI/debugging (async when possible).
-    if (s_out_q && event_should_go_to_out_queue(e.type) && xQueueSend(s_out_q, &e, 0) == pdTRUE) {
-        return;
+    bool route_to_ws = event_should_go_to_out_queue(e.type);
+    if (s_out_q && route_to_ws) {
+        if (xQueueSend(s_out_q, &e, 0) == pdTRUE) {
+            ESP_LOGI(TAG,
+                     "pub id=%u type=%s src=%s uid=%s short=0x%04x ws=1",
+                     (unsigned)e.id,
+                     e.type,
+                     e.source,
+                     e.device_uid,
+                     (unsigned)e.short_addr);
+            return;
+        }
+        ESP_LOGW(TAG,
+                 "pub id=%u type=%s src=%s uid=%s short=0x%04x ws_drop=1",
+                 (unsigned)e.id,
+                 e.type,
+                 e.source,
+                 e.device_uid,
+                 (unsigned)e.short_addr);
     }
+
+    ESP_LOGI(TAG,
+             "pub id=%u type=%s src=%s uid=%s short=0x%04x ws=0",
+             (unsigned)e.id,
+             e.type,
+             e.source,
+             e.device_uid,
+             (unsigned)e.short_addr);
 
     gw_event_bus_record_event(&e);
 }

@@ -25,7 +25,8 @@ esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *na
 esp_err_t gw_device_registry_remove(const gw_device_uid_t *uid);
 size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices);
 
-// Endpoint helpers backed by live zb_model.
+// Endpoint helpers backed by persisted storage.
+// `sync_endpoints` merges latest data from live zb_model into storage.
 esp_err_t gw_device_registry_sync_endpoints(const gw_device_uid_t *uid);
 size_t gw_device_registry_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps);
 

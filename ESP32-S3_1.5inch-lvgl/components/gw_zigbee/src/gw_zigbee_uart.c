@@ -508,6 +508,7 @@ static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch
         if (s_device_fb_received_len == s_device_fb_expected_len) {
             (void)gw_device_fb_store_set(s_device_fb_buf, s_device_fb_expected_len);
             ESP_LOGI(TAG, "device fb updated: %u bytes", (unsigned)s_device_fb_expected_len);
+            gw_event_bus_publish("device.changed", "zigbee-uart", "", 0, "device_fb_updated");
         } else {
             ESP_LOGW(TAG,
                      "device fb incomplete: recv=%u expected=%u",
