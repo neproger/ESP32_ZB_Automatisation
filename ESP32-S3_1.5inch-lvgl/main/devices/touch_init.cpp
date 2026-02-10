@@ -81,7 +81,7 @@ esp_err_t devices_touch_init(esp_lcd_touch_handle_t *out_handle)
     tp_cfg.flags.mirror_y = 0;
 
 #ifdef ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG
-    // Keep config compatible with legacy i2c_lcd path: do not set scl_speed_hz here.
+    // Keep I2C settings aligned with current display/touch stack.
     const esp_lcd_panel_io_i2c_config_t tp_io_config = {
         .dev_addr = ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS,
         .on_color_trans_done = NULL,

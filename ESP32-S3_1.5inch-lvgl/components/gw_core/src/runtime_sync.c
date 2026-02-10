@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -383,12 +384,16 @@ esp_err_t gw_runtime_sync_init(void)
 esp_err_t gw_runtime_sync_snapshot_begin(uint16_t total_devices)
 {
     (void)total_devices;
-    gw_device_t devices[GW_DEVICE_MAX_DEVICES] = {0};
+    gw_device_t *devices = (gw_device_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_t));
+    if (!devices) {
+        return ESP_ERR_NO_MEM;
+    }
     size_t count = gw_device_registry_list(devices, GW_DEVICE_MAX_DEVICES);
     s_snapshot_stale_count = 0;
     for (size_t i = 0; i < count && s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES; i++) {
         s_snapshot_stale[s_snapshot_stale_count++] = devices[i].device_uid;
     }
+    free(devices);
     s_snapshot_active = true;
     ESP_LOGI(TAG, "snapshot begin (stale candidates=%u)", (unsigned)s_snapshot_stale_count);
     return ESP_OK;

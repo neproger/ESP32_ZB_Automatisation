@@ -39,6 +39,10 @@
   margin: 0 auto;
 }
 
+.page {
+  padding: 16px;
+}
+
 .page h1 {
   margin: 0 0 4px;
   font-size: 20px;
@@ -143,7 +147,7 @@ code {
   align-items: flex-start;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .content {
     padding: 12px;
   }
