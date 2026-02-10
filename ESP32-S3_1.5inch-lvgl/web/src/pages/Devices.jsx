@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { postCbor } from '../api.js'
 import { useGateway } from '../gateway.jsx'
 
@@ -87,10 +87,6 @@ export default function Devices() {
 		},
 		[loadDevices],
 	)
-
-	useEffect(() => {
-		loadDevices()
-	}, [loadDevices])
 
 	return (
 		<div className="page">

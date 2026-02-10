@@ -10,6 +10,13 @@ static bool rd_has(const gw_cbor_reader_t *r, size_t n)
     return r && (size_t)(r->end - r->p) >= n;
 }
 
+static bool rd_peek_u8(const gw_cbor_reader_t *r, uint8_t *out)
+{
+    if (!r || !out || !rd_has(r, 1)) return false;
+    *out = *r->p;
+    return true;
+}
+
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((p[0] << 8) | p[1]); }
 static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
 static uint64_t be64(const uint8_t *p) { return ((uint64_t)be32(p) << 32) | (uint64_t)be32(p + 4); }
@@ -31,6 +38,10 @@ bool gw_cbor_read_u8(gw_cbor_reader_t *r, uint8_t *out)
 bool gw_cbor_read_uint_arg(gw_cbor_reader_t *r, uint8_t ai, uint64_t *out)
 {
     if (!r || !out) return false;
+    if (ai == 31) {
+        // Indefinite-length marker. Caller must handle it explicitly.
+        return false;
+    }
     if (ai < 24) {
         *out = ai;
         return true;
@@ -59,7 +70,7 @@ bool gw_cbor_read_uint_arg(gw_cbor_reader_t *r, uint8_t ai, uint64_t *out)
         r->p += 8;
         return true;
     }
-    return false; // 31 = indefinite length (not supported)
+    return false;
 }
 
 bool gw_cbor_read_text_span(gw_cbor_reader_t *r, uint8_t ai, const uint8_t **out_ptr, size_t *out_len)
@@ -86,6 +97,26 @@ bool gw_cbor_skip_item(gw_cbor_reader_t *r)
         return gw_cbor_read_uint_arg(r, ai, &tmp);
     }
     if (major == 2 || major == 3) {
+        if (ai == 31) {
+            // Indefinite bytes/text: sequence of definite chunks terminated by break(0xff).
+            for (;;) {
+                uint8_t pb = 0;
+                if (!rd_peek_u8(r, &pb)) return false;
+                if (pb == 0xff) {
+                    r->p++; // consume break
+                    return true;
+                }
+                uint8_t cib = 0;
+                if (!gw_cbor_read_u8(r, &cib)) return false;
+                const uint8_t cmajor = (uint8_t)(cib >> 5);
+                const uint8_t cai = (uint8_t)(cib & 0x1f);
+                if (cmajor != major || cai == 31) return false;
+                uint64_t n = 0;
+                if (!gw_cbor_read_uint_arg(r, cai, &n)) return false;
+                if (!rd_has(r, (size_t)n)) return false;
+                r->p += (size_t)n;
+            }
+        }
         uint64_t n = 0;
         if (!gw_cbor_read_uint_arg(r, ai, &n)) return false;
         if (!rd_has(r, (size_t)n)) return false;
@@ -93,6 +124,17 @@ bool gw_cbor_skip_item(gw_cbor_reader_t *r)
         return true;
     }
     if (major == 4) {
+        if (ai == 31) {
+            for (;;) {
+                uint8_t pb = 0;
+                if (!rd_peek_u8(r, &pb)) return false;
+                if (pb == 0xff) {
+                    r->p++; // consume break
+                    return true;
+                }
+                if (!gw_cbor_skip_item(r)) return false;
+            }
+        }
         uint64_t n = 0;
         if (!gw_cbor_read_uint_arg(r, ai, &n)) return false;
         for (uint64_t i = 0; i < n; i++) {
@@ -101,6 +143,18 @@ bool gw_cbor_skip_item(gw_cbor_reader_t *r)
         return true;
     }
     if (major == 5) {
+        if (ai == 31) {
+            for (;;) {
+                uint8_t pb = 0;
+                if (!rd_peek_u8(r, &pb)) return false;
+                if (pb == 0xff) {
+                    r->p++; // consume break
+                    return true;
+                }
+                if (!gw_cbor_skip_item(r)) return false; // key
+                if (!gw_cbor_skip_item(r)) return false; // value
+            }
+        }
         uint64_t n = 0;
         if (!gw_cbor_read_uint_arg(r, ai, &n)) return false;
         for (uint64_t i = 0; i < n * 2; i++) {
@@ -128,8 +182,13 @@ bool gw_cbor_top_is_map(const uint8_t *buf, size_t len, uint64_t *out_pairs)
     uint8_t ib = 0;
     if (!gw_cbor_read_u8(&r, &ib)) return false;
     if ((ib >> 5) != 5) return false;
+    const uint8_t ai = (uint8_t)(ib & 0x1f);
     uint64_t pairs = 0;
-    if (!gw_cbor_read_uint_arg(&r, (uint8_t)(ib & 0x1f), &pairs)) return false;
+    if (ai == 31) {
+        pairs = UINT64_MAX; // indefinite map
+    } else if (!gw_cbor_read_uint_arg(&r, ai, &pairs)) {
+        return false;
+    }
     if (out_pairs) *out_pairs = pairs;
     return true;
 }
@@ -155,11 +214,21 @@ bool gw_cbor_map_find(const uint8_t *buf, size_t len, const char *key, gw_cbor_s
     if (!gw_cbor_read_u8(&r, &ib)) return false;
     if ((ib >> 5) != 5) return false;
 
+    const uint8_t ai = (uint8_t)(ib & 0x1f);
+    const bool indefinite = (ai == 31);
     uint64_t pairs = 0;
-    if (!gw_cbor_read_uint_arg(&r, (uint8_t)(ib & 0x1f), &pairs)) return false;
+    if (!indefinite && !gw_cbor_read_uint_arg(&r, ai, &pairs)) return false;
 
     const size_t key_len = strlen(key);
-    for (uint64_t i = 0; i < pairs; i++) {
+    for (uint64_t i = 0; indefinite || i < pairs; i++) {
+        if (indefinite) {
+            uint8_t pb = 0;
+            if (!rd_peek_u8(&r, &pb)) return false;
+            if (pb == 0xff) {
+                r.p++; // consume break
+                return false;
+            }
+        }
         // key
         uint8_t kb = 0;
         if (!gw_cbor_read_u8(&r, &kb)) return false;

@@ -3,6 +3,7 @@ idf_component_register(
         "src/storage.c"
         "src/device_storage.c"
         "src/device_storage_bridge.c"
+        "src/device_fb_store.c"
         "src/event_bus.c"
         "src/device_registry.c"
         "src/automation_store.c"

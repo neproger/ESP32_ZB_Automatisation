@@ -7,6 +7,7 @@ idf_component_register(
         "include"
     PRIV_REQUIRES
         esp_http_server
+        esp_timer
         json
         log
         spiffs

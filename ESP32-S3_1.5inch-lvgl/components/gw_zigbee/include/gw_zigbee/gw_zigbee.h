@@ -35,6 +35,8 @@ typedef struct {
 
 // Initialize/start UART link to C6 explicitly (optional, can also start lazily on first command).
 esp_err_t gw_zigbee_link_start(void);
+// Request fresh device FlatBuffer snapshot from C6.
+esp_err_t gw_zigbee_sync_device_fb(void);
 
 // Allow new devices to join the network for `seconds`.
 esp_err_t gw_zigbee_permit_join(uint8_t seconds);

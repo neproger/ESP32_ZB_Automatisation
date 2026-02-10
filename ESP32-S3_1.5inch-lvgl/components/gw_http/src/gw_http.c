@@ -8,6 +8,7 @@
 #include <sys/types.h>
 
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
 
@@ -179,7 +180,9 @@ esp_err_t gw_http_start(void)
     // REST + WS + SPA assets can easily exceed the default handler slots.
     config.max_uri_handlers = 18;
     // WS/events and CBOR encoding can be stack-hungry in the httpd task.
-    config.stack_size = 8192;
+    config.stack_size = 6144;
+    // HTTPD handles SPIFFS/NVS paths; its stack must stay in internal RAM
+    // because flash operations can run with cache disabled.
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     s_server_port = config.server_port;
 
@@ -203,10 +206,43 @@ esp_err_t gw_http_start(void)
         .user_ctx = NULL,
     };
 
-    ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &index_uri));
-    ESP_ERROR_CHECK(gw_http_register_rest_endpoints(s_server));
-    ESP_ERROR_CHECK(gw_ws_register(s_server));
-    ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &static_uri));
+    err = httpd_register_uri_handler(s_server, &index_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register index uri failed: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        s_server_port = 0;
+        return err;
+    }
+
+    err = gw_http_register_rest_endpoints(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register REST endpoints failed: %s", esp_err_to_name(err));
+        httpd_stop(s_server);
+        s_server = NULL;
+        s_server_port = 0;
+        return err;
+    }
+
+    ESP_LOGI(TAG,
+             "Heap before WS register: internal=%u dma=%u psram=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    err = gw_ws_register(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "WebSocket disabled due to init failure: %s", esp_err_to_name(err));
+    }
+
+    err = httpd_register_uri_handler(s_server, &static_uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register static uri failed: %s", esp_err_to_name(err));
+        gw_ws_unregister();
+        httpd_stop(s_server);
+        s_server = NULL;
+        s_server_port = 0;
+        return err;
+    }
 
     if (s_server_port != 0) {
         ESP_LOGI(TAG, "HTTP server started (port %u)", (unsigned)s_server_port);

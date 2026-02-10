@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
@@ -31,12 +32,14 @@ typedef struct {
 static httpd_handle_t s_server;
 static portMUX_TYPE s_client_lock = portMUX_INITIALIZER_UNLOCKED;
 
-#define GW_WS_MAX_CLIENTS 8
-#define GW_WS_EVENT_Q_CAP 32
+#define GW_WS_MAX_CLIENTS 4
+#define GW_WS_EVENT_Q_CAP 8
 #define GW_WS_EVENT_TASK_PRIO 2
+#define GW_WS_EVENT_TASK_STACK 2560
 static gw_ws_client_t s_clients[GW_WS_MAX_CLIENTS];
 static QueueHandle_t s_event_q;
 static TaskHandle_t s_event_task;
+static bool s_event_q_caps_alloc;
 
 static void ws_refresh_out_queue_binding(void)
 {
@@ -104,7 +107,10 @@ static bool cbor_wr_reserve(cbor_wr_t *w, size_t add)
     if (w->len + add <= w->cap) return true;
     size_t new_cap = w->cap ? w->cap : 128;
     while (new_cap < w->len + add) new_cap *= 2;
-    uint8_t *nb = (uint8_t *)realloc(w->buf, new_cap);
+    uint8_t *nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!nb) {
+        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_8BIT);
+    }
     if (!nb) return false;
     w->buf = nb;
     w->cap = new_cap;
@@ -209,7 +215,10 @@ static esp_err_t ws_send_cbor_async(int fd, const uint8_t *buf, size_t len)
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t *copy = (uint8_t *)malloc(len);
+    uint8_t *copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_8BIT);
+    }
     if (!copy) return ESP_ERR_NO_MEM;
     memcpy(copy, buf, len);
 
@@ -522,7 +531,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
     if (frame.len > 0) {
-        uint8_t *buf = (uint8_t *)malloc(frame.len);
+        uint8_t *buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buf) {
+            buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_8BIT);
+        }
         if (!buf) return ESP_ERR_NO_MEM;
         frame.payload = buf;
         err = httpd_ws_recv_frame(req, &frame, frame.len);
@@ -539,14 +551,25 @@ esp_err_t gw_ws_register(httpd_handle_t server)
 
     s_server = server;
     memset(s_clients, 0, sizeof(s_clients));
-    s_event_q = xQueueCreate(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t));
+    s_event_q_caps_alloc = false;
+    s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_event_q) {
+        s_event_q = xQueueCreate(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t));
+    } else {
+        s_event_q_caps_alloc = true;
+    }
     if (!s_event_q) {
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreateWithCaps(ws_event_task_fn, "ws_events", 3072, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        vQueueDelete(s_event_q);
+    if (xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        if (s_event_q_caps_alloc) {
+            vQueueDeleteWithCaps(s_event_q);
+        } else {
+            vQueueDelete(s_event_q);
+        }
         s_event_q = NULL;
+        s_event_q_caps_alloc = false;
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -564,8 +587,13 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     if (err != ESP_OK) {
         vTaskDelete(s_event_task);
         s_event_task = NULL;
-        vQueueDelete(s_event_q);
+        if (s_event_q_caps_alloc) {
+            vQueueDeleteWithCaps(s_event_q);
+        } else {
+            vQueueDelete(s_event_q);
+        }
         s_event_q = NULL;
+        s_event_q_caps_alloc = false;
         s_server = NULL;
         return err;
     }
@@ -588,8 +616,13 @@ void gw_ws_unregister(void)
         s_event_task = NULL;
     }
     if (s_event_q) {
-        vQueueDelete(s_event_q);
+        if (s_event_q_caps_alloc) {
+            vQueueDeleteWithCaps(s_event_q);
+        } else {
+            vQueueDelete(s_event_q);
+        }
         s_event_q = NULL;
+        s_event_q_caps_alloc = false;
     }
     s_server = NULL;
 }

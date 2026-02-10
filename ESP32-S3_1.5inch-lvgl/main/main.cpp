@@ -5,6 +5,7 @@
 #include "gw_http/gw_http.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/device_registry.h"
+#include "gw_core/device_fb_store.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
@@ -66,24 +67,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(gw_event_bus_init());
-    ESP_ERROR_CHECK(gw_zb_model_init());
-    ESP_ERROR_CHECK(gw_sensor_store_init());
-    ESP_ERROR_CHECK(gw_state_store_init());
-    ESP_ERROR_CHECK(gw_device_registry_init());
-    ESP_ERROR_CHECK(gw_automation_store_init());
-    ESP_ERROR_CHECK(gw_rules_init());
-    ESP_ERROR_CHECK(gw_runtime_sync_init());
-
-    esp_err_t zb_link_err = gw_zigbee_link_start();
-    if (zb_link_err != ESP_OK) {
-        ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
-    }
-
-    xTaskCreateWithCaps(wifi_connect_task, "wifi_connect", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
-    ESP_ERROR_CHECK(gw_http_start());
-
+    // Bring up display/LVGL first while internal + DMA-capable heap is still mostly free.
     esp_err_t err = devices_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG_APP, "Devices init failed: %s", esp_err_to_name(err));
@@ -91,6 +75,27 @@ extern "C" void app_main(void)
         ui_app_init();
         ESP_LOGI(TAG_APP, "UI started (display + touch + encoder + button)");
     }
+
+    ESP_ERROR_CHECK(gw_event_bus_init());
+    ESP_ERROR_CHECK(gw_zb_model_init());
+    ESP_ERROR_CHECK(gw_sensor_store_init());
+    ESP_ERROR_CHECK(gw_state_store_init());
+    ESP_ERROR_CHECK(gw_device_registry_init());
+    ESP_ERROR_CHECK(gw_device_fb_store_init());
+    ESP_ERROR_CHECK(gw_automation_store_init());
+    ESP_ERROR_CHECK(gw_rules_init());
+    ESP_ERROR_CHECK(gw_runtime_sync_init());
+
+    // Start network/backend after LVGL allocation to avoid DMA starvation on S3.
+    xTaskCreateWithCaps(wifi_connect_task, "wifi_connect", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    esp_err_t zb_link_err = gw_zigbee_link_start();
+    if (zb_link_err != ESP_OK) {
+        ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
+    }
+
+    ESP_ERROR_CHECK(gw_http_start());
+
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

@@ -29,7 +29,32 @@ function readArg(dv, st, ai) {
 		st.o += 8
 		return v
 	}
-	throw new Error('indefinite not supported')
+	if (ai === 31) {
+		return null
+	}
+	throw new Error('unsupported additional info')
+}
+
+function isBreakByte(dv, st) {
+	return st.o < dv.byteLength && dv.getUint8(st.o) === 0xff
+}
+
+function readDefiniteBytes(dv, st, n) {
+	const bytes = new Uint8Array(dv.buffer, dv.byteOffset + st.o, n)
+	st.o += n
+	return bytes
+}
+
+function concatUint8(chunks) {
+	let total = 0
+	for (const c of chunks) total += c.byteLength
+	const out = new Uint8Array(total)
+	let off = 0
+	for (const c of chunks) {
+		out.set(c, off)
+		off += c.byteLength
+	}
+	return out
 }
 
 function decodeItem(dv, st) {
@@ -47,19 +72,67 @@ function decodeItem(dv, st) {
 		const u = readArg(dv, st, ai)
 		return -1 - Number(u)
 	}
-	if (major === 3) {
+	if (major === 2) {
+		if (ai === 31) {
+			const chunks = []
+			while (!isBreakByte(dv, st)) {
+				const hb = dv.getUint8(st.o)
+				const hm = hb >> 5
+				const hai = hb & 0x1f
+				if (hm !== 2 || hai === 31) throw new Error('invalid indefinite bytes chunk')
+				st.o += 1
+				const n = Number(readArg(dv, st, hai))
+				chunks.push(readDefiniteBytes(dv, st, n))
+			}
+			st.o += 1 // break
+			return concatUint8(chunks)
+		}
 		const n = Number(readArg(dv, st, ai))
-		const bytes = new Uint8Array(dv.buffer, dv.byteOffset + st.o, n)
-		st.o += n
+		return readDefiniteBytes(dv, st, n)
+	}
+	if (major === 3) {
+		if (ai === 31) {
+			let s = ''
+			while (!isBreakByte(dv, st)) {
+				const hb = dv.getUint8(st.o)
+				const hm = hb >> 5
+				const hai = hb & 0x1f
+				if (hm !== 3 || hai === 31) throw new Error('invalid indefinite text chunk')
+				st.o += 1
+				const n = Number(readArg(dv, st, hai))
+				const bytes = readDefiniteBytes(dv, st, n)
+				s += new TextDecoder().decode(bytes)
+			}
+			st.o += 1 // break
+			return s
+		}
+		const n = Number(readArg(dv, st, ai))
+		const bytes = readDefiniteBytes(dv, st, n)
 		return new TextDecoder().decode(bytes)
 	}
 	if (major === 4) {
+		if (ai === 31) {
+			const arr = []
+			while (!isBreakByte(dv, st)) arr.push(decodeItem(dv, st))
+			st.o += 1 // break
+			return arr
+		}
 		const n = Number(readArg(dv, st, ai))
 		const arr = new Array(n)
 		for (let i = 0; i < n; i++) arr[i] = decodeItem(dv, st)
 		return arr
 	}
 	if (major === 5) {
+		if (ai === 31) {
+			const obj = {}
+			while (!isBreakByte(dv, st)) {
+				const k = decodeItem(dv, st)
+				const v = decodeItem(dv, st)
+				obj[String(k)] = v
+			}
+			st.o += 1 // break
+			return obj
+		}
 		const n = Number(readArg(dv, st, ai))
 		const obj = {}
 		for (let i = 0; i < n; i++) {
@@ -70,6 +143,7 @@ function decodeItem(dv, st) {
 		return obj
 	}
 	if (major === 7) {
+		if (ai === 31) throw new Error('unexpected break')
 		if (ai === 20) return false
 		if (ai === 21) return true
 		if (ai === 22) return null

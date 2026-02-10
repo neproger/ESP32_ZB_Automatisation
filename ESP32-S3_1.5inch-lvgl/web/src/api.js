@@ -19,6 +19,13 @@ async function handleResponse(res, method, path) {
 	return cborDecode(buf)
 }
 
+async function throwHttpError(res, method, path) {
+	const ct = String(res.headers.get('content-type') ?? '')
+	const details = ct.includes('text/') || ct.includes('application/json') ? await res.text() : ''
+	const suffix = details ? ` ${details.trim()}` : ''
+	throw new Error(`${method} ${path} failed: ${res.status}${suffix}`)
+}
+
 export async function fetchCbor(path, options = {}) {
 	const method = String(options.method ?? 'GET').toUpperCase()
 	const res = await fetch(path, {
@@ -29,6 +36,15 @@ export async function fetchCbor(path, options = {}) {
 		},
 	})
 	return handleResponse(res, method, path)
+}
+
+export async function fetchBinary(path, options = {}) {
+	const method = String(options.method ?? 'GET').toUpperCase()
+	const res = await fetch(path, options)
+	if (!res.ok) {
+		await throwHttpError(res, method, path)
+	}
+	return res.arrayBuffer()
 }
 
 function buildOptions(method, body, overrides = {}) {

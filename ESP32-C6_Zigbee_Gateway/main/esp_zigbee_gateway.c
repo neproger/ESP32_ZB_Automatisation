@@ -659,6 +659,11 @@ static void esp_zb_task(void *pvParameters)
 
 void app_main(void)
 {
+    // Keep runtime logging moderate for stable UART timings under load.
+    esp_log_level_set("gw_uart", ESP_LOG_INFO);
+    esp_log_level_set("gw_zigbee", ESP_LOG_INFO);
+    esp_log_level_set("ESP_ZB_GATEWAY", ESP_LOG_INFO);
+
     esp_zb_platform_config_t config = {
         .radio_config = ESP_ZB_DEFAULT_RADIO_CONFIG(),
         .host_config = ESP_ZB_DEFAULT_HOST_CONFIG(),
@@ -679,7 +684,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_zb_gateway_console_init());
 #endif
     xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, GW_TASK_PRIO_ZIGBEE, NULL);
-    xTaskCreate(gw_log_heap_task, "heap_log", 2048, NULL, 1, NULL);
+    // Logging path (vfprintf) can consume notable stack on C6, keep a safer margin.
+    xTaskCreate(gw_log_heap_task, "heap_log", 4096, NULL, 1, NULL);
 }
 
 

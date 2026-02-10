@@ -33,7 +33,7 @@
 
 .content {
   flex: 1;
-  padding: 16px;
+  /* padding: 16px; */
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
@@ -75,7 +75,7 @@
 }
 
 .card.scroll {
-  max-height: 90vh;
+  max-height: 76vh;
   overflow: auto;
 }
 

@@ -6,7 +6,9 @@
 
 #include "driver/uart.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/semphr.h"
@@ -14,6 +16,7 @@
 
 #include "gw_core/event_bus.h"
 #include "gw_core/gw_uart_proto.h"
+#include "gw_core/device_fb_store.h"
 #include "gw_core/runtime_sync.h"
 
 static const char *TAG = "gw_zigbee_uart";
@@ -30,17 +33,27 @@ static const char *TAG = "gw_zigbee_uart";
 #define GW_UART_TX_PIN         CONFIG_GW_ZIGBEE_UART_TX_PIN
 #define GW_UART_RX_PIN         CONFIG_GW_ZIGBEE_UART_RX_PIN
 #define GW_UART_BAUD           CONFIG_GW_ZIGBEE_UART_BAUD
+#if CONFIG_GW_ZIGBEE_UART_RSP_TIMEOUT_MS < 2500
+#define GW_UART_RESP_TIMEOUTMS 2500
+#else
 #define GW_UART_RESP_TIMEOUTMS CONFIG_GW_ZIGBEE_UART_RSP_TIMEOUT_MS
-#define GW_UART_RX_BUF_SIZE    1024
-#define GW_UART_TX_BUF_SIZE    1024
+#endif
+#define GW_UART_RX_BUF_SIZE    2048
+#define GW_UART_TX_BUF_SIZE    2048
 #define GW_UART_EVT_Q_LEN      8
 #define GW_UART_RX_TASK_STACK  8192
+#define GW_SNAPSHOT_IDLE_TIMEOUT_US  (3000000LL)
+#define GW_SNAPSHOT_RETRY_GAP_US     (1000000LL)
+#define GW_SNAPSHOT_RETRY_MAX        6
+#define GW_DEVICE_FB_IDLE_TIMEOUT_US (3000000LL)
+#define GW_DEVICE_FB_RETRY_GAP_US    (1000000LL)
+#define GW_DEVICE_FB_RETRY_MAX       6
 
 static TaskHandle_t s_rx_task;
-static TaskHandle_t s_snapshot_retry_task;
 static SemaphoreHandle_t s_init_lock;
 static SemaphoreHandle_t s_cmd_lock;
 static SemaphoreHandle_t s_rsp_sem;
+static SemaphoreHandle_t s_tx_lock;
 static bool s_started;
 static uint16_t s_seq;
 
@@ -48,12 +61,53 @@ static portMUX_TYPE s_wait_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_wait_active;
 static uint16_t s_wait_seq;
 static gw_uart_cmd_rsp_v1_t s_wait_rsp;
-static bool s_snapshot_seen;
-static bool s_snapshot_retry_scheduled;
+static bool s_snapshot_stream_active;
+static int64_t s_snapshot_last_chunk_us;
+static int64_t s_snapshot_last_retry_us;
+static uint8_t s_snapshot_retry_count;
 static uint16_t s_snapshot_expected_devices;
 static uint16_t s_snapshot_received_devices;
+static uint16_t s_device_fb_transfer_id;
+static uint32_t s_device_fb_expected_len;
+static size_t s_device_fb_received_len;
+static uint8_t *s_device_fb_buf;
+static bool s_device_fb_active;
+static int64_t s_device_fb_last_chunk_us;
+static int64_t s_device_fb_last_retry_us;
+static uint8_t s_device_fb_retry_count;
+static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_cmd_wait_rsp(gw_uart_cmd_req_v1_t *req);
 static esp_err_t request_snapshot_sync(void);
+static esp_err_t request_device_fb_sync(void);
+static esp_err_t request_sync_cmd_async(gw_uart_cmd_id_t cmd_id, const char *label);
+
+static bool uart_write_all(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return true;
+    }
+
+    size_t off = 0;
+    int attempts = 0;
+    while (off < len && attempts < 8) {
+        int wr = uart_write_bytes(GW_UART_PORT, data + off, len - off);
+        if (wr > 0) {
+            off += (size_t)wr;
+            attempts = 0;
+            continue;
+        }
+        attempts++;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    if (off < len) {
+        ESP_LOGW(TAG, "UART short write: sent=%u total=%u", (unsigned)off, (unsigned)len);
+        return false;
+    }
+
+    (void)uart_wait_tx_done(GW_UART_PORT, pdMS_TO_TICKS(20));
+    return true;
+}
 
 #if defined(UART_SCLK_XTAL)
 #define GW_UART_SCLK_SRC UART_SCLK_XTAL
@@ -80,6 +134,8 @@ static const char *msg_type_name(uint8_t t)
             return "EVT";
         case GW_UART_MSG_SNAPSHOT:
             return "SNAPSHOT";
+        case GW_UART_MSG_DEVICE_FB:
+            return "DEVICE_FB";
         default:
             return "UNKNOWN";
     }
@@ -124,6 +180,8 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "IDENTIFY";
         case GW_UART_CMD_SYNC_SNAPSHOT:
             return "SYNC_SNAPSHOT";
+        case GW_UART_CMD_SYNC_DEVICE_FB:
+            return "SYNC_DEVICE_FB";
         default:
             return "UNKNOWN";
     }
@@ -301,10 +359,13 @@ static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
     if (!snap) {
         return;
     }
+    s_snapshot_last_chunk_us = esp_timer_get_time();
 
     switch ((gw_uart_snapshot_kind_t)snap->kind) {
         case GW_UART_SNAPSHOT_BEGIN:
-            s_snapshot_seen = true;
+            s_snapshot_stream_active = true;
+            s_snapshot_retry_count = 0;
+            s_snapshot_last_retry_us = 0;
             s_snapshot_expected_devices = snap->total_devices;
             s_snapshot_received_devices = 0;
             (void)gw_runtime_sync_snapshot_begin(snap->total_devices);
@@ -370,13 +431,96 @@ static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
             (void)gw_runtime_sync_snapshot_end();
             ESP_LOGI(TAG, "Snapshot end: expected=%u received=%u",
                      (unsigned)s_snapshot_expected_devices, (unsigned)s_snapshot_received_devices);
+            s_snapshot_stream_active = false;
+            s_snapshot_last_chunk_us = 0;
+            s_snapshot_last_retry_us = 0;
+            s_snapshot_retry_count = 0;
             if (s_snapshot_expected_devices > 0 && s_snapshot_received_devices < s_snapshot_expected_devices) {
                 ESP_LOGW(TAG, "Snapshot incomplete, requesting re-sync");
                 (void)request_snapshot_sync();
+            } else {
+                // After a completed snapshot, always refresh the device flatbuffer.
+                // This guarantees frontend store sync after any snapshot recovery cycle.
+                (void)request_sync_cmd_async(GW_UART_CMD_SYNC_DEVICE_FB, "device fb sync");
             }
             break;
         default:
             break;
+    }
+}
+
+static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch)
+{
+    if (!ch || ch->chunk_len > sizeof(ch->data)) {
+        return;
+    }
+
+    if (ch->flags & GW_UART_DEVICE_FB_FLAG_BEGIN) {
+        free(s_device_fb_buf);
+        s_device_fb_buf = NULL;
+        s_device_fb_received_len = 0;
+        s_device_fb_expected_len = ch->total_len;
+        s_device_fb_transfer_id = ch->transfer_id;
+        s_device_fb_active = false;
+        s_device_fb_last_chunk_us = esp_timer_get_time();
+        if (s_device_fb_expected_len > 0) {
+            s_device_fb_buf = (uint8_t *)malloc(s_device_fb_expected_len);
+            if (!s_device_fb_buf) {
+                ESP_LOGW(TAG, "device fb alloc failed: %u bytes", (unsigned)s_device_fb_expected_len);
+                s_device_fb_expected_len = 0;
+            } else {
+                s_device_fb_active = true;
+                s_device_fb_retry_count = 0;
+                ESP_LOGI(TAG, "device fb begin: transfer=%u total=%u", (unsigned)ch->transfer_id, (unsigned)ch->total_len);
+            }
+        }
+    }
+
+    if (!s_device_fb_buf || s_device_fb_expected_len == 0) {
+        return;
+    }
+    if (ch->transfer_id != s_device_fb_transfer_id) {
+        return;
+    }
+    if ((size_t)ch->offset + ch->chunk_len > s_device_fb_expected_len) {
+        ESP_LOGW(TAG, "device fb chunk out of bounds");
+        return;
+    }
+
+    s_device_fb_last_chunk_us = esp_timer_get_time();
+    memcpy(&s_device_fb_buf[ch->offset], ch->data, ch->chunk_len);
+    size_t end = (size_t)ch->offset + ch->chunk_len;
+    if (end > s_device_fb_received_len) {
+        s_device_fb_received_len = end;
+    }
+    if ((ch->flags & GW_UART_DEVICE_FB_FLAG_END) == 0) {
+        ESP_LOGI(TAG, "device fb chunk: transfer=%u off=%u len=%u recv=%u/%u",
+                 (unsigned)ch->transfer_id,
+                 (unsigned)ch->offset,
+                 (unsigned)ch->chunk_len,
+                 (unsigned)s_device_fb_received_len,
+                 (unsigned)s_device_fb_expected_len);
+    }
+
+    if (ch->flags & GW_UART_DEVICE_FB_FLAG_END) {
+        if (s_device_fb_received_len == s_device_fb_expected_len) {
+            (void)gw_device_fb_store_set(s_device_fb_buf, s_device_fb_expected_len);
+            ESP_LOGI(TAG, "device fb updated: %u bytes", (unsigned)s_device_fb_expected_len);
+        } else {
+            ESP_LOGW(TAG,
+                     "device fb incomplete: recv=%u expected=%u",
+                     (unsigned)s_device_fb_received_len,
+                     (unsigned)s_device_fb_expected_len);
+        }
+        free(s_device_fb_buf);
+        s_device_fb_buf = NULL;
+        s_device_fb_received_len = 0;
+        s_device_fb_expected_len = 0;
+        s_device_fb_transfer_id = 0;
+        s_device_fb_active = false;
+        s_device_fb_last_chunk_us = 0;
+        s_device_fb_last_retry_us = 0;
+        s_device_fb_retry_count = 0;
     }
 }
 
@@ -393,27 +537,44 @@ static esp_err_t request_snapshot_sync(void)
     return err;
 }
 
-static void snapshot_retry_task(void *arg)
+static esp_err_t request_device_fb_sync(void)
 {
-    (void)arg;
-    for (int attempt = 0; attempt < 20 && !s_snapshot_seen; attempt++) {
-        if (attempt > 0) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(300));
-        }
-        if (s_snapshot_seen) {
-            break;
-        }
-        esp_err_t err = request_snapshot_sync();
-        if (err == ESP_OK) {
-            // wait for BEGIN/END stream
-            vTaskDelay(pdMS_TO_TICKS(200));
-        }
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_SYNC_DEVICE_FB;
+    esp_err_t err = send_cmd_wait_rsp(&req);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "device fb sync request failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "device fb sync requested");
     }
-    s_snapshot_retry_scheduled = false;
-    s_snapshot_retry_task = NULL;
-    vTaskDelete(NULL);
+    return err;
+}
+
+static esp_err_t request_sync_cmd_async(gw_uart_cmd_id_t cmd_id, const char *label)
+{
+    if (!label) {
+        label = "sync";
+    }
+    if (!s_cmd_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_cmd_lock, 0) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = (uint8_t)cmd_id;
+    uint16_t seq = ++s_seq;
+    req.req_id = seq;
+    esp_err_t err = uart_send_frame(GW_UART_MSG_CMD_REQ, seq, &req, sizeof(req));
+    xSemaphoreGive(s_cmd_lock);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "%s requested (async)", label);
+    } else {
+        ESP_LOGW(TAG, "%s async request failed: %s", label, esp_err_to_name(err));
+    }
+    return err;
 }
 
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len)
@@ -441,8 +602,14 @@ static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *pay
     } else {
         GW_UART_TRACE_I("UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
     }
-    int wr = uart_write_bytes(GW_UART_PORT, raw, raw_len);
-    return (wr == (int)raw_len) ? ESP_OK : ESP_FAIL;
+    if (s_tx_lock) {
+        (void)xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    }
+    bool ok = uart_write_all(raw, raw_len);
+    if (s_tx_lock) {
+        (void)xSemaphoreGive(s_tx_lock);
+    }
+    return ok ? ESP_OK : ESP_FAIL;
 }
 
 static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
@@ -469,13 +636,6 @@ static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
                         evt.device_uid, (unsigned)evt.short_addr, (unsigned)evt.endpoint,
                         (unsigned)evt.cluster_id, cluster_name(evt.cluster_id), (unsigned)evt.attr_id, evt.cmd);
         publish_evt_from_c6(&evt);
-        if (!s_snapshot_seen && !s_snapshot_retry_scheduled) {
-            s_snapshot_retry_scheduled = true;
-            if (xTaskCreate(snapshot_retry_task, "zb_snap_retry", 3072, NULL, 5, &s_snapshot_retry_task) != pdPASS) {
-                s_snapshot_retry_scheduled = false;
-                s_snapshot_retry_task = NULL;
-            }
-        }
         return;
     }
 
@@ -514,6 +674,14 @@ static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
         apply_snapshot_from_c6(&snap);
         return;
     }
+
+    if (frame->msg_type == GW_UART_MSG_DEVICE_FB) {
+        gw_uart_device_fb_chunk_v1_t ch = {0};
+        size_t n = frame->payload_len < sizeof(ch) ? frame->payload_len : sizeof(ch);
+        memcpy(&ch, frame->payload, n);
+        apply_device_fb_chunk_from_c6(&ch);
+        return;
+    }
 }
 
 static void rx_task(void *arg)
@@ -524,6 +692,40 @@ static void rx_task(void *arg)
     gw_uart_proto_parser_init(&parser);
 
     for (;;) {
+        // Watch stalled streams regardless of incoming event traffic.
+        int64_t now_us = esp_timer_get_time();
+        if (s_snapshot_stream_active && s_snapshot_last_chunk_us > 0) {
+            if ((now_us - s_snapshot_last_chunk_us) > GW_SNAPSHOT_IDLE_TIMEOUT_US &&
+                (now_us - s_snapshot_last_retry_us) > GW_SNAPSHOT_RETRY_GAP_US &&
+                s_snapshot_retry_count < GW_SNAPSHOT_RETRY_MAX) {
+                s_snapshot_last_retry_us = now_us;
+                s_snapshot_retry_count++;
+                ESP_LOGW(TAG,
+                         "snapshot stalled: received=%u/%u retry=%u/%u",
+                         (unsigned)s_snapshot_received_devices,
+                         (unsigned)s_snapshot_expected_devices,
+                         (unsigned)s_snapshot_retry_count,
+                         (unsigned)GW_SNAPSHOT_RETRY_MAX);
+                (void)request_sync_cmd_async(GW_UART_CMD_SYNC_SNAPSHOT, "snapshot sync");
+            }
+        }
+        if (s_device_fb_active && s_device_fb_expected_len > 0 && s_device_fb_last_chunk_us > 0) {
+            if ((now_us - s_device_fb_last_chunk_us) > GW_DEVICE_FB_IDLE_TIMEOUT_US &&
+                (now_us - s_device_fb_last_retry_us) > GW_DEVICE_FB_RETRY_GAP_US &&
+                s_device_fb_retry_count < GW_DEVICE_FB_RETRY_MAX) {
+                s_device_fb_last_retry_us = now_us;
+                s_device_fb_retry_count++;
+                ESP_LOGW(TAG,
+                         "device fb stalled: recv=%u/%u transfer=%u retry=%u/%u",
+                         (unsigned)s_device_fb_received_len,
+                         (unsigned)s_device_fb_expected_len,
+                         (unsigned)s_device_fb_transfer_id,
+                         (unsigned)s_device_fb_retry_count,
+                         (unsigned)GW_DEVICE_FB_RETRY_MAX);
+                (void)request_sync_cmd_async(GW_UART_CMD_SYNC_DEVICE_FB, "device fb sync");
+            }
+        }
+
         int n = uart_read_bytes(GW_UART_PORT, rx, sizeof(rx), pdMS_TO_TICKS(50));
         if (n <= 0) {
             continue;
@@ -562,7 +764,15 @@ static esp_err_t ensure_started(void)
     if (!s_rsp_sem) {
         s_rsp_sem = xSemaphoreCreateBinary();
     }
-    if (!s_init_lock || !s_cmd_lock || !s_rsp_sem) {
+    if (!s_tx_lock) {
+        s_tx_lock = xSemaphoreCreateMutex();
+    }
+    if (!s_init_lock || !s_cmd_lock || !s_rsp_sem || !s_tx_lock) {
+        ESP_LOGW(TAG,
+                 "sync primitive alloc failed: internal=%u dma=%u psram=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
 
@@ -582,23 +792,47 @@ static esp_err_t ensure_started(void)
         .source_clk = GW_UART_SCLK_SRC,
     };
 
+    bool driver_installed_here = false;
     esp_err_t err = uart_driver_install(GW_UART_PORT, GW_UART_RX_BUF_SIZE, GW_UART_TX_BUF_SIZE, GW_UART_EVT_Q_LEN, NULL, 0);
+    if (err == ESP_OK) {
+        driver_installed_here = true;
+    } else if (uart_is_driver_installed(GW_UART_PORT)) {
+        // Previous init attempt may have left the driver installed.
+        ESP_LOGW(TAG, "UART driver already installed on port %d, reusing", (int)GW_UART_PORT);
+        err = ESP_OK;
+    }
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "uart_driver_install failed: %s", esp_err_to_name(err));
         xSemaphoreGive(s_init_lock);
         return err;
     }
     err = uart_param_config(GW_UART_PORT, &cfg);
     if (err != ESP_OK) {
+        if (driver_installed_here) {
+            (void)uart_driver_delete(GW_UART_PORT);
+        }
         xSemaphoreGive(s_init_lock);
         return err;
     }
     err = uart_set_pin(GW_UART_PORT, GW_UART_TX_PIN, GW_UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
+        if (driver_installed_here) {
+            (void)uart_driver_delete(GW_UART_PORT);
+        }
         xSemaphoreGive(s_init_lock);
         return err;
     }
 
+    // Must run on internal stack: this task can touch NVS/flash paths during snapshot apply.
     if (xTaskCreate(rx_task, "zb_uart_rx", GW_UART_RX_TASK_STACK, NULL, 7, &s_rx_task) != pdPASS) {
+        if (driver_installed_here) {
+            (void)uart_driver_delete(GW_UART_PORT);
+        }
+        ESP_LOGW(TAG,
+                 "rx task create failed: internal=%u dma=%u psram=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         xSemaphoreGive(s_init_lock);
         return ESP_ERR_NO_MEM;
     }
@@ -690,16 +924,23 @@ esp_err_t gw_zigbee_link_start(void)
     if (err != ESP_OK) {
         return err;
     }
-    s_snapshot_seen = false;
-    if (!s_snapshot_retry_scheduled) {
-        s_snapshot_retry_scheduled = true;
-        if (xTaskCreate(snapshot_retry_task, "zb_snap_retry", 3072, NULL, 5, &s_snapshot_retry_task) != pdPASS) {
-            s_snapshot_retry_scheduled = false;
-            s_snapshot_retry_task = NULL;
-        }
-    }
     err = request_snapshot_sync();
-    return err;
+    if (err != ESP_OK) {
+        // Defer retry to the regular async recovery path.
+        (void)request_sync_cmd_async(GW_UART_CMD_SYNC_SNAPSHOT, "snapshot sync");
+        return ESP_OK;
+    }
+    (void)request_device_fb_sync();
+    return ESP_OK;
+}
+
+esp_err_t gw_zigbee_sync_device_fb(void)
+{
+    esp_err_t err = ensure_started();
+    if (err != ESP_OK) {
+        return err;
+    }
+    return request_device_fb_sync();
 }
 
 esp_err_t gw_zigbee_permit_join(uint8_t seconds)

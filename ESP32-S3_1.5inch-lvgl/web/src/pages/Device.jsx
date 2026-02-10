@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { describeAttr, describeCluster, describeDeviceId, describeProfile, formatSensorValue, hex16 } from '../zigbee/zcl.js'
-import { fetchCbor, execAction } from '../api.js'
+import { execAction } from '../api.js'
 import { useGateway } from '../gateway.jsx'
 
 function renderSensorValue(s) {
@@ -86,34 +86,20 @@ function toNumberOrNull(v) {
 
 export default function Device() {
 	const { uid } = useParams()
-	const { deviceStates } = useGateway()
-	const [device, setDevice] = useState(null)
-	const [endpoints, setEndpoints] = useState([])
-	const [sensors, setSensors] = useState([])
-	const [state, setState] = useState({})
+	const { devices, deviceStates, reloadDevices } = useGateway()
 	const [levelByEndpoint, setLevelByEndpoint] = useState(() => new Map())
 	const [colorByEndpoint, setColorByEndpoint] = useState(() => new Map())
 	const [tempKByEndpoint, setTempKByEndpoint] = useState(() => new Map())
 	const [status, setStatus] = useState('')
 
-	const load = useCallback(async () => {
+	const device = useMemo(() => {
 		const u = String(uid ?? '')
-		if (!u) return
-		setStatus('')
-		try {
-			const res = await fetchCbor(`/api/devices/${encodeURIComponent(u)}`)
-			setDevice(res ?? null)
-			setEndpoints(Array.isArray(res?.endpoints) ? res.endpoints : [])
-			setSensors(Array.isArray(res?.sensors) ? res.sensors : [])
-			setState(res?.state && typeof res.state === 'object' ? res.state : {})
-		} catch (e) {
-			setStatus(String(e?.message ?? e))
-		}
-	}, [uid])
+		return (Array.isArray(devices) ? devices : []).find((d) => String(d?.device_uid ?? '') === u) || null
+	}, [devices, uid])
 
-	useEffect(() => {
-		load()
-	}, [load])
+	const endpoints = useMemo(() => (Array.isArray(device?.endpoints) ? device.endpoints : []), [device])
+	const sensors = useMemo(() => (Array.isArray(device?.sensors) ? device.sensors : []), [device])
+	const state = useMemo(() => ((device?.state && typeof device.state === 'object') ? device.state : {}), [device])
 
 	const sortedEndpoints = useMemo(() => {
 		const items = Array.isArray(endpoints) ? [...endpoints] : []
@@ -225,13 +211,12 @@ export default function Device() {
 					device_uid: u,
 					endpoint,
 				})
-				await load()
 				setStatus('')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
 		},
-		[uid, load],
+		[uid],
 	)
 
 	const sendLevel = useCallback(
@@ -322,7 +307,7 @@ export default function Device() {
 					</div>
 				</div>
 				<div className="row">
-					<button onClick={load}>Refresh</button>
+					<button onClick={reloadDevices}>Refresh</button>
 					<Link className="navlink" to="/devices">
 						Back
 					</Link>

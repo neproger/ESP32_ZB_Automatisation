@@ -855,116 +855,6 @@ static uint16_t transition_ms_to_ds(uint16_t ms)
     return (uint16_t)ds;
 }
 
-static void publish_onoff_state_synthetic(const gw_device_uid_t *uid, uint16_t short_addr, uint8_t endpoint, bool onoff)
-{
-    if (!uid || uid->uid[0] == '\0' || endpoint == 0) return;
-    uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    (void)gw_state_store_set_bool(uid, "onoff", onoff, ts_ms);
-    gw_event_bus_publish_zb("zigbee.attr_report",
-                            "zigbee",
-                            uid->uid,
-                            short_addr,
-                            "synthetic onoff",
-                            endpoint,
-                            NULL,
-                            ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-                            ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID,
-                            GW_EVENT_VALUE_BOOL,
-                            onoff,
-                            0,
-                            0.0,
-                            NULL,
-                            NULL,
-                            0);
-}
-
-static void publish_level_state_synthetic(const gw_device_uid_t *uid, uint16_t short_addr, uint8_t endpoint, uint8_t level)
-{
-    if (!uid || uid->uid[0] == '\0' || endpoint == 0) return;
-    uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    (void)gw_state_store_set_u32(uid, "level", (uint32_t)level, ts_ms);
-    gw_event_bus_publish_zb("zigbee.attr_report",
-                            "zigbee",
-                            uid->uid,
-                            short_addr,
-                            "synthetic level",
-                            endpoint,
-                            NULL,
-                            ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
-                            ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID,
-                            GW_EVENT_VALUE_I64,
-                            false,
-                            (int64_t)level,
-                            0.0,
-                            NULL,
-                            NULL,
-                            0);
-}
-
-static void publish_color_xy_state_synthetic(const gw_device_uid_t *uid, uint16_t short_addr, uint8_t endpoint, uint16_t x, uint16_t y)
-{
-    if (!uid || uid->uid[0] == '\0' || endpoint == 0) return;
-    uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    (void)gw_state_store_set_u32(uid, "color_x", (uint32_t)x, ts_ms);
-    (void)gw_state_store_set_u32(uid, "color_y", (uint32_t)y, ts_ms);
-
-    gw_event_bus_publish_zb("zigbee.attr_report",
-                            "zigbee",
-                            uid->uid,
-                            short_addr,
-                            "synthetic color_x",
-                            endpoint,
-                            NULL,
-                            ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID,
-                            GW_EVENT_VALUE_I64,
-                            false,
-                            (int64_t)x,
-                            0.0,
-                            NULL,
-                            NULL,
-                            0);
-    gw_event_bus_publish_zb("zigbee.attr_report",
-                            "zigbee",
-                            uid->uid,
-                            short_addr,
-                            "synthetic color_y",
-                            endpoint,
-                            NULL,
-                            ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID,
-                            GW_EVENT_VALUE_I64,
-                            false,
-                            (int64_t)y,
-                            0.0,
-                            NULL,
-                            NULL,
-                            0);
-}
-
-static void publish_color_temp_state_synthetic(const gw_device_uid_t *uid, uint16_t short_addr, uint8_t endpoint, uint16_t mireds)
-{
-    if (!uid || uid->uid[0] == '\0' || endpoint == 0) return;
-    uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    (void)gw_state_store_set_u32(uid, "color_temp_mireds", (uint32_t)mireds, ts_ms);
-    gw_event_bus_publish_zb("zigbee.attr_report",
-                            "zigbee",
-                            uid->uid,
-                            short_addr,
-                            "synthetic color_temp",
-                            endpoint,
-                            NULL,
-                            ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
-                            ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID,
-                            GW_EVENT_VALUE_I64,
-                            false,
-                            (int64_t)mireds,
-                            0.0,
-                            NULL,
-                            NULL,
-                            0);
-}
-
 static void action_send_cb(uint8_t token)
 {
     gw_zb_action_ctx_t *ctx = NULL;
@@ -1019,16 +909,9 @@ static void action_send_cb(uint8_t token)
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "cluster");
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "0x0006");
 
-        if (ctx->u.onoff.cmd == GW_ZIGBEE_ONOFF_CMD_ON) {
-            publish_onoff_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, true);
-        } else if (ctx->u.onoff.cmd == GW_ZIGBEE_ONOFF_CMD_OFF) {
-            publish_onoff_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, false);
-        } else {
-            gw_state_item_t cur = {0};
-            if (gw_state_store_get(&ctx->uid, "onoff", &cur) == ESP_OK && cur.value_type == GW_STATE_VALUE_BOOL) {
-                publish_onoff_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, !cur.value_bool);
-            }
-        }
+        // Do not emit synthetic on/off here: cached state can be stale (especially for toggle).
+        // Request real device state so UI/store are updated only from actual attr_report/read_attr response.
+        (void)gw_zigbee_read_onoff_state(&ctx->uid, ctx->endpoint);
     } else if (ctx->type == GW_ZB_ACTION_LEVEL_MOVE_TO_LEVEL) {
         esp_zb_zcl_move_to_level_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -1055,7 +938,10 @@ static void action_send_cb(uint8_t token)
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.level.level);
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "transition_ds");
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.level.transition_ds);
-        publish_level_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, ctx->u.level.level);
+        (void)gw_zigbee_read_attr(&ctx->uid,
+                                  ctx->endpoint,
+                                  ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                                  ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID);
     } else if (ctx->type == GW_ZB_ACTION_COLOR_MOVE_TO_XY) {
         esp_zb_zcl_color_move_to_color_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -1085,7 +971,14 @@ static void action_send_cb(uint8_t token)
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.color_xy.y);
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "transition_ds");
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.color_xy.transition_ds);
-        publish_color_xy_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, ctx->u.color_xy.x, ctx->u.color_xy.y);
+        (void)gw_zigbee_read_attr(&ctx->uid,
+                                  ctx->endpoint,
+                                  ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                                  ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID);
+        (void)gw_zigbee_read_attr(&ctx->uid,
+                                  ctx->endpoint,
+                                  ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                                  ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID);
     } else if (ctx->type == GW_ZB_ACTION_COLOR_MOVE_TO_TEMP) {
         esp_zb_zcl_color_move_to_color_temperature_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -1112,7 +1005,10 @@ static void action_send_cb(uint8_t token)
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.color_temp.mireds);
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "transition_ds");
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, ctx->u.color_temp.transition_ds);
-        publish_color_temp_state_synthetic(&ctx->uid, ctx->short_addr, ctx->endpoint, ctx->u.color_temp.mireds);
+        (void)gw_zigbee_read_attr(&ctx->uid,
+                                  ctx->endpoint,
+                                  ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                                  ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID);
     } else if (ctx->type == GW_ZB_ACTION_SCENE_STORE) {
         esp_zb_zcl_scenes_store_scene_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -1192,7 +1088,8 @@ esp_err_t gw_zigbee_read_onoff_state(const gw_device_uid_t *uid, uint8_t endpoin
 
 esp_err_t gw_zigbee_read_attr(const gw_device_uid_t *uid, uint8_t endpoint, uint16_t cluster_id, uint16_t attr_id)
 {
-    if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0 || cluster_id == 0 || attr_id == 0) {
+    // attr_id can be 0x0000 for many valid attributes (e.g. OnOff, Level current value).
+    if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0 || cluster_id == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 

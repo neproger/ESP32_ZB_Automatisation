@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchCbor, postCbor, patchCbor, deleteCbor, execAction } from '../api.js'
+import { useCallback, useMemo, useState } from 'react'
+import { postCbor, patchCbor, deleteCbor, execAction } from '../api.js'
+import { useGateway } from '../gateway.jsx'
 
 function defaultAutomationDef({ id, name, enabled }) {
 	return {
@@ -846,8 +847,7 @@ function AutomationEditor({
 }
 
 export default function Automations() {
-	const [automations, setAutomations] = useState([])
-	const [devices, setDevices] = useState([])
+	const { automations, devices, reloadAutomations } = useGateway()
 	const [endpointsByUid, setEndpointsByUid] = useState({})
 	const [status, setStatus] = useState('')
 	const [draft, setDraft] = useState(null)
@@ -898,32 +898,14 @@ export default function Automations() {
 		return ''
 	}, [])
 
-	const loadDevices = useCallback(async () => {
-		try {
-			const j = await fetchCbor('/api/devices')
-			setDevices(Array.isArray(j) ? j : [])
-		} catch {
-			setDevices([])
-		}
-	}, [])
-
 	const load = useCallback(async () => {
 		setStatus('')
 		try {
-			const res = await fetchCbor('/api/automations')
-			setAutomations(Array.isArray(res?.automations) ? res.automations : [])
+			await reloadAutomations()
 		} catch (e) {
 			setStatus(String(e?.message ?? e))
 		}
-	}, [])
-
-	useEffect(() => {
-		load()
-	}, [load])
-
-	useEffect(() => {
-		loadDevices()
-	}, [loadDevices])
+	}, [reloadAutomations])
 
 	const ensureEndpoints = useCallback(async (uid) => {
 		const u = String(uid ?? '')
@@ -934,14 +916,10 @@ export default function Automations() {
 			return { ...(cur ?? {}), [u]: null }
 		})
 
-		try {
-			const res = await fetchCbor(`/api/devices/${encodeURIComponent(u)}`)
-			const eps = Array.isArray(res?.endpoints) ? res.endpoints : []
-			setEndpointsByUid((cur) => ({ ...(cur ?? {}), [u]: eps }))
-		} catch {
-			setEndpointsByUid((cur) => ({ ...(cur ?? {}), [u]: [] }))
-		}
-	}, [])
+		const dev = (Array.isArray(devices) ? devices : []).find((d) => String(d?.device_uid ?? '') === u)
+		const eps = Array.isArray(dev?.endpoints) ? dev.endpoints : []
+		setEndpointsByUid((cur) => ({ ...(cur ?? {}), [u]: eps }))
+	}, [devices])
 
 	const sorted = useMemo(() => {
 		const items = Array.isArray(automations) ? [...automations] : []
@@ -965,9 +943,8 @@ export default function Automations() {
 			}
 
 			setDraftStatus('Loading...')
-			const res = await fetchCbor(`/api/automations/${encodeURIComponent(id)}`)
-			const base = defaultAutomationDef({ id: res?.id ?? '', name: res?.name ?? '', enabled: Boolean(res?.enabled) })
-			const payload = (res?.automation && typeof res.automation === 'object') ? res.automation : null
+			const base = defaultAutomationDef({ id: a?.id ?? '', name: a?.name ?? '', enabled: Boolean(a?.enabled) })
+			const payload = (a?.automation && typeof a.automation === 'object') ? a.automation : null
 			const merged = { ...base }
 
 			if (payload && typeof payload === 'object') {
@@ -984,9 +961,9 @@ export default function Automations() {
 				merged.v = payload.v ?? base.v
 			}
 
-			merged.id = String(res?.id ?? '')
-			merged.name = String(res?.name ?? '')
-			merged.enabled = Boolean(res?.enabled)
+			merged.id = String(a?.id ?? '')
+			merged.name = String(a?.name ?? '')
+			merged.enabled = Boolean(a?.enabled)
 
 			setDraft(merged)
 			setDraftStatus('')

@@ -31,10 +31,6 @@
 #define GW_UART_RX_PIN 4
 #define GW_UART_TX_PIN 5
 
-/* Backward-compatible aliases for RCP config. */
-#define HOST_RX_PIN_TO_RCP_TX GW_UART_RX_PIN
-#define HOST_TX_PIN_TO_RCP_RX GW_UART_TX_PIN
-
 #define ESP_ZB_ZC_CONFIG()                                                              \
     {                                                                                   \
         .esp_zb_role = ESP_ZB_DEVICE_TYPE_COORDINATOR,                                  \
@@ -65,8 +61,8 @@
                     .rx_flow_ctrl_thresh = 0,                   \
                     .source_clk = UART_SCLK_DEFAULT,            \
                 },                                              \
-            .rx_pin = HOST_RX_PIN_TO_RCP_TX,                    \
-            .tx_pin = HOST_TX_PIN_TO_RCP_RX,                    \
+            .rx_pin = GW_UART_RX_PIN,                           \
+            .tx_pin = GW_UART_TX_PIN,                           \
         },                                                      \
     }
 #endif

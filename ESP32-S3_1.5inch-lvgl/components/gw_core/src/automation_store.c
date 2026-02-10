@@ -49,7 +49,7 @@ static const gw_storage_desc_t s_automation_storage_desc = {
     .max_items = AUTOMATION_STORAGE_MAX_ITEMS,
     .magic = AUTOMATION_STORAGE_MAGIC,
     .version = AUTOMATION_STORAGE_VERSION,
-    .namespace = "autos" // For SPIFFS, this becomes a directory
+    .namespace = "autos"
 };
 
 // Internal helper functions
@@ -62,17 +62,11 @@ esp_err_t gw_automation_store_init(void)
         return ESP_OK;
     }
 
-    // Prefer SPIFFS for larger automation payloads; fall back to NVS if
-    // the SPIFFS partition is absent/corrupted on this firmware layout.
-    esp_err_t err = gw_storage_init(&s_automation_storage, &s_automation_storage_desc, GW_STORAGE_SPIFFS);
+    // S3 architecture now keeps automations in NVS only.
+    esp_err_t err = gw_storage_init(&s_automation_storage, &s_automation_storage_desc, GW_STORAGE_NVS);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "SPIFFS automation storage unavailable (%s), fallback to NVS", esp_err_to_name(err));
-
-        err = gw_storage_init(&s_automation_storage, &s_automation_storage_desc, GW_STORAGE_NVS);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize automation storage (SPIFFS and NVS): %s", esp_err_to_name(err));
-            return err;
-        }
+        ESP_LOGE(TAG, "Failed to initialize automation storage (NVS): %s", esp_err_to_name(err));
+        return err;
     }
 
     s_initialized = true;

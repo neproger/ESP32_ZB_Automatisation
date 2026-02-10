@@ -1,10 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchCbor } from './api.js'
+import { fetchBinary, fetchCbor } from './api.js'
 import { cborDecode } from './cbor.js'
+import { parseDeviceBlob } from './deviceBlob.js'
 
 function wsUrl(path) {
 	const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
 	return `${proto}://${window.location.host}${path}`
+}
+
+function normalizeUid(v) {
+	return String(v ?? '').trim().toLowerCase()
 }
 
 function normalizeEndpointStateFromSnapshot(stateObj = {}) {
@@ -42,6 +47,7 @@ const GatewayContext = createContext(null)
 
 export function GatewayProvider({ children }) {
 	const [devices, setDevices] = useState([])
+	const [automations, setAutomations] = useState([])
 	const [events, setEvents] = useState([])
 	const [deviceStates, setDeviceStates] = useState({})
 	const [wsStatus, setWsStatus] = useState('disconnected')
@@ -49,13 +55,12 @@ export function GatewayProvider({ children }) {
 	const wsRef = useRef(null)
 	const reconnectTimerRef = useRef(null)
 
-	const loadDevices = useCallback(async () => {
-		const data = await fetchCbor('/api/devices')
-		const list = Array.isArray(data) ? data : []
-		setDevices(list)
+	const applyDeviceList = useCallback((list) => {
+		const safeList = Array.isArray(list) ? list : []
+		setDevices(safeList)
 		setDeviceStates((prev) => {
 			const next = { ...prev }
-			for (const d of list) {
+			for (const d of safeList) {
 				const uid = String(d?.device_uid ?? '')
 				if (!uid) continue
 				const fromSnapshot = normalizeEndpointStateFromSnapshot(d?.state && typeof d.state === 'object' ? d.state : {})
@@ -75,6 +80,19 @@ export function GatewayProvider({ children }) {
 			}
 			return next
 		})
+		return safeList
+	}, [])
+
+	const loadDevices = useCallback(async () => {
+		const blob = await fetchBinary('/api/devices/flatbuffer')
+		const list = parseDeviceBlob(blob)
+		return applyDeviceList(list)
+	}, [applyDeviceList])
+
+	const loadAutomations = useCallback(async () => {
+		const data = await fetchCbor('/api/automations')
+		const list = Array.isArray(data?.automations) ? data.automations : []
+		setAutomations(list)
 		return list
 	}, [])
 
@@ -120,14 +138,19 @@ export function GatewayProvider({ children }) {
 					})
 
 					if (type === 'device.state') {
-						const uid = String(data?.device_id ?? '')
-						const ep = String(data?.endpoint_id ?? '')
+						const uid = normalizeUid(data?.device_id ?? '')
+						const epNum = Number(data?.endpoint_id ?? data?.endpoint ?? 0)
+						const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : 0)
 						const key = String(data?.key ?? '')
 						if (!uid || !ep || !key) return
 						setDeviceStates((prev) => ({
 							...prev,
 							[uid]: {
 								...(prev[uid] || {}),
+								0: {
+									...((prev[uid] && prev[uid]['0']) || {}),
+									[key]: data?.value ?? null,
+								},
 								[ep]: {
 									...((prev[uid] && prev[uid][ep]) || {}),
 									[key]: data?.value ?? null,
@@ -162,18 +185,57 @@ export function GatewayProvider({ children }) {
 	}, [])
 
 	useEffect(() => {
-		loadDevices().catch(() => {})
+		loadAutomations().catch(() => {})
+	}, [loadDevices, loadAutomations])
+
+	useEffect(() => {
+		let cancelled = false
+		let timer = null
+		let attempt = 0
+
+		const schedule = (ms) => {
+			if (cancelled) return
+			if (timer) clearTimeout(timer)
+			timer = setTimeout(run, ms)
+		}
+
+		const run = async () => {
+			try {
+				const list = await loadDevices()
+				if (cancelled) return
+				const count = Array.isArray(list) ? list.length : 0
+				// Device snapshot can be unavailable right after boot; retry while empty.
+				if (count === 0 && attempt < 20) {
+					attempt += 1
+					schedule(Math.min(5000, 250 * 2 ** Math.min(attempt, 5)))
+				}
+			} catch {
+				if (cancelled) return
+				if (attempt < 20) {
+					attempt += 1
+					schedule(Math.min(5000, 250 * 2 ** Math.min(attempt, 5)))
+				}
+			}
+		}
+
+		run()
+		return () => {
+			cancelled = true
+			if (timer) clearTimeout(timer)
+		}
 	}, [loadDevices])
 
 	const value = useMemo(
 		() => ({
 			devices,
+			automations,
 			events,
 			deviceStates,
 			wsStatus,
 			reloadDevices: loadDevices,
+			reloadAutomations: loadAutomations,
 		}),
-		[devices, events, deviceStates, wsStatus, loadDevices],
+		[devices, automations, events, deviceStates, wsStatus, loadDevices, loadAutomations],
 	)
 
 	return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>
