@@ -1,3 +1,5 @@
+﻿//UTF-8
+//gateway.jsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchBinary, fetchCbor } from './api.js'
 import { cborDecode } from './cbor.js'
@@ -12,37 +14,6 @@ function normalizeUid(v) {
 	return String(v ?? '').trim().toLowerCase()
 }
 
-function normalizeEndpointStateFromSnapshot(stateObj = {}) {
-	const endpointState = {}
-	for (const [k, v] of Object.entries(stateObj || {})) {
-		if (!endpointState['0']) endpointState['0'] = {}
-		endpointState['0'][k] = v
-	}
-	return endpointState
-}
-
-function sensorToState(sensor) {
-	const cluster = Number(sensor?.cluster_id ?? 0)
-	const attr = Number(sensor?.attr_id ?? 0)
-	if (cluster === 0x0006 && attr === 0x0000) {
-		const raw = Number(sensor?.value_u32 ?? sensor?.value_i32 ?? 0)
-		return { key: 'onoff', value: raw !== 0 }
-	}
-	if (cluster === 0x0402 && attr === 0x0000) {
-		const raw = Number(sensor?.value_i32 ?? 0)
-		return { key: 'temperature_c', value: raw / 100.0 }
-	}
-	if (cluster === 0x0405 && attr === 0x0000) {
-		const raw = Number(sensor?.value_u32 ?? 0)
-		return { key: 'humidity_pct', value: raw / 100.0 }
-	}
-	if (cluster === 0x0001 && attr === 0x0021) {
-		const raw = Number(sensor?.value_u32 ?? 0)
-		return { key: 'battery_pct', value: Math.floor(raw / 2) }
-	}
-	return null
-}
-
 const GatewayContext = createContext(null)
 
 export function GatewayProvider({ children }) {
@@ -54,34 +25,10 @@ export function GatewayProvider({ children }) {
 
 	const wsRef = useRef(null)
 	const reconnectTimerRef = useRef(null)
-	const devicesReloadTimerRef = useRef(null)
-	const automationsReloadTimerRef = useRef(null)
 
 	const applyDeviceList = useCallback((list) => {
 		const safeList = Array.isArray(list) ? list : []
 		setDevices(safeList)
-		setDeviceStates((prev) => {
-			const next = { ...prev }
-			for (const d of safeList) {
-				const uid = String(d?.device_uid ?? '')
-				if (!uid) continue
-				const fromSnapshot = normalizeEndpointStateFromSnapshot(d?.state && typeof d.state === 'object' ? d.state : {})
-				if (!next[uid]) next[uid] = {}
-				for (const [ep, st] of Object.entries(fromSnapshot)) {
-					next[uid][ep] = { ...(next[uid][ep] || {}), ...(st || {}) }
-				}
-				const sensors = Array.isArray(d?.sensors) ? d.sensors : []
-				for (const s of sensors) {
-					const endpoint = String(Number(s?.endpoint ?? 0))
-					if (!endpoint || endpoint === '0') continue
-					const mapped = sensorToState(s)
-					if (!mapped) continue
-					if (!next[uid][endpoint]) next[uid][endpoint] = {}
-					next[uid][endpoint][mapped.key] = mapped.value
-				}
-			}
-			return next
-		})
 		return safeList
 	}, [])
 
@@ -121,11 +68,13 @@ export function GatewayProvider({ children }) {
 			wsRef.current = ws
 
 			ws.onopen = () => {
+				if (wsRef.current !== ws) return
 				attempts = 0
 				setWsStatus('connected')
 			}
 
 			ws.onmessage = (ev) => {
+				if (wsRef.current !== ws) return
 				try {
 					if (!(ev?.data instanceof ArrayBuffer)) return
 					const msg = cborDecode(ev.data)
@@ -142,17 +91,13 @@ export function GatewayProvider({ children }) {
 					if (type === 'device.state') {
 						const uid = normalizeUid(data?.device_id ?? '')
 						const epNum = Number(data?.endpoint_id ?? data?.endpoint ?? 0)
-						const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : 0)
+						const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : '')
 						const key = String(data?.key ?? '')
 						if (!uid || !ep || !key) return
 						setDeviceStates((prev) => ({
 							...prev,
 							[uid]: {
 								...(prev[uid] || {}),
-								0: {
-									...((prev[uid] && prev[uid]['0']) || {}),
-									[key]: data?.value ?? null,
-								},
 								[ep]: {
 									...((prev[uid] && prev[uid][ep]) || {}),
 									[key]: data?.value ?? null,
@@ -163,15 +108,9 @@ export function GatewayProvider({ children }) {
 					if (type === 'gateway.event') {
 						const evType = String(data?.event_type ?? '')
 						if (evType === 'device.changed') {
-							if (devicesReloadTimerRef.current) clearTimeout(devicesReloadTimerRef.current)
-							devicesReloadTimerRef.current = setTimeout(() => {
-								loadDevices().catch(() => {})
-							}, 250)
+							loadDevices().catch(() => {})
 						} else if (evType === 'automation.changed') {
-							if (automationsReloadTimerRef.current) clearTimeout(automationsReloadTimerRef.current)
-							automationsReloadTimerRef.current = setTimeout(() => {
-								loadAutomations().catch(() => {})
-							}, 250)
+							loadAutomations().catch(() => {})
 						}
 					}
 				} catch {
@@ -180,6 +119,7 @@ export function GatewayProvider({ children }) {
 			}
 
 			ws.onclose = () => {
+				if (wsRef.current !== ws) return
 				if (cancelled) return
 				setWsStatus('disconnected')
 				attempts += 1
@@ -188,6 +128,7 @@ export function GatewayProvider({ children }) {
 			}
 
 			ws.onerror = () => {
+				if (wsRef.current !== ws) return
 				setWsStatus('error')
 			}
 		}
@@ -196,58 +137,14 @@ export function GatewayProvider({ children }) {
 		return () => {
 			cancelled = true
 			cleanup()
-			if (devicesReloadTimerRef.current) {
-				clearTimeout(devicesReloadTimerRef.current)
-				devicesReloadTimerRef.current = null
-			}
-			if (automationsReloadTimerRef.current) {
-				clearTimeout(automationsReloadTimerRef.current)
-				automationsReloadTimerRef.current = null
-			}
 			setWsStatus('disconnected')
 		}
 	}, [loadAutomations, loadDevices])
 
 	useEffect(() => {
+		loadDevices().catch(() => {})
 		loadAutomations().catch(() => {})
 	}, [loadDevices, loadAutomations])
-
-	useEffect(() => {
-		let cancelled = false
-		let timer = null
-		let attempt = 0
-
-		const schedule = (ms) => {
-			if (cancelled) return
-			if (timer) clearTimeout(timer)
-			timer = setTimeout(run, ms)
-		}
-
-		const run = async () => {
-			try {
-				const list = await loadDevices()
-				if (cancelled) return
-				const count = Array.isArray(list) ? list.length : 0
-				// Device snapshot can be unavailable right after boot; retry while empty.
-				if (count === 0 && attempt < 20) {
-					attempt += 1
-					schedule(Math.min(5000, 250 * 2 ** Math.min(attempt, 5)))
-				}
-			} catch {
-				if (cancelled) return
-				if (attempt < 20) {
-					attempt += 1
-					schedule(Math.min(5000, 250 * 2 ** Math.min(attempt, 5)))
-				}
-			}
-		}
-
-		run()
-		return () => {
-			cancelled = true
-			if (timer) clearTimeout(timer)
-		}
-	}, [loadDevices])
 
 	const value = useMemo(
 		() => ({

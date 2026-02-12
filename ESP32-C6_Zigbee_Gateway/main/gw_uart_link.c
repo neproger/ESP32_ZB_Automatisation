@@ -119,6 +119,9 @@ static bool is_forwardable_event(const char *type)
     if (strcmp(type, "device.join") == 0 || strcmp(type, "device.leave") == 0) {
         return true;
     }
+    if (strcmp(type, "device.changed") == 0) {
+        return true;
+    }
     return false;
 }
 
@@ -653,9 +656,6 @@ static void on_event(const gw_event_t *event, void *user_ctx)
         // Endpoint topology was updated from live Zigbee model into storage.
         // Push refreshed blob so S3/UI see new endpoint metadata.
         device_fb_request_async();
-    } else if (strcmp(event->type, "api_device_removed") == 0) {
-        // Local remove on C6 should always propagate full metadata update to S3.
-        device_fb_request_async();
     }
     if (!is_forwardable_event(event->type)) {
         return;
@@ -768,6 +768,16 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
             }
             return err;
         }
+        case GW_UART_CMD_REMOVE_DEVICE: {
+            if (!has_uid) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            esp_err_t err = gw_device_registry_remove(&uid);
+            if (err == ESP_OK) {
+                device_fb_request_async();
+            }
+            return err;
+        }
 
         default:
             return ESP_ERR_NOT_SUPPORTED;
@@ -851,14 +861,19 @@ static void uart_snapshot_task(void *arg)
             continue;
         }
         if (s_snapshot_requested) {
+            bool fb_sent = false;
             s_snapshot_requested = false;
             s_snapshot_tx_active = true;
             (void)uart_send_snapshot((uint16_t)(s_evt_seq++));
             if (s_device_fb_requested) {
                 s_device_fb_requested = false;
                 uart_send_device_fb_blob((uint16_t)(s_evt_seq++));
+                fb_sent = true;
             }
             s_snapshot_tx_active = false;
+            if (fb_sent) {
+                gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
+            }
             uart_request_states_after_snapshot();
         }
         if (s_device_fb_requested) {
@@ -866,18 +881,24 @@ static void uart_snapshot_task(void *arg)
             s_snapshot_tx_active = true;
             uart_send_device_fb_blob((uint16_t)(s_evt_seq++));
             s_snapshot_tx_active = false;
+            gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
         }
 
         while (s_snapshot_requested || s_device_fb_requested) {
             if (s_snapshot_requested) {
+                bool fb_sent = false;
                 s_snapshot_requested = false;
                 s_snapshot_tx_active = true;
                 (void)uart_send_snapshot((uint16_t)(s_evt_seq++));
                 if (s_device_fb_requested) {
                     s_device_fb_requested = false;
                     uart_send_device_fb_blob((uint16_t)(s_evt_seq++));
+                    fb_sent = true;
                 }
                 s_snapshot_tx_active = false;
+                if (fb_sent) {
+                    gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
+                }
                 uart_request_states_after_snapshot();
             }
             if (s_device_fb_requested) {
@@ -885,6 +906,7 @@ static void uart_snapshot_task(void *arg)
                 s_snapshot_tx_active = true;
                 uart_send_device_fb_blob((uint16_t)(s_evt_seq++));
                 s_snapshot_tx_active = false;
+                gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
             }
         }
     }

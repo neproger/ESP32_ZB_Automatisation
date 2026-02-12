@@ -16,20 +16,12 @@
 #include "gw_core/automation_store.h"
 #include "gw_core/cbor.h"
 #include "gw_core/device_fb_store.h"
-#include "gw_core/device_registry.h"
-#include "gw_core/device_storage.h"
 #include "gw_core/event_bus.h"
 #include "gw_zigbee/gw_zigbee.h"
 
 
 #define GW_HTTP_MAX_BODY (16 * 1024)
 #define GW_HTTP_ID_BUFFER 128
-#define GW_DEVICE_FB_MAGIC 0x31424644u
-#define GW_DEVICE_FB_VERSION 1u
-#define GW_DEVICE_FB_UID_LEN 19u
-#define GW_DEVICE_FB_NAME_LEN 32u
-#define GW_DEVICE_FB_HEADER_SIZE 12u
-#define GW_DEVICE_FB_DEVICE_SIZE (GW_DEVICE_FB_UID_LEN + 2u + 8u + 1u + 1u + GW_DEVICE_FB_NAME_LEN)
 
 static bool gw_http_percent_decode(const char *src, char *dst, size_t dst_size);
 static bool gw_http_extract_id(const char *uri, const char *prefix, char *out, size_t out_size);
@@ -49,60 +41,6 @@ static esp_err_t api_automation_detail_patch_handler(httpd_req_t *req);
 static esp_err_t api_automation_detail_delete_handler(httpd_req_t *req);
 static esp_err_t api_automation_post_handler(httpd_req_t *req);
 static esp_err_t api_actions_post_handler(httpd_req_t *req);
-
-static uint16_t rd_le16(const uint8_t *p)
-{
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-static uint32_t rd_le32(const uint8_t *p)
-{
-    return (uint32_t)p[0] |
-           ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
-}
-
-static void overlay_device_names_into_fb(uint8_t *buf, size_t len)
-{
-    if (!buf || len < GW_DEVICE_FB_HEADER_SIZE) {
-        return;
-    }
-
-    uint32_t magic = rd_le32(&buf[0]);
-    uint16_t version = rd_le16(&buf[4]);
-    uint16_t device_count = rd_le16(&buf[6]);
-    uint16_t endpoint_count = rd_le16(&buf[8]);
-    (void)endpoint_count;
-
-    if (magic != GW_DEVICE_FB_MAGIC || version != GW_DEVICE_FB_VERSION) {
-        return;
-    }
-
-    size_t need = GW_DEVICE_FB_HEADER_SIZE + ((size_t)device_count * GW_DEVICE_FB_DEVICE_SIZE);
-    if (len < need) {
-        return;
-    }
-
-    size_t off = GW_DEVICE_FB_HEADER_SIZE;
-    for (size_t i = 0; i < (size_t)device_count; i++) {
-        char uid_text[GW_DEVICE_FB_UID_LEN + 1] = {0};
-        memcpy(uid_text, &buf[off], GW_DEVICE_FB_UID_LEN);
-        uid_text[GW_DEVICE_FB_UID_LEN] = '\0';
-
-        gw_device_uid_t uid = {0};
-        strlcpy(uid.uid, uid_text, sizeof(uid.uid));
-        if (uid.uid[0] != '\0') {
-            gw_device_t reg = {0};
-            if (gw_device_registry_get(&uid, &reg) == ESP_OK && reg.name[0] != '\0') {
-                size_t name_off = off + GW_DEVICE_FB_UID_LEN + 2u + 8u + 1u + 1u;
-                memset(&buf[name_off], 0, GW_DEVICE_FB_NAME_LEN);
-                strlcpy((char *)&buf[name_off], reg.name, GW_DEVICE_FB_NAME_LEN);
-            }
-        }
-        off += GW_DEVICE_FB_DEVICE_SIZE;
-    }
-}
 
 static int hex_digit(int c)
 {
@@ -702,9 +640,6 @@ static esp_err_t api_devices_flatbuffer_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    // Keep topology from C6, but apply user names persisted on S3 registry.
-    overlay_device_names_into_fb(buf, len);
-
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "X-Device-Buffer-Format", "flatbuffer");
     esp_err_t err = httpd_resp_send(req, (const char *)buf, (ssize_t)len);
@@ -714,7 +649,7 @@ static esp_err_t api_devices_flatbuffer_get_handler(httpd_req_t *req)
 
 static esp_err_t api_devices_post_handler(httpd_req_t *req)
 {
-    // Body (CBOR): { device_uid: string, name?: string, has_onoff?: bool, has_button?: bool }
+    // Body (CBOR): { device_uid: string, name: string }
     uint8_t *buf = NULL;
     size_t len = 0;
     if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
@@ -735,65 +670,37 @@ static esp_err_t api_devices_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    gw_device_t d = {0};
-    if (gw_device_registry_get(&duid, &d) != ESP_OK) {
-        memset(&d, 0, sizeof(d));
-        d.device_uid = duid;
-    }
-
     gw_cbor_slice_t name_s = {0};
-    bool has_name_update = false;
-    if (cbor_map_find_val_buf(buf, len, "name", &name_s)) {
-        char name_buf[sizeof(d.name)] = {0};
-        if (!cbor_text_copy(&name_s, name_buf, sizeof(name_buf))) {
-            free(buf);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name");
-            return ESP_OK;
-        }
-        // Allow empty string to clear name.
-        strlcpy(d.name, name_buf, sizeof(d.name));
-        has_name_update = true;
+    if (!cbor_map_find_val_buf(buf, len, "name", &name_s)) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing name");
+        return ESP_OK;
     }
-
-    gw_cbor_slice_t onoff_s = {0};
-    bool b = false;
-    if (cbor_map_find_val_buf(buf, len, "has_onoff", &onoff_s) && gw_cbor_slice_to_bool(&onoff_s, &b)) {
-        d.has_onoff = b;
-    }
-
-    gw_cbor_slice_t button_s = {0};
-    if (cbor_map_find_val_buf(buf, len, "has_button", &button_s) && gw_cbor_slice_to_bool(&button_s, &b)) {
-        d.has_button = b;
-    }
-
-    if (has_name_update) {
-        esp_err_t c6err = gw_zigbee_set_device_name(&duid, d.name);
-        if (c6err != ESP_OK) {
-            free(buf);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "c6 rename failed");
-            return ESP_OK;
-        }
-        esp_err_t sync_err = gw_zigbee_sync_device_fb();
-        if (sync_err != ESP_OK) {
-            free(buf);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "device blob sync failed");
-            return ESP_OK;
-        }
-    }
-
-    esp_err_t err = gw_device_registry_upsert(&d);
-    free(buf);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "registry error");
+    char name_buf[32] = {0};
+    if (!cbor_text_copy(&name_s, name_buf, sizeof(name_buf))) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name");
         return ESP_OK;
     }
 
-    (void)gw_device_registry_sync_endpoints(&d.device_uid);
-    gw_event_bus_publish("device.changed", "rest", d.device_uid.uid, d.short_addr, "updated");
+    esp_err_t err = gw_zigbee_set_device_name(&duid, name_buf);
+    free(buf);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND) {
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "device not found");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "c6 rename failed");
+        }
+        return ESP_OK;
+    }
+
+    gw_event_bus_publish("api_device_rename", "rest", duid.uid, 0, "requested");
     gw_cbor_writer_t w;
     gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    esp_err_t rc = gw_cbor_writer_map(&w, 2);
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "queued");
     if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
@@ -803,7 +710,7 @@ static esp_err_t api_devices_post_handler(httpd_req_t *req)
 
 static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
 {
-    // Body (CBOR): { device_uid: string, kick?: bool }
+    // Body (CBOR): { device_uid: string }
     uint8_t *buf = NULL;
     size_t len = 0;
     if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
@@ -824,41 +731,19 @@ static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    bool kick = false;
-    gw_cbor_slice_t kick_s = {0};
-    if (cbor_map_find_val_buf(buf, len, "kick", &kick_s)) {
-        (void)gw_cbor_slice_to_bool(&kick_s, &kick);
-    }
     free(buf);
 
-    uint16_t short_addr = 0;
-    if (kick) {
-        gw_device_t d = {0};
-        if (gw_device_registry_get(&uid, &d) != ESP_OK) {
-            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "device not found");
-            return ESP_OK;
-        }
-        short_addr = d.short_addr;
-
-        esp_err_t lerr = gw_zigbee_device_leave(&uid, short_addr, false);
-        if (lerr != ESP_OK) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "leave failed");
-            return ESP_OK;
-        }
-
-        char msg[64];
-        (void)snprintf(msg, sizeof(msg), "uid=%s short=0x%04x", uid.uid, (unsigned)short_addr);
-        gw_event_bus_publish("api_device_kick", "rest", uid.uid, short_addr, msg);
-    }
-
-    esp_err_t rm = gw_device_registry_remove(&uid);
+    esp_err_t rm = gw_zigbee_remove_device(&uid);
     if (rm != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "device not found");
+        if (rm == ESP_ERR_NOT_FOUND) {
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "device not found");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "c6 remove failed");
+        }
         return ESP_OK;
     }
 
-    gw_event_bus_publish("api_device_removed", "rest", uid.uid, short_addr, kick ? "kick=1" : "kick=0");
-    gw_event_bus_publish("device.changed", "rest", uid.uid, short_addr, "removed");
+    gw_event_bus_publish("api_device_remove", "rest", uid.uid, 0, "requested");
 
     gw_cbor_writer_t w;
     gw_cbor_writer_init(&w);
@@ -867,8 +752,8 @@ static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
     if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_uid");
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, uid.uid);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "kick");
-    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, kick);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "queued");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
     gw_cbor_writer_free(&w);

@@ -1,3 +1,5 @@
+﻿//UTF-8
+//Devices.jsx
 import { Link } from 'react-router-dom'
 import { useCallback, useMemo, useState } from 'react'
 import { postCbor } from '../api.js'
@@ -51,16 +53,15 @@ export default function Devices() {
 	}, [])
 
 	const removeDevice = useCallback(
-		async (uid, kick) => {
+		async (uid) => {
 			const u = String(uid ?? '')
 			if (!u) return
-			const text = kick ? `Remove + kick device ${u}?` : `Remove device ${u} from memory?`
-			if (!confirm(text)) return
+			if (!confirm(`Удалить устройство ${u} из памяти шлюза?`)) return
 
-			setStatus(kick ? 'Removing + kicking...' : 'Removing...')
+			setStatus('Удаление...')
 			try {
-				await postCbor('/api/devices/remove', { device_uid: u, kick: Boolean(kick) })
-				setStatus(kick ? 'Removed + kick requested (waiting WS sync)' : 'Removed (waiting WS sync)')
+				await postCbor('/api/devices/remove', { device_uid: u })
+				setStatus('Запрос на удаление отправлен (ждем событие обновления)')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
@@ -125,7 +126,7 @@ export default function Devices() {
 								</tr>
 							) : (
 								sortedDevices.map((d) => (
-									<tr key={String(d?.device_uid ?? Math.random())}>
+									<tr key={String(d?.device_uid ?? '')}>
 										<td>
 											<Link to={`/devices/${encodeURIComponent(String(d?.device_uid ?? ''))}`}>
 												<code>{String(d?.device_uid ?? '')}</code>
@@ -139,8 +140,7 @@ export default function Devices() {
 										<td>
 											<div className="row">
 												<button onClick={() => renameDevice(d?.device_uid, d?.name)}>Rename</button>
-												<button onClick={() => removeDevice(d?.device_uid, false)}>Forget</button>
-												<button onClick={() => removeDevice(d?.device_uid, true)}>Forget + kick</button>
+												<button onClick={() => removeDevice(d?.device_uid)}>Удалить</button>
 											</div>
 										</td>
 									</tr>

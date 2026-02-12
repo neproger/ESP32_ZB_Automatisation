@@ -1,8 +1,14 @@
+﻿//UTF-8
+//Device.jsx
 import { Link, useParams } from 'react-router-dom'
 import { useCallback, useMemo, useState } from 'react'
 import { describeAttr, describeCluster, describeDeviceId, describeProfile, formatSensorValue, hex16 } from '../zigbee/zcl.js'
 import { execAction } from '../api.js'
 import { useGateway } from '../gateway.jsx'
+
+function normalizeUid(v) {
+	return String(v ?? '').trim().toLowerCase()
+}
 
 function renderSensorValue(s) {
 	return formatSensorValue(s)
@@ -93,13 +99,12 @@ export default function Device() {
 	const [status, setStatus] = useState('')
 
 	const device = useMemo(() => {
-		const u = String(uid ?? '')
-		return (Array.isArray(devices) ? devices : []).find((d) => String(d?.device_uid ?? '') === u) || null
+		const u = normalizeUid(uid)
+		return (Array.isArray(devices) ? devices : []).find((d) => normalizeUid(d?.device_uid) === u) || null
 	}, [devices, uid])
 
 	const endpoints = useMemo(() => (Array.isArray(device?.endpoints) ? device.endpoints : []), [device])
 	const sensors = useMemo(() => (Array.isArray(device?.sensors) ? device.sensors : []), [device])
-	const state = useMemo(() => ((device?.state && typeof device.state === 'object') ? device.state : {}), [device])
 
 	const sortedEndpoints = useMemo(() => {
 		const items = Array.isArray(endpoints) ? [...endpoints] : []
@@ -108,7 +113,7 @@ export default function Device() {
 	}, [endpoints])
 
 	const liveStateByEndpoint = useMemo(() => {
-		const u = String(uid ?? '')
+		const u = normalizeUid(uid)
 		return (u && deviceStates?.[u]) ? deviceStates[u] : {}
 	}, [uid, deviceStates])
 
@@ -143,12 +148,10 @@ export default function Device() {
 		(endpoint) => {
 			const ep = String(Number(endpoint ?? 0))
 			return {
-				...(state && typeof state === 'object' ? state : {}),
-				...((liveStateByEndpoint && liveStateByEndpoint['0']) || {}),
 				...((liveStateByEndpoint && liveStateByEndpoint[ep]) || {}),
 			}
 		},
-		[liveStateByEndpoint, state],
+		[liveStateByEndpoint],
 	)
 
 	const getLevelValue = useCallback(
@@ -163,6 +166,18 @@ export default function Device() {
 			return 0
 		},
 		[levelByEndpoint, getEndpointState, getSensorValue],
+	)
+
+	const getOnOffValue = useCallback(
+		(endpoint) => {
+			const ep = Number(endpoint)
+			const st = getEndpointState(ep)
+			if (typeof st?.onoff === 'boolean') return st.onoff
+			const fromSensor = getSensorValue(ep, 0x0006, 0x0000)
+			if (fromSensor != null) return Number(fromSensor) !== 0
+			return false
+		},
+		[getEndpointState, getSensorValue],
 	)
 
 	const getTempKValue = useCallback(
@@ -201,7 +216,7 @@ export default function Device() {
 
 	const sendOnOff = useCallback(
 		async (endpoint, cmd) => {
-			const u = String(uid ?? '')
+			const u = normalizeUid(uid)
 			if (!u) return
 			setStatus('Sending...')
 			try {
@@ -221,7 +236,7 @@ export default function Device() {
 
 	const sendLevel = useCallback(
 		async (endpoint) => {
-			const u = String(uid ?? '')
+			const u = normalizeUid(uid)
 			const level = getLevelValue(endpoint)
 			if (!u) return
 			if (!Number.isFinite(level)) return
@@ -245,7 +260,7 @@ export default function Device() {
 
 	const sendColor = useCallback(
 		async (endpoint) => {
-			const u = String(uid ?? '')
+			const u = normalizeUid(uid)
 			const hex = String(getColorValue(endpoint))
 			if (!u) return
 			const { x, y } = rgbHexToXy(hex)
@@ -270,7 +285,7 @@ export default function Device() {
 
 	const sendTemp = useCallback(
 		async (endpoint) => {
-			const u = String(uid ?? '')
+			const u = normalizeUid(uid)
 			const k = Number(getTempKValue(endpoint))
 			if (!u || !Number.isFinite(k) || k <= 0) return
 			const mireds = Math.round(1_000_000 / k)
@@ -300,7 +315,7 @@ export default function Device() {
 					<div className="muted">
 						{device?.name ? (
 							<>
-								<span>{String(device.name)}</span> <span className="muted">·</span>{' '}
+								<span>{String(device.name)}</span> <span className="muted">В·</span>{' '}
 							</>
 						) : null}
 						<code>{String(uid ?? '')}</code>
@@ -362,11 +377,7 @@ export default function Device() {
 														<label className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
 															<input
 																type="checkbox"
-																checked={Boolean(
-																	liveStateByEndpoint?.[String(Number(e?.endpoint ?? 0))]?.onoff ??
-																	liveStateByEndpoint?.['0']?.onoff ??
-																	state?.onoff
-																)}
+																checked={getOnOffValue(Number(e?.endpoint ?? 0))}
 																onChange={(ev) => sendOnOff(Number(e?.endpoint ?? 1), ev?.target?.checked ? 'on' : 'off')}
 															/>
 															On

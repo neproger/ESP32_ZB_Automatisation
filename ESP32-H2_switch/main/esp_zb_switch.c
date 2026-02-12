@@ -43,6 +43,9 @@ static switch_func_pair_t button_func_pair[] = {
 
 static const char *TAG = "ESP_ZB_ON_OFF_SWITCH";
 static bool s_factory_reset_requested;
+static bool s_factory_reset_hold_alert_active;
+static bool s_factory_reset_hold_led_on;
+static esp_timer_handle_t s_factory_reset_hold_blink_timer;
 static uint8_t s_last_binding_total;
 static int64_t s_last_binding_total_update_us;
 static bool s_relay_state;
@@ -53,7 +56,6 @@ static uint16_t s_fake_humi_centi_pct = 4500;
 static uint16_t s_fake_humi_min_centi_pct = ESP_ZB_ZCL_REL_HUMIDITY_MEASUREMENT_MIN_MEASURED_VALUE_MINIMUM;
 static uint16_t s_fake_humi_max_centi_pct = 10000; /* 100.00% */
 static uint16_t s_fake_humi_tolerance_centi_pct = 50; /* 0.50% */
-static bool s_fake_reporting_started;
 
 /* RGB LED (WS2812/NeoPixel) state for HA_RGB_LIGHT_ENDPOINT */
 static bool s_rgb_on;
@@ -88,6 +90,7 @@ static rgb_persist_t s_rgb_identify_saved;
 /* Retry interval for BDB network steering after failure */
 #define ESP_ZB_STEERING_RETRY_DELAY_MS (3000)
 #define ESP_ZB_STEERING_RETRY_DELAY_S  (ESP_ZB_STEERING_RETRY_DELAY_MS / 1000)
+#define FACTORY_RESET_HOLD_BLINK_MS    (180)
 
 static const char *zb_nwk_cmd_status_to_string(uint8_t status)
 {
@@ -807,6 +810,52 @@ static void relay_set(bool on)
     ESP_LOGI(TAG, "Relay(test LED) -> %s", on ? "ON" : "OFF");
 }
 
+static void factory_reset_hold_blink_cb(void *arg)
+{
+    (void)arg;
+    s_factory_reset_hold_led_on = !s_factory_reset_hold_led_on;
+    gpio_set_level(GPIO_OUTPUT_IO_RELAY_TEST, s_factory_reset_hold_led_on ? GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL
+                                                                          : !GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL);
+}
+
+static void factory_reset_hold_alert_start(void)
+{
+    if (s_factory_reset_hold_alert_active) {
+        return;
+    }
+    if (!s_factory_reset_hold_blink_timer) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = factory_reset_hold_blink_cb,
+            .name = "fr_hold_blink",
+        };
+        if (esp_timer_create(&timer_args, &s_factory_reset_hold_blink_timer) != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to create factory reset hold blink timer");
+            return;
+        }
+    }
+
+    s_factory_reset_hold_alert_active = true;
+    s_factory_reset_hold_led_on = true;
+    gpio_set_level(GPIO_OUTPUT_IO_RELAY_TEST, GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL);
+    (void)esp_timer_stop(s_factory_reset_hold_blink_timer);
+    (void)esp_timer_start_periodic(s_factory_reset_hold_blink_timer, FACTORY_RESET_HOLD_BLINK_MS * 1000);
+    ESP_LOGW(TAG, "Factory reset arming: hold detected, LED blink started");
+}
+
+static void factory_reset_hold_alert_stop(void)
+{
+    if (!s_factory_reset_hold_alert_active) {
+        return;
+    }
+    s_factory_reset_hold_alert_active = false;
+    s_factory_reset_hold_led_on = false;
+    if (s_factory_reset_hold_blink_timer) {
+        (void)esp_timer_stop(s_factory_reset_hold_blink_timer);
+    }
+    gpio_set_level(GPIO_OUTPUT_IO_RELAY_TEST, s_relay_state ? GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL
+                                                             : !GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL);
+}
+
 static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t *message)
 {
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
@@ -885,72 +934,14 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
     }
 }
 
-static void sensor_send_one_shot_reports(void)
-{
-    /* Send reports to coordinator (short 0x0000), endpoint 1 by default */
-    const uint16_t coordinator_short = 0x0000;
-
-    esp_zb_lock_acquire(portMAX_DELAY);
-
-    esp_zb_zcl_report_attr_cmd_t rep = {0};
-    rep.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-    rep.zcl_basic_cmd.dst_addr_u.addr_short = coordinator_short;
-    rep.zcl_basic_cmd.dst_endpoint = 1;
-    rep.zcl_basic_cmd.src_endpoint = HA_TEMP_HUMI_SENSOR_ENDPOINT;
-    rep.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-    rep.dis_default_resp = 1;
-    rep.manuf_specific = 0;
-    rep.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
-
-    rep.clusterID = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT;
-    rep.attributeID = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID;
-    (void)esp_zb_zcl_report_attr_cmd_req(&rep);
-
-    rep.clusterID = ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT;
-    rep.attributeID = ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID;
-    (void)esp_zb_zcl_report_attr_cmd_req(&rep);
-
-    esp_zb_lock_release();
-}
-
-static void sensor_fake_update_and_report_cb(uint8_t param)
-{
-    (void)param;
-
-    /* Simple fake waveform: temp 23.00 -> 28.00 -> 23.00 ... ; humidity 45% -> 55% -> 45% ... */
-    static int dir = 1;
-    s_fake_temp_centi_c += (int16_t)(dir * 10); /* 0.10°C step */
-    s_fake_humi_centi_pct += (uint16_t)(dir * 20); /* 0.20% step */
-    if (s_fake_temp_centi_c >= 2800 || s_fake_temp_centi_c <= 2300) {
-        dir *= -1;
-    }
-    if (s_fake_humi_centi_pct > 5500) {
-        s_fake_humi_centi_pct = 5500;
-    } else if (s_fake_humi_centi_pct < 4500) {
-        s_fake_humi_centi_pct = 4500;
-    }
-
-    esp_zb_lock_acquire(portMAX_DELAY);
-    (void)esp_zb_zcl_set_attribute_val(HA_TEMP_HUMI_SENSOR_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
-                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-                                      &s_fake_temp_centi_c, false);
-    (void)esp_zb_zcl_set_attribute_val(HA_TEMP_HUMI_SENSOR_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
-                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
-                                      &s_fake_humi_centi_pct, false);
-    esp_zb_lock_release();
-
-    ESP_LOGI(TAG, "Fake sensor: temp=%.2fC hum=%.2f%%",
-             (double)s_fake_temp_centi_c / 100.0, (double)s_fake_humi_centi_pct / 100.0);
-
-    sensor_send_one_shot_reports();
-
-    /* Repeat every 10 seconds */
-    esp_zb_scheduler_alarm((esp_zb_callback_t)sensor_fake_update_and_report_cb, 0, 10 * 1000);
-}
-
 static void zb_buttons_handler(switch_func_pair_t *button_func_pair)
 {
+    if (button_func_pair->func == SWITCH_FACTORY_RESET_HOLD_CONTROL) {
+        factory_reset_hold_alert_start();
+        return;
+    }
     if (button_func_pair->func == SWITCH_FACTORY_RESET_CONTROL) {
+        factory_reset_hold_alert_stop();
         if (!s_factory_reset_requested) {
             s_factory_reset_requested = true;
             ESP_LOGW(TAG, "Button long-press: factory reset requested (erase zb_storage and restart)");
@@ -1063,10 +1054,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Joined network successfully (PAN ID: 0x%04hx, Channel:%d, Short Address: 0x%04hx)",
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
             zb_request_binding_table_dump(0);
-            if (!s_fake_reporting_started) {
-                s_fake_reporting_started = true;
-                esp_zb_scheduler_alarm((esp_zb_callback_t)sensor_fake_update_and_report_cb, 0, 3 * 1000);
-            }
+            ESP_LOGI(TAG, "Temp/Humidity reporting is standard ZCL: wait for coordinator Configure Reporting");
         } else {
             ESP_LOGW(TAG, "Network steering failed (status: %s), retry in %ds", esp_err_to_name(err_status),
                      ESP_ZB_STEERING_RETRY_DELAY_S);

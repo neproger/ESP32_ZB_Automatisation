@@ -62,6 +62,7 @@ typedef enum {
     GW_UART_CMD_SYNC_SNAPSHOT = 9, /* запрос полного списка устройств/endpoint от C6 */
     GW_UART_CMD_SYNC_DEVICE_FB = 10, /* запрос сырого device FlatBuffer снимка */
     GW_UART_CMD_SET_DEVICE_NAME = 11, /* device_uid + value_text */
+    GW_UART_CMD_REMOVE_DEVICE = 12, /* device_uid */
 } gw_uart_cmd_id_t;
 
 typedef enum {

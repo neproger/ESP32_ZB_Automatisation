@@ -92,8 +92,10 @@ static void switch_driver_button_detected(void *arg)
 {
     gpio_num_t io_num = GPIO_NUM_NC;
     switch_func_pair_t button_func_pair;
+    switch_func_pair_t hold_evt_pair;
     static switch_state_t switch_state = SWITCH_IDLE;
     bool evt_flag = false;
+    bool long_press_hold_notified = false;
     int64_t press_start_us = 0;
 
     for (;;) {
@@ -103,6 +105,7 @@ static void switch_driver_button_detected(void *arg)
             switch_driver_gpios_intr_enabled(false);
             evt_flag = true;
             press_start_us = 0;
+            long_press_hold_notified = false;
         }
         while (evt_flag) {
             bool value = gpio_get_level(io_num);
@@ -114,7 +117,20 @@ static void switch_driver_button_detected(void *arg)
                 }
                 break;
             case SWITCH_PRESS_DETECTED:
-                switch_state = (value == GPIO_INPUT_LEVEL_ON) ? SWITCH_PRESS_DETECTED : SWITCH_RELEASE_DETECTED;
+                if (value == GPIO_INPUT_LEVEL_ON) {
+                    if (!long_press_hold_notified && press_start_us > 0) {
+                        const int64_t held_ms = (esp_timer_get_time() - press_start_us) / 1000;
+                        if (held_ms >= SWITCH_DRIVER_LONG_PRESS_MS) {
+                            hold_evt_pair = button_func_pair;
+                            hold_evt_pair.func = SWITCH_FACTORY_RESET_HOLD_CONTROL;
+                            (*func_ptr)(&hold_evt_pair);
+                            long_press_hold_notified = true;
+                        }
+                    }
+                    switch_state = SWITCH_PRESS_DETECTED;
+                } else {
+                    switch_state = SWITCH_RELEASE_DETECTED;
+                }
                 break;
             case SWITCH_RELEASE_DETECTED:
                 switch_state = SWITCH_IDLE;

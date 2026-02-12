@@ -1,5 +1,8 @@
+﻿//UTF-8
+//Events.jsx
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useGateway } from '../gateway.jsx'
+import { formatEventData } from '../zigbee/eventFormat.js'
 
 function fmtTs(tsMs) {
 	const v = Number(tsMs ?? 0)
@@ -8,7 +11,7 @@ function fmtTs(tsMs) {
 }
 
 export default function Events() {
-	const { events, wsStatus } = useGateway()
+	const { events, devices, wsStatus } = useGateway()
 	const [paused, setPaused] = useState(false)
 	const [clearedAtMs, setClearedAtMs] = useState(0)
 	const [status] = useState('')
@@ -48,6 +51,15 @@ export default function Events() {
 		return [...base].sort((a, b) => Number(a?.ts_ms ?? 0) - Number(b?.ts_ms ?? 0))
 	}, [events, paused, clearedAtMs])
 
+	const deviceByUid = useMemo(() => {
+		const byUid = new Map()
+		for (const d of Array.isArray(devices) ? devices : []) {
+			const uid = String(d?.device_uid ?? '').trim().toLowerCase()
+			if (uid) byUid.set(uid, d)
+		}
+		return byUid
+	}, [devices])
+
 	const clear = useCallback(() => {
 		setClearedAtMs(Date.now())
 	}, [])
@@ -61,10 +73,20 @@ export default function Events() {
 		}
 	}, [])
 
+	const eventToText = useCallback((event) => {
+		return formatEventData(event, {
+			getDeviceByUid: (uid) => deviceByUid.get(String(uid ?? '').trim().toLowerCase()) || null,
+			fallbackText: payloadToText,
+		})
+	}, [deviceByUid, payloadToText])
+
 	const dataDeviceLabel = useCallback((e) => {
-		const uid = String(e?.data?.device_id ?? '')
-		return uid || '-'
-	}, [])
+		const uid = String(e?.data?.device_id ?? '').trim()
+		if (!uid) return '-'
+		const found = deviceByUid.get(uid.toLowerCase()) || null
+		const name = String(found?.name ?? '').trim()
+		return name ? `${name} (${uid})` : uid
+	}, [deviceByUid])
 
 	return (
 		<div className="page">
@@ -103,14 +125,14 @@ export default function Events() {
 								</tr>
 							) : (
 								sortedEvents.map((e, index) => (
-									<tr key={`${Number(e?.ts_ms ?? 0)}_${index}`}>
+									<tr key={`${Number(e?.ts_ms ?? 0)}_${index}`} className="event-flash">
 										<td className="muted">
 											{fmtTs(e?.ts_ms)}
 										</td>
 										<td>{String(e?.type ?? '')}</td>
 										<td>{dataDeviceLabel(e)}</td>
 										<td className="mono" style={{ whiteSpace: 'pre-wrap' }}>
-											{payloadToText(e?.data)}
+											{eventToText(e)}
 										</td>
 									</tr>
 								))

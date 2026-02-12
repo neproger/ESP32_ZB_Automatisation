@@ -351,14 +351,7 @@ static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
         if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
             strlcpy(cmd, e->payload_cmd, sizeof(cmd));
         }
-    } else if (strcmp(e->type, "zigbee.cmd") == 0) {
-        out_type = "device.event";
-        data_kind = DATA_DEVICE_EVENT;
-        device_event_name = "command";
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
-            strlcpy(cmd, e->payload_cmd, sizeof(cmd));
-        }
-    } else if (strcmp(e->type, "zigbee.attr_report") == 0) {
+    } else if (strcmp(e->type, "zigbee.attr_report") == 0 || strcmp(e->type, "zigbee.attr_read") == 0) {
         out_type = "device.state";
         data_kind = DATA_DEVICE_STATE;
         map_state_key(e->payload_cluster, e->payload_attr, state_key, sizeof(state_key));

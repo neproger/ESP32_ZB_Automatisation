@@ -1,3 +1,5 @@
+﻿//UTF-8
+//Automations.jsx
 import { useCallback, useMemo, useState } from 'react'
 import { postCbor, patchCbor, deleteCbor, execAction } from '../api.js'
 import { useGateway } from '../gateway.jsx'

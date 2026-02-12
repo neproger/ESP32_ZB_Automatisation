@@ -40,6 +40,7 @@
 #include "zcl/esp_zigbee_zcl_command.h"
 #include "zcl/esp_zigbee_zcl_core.h"
 #include "zcl/esp_zigbee_zcl_on_off.h"
+#include "zcl/esp_zigbee_zcl_level.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 #include "zcl/esp_zigbee_zcl_humidity_meas.h"
 #include "zcl/esp_zigbee_zcl_power_config.h"
@@ -55,6 +56,36 @@ static const char *TAG = "ESP_ZB_GATEWAY";
 #define GW_ZB_ATTR_MEASURED_VALUE             0x0000
 #define GW_ZB_ATTR_OCCUPANCY                  0x0000
 #define GW_ZB_ATTR_BATTERY_VOLTAGE            0x0020
+
+static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
+{
+    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+        switch (cmd_id) {
+        case ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID: return "off";
+        case ESP_ZB_ZCL_CMD_ON_OFF_ON_ID: return "on";
+        case ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID: return "toggle";
+        case ESP_ZB_ZCL_CMD_ON_OFF_OFF_WITH_EFFECT_ID: return "off_effect";
+        case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_RECALL_GLOBAL_SCENE_ID: return "on_recall";
+        case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_TIMED_OFF_ID: return "on_timed";
+        default: return "onoff_unknown";
+        }
+    }
+    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL) {
+        switch (cmd_id) {
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL: return "move_to_level";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE: return "move";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP: return "step";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP: return "stop";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL_WITH_ON_OFF: return "mv_lvl_onoff";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_WITH_ON_OFF: return "move_onoff";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP_WITH_ON_OFF: return "step_onoff";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP_WITH_ON_OFF: return "stop_onoff";
+        case ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_CLOSEST_FREQUENCY: return "move_freq";
+        default: return "level_unknown";
+        }
+    }
+    return "unknown";
+}
 
 static void gw_log_heap_task(void *arg)
 {
@@ -420,7 +451,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                 }
 
                 if (has_state_update) {
-                    gw_event_bus_publish_zb("zigbee.attr_report",
+                    gw_event_bus_publish_zb("zigbee.attr_read",
                                             "zigbee",
                                             uid.uid,
                                             src_short,
@@ -469,43 +500,50 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         if (m == NULL) {
             return ESP_OK;
         }
-
-        if (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && m->info.command.id == ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID) {
-            uint16_t src_short = 0;
-            if (m->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
-                src_short = m->info.src_address.u.short_addr;
-            }
-
-            gw_device_uid_t uid = {0};
-            if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
-                (void)gw_zigbee_discover_by_short(src_short);
-            }
-
-            char msg[128];
-            (void)snprintf(msg,
-                           sizeof(msg),
-                           "on_off toggle (src=0x%04x ep=%u rssi=%d)",
-                           (unsigned)src_short,
-                           (unsigned)m->info.src_endpoint,
-                           (int)m->info.header.rssi);
-
-            gw_event_bus_publish_zb("zigbee.command",
-                                    "zigbee",
-                                    uid.uid,
-                                    src_short,
-                                    msg,
-                                    m->info.src_endpoint,
-                                    "toggle",
-                                    ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
-                                    0,
-                                    GW_EVENT_VALUE_NONE,
-                                    false,
-                                    0,
-                                    0.0,
-                                    NULL,
-                                    NULL,
-                                    0);
+        const bool known_cluster =
+            (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) ||
+            (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL);
+        if (!known_cluster) {
+            return ESP_OK;
         }
+
+        uint16_t src_short = 0;
+        if (m->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
+            src_short = m->info.src_address.u.short_addr;
+        }
+
+        gw_device_uid_t uid = {0};
+        if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+            (void)gw_zigbee_discover_by_short(src_short);
+        }
+
+        const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
+        char msg[128];
+        (void)snprintf(msg,
+                       sizeof(msg),
+                       "cmd cluster=0x%04x id=0x%02x src=0x%04x ep=%u rssi=%d",
+                       (unsigned)m->info.cluster,
+                       (unsigned)m->info.command.id,
+                       (unsigned)src_short,
+                       (unsigned)m->info.src_endpoint,
+                       (int)m->info.header.rssi);
+
+        gw_event_bus_publish_zb("zigbee.command",
+                                "zigbee",
+                                uid.uid,
+                                src_short,
+                                msg,
+                                m->info.src_endpoint,
+                                cmd_name,
+                                m->info.cluster,
+                                0,
+                                GW_EVENT_VALUE_NONE,
+                                false,
+                                0,
+                                0.0,
+                                NULL,
+                                NULL,
+                                0);
     }
 
     return ESP_OK;
@@ -644,13 +682,26 @@ static void esp_zb_task(void *pvParameters)
     // Expose an On/Off server so HA switches can bind to the gateway and we can observe toggle commands.
     esp_zb_on_off_cluster_cfg_t on_off_cfg = {.on_off = false};
     esp_zb_cluster_list_add_on_off_cluster(cluster_list, esp_zb_on_off_cluster_create(&on_off_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    // Expose a Level server to receive dimmer commands from remotes.
+    esp_zb_level_cluster_cfg_t level_cfg = {.current_level = ESP_ZB_ZCL_LEVEL_CONTROL_CURRENT_LEVEL_DEFAULT_VALUE};
+    esp_zb_cluster_list_add_level_cluster(cluster_list, esp_zb_level_cluster_create(&level_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_ep_list_add_gateway_ep(ep_list, cluster_list, endpoint_config);
     esp_zb_device_register(ep_list);
 
-    // Allow the application to observe On/Off Toggle as a "privilege command" callback.
+    // Allow the application to observe controller commands as "privilege command" callbacks.
     esp_zb_core_action_handler_register(zb_core_action_handler);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID);
-    gw_event_bus_publish("zigbee_ready", "zigbee", "", 0, "registered privilege handler for on_off toggle");
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL_WITH_ON_OFF);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_WITH_ON_OFF);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP_WITH_ON_OFF);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP_WITH_ON_OFF);
+    gw_event_bus_publish("zigbee_ready", "zigbee", "", 0, "registered privilege handlers for onoff+level");
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_stack_main_loop();

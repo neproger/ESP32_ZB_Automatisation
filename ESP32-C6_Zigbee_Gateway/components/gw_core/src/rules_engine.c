@@ -101,7 +101,6 @@ static void build_payload_view_from_event(const gw_event_t *e, event_payload_vie
 static gw_auto_evt_type_t evt_type_from_event(const gw_event_t *e)
 {
     if (strcmp(e->type, "zigbee.command") == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
-    if (strcmp(e->type, "zigbee.cmd") == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
     if (strcmp(e->type, "zigbee.attr_report") == 0) return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
     if (strcmp(e->type, "device.join") == 0) return GW_AUTO_EVT_DEVICE_JOIN;
     if (strcmp(e->type, "device.leave") == 0) return GW_AUTO_EVT_DEVICE_LEAVE;
@@ -220,10 +219,6 @@ static void process_event(const gw_event_t *e)
 
         for (uint8_t ai = 0; ai < entry->actions_count; ai++) {
             char errbuf[96] = {0};
-            // This function needs to be adapted or wrapped to work with gw_automation_entry_t
-            // For now, let's assume a wrapper exists. We will need to create it.
-            // esp_err_t rc = gw_action_exec_compiled(c, &acts[ai], errbuf, sizeof(errbuf));
-            // Let's create a temporary compatible structure for gw_action_exec_compiled
             gw_auto_compiled_t temp_compiled = {
                 .strings = (char*)entry->string_table,
                 .hdr.strings_size = entry->string_table_size

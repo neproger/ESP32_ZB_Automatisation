@@ -184,6 +184,8 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "SYNC_DEVICE_FB";
         case GW_UART_CMD_SET_DEVICE_NAME:
             return "SET_DEVICE_NAME";
+        case GW_UART_CMD_REMOVE_DEVICE:
+            return "REMOVE_DEVICE";
         default:
             return "UNKNOWN";
     }
@@ -508,7 +510,6 @@ static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch
         if (s_device_fb_received_len == s_device_fb_expected_len) {
             (void)gw_device_fb_store_set(s_device_fb_buf, s_device_fb_expected_len);
             ESP_LOGI(TAG, "device fb updated: %u bytes", (unsigned)s_device_fb_expected_len);
-            gw_event_bus_publish("device.changed", "zigbee-uart", "", 0, "device_fb_updated");
         } else {
             ESP_LOGW(TAG,
                      "device fb incomplete: recv=%u expected=%u",
@@ -955,6 +956,17 @@ esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name
     req.cmd_id = GW_UART_CMD_SET_DEVICE_NAME;
     fill_uid(req.device_uid, uid);
     strlcpy(req.value_text, name, sizeof(req.value_text));
+    return send_cmd_wait_rsp(&req);
+}
+
+esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid)
+{
+    if (!uid || !uid->uid[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_REMOVE_DEVICE;
+    fill_uid(req.device_uid, uid);
     return send_cmd_wait_rsp(&req);
 }
 

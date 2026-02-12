@@ -9,34 +9,45 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elev) 86%, transparent);
   flex-wrap: wrap;
 }
 
 .brand {
   font-weight: 700;
   margin-right: 8px;
+  letter-spacing: 0.2px;
 }
 
 .navlink {
   color: inherit;
-  opacity: 0.85;
+  opacity: 0.9;
   text-decoration: none;
   padding: 6px 10px;
   border-radius: 8px;
+  border: 1px solid transparent;
 }
 
 .navlink.active {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--accent-soft);
+  border-color: var(--border);
 }
 
 .content {
   flex: 1;
-  /* padding: 16px; */
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
+}
+
+.nav-spacer {
+  flex: 1;
+}
+
+.theme-toggle {
+  min-width: 112px;
 }
 
 .page {
@@ -49,7 +60,7 @@
 }
 
 .muted {
-  opacity: 0.75;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -73,9 +84,10 @@
 }
 
 .card {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  background: var(--surface);
 }
 
 .card.scroll {
@@ -96,7 +108,7 @@ table {
 th,
 td {
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--line);
   text-align: left;
   font-size: 14px;
 }
@@ -107,10 +119,10 @@ tr.event-flash td {
 
 @keyframes eventFlash {
   0% {
-    background-color: rgba(255, 255, 255, 0.10);
+    background-color: color-mix(in srgb, var(--accent) 24%, transparent);
   }
   66.666% {
-    background-color: rgba(255, 255, 255, 0.10);
+    background-color: color-mix(in srgb, var(--accent) 24%, transparent);
   }
   100% {
     background-color: transparent;
@@ -118,7 +130,7 @@ tr.event-flash td {
 }
 
 code {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 6px;
 }
@@ -127,8 +139,8 @@ code {
   margin: 8px 0 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-border);
   font-size: 14px;
 }
 

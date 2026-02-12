@@ -220,7 +220,6 @@ static void build_payload_view_from_event(const gw_event_t *e, event_payload_vie
 static gw_auto_evt_type_t evt_type_from_event(const gw_event_t *e)
 {
     if (strcmp(e->type, "zigbee.command") == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
-    if (strcmp(e->type, "zigbee.cmd") == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
     if (strcmp(e->type, "zigbee.attr_report") == 0) return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
     if (strcmp(e->type, "device.join") == 0) return GW_AUTO_EVT_DEVICE_JOIN;
     if (strcmp(e->type, "device.leave") == 0) return GW_AUTO_EVT_DEVICE_LEAVE;

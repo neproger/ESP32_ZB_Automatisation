@@ -1,3 +1,5 @@
+﻿//UTF-8
+//AutomationList.jsx
 export default function AutomationList({ sorted, onEdit, onToggleEnabled, onRemove }) {
 	return (
 		<div className="card">

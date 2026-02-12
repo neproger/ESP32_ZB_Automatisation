@@ -45,11 +45,13 @@ function hasCluster(list, clusterId) {
 	return Array.isArray(list) && list.includes(clusterId)
 }
 
-function classifyKind(ep) {
+function classifyKind(ep, device) {
 	const onoffSrv = hasCluster(ep.in_clusters, ZCL.ONOFF)
 	const onoffCli = hasCluster(ep.out_clusters, ZCL.ONOFF)
 	const levelSrv = hasCluster(ep.in_clusters, ZCL.LEVEL)
 	const colorSrv = hasCluster(ep.in_clusters, ZCL.COLOR_CONTROL)
+	const levelCli = hasCluster(ep.out_clusters, ZCL.LEVEL)
+	const isButtonDevice = Boolean(device?.has_button)
 
 	const tempSrv = hasCluster(ep.in_clusters, ZCL.TEMPERATURE)
 	const humSrv = hasCluster(ep.in_clusters, ZCL.HUMIDITY)
@@ -59,11 +61,16 @@ function classifyKind(ep) {
 	const flowSrv = hasCluster(ep.in_clusters, ZCL.FLOW)
 
 	if (colorSrv) return 'color_light'
+
+	if (onoffCli) {
+		if (levelCli) return 'dimmer_switch'
+		if (isButtonDevice && !levelSrv && !colorSrv) return 'switch'
+	}
+
 	if (levelSrv && onoffSrv) return 'dimmable_light'
 	if (onoffSrv) return 'relay'
 
 	if (onoffCli) {
-		if (hasCluster(ep.out_clusters, ZCL.LEVEL)) return 'dimmer_switch'
 		return 'switch'
 	}
 
@@ -220,7 +227,7 @@ export function parseDeviceBlob(buffer) {
 			in_clusters: allIn.slice(0, in_cluster_count),
 			out_clusters: allOut.slice(0, out_cluster_count),
 		}
-		ep.kind = classifyKind(ep)
+		ep.kind = classifyKind(ep, d)
 		ep.accepts = endpointAccepts(ep)
 		ep.emits = endpointEmits(ep)
 		ep.reports = endpointReports(ep)

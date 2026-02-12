@@ -118,34 +118,6 @@ static void strtab_free(strtab_t *t)
     *t = (strtab_t){0};
 }
 
-static uint32_t strtab_add(strtab_t *t, const char *s)
-{
-    if (!t || !t->buf || !s || !s[0]) return 0;
-    // naive de-dupe: linear scan (fine for MVP; can hash later)
-    for (size_t off = 0; off < t->len;) {
-        const char *cur = t->buf + off;
-        size_t n = strlen(cur);
-        if (strcmp(cur, s) == 0) {
-            return (uint32_t)off;
-        }
-        off += n + 1;
-    }
-
-    size_t n = strlen(s) + 1;
-    if (t->len + n > t->cap) {
-        size_t next = t->cap ? t->cap : 1;
-        while (next < t->len + n) next *= 2;
-        char *nb = (char *)realloc(t->buf, next);
-        if (!nb) return 0;
-        t->buf = nb;
-        t->cap = next;
-    }
-    uint32_t off = (uint32_t)t->len;
-    memcpy(t->buf + t->len, s, n);
-    t->len += n;
-    return off;
-}
-
 static uint32_t strtab_add_n(strtab_t *t, const uint8_t *s, size_t n)
 {
     if (!t || !t->buf || !s || n == 0) return 0;
@@ -895,7 +867,6 @@ static esp_err_t compile_from_root_cbor(const uint8_t *buf, size_t len, gw_auto_
     gw_cbor_slice_t id_s = {0};
     gw_cbor_slice_t name_s = {0};
     gw_cbor_slice_t enabled_s = {0};
-    gw_cbor_slice_t mode_s = {0};
     gw_cbor_slice_t triggers_s = {0};
     gw_cbor_slice_t conds_s = {0};
     gw_cbor_slice_t actions_s = {0};
@@ -916,7 +887,6 @@ static esp_err_t compile_from_root_cbor(const uint8_t *buf, size_t len, gw_auto_
         goto done;
     }
     (void)cbor_map_find_val(&root, "enabled", &enabled_s);
-    (void)cbor_map_find_val(&root, "mode", &mode_s);
     (void)cbor_map_find_val(&root, "conditions", &conds_s);
 
     const uint8_t *id_p = NULL;
@@ -980,7 +950,8 @@ static esp_err_t compile_from_root_cbor(const uint8_t *buf, size_t len, gw_auto_
             auto_rec->enabled = b ? 1 : 0;
         }
     }
-    auto_rec->mode = cbor_text_equals(&mode_s, "single") ? 1 : 1;
+    // Only single-run mode is supported in current runtime.
+    auto_rec->mode = 1;
     auto_rec->triggers_index = 0;
     auto_rec->triggers_count = trigger_count;
     auto_rec->conditions_index = 0;

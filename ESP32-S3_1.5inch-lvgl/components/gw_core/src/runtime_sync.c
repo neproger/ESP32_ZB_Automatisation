@@ -357,7 +357,7 @@ static void runtime_event_listener(const gw_event_t *event, void *user_ctx)
         return;
     }
 
-    if (strcmp(event->type, "zigbee.attr_report") == 0) {
+    if (strcmp(event->type, "zigbee.attr_report") == 0 || strcmp(event->type, "zigbee.attr_read") == 0) {
         if (!have_uid) {
             return;
         }
