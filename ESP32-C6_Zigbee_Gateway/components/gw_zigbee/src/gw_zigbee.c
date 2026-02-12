@@ -192,8 +192,6 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
     }
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || simple_desc == NULL || simple_desc->app_cluster_list == NULL) {
-        ESP_LOGW(TAG, "interview simple_desc failed: short=0x%04x ep=%u status=0x%02x",
-                 (unsigned)ctx->short_addr, (unsigned)ctx->endpoint, (unsigned)zdo_status);
         gw_event_bus_publish("zigbee_simple_desc_failed", "zigbee", "", ctx->short_addr, "simple desc request failed");
         free(ctx);
         return;
@@ -243,9 +241,6 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
                    has_onoff_srv ? 1 : 0,
                    has_onoff_cli ? 1 : 0);
     gw_event_bus_publish("zigbee_simple_desc", "zigbee", uid, ctx->short_addr, msg);
-    ESP_LOGI(TAG, "interview simple_desc ok: uid=%s short=0x%04x ep=%u in=%u out=%u",
-             uid, (unsigned)ctx->short_addr, (unsigned)simple_desc->endpoint,
-             (unsigned)simple_desc->app_input_cluster_count, (unsigned)simple_desc->app_output_cluster_count);
 
     // Update capabilities for UI.
     gw_device_uid_t duid = {0};
@@ -608,8 +603,6 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     }
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || ep_count == 0 || ep_id_list == NULL) {
-        ESP_LOGW(TAG, "interview active_ep failed: short=0x%04x status=0x%02x ep_count=%u",
-                 (unsigned)ctx->short_addr, (unsigned)zdo_status, (unsigned)ep_count);
         gw_event_bus_publish("zigbee_active_ep_failed", "zigbee", "", ctx->short_addr, "active ep request failed");
         free(ctx);
         return;
@@ -621,8 +614,6 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     char msg[64];
     (void)snprintf(msg, sizeof(msg), "ep_count=%u", (unsigned)ep_count);
     gw_event_bus_publish("zigbee_active_ep", "zigbee", uid, ctx->short_addr, msg);
-    ESP_LOGI(TAG, "interview active_ep ok: uid=%s short=0x%04x ep_count=%u",
-             uid, (unsigned)ctx->short_addr, (unsigned)ep_count);
 
     for (uint8_t i = 0; i < ep_count; i++) {
         gw_zb_simple_ctx_t *sctx = (gw_zb_simple_ctx_t *)calloc(1, sizeof(*sctx));
@@ -638,8 +629,6 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
             .addr_of_interest = ctx->short_addr,
             .endpoint = sctx->endpoint,
         };
-        ESP_LOGI(TAG, "interview simple_desc req: uid=%s short=0x%04x ep=%u",
-                 uid, (unsigned)ctx->short_addr, (unsigned)sctx->endpoint);
         esp_zb_zdo_simple_desc_req(&req, simple_desc_cb, sctx);
     }
 
@@ -655,10 +644,6 @@ static void gw_zigbee_start_discovery(const uint8_t ieee_addr[8], uint16_t short
     }
     memcpy(ctx->ieee, ieee_addr, sizeof(ctx->ieee));
     ctx->short_addr = short_addr;
-    char uid[GW_DEVICE_UID_STRLEN];
-    ieee_to_uid_str(ieee_addr, uid);
-    ESP_LOGI(TAG, "interview start: uid=%s short=0x%04x", uid, (unsigned)short_addr);
-
     esp_zb_zdo_active_ep_req_param_t req = {.addr_of_interest = short_addr};
     esp_zb_zdo_active_ep_req(&req, active_ep_cb, ctx);
 }
@@ -786,7 +771,6 @@ static void ieee_addr_cb(esp_zb_zdp_status_t zdo_status, esp_zb_zdo_ieee_addr_rs
     }
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || resp == NULL) {
-        ESP_LOGW(TAG, "ieee_lookup failed: short=0x%04x status=0x%02x", (unsigned)ctx->short_addr, (unsigned)zdo_status);
         gw_event_bus_publish("zigbee_ieee_lookup_failed", "zigbee", "", ctx->short_addr, "ieee_addr_req failed");
         free(ctx);
         return;
@@ -803,7 +787,6 @@ static void ieee_addr_cb(esp_zb_zdp_status_t zdo_status, esp_zb_zdo_ieee_addr_rs
     (void)gw_device_registry_upsert(&d);
 
     gw_event_bus_publish("zigbee_ieee_lookup_ok", "zigbee", uid, resp->nwk_addr, "ieee resolved, starting discovery");
-    ESP_LOGI(TAG, "ieee_lookup ok: short=0x%04x uid=%s -> discovery", (unsigned)resp->nwk_addr, uid);
     gw_zigbee_start_discovery(resp->ieee_addr, resp->nwk_addr);
 
     free(ctx);
@@ -862,8 +845,6 @@ esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr)
     portEXIT_CRITICAL(&s_ieee_lock);
 
     gw_event_bus_publish("zigbee_ieee_lookup_requested", "zigbee", "", short_addr, "ieee_addr_req");
-    ESP_LOGI(TAG, "discover_by_short requested: short=0x%04x", (unsigned)short_addr);
-
     // Schedule into Zigbee context.
     zb_lock();
     esp_zb_scheduler_alarm(ieee_lookup_send_cb, token, 0);

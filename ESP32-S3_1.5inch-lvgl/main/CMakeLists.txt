@@ -8,6 +8,11 @@ idf_component_register(
         "devices/input_init.cpp"
         "devices/touch_init.cpp"
         "ui/ui_app.cpp"
+        "ui/ui_mapper.cpp"
+        "ui/ui_store.cpp"
+        "ui/ui_actions.cpp"
+        "ui/ui_events_bridge.cpp"
+        "ui/ui_screen_devices.cpp"
     INCLUDE_DIRS
         "."
         "devices"

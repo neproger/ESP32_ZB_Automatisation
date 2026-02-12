@@ -1,163 +1,124 @@
 #include "ui_app.hpp"
 
-#include <algorithm>
 #include <cstdint>
 
+#include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "iot_button.h"
 #include "iot_knob.h"
-#include "devices_init.h"
+
+#include "ui_actions.hpp"
+#include "ui_events_bridge.hpp"
+#include "ui_screen_devices.hpp"
+#include "ui_store.hpp"
 
 namespace
 {
-    static const char *TAG_UI = "ui_min";
+static const char *TAG_UI = "ui_app";
 
-    lv_obj_t *s_status = nullptr;
-    lv_obj_t *s_knob_value = nullptr;
-    lv_obj_t *s_touch_value = nullptr;
-    lv_obj_t *s_button_value = nullptr;
+static ui_store_t *s_store = nullptr;
+static bool s_render_requested = false;
+static bool s_reload_requested = false;
 
-    int s_knob_pos = 0;
-    int s_touch_count = 0;
-    int s_button_count = 0;
+void request_render()
+{
+    s_render_requested = true;
+}
 
-    void update_labels()
+void ui_tick_cb(lv_timer_t *timer)
+{
+    (void)timer;
+
+    if (s_reload_requested)
     {
-        if (s_knob_value)
+        if (s_store)
         {
-            lv_label_set_text_fmt(s_knob_value, "Encoder value: %d", s_knob_pos);
+            ui_store_reload(s_store);
         }
-        if (s_touch_value)
+        s_reload_requested = false;
+        s_render_requested = true;
+    }
+
+    gw_event_t events[8] = {};
+    const size_t n = ui_events_bridge_drain(events, 8);
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (s_store && ui_store_apply_event(s_store, &events[i]))
         {
-            lv_label_set_text_fmt(s_touch_value, "Touch taps: %d", s_touch_count);
-        }
-        if (s_button_value)
-        {
-            lv_label_set_text_fmt(s_button_value, "Button clicks: %d", s_button_count);
+            s_render_requested = true;
         }
     }
 
-    void touch_cb(lv_event_t *e)
+    if (s_render_requested)
     {
-        if (!e)
+        if (s_store)
         {
-            return;
+            ui_screen_devices_render(s_store);
         }
-
-        lv_event_code_t code = lv_event_get_code(e);
-        lv_indev_t *indev = lv_indev_active();
-        lv_point_t p = {0, 0};
-        if (indev)
-        {
-            lv_indev_get_point(indev, &p);
-        }
-
-        if (code == LV_EVENT_PRESSING || code == LV_EVENT_PRESSED)
-        {
-            if (s_status)
-            {
-                lv_label_set_text_fmt(s_status, "Touch: x=%d y=%d", p.x, p.y);
-            }
-        }
-        else if (code == LV_EVENT_CLICKED)
-        {
-            s_touch_count++;
-            if (s_status)
-            {
-                lv_label_set_text_fmt(s_status, "Touch click: x=%d y=%d", p.x, p.y);
-            }
-            update_labels();
-        }
+        s_render_requested = false;
     }
+}
 } // namespace
 
 void ui_app_init(void)
 {
-    lvgl_port_lock(-1);
-
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0f172a), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(scr, touch_cb, LV_EVENT_PRESSED, nullptr);
-    lv_obj_add_event_cb(scr, touch_cb, LV_EVENT_PRESSING, nullptr);
-    lv_obj_add_event_cb(scr, touch_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "Hardware base ready");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xe2e8f0), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
-
-    s_status = lv_label_create(scr);
-    lv_label_set_text(s_status, "Touch/rotate/click to test input");
-    lv_obj_set_style_text_color(s_status, lv_color_hex(0x93c5fd), 0);
-    lv_obj_align(s_status, LV_ALIGN_TOP_MID, 0, 52);
-
-    lv_obj_t *panel = lv_obj_create(scr);
-    lv_obj_set_size(panel, 360, 220);
-    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 25);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(0x111827), 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(0x334155), 0);
-    lv_obj_set_style_radius(panel, 14, 0);
-    lv_obj_set_style_pad_all(panel, 16, 0);
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    s_knob_value = lv_label_create(panel);
-    s_touch_value = lv_label_create(panel);
-    s_button_value = lv_label_create(panel);
-
-    lv_obj_set_style_text_color(s_knob_value, lv_color_hex(0xf8fafc), 0);
-    lv_obj_set_style_text_color(s_touch_value, lv_color_hex(0xf8fafc), 0);
-    lv_obj_set_style_text_color(s_button_value, lv_color_hex(0xf8fafc), 0);
-
-    update_labels();
-
-    lv_obj_t *hint = lv_label_create(panel);
-    lv_label_set_text(hint, "Button click only logs/counter");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x94a3b8), 0);
-
-    (void)devices_display_set_brightness(230);
-    if (!devices_has_touch())
+    if (!s_store)
     {
-        lv_label_set_text(s_status, "Touch driver not initialized");
-        ESP_LOGW(TAG_UI, "Touch handle is not available");
+        s_store = (ui_store_t *)heap_caps_malloc(sizeof(ui_store_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_store)
+        {
+            s_store = (ui_store_t *)heap_caps_malloc(sizeof(ui_store_t), MALLOC_CAP_8BIT);
+        }
+        ESP_ERROR_CHECK(s_store ? ESP_OK : ESP_ERR_NO_MEM);
     }
 
+    lvgl_port_lock(-1);
+
+    ui_store_init(s_store);
+    ui_store_reload(s_store);
+
+    lv_obj_t *scr = lv_screen_active();
+    ui_screen_devices_init(scr);
+    ui_screen_devices_render(s_store);
+    lv_timer_create(ui_tick_cb, 100, nullptr);
+
     lvgl_port_unlock();
+
+    ESP_ERROR_CHECK(ui_actions_init());
+    ESP_ERROR_CHECK(ui_events_bridge_init());
+    ESP_LOGI(TAG_UI, "Device UI initialized");
 }
 
 extern "C" void LVGL_knob_event(void *event)
 {
-    int ev = (int)(intptr_t)event;
-
+    if (!s_store)
+    {
+        return;
+    }
+    const int ev = (int)(intptr_t)event;
     if (ev == KNOB_RIGHT)
     {
-        s_knob_pos = std::min(s_knob_pos + 1, 999);
+        if (ui_store_next_device(s_store))
+        {
+            request_render();
+        }
     }
     else if (ev == KNOB_LEFT)
     {
-        s_knob_pos = std::max(s_knob_pos - 1, -999);
+        if (ui_store_prev_device(s_store))
+        {
+            request_render();
+        }
     }
-
-    update_labels();
 }
 
 extern "C" void LVGL_button_event(void *event)
 {
-    int ev = (int)(intptr_t)event;
-
+    const int ev = (int)(intptr_t)event;
     if (ev == BUTTON_SINGLE_CLICK)
     {
-        s_button_count++;
-        if (s_status)
-        {
-            lv_label_set_text(s_status, "Button single click");
-        }
-        ESP_LOGI(TAG_UI, "Button single click");
+        s_reload_requested = true;
     }
-
-    update_labels();
 }
