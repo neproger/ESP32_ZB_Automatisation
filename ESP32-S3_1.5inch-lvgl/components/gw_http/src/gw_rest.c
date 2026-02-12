@@ -694,7 +694,6 @@ static esp_err_t api_devices_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    gw_event_bus_publish("api_device_rename", "rest", duid.uid, 0, "requested");
     gw_cbor_writer_t w;
     gw_cbor_writer_init(&w);
     esp_err_t rc = gw_cbor_writer_map(&w, 2);
@@ -742,8 +741,6 @@ static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
         }
         return ESP_OK;
     }
-
-    gw_event_bus_publish("api_device_remove", "rest", uid.uid, 0, "requested");
 
     gw_cbor_writer_t w;
     gw_cbor_writer_init(&w);

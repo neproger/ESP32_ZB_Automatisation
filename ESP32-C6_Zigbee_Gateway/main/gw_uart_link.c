@@ -778,7 +778,6 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
             }
             return err;
         }
-
         default:
             return ESP_ERR_NOT_SUPPORTED;
     }
