@@ -306,6 +306,16 @@ static void map_state_key(uint16_t cluster, uint16_t attr, char *out, size_t out
     (void)snprintf(out, out_size, "cluster_%04x_attr_%04x", (unsigned)cluster, (unsigned)attr);
 }
 
+static bool is_state_event_type(const char *type)
+{
+    if (!type || !type[0]) {
+        return false;
+    }
+    return (strcmp(type, "zigbee.attr_report") == 0) ||
+           (strcmp(type, "zigbee.attr_read") == 0) ||
+           (strcmp(type, "zigbee.read_attr") == 0);
+}
+
 static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
 {
     if (!e || !w) return false;
@@ -351,7 +361,12 @@ static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
         if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
             strlcpy(cmd, e->payload_cmd, sizeof(cmd));
         }
-    } else if (strcmp(e->type, "zigbee.attr_report") == 0 || strcmp(e->type, "zigbee.attr_read") == 0) {
+    } else if (is_state_event_type(e->type) ||
+               (strcmp(e->type, "zigbee.read_attr_resp") == 0 &&
+                (e->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
+                (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
+                (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
+                (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR))) {
         out_type = "device.state";
         data_kind = DATA_DEVICE_STATE;
         map_state_key(e->payload_cluster, e->payload_attr, state_key, sizeof(state_key));

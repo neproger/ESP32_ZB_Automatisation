@@ -17,6 +17,8 @@
 #include "gw_core/event_bus.h"
 #include "gw_core/gw_uart_proto.h"
 #include "gw_core/device_fb_store.h"
+#include "gw_core/device_registry.h"
+#include "gw_core/device_storage.h"
 #include "gw_core/runtime_sync.h"
 
 static const char *TAG = "gw_zigbee_uart";
@@ -75,11 +77,15 @@ static bool s_device_fb_active;
 static int64_t s_device_fb_last_chunk_us;
 static int64_t s_device_fb_last_retry_us;
 static uint8_t s_device_fb_retry_count;
+static TaskHandle_t s_initial_state_sync_task;
+static bool s_initial_state_sync_done;
+static bool s_initial_state_sync_started;
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_cmd_wait_rsp(gw_uart_cmd_req_v1_t *req);
 static esp_err_t request_snapshot_sync(void);
 static esp_err_t request_device_fb_sync(void);
 static esp_err_t request_sync_cmd_async(gw_uart_cmd_id_t cmd_id, const char *label);
+static void start_initial_state_sync_once(void);
 
 static bool uart_write_all(const uint8_t *data, size_t len)
 {
@@ -331,14 +337,6 @@ static void publish_evt_from_c6(const gw_uart_evt_v1_t *evt)
     char type_buf[32];
     normalize_evt_type(evt->event_type, type_buf, sizeof(type_buf), evt->evt_id);
     gw_event_value_type_t vtype = map_value_type(evt->value_type);
-    const char *cmd = evt->cmd;
-    char cmd_fallback[16] = {0};
-    if ((!cmd || cmd[0] == '\0') && evt->evt_id == GW_UART_EVT_COMMAND) {
-        if (evt->cluster_id == 0x0006) {
-            strlcpy(cmd_fallback, "toggle", sizeof(cmd_fallback));
-            cmd = cmd_fallback;
-        }
-    }
 
     gw_event_bus_publish_zb(type_buf,
                             "zigbee-uart",
@@ -346,7 +344,7 @@ static void publish_evt_from_c6(const gw_uart_evt_v1_t *evt)
                             evt->short_addr,
                             "from_c6",
                             evt->endpoint,
-                            cmd,
+                            evt->cmd,
                             evt->cluster_id,
                             evt->attr_id,
                             vtype,
@@ -453,6 +451,97 @@ static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
     }
 }
 
+static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
+{
+    if (!ep || cluster_id == 0) {
+        return false;
+    }
+    size_t n = ep->in_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : ep->in_cluster_count;
+    for (size_t i = 0; i < n; i++) {
+        if (ep->in_clusters[i] == cluster_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void queue_read_attr_if_present(const gw_device_uid_t *uid,
+                                       const gw_zb_endpoint_t *ep,
+                                       uint16_t cluster_id,
+                                       uint16_t attr_id,
+                                       uint32_t *ok_count)
+{
+    if (!uid || !ep) {
+        return;
+    }
+    if (!endpoint_has_in_cluster(ep, cluster_id)) {
+        return;
+    }
+    if (gw_zigbee_read_attr(uid, ep->endpoint, cluster_id, attr_id) == ESP_OK && ok_count) {
+        (*ok_count)++;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+static void initial_state_sync_task(void *arg)
+{
+    (void)arg;
+    uint32_t ok_count = 0;
+
+    gw_device_t *devices = (gw_device_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_t));
+    if (!devices) {
+        ESP_LOGW(TAG, "initial state sync: no mem for device list");
+        s_initial_state_sync_started = false;
+        s_initial_state_sync_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    gw_zb_endpoint_t *eps = (gw_zb_endpoint_t *)calloc(GW_ZB_MAX_ENDPOINTS, sizeof(gw_zb_endpoint_t));
+    if (!eps) {
+        ESP_LOGW(TAG, "initial state sync: no mem for endpoint list");
+        free(devices);
+        s_initial_state_sync_started = false;
+        s_initial_state_sync_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    size_t dev_count = gw_device_registry_list(devices, GW_DEVICE_MAX_DEVICES);
+    for (size_t i = 0; i < dev_count; i++) {
+        size_t ep_count = gw_device_registry_list_endpoints(&devices[i].device_uid, eps, GW_ZB_MAX_ENDPOINTS);
+        for (size_t ei = 0; ei < ep_count; ei++) {
+            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0006, 0x0000, &ok_count);
+            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0008, 0x0000, &ok_count);
+            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0003, &ok_count);
+            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0004, &ok_count);
+            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0007, &ok_count);
+        }
+    }
+
+    free(eps);
+    free(devices);
+
+    ESP_LOGI(TAG, "initial state sync done: read_attr ok=%u", (unsigned)ok_count);
+    s_initial_state_sync_done = true;
+    s_initial_state_sync_started = false;
+    s_initial_state_sync_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void start_initial_state_sync_once(void)
+{
+    if (s_initial_state_sync_done || s_initial_state_sync_started) {
+        return;
+    }
+    s_initial_state_sync_started = true;
+    if (xTaskCreate(initial_state_sync_task, "zb_init_state", 6144, NULL, 5, &s_initial_state_sync_task) != pdPASS) {
+        s_initial_state_sync_started = false;
+        s_initial_state_sync_task = NULL;
+        ESP_LOGW(TAG, "initial state sync task create failed");
+    }
+}
+
 static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch)
 {
     if (!ch || ch->chunk_len > sizeof(ch->data)) {
@@ -510,6 +599,7 @@ static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch
         if (s_device_fb_received_len == s_device_fb_expected_len) {
             (void)gw_device_fb_store_set(s_device_fb_buf, s_device_fb_expected_len);
             ESP_LOGI(TAG, "device fb updated: %u bytes", (unsigned)s_device_fb_expected_len);
+            start_initial_state_sync_once();
         } else {
             ESP_LOGW(TAG,
                      "device fb incomplete: recv=%u expected=%u",

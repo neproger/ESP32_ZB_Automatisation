@@ -92,19 +92,19 @@ void apply_state_to_endpoint(ui_endpoint_vm_t *ep, const gw_state_item_t *st)
     }
 }
 
-void apply_value_from_event(ui_endpoint_vm_t *ep, const gw_event_t *event)
+bool apply_value_from_event(ui_endpoint_vm_t *ep, const gw_event_t *event)
 {
     if (!ep || !event)
     {
-        return;
+        return false;
     }
     if ((event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) == 0 || (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) == 0)
     {
-        return;
+        return false;
     }
     if ((event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) == 0)
     {
-        return;
+        return false;
     }
 
     const uint16_t cluster = event->payload_cluster;
@@ -113,63 +113,94 @@ void apply_value_from_event(ui_endpoint_vm_t *ep, const gw_event_t *event)
 
     if (cluster == 0x0006 && attr == 0x0000 && value_type == GW_EVENT_VALUE_BOOL)
     {
+        const bool new_value = (event->payload_value_bool != 0);
+        const bool changed = (!ep->has_onoff) || (ep->onoff != new_value);
         ep->has_onoff = true;
-        ep->onoff = (event->payload_value_bool != 0);
+        ep->onoff = new_value;
+        return changed;
     }
     else if (cluster == 0x0008 && attr == 0x0000)
     {
         if (value_type == GW_EVENT_VALUE_I64)
         {
+            const uint16_t new_value = (uint16_t)event->payload_value_i64;
+            const bool changed = (!ep->has_level) || (ep->level != new_value);
             ep->has_level = true;
-            ep->level = (uint16_t)event->payload_value_i64;
+            ep->level = new_value;
+            return changed;
         }
     }
     else if (cluster == 0x0402 && attr == 0x0000)
     {
         if (value_type == GW_EVENT_VALUE_F64)
         {
+            const float new_value = (float)event->payload_value_f64;
+            const bool changed = (!ep->has_temperature_c) || (ep->temperature_c != new_value);
             ep->has_temperature_c = true;
-            ep->temperature_c = (float)event->payload_value_f64;
+            ep->temperature_c = new_value;
+            return changed;
         }
         else if (value_type == GW_EVENT_VALUE_I64)
         {
+            const float new_value = ((float)event->payload_value_i64) / 100.0f;
+            const bool changed = (!ep->has_temperature_c) || (ep->temperature_c != new_value);
             ep->has_temperature_c = true;
-            ep->temperature_c = ((float)event->payload_value_i64) / 100.0f;
+            ep->temperature_c = new_value;
+            return changed;
         }
     }
     else if (cluster == 0x0405 && attr == 0x0000)
     {
         if (value_type == GW_EVENT_VALUE_F64)
         {
+            const float new_value = (float)event->payload_value_f64;
+            const bool changed = (!ep->has_humidity_pct) || (ep->humidity_pct != new_value);
             ep->has_humidity_pct = true;
-            ep->humidity_pct = (float)event->payload_value_f64;
+            ep->humidity_pct = new_value;
+            return changed;
         }
         else if (value_type == GW_EVENT_VALUE_I64)
         {
+            const float new_value = ((float)event->payload_value_i64) / 100.0f;
+            const bool changed = (!ep->has_humidity_pct) || (ep->humidity_pct != new_value);
             ep->has_humidity_pct = true;
-            ep->humidity_pct = ((float)event->payload_value_i64) / 100.0f;
+            ep->humidity_pct = new_value;
+            return changed;
         }
     }
     else if (cluster == 0x0001 && attr == 0x0021 && value_type == GW_EVENT_VALUE_I64)
     {
+        const uint32_t new_value = (uint32_t)event->payload_value_i64;
+        const bool changed = (!ep->has_battery_pct) || (ep->battery_pct != new_value);
         ep->has_battery_pct = true;
-        ep->battery_pct = (uint32_t)event->payload_value_i64;
+        ep->battery_pct = new_value;
+        return changed;
     }
     else if (cluster == 0x0300 && attr == 0x0003 && value_type == GW_EVENT_VALUE_I64)
     {
+        const uint16_t new_value = (uint16_t)event->payload_value_i64;
+        const bool changed = (!ep->has_color_x) || (ep->color_x != new_value);
         ep->has_color_x = true;
-        ep->color_x = (uint16_t)event->payload_value_i64;
+        ep->color_x = new_value;
+        return changed;
     }
     else if (cluster == 0x0300 && attr == 0x0004 && value_type == GW_EVENT_VALUE_I64)
     {
+        const uint16_t new_value = (uint16_t)event->payload_value_i64;
+        const bool changed = (!ep->has_color_y) || (ep->color_y != new_value);
         ep->has_color_y = true;
-        ep->color_y = (uint16_t)event->payload_value_i64;
+        ep->color_y = new_value;
+        return changed;
     }
     else if (cluster == 0x0300 && attr == 0x0007 && value_type == GW_EVENT_VALUE_I64)
     {
+        const uint16_t new_value = (uint16_t)event->payload_value_i64;
+        const bool changed = (!ep->has_color_temp_mireds) || (ep->color_temp_mireds != new_value);
         ep->has_color_temp_mireds = true;
-        ep->color_temp_mireds = (uint16_t)event->payload_value_i64;
+        ep->color_temp_mireds = new_value;
+        return changed;
     }
+    return false;
 }
 
 void load_state_for_device(ui_device_vm_t *dev)
@@ -242,13 +273,23 @@ bool ui_store_apply_event(ui_store_t *store, const gw_event_t *event)
         return false;
     }
 
-    if (strcmp(event->type, "device.join") == 0 || strcmp(event->type, "device.leave") == 0 || strcmp(event->type, "device.changed") == 0)
+    if (strcmp(event->type, "device.join") == 0 || strcmp(event->type, "device.leave") == 0 ||
+        strcmp(event->type, "device.changed") == 0 || strcmp(event->type, "device.update") == 0)
     {
         ui_store_reload(store);
         return true;
     }
 
-    if (strcmp(event->type, "zigbee.attr_report") != 0 && strcmp(event->type, "zigbee.attr_read") != 0)
+    const bool is_state_event =
+        (strcmp(event->type, "zigbee.attr_report") == 0) ||
+        (strcmp(event->type, "zigbee.attr_read") == 0) ||
+        (strcmp(event->type, "zigbee.read_attr") == 0) ||
+        (strcmp(event->type, "zigbee.read_attr_resp") == 0 &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR));
+    if (!is_state_event)
     {
         return false;
     }
@@ -268,8 +309,7 @@ bool ui_store_apply_event(ui_store_t *store, const gw_event_t *event)
     {
         return false;
     }
-    apply_value_from_event(&dev->endpoints[ep_idx], event);
-    return true;
+    return apply_value_from_event(&dev->endpoints[ep_idx], event);
 }
 
 bool ui_store_next_device(ui_store_t *store)

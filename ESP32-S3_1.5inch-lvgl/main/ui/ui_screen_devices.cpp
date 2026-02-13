@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ui_actions.hpp"
+#include "ui_style.hpp"
 
 namespace
 {
@@ -74,29 +75,34 @@ void on_color_temp_clicked(lv_event_t *e)
     {
         return;
     }
-    (void)ui_actions_enqueue_color_temp(&ctx->uid, ctx->endpoint, 370);
+    (void)ui_actions_enqueue_color_temp(&ctx->uid, ctx->endpoint, ui_style::kWarmColorTempMireds);
 }
 
 void add_endpoint_card(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
 {
     lv_obj_t *card = lv_obj_create(s_list);
     lv_obj_set_width(card, lv_pct(100));
-    lv_obj_set_style_pad_all(card, 10, 0);
-    lv_obj_set_style_radius(card, 10, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x16223f), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x2f3c63), 0);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(card, ui_style::kCardPad, 0);
+    lv_obj_set_style_pad_row(card, ui_style::kCardRowGap, 0);
+    lv_obj_set_style_radius(card, ui_style::kCardRadius, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(ui_style::kCardBgHex), 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(ui_style::kBorderHex), 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
     lv_obj_t *hdr = lv_label_create(card);
     lv_label_set_text_fmt(hdr, "EP%u (%s)", (unsigned)ep->endpoint_id, ep->kind[0] ? ep->kind : "endpoint");
-    lv_obj_set_style_text_color(hdr, lv_color_hex(0xe5e7eb), 0);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(ui_style::kCardTitleHex), 0);
 
     if (ep->caps.onoff)
     {
         lv_obj_t *row = lv_obj_create(card);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -117,7 +123,7 @@ void add_endpoint_card(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
         lv_label_set_text_fmt(lbl, "Level: %u", (unsigned)(ep->has_level ? ep->level : 0));
         lv_obj_t *slider = lv_slider_create(card);
         lv_obj_set_width(slider, lv_pct(100));
-        lv_slider_set_range(slider, 0, 254);
+        lv_slider_set_range(slider, ui_style::kLevelMin, ui_style::kLevelMax);
         lv_slider_set_value(slider, (int32_t)(ep->has_level ? ep->level : 0), LV_ANIM_OFF);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::Level, &dev->uid, ep->endpoint_id);
         lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, ctx);
@@ -133,7 +139,7 @@ void add_endpoint_card(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
                               (unsigned)(ep->has_color_temp_mireds ? ep->color_temp_mireds : 0));
         lv_obj_t *btn = lv_button_create(card);
         lv_obj_t *btn_lbl = lv_label_create(btn);
-        lv_label_set_text(btn_lbl, "Set Warm (370)");
+        lv_label_set_text_fmt(btn_lbl, "Set Warm (%u)", (unsigned)ui_style::kWarmColorTempMireds);
         lv_obj_center(btn_lbl);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::ColorTemp, &dev->uid, ep->endpoint_id);
         lv_obj_add_event_cb(btn, on_color_temp_clicked, LV_EVENT_CLICKED, ctx);
@@ -187,24 +193,26 @@ void ui_screen_devices_init(lv_obj_t *root)
     s_subtitle = lv_label_create(root);
     s_list = lv_obj_create(root);
 
-    lv_obj_set_style_bg_color(root, lv_color_hex(0x0b1020), 0);
+    lv_obj_set_style_bg_color(root, lv_color_hex(ui_style::kScreenBgHex), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
-    lv_obj_align(s_title, LV_ALIGN_TOP_LEFT, 12, 10);
-    lv_obj_set_style_text_color(s_title, lv_color_hex(0xf8fafc), 0);
+    lv_obj_align(s_title, LV_ALIGN_TOP_LEFT, ui_style::kTitleX, ui_style::kTitleY);
+    lv_obj_set_style_text_color(s_title, lv_color_hex(ui_style::kTitleTextHex), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
 
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_LEFT, 12, 44);
-    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(0x9fb0d9), 0);
+    lv_obj_align(s_subtitle, LV_ALIGN_TOP_LEFT, ui_style::kSubtitleX, ui_style::kSubtitleY);
+    lv_obj_set_style_text_color(s_subtitle, lv_color_hex(ui_style::kSubtitleTextHex), 0);
 
-    lv_obj_set_size(s_list, 456, 250);
-    lv_obj_align(s_list, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_style_pad_all(s_list, 8, 0);
-    lv_obj_set_style_bg_color(s_list, lv_color_hex(0x111827), 0);
-    lv_obj_set_style_border_color(s_list, lv_color_hex(0x2f3c63), 0);
+    lv_obj_set_size(s_list, ui_style::kListWidth, ui_style::kListHeight);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, ui_style::kListBottomOffsetY);
+    lv_obj_set_style_pad_all(s_list, ui_style::kListPad, 0);
+    lv_obj_set_style_pad_row(s_list, ui_style::kListItemGap, 0);
+    lv_obj_set_style_bg_color(s_list, lv_color_hex(ui_style::kPanelBgHex), 0);
+    lv_obj_set_style_border_color(s_list, lv_color_hex(ui_style::kBorderHex), 0);
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
 }
 
 void ui_screen_devices_render(const ui_store_t *store)
@@ -238,4 +246,3 @@ void ui_screen_devices_render(const ui_store_t *store)
         add_endpoint_card(dev, &dev->endpoints[i]);
     }
 }
-

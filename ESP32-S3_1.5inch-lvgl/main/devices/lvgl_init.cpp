@@ -72,7 +72,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     lvgl_port_cfg_t lvgl_cfg = {};
     lvgl_cfg.task_priority = 4;
     lvgl_cfg.task_stack = 6144;
-    lvgl_cfg.task_affinity = -1;
+    lvgl_cfg.task_affinity = 1;
     lvgl_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     lvgl_cfg.task_max_sleep_ms = 100;
     lvgl_cfg.timer_period_ms = 10;
@@ -92,19 +92,19 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     const lvgl_disp_profile_t profiles[] = {
         {
             .draw_lines = LCD_DRAW_BUFF_HEIGHT,
-            .double_buffer = LCD_DRAW_BUFF_DOUBLE,
-            .buff_dma = true,
-            .buff_spiram = false,
-            .trans_size = 0,
-            .name = "dma_internal_default",
-        },
-        {
-            .draw_lines = LCD_DRAW_BUFF_HEIGHT,
             .double_buffer = false,
             .buff_dma = false,
             .buff_spiram = true,
             .trans_size = LCD_H_RES * 8,
             .name = "psram_draw_dma_xfer",
+        },
+        {
+            .draw_lines = LCD_DRAW_BUFF_HEIGHT,
+            .double_buffer = LCD_DRAW_BUFF_DOUBLE,
+            .buff_dma = true,
+            .buff_spiram = false,
+            .trans_size = 0,
+            .name = "dma_internal_default",
         },
         {
             .draw_lines = 8,

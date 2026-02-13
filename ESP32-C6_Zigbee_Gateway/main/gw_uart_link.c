@@ -69,7 +69,6 @@ static bool uart_write_all(const uint8_t *data, size_t len)
     return true;
 }
 static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
-static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id);
 static void snapshot_request_async(void);
 static void device_fb_request_async(void);
 
@@ -168,72 +167,6 @@ static void uart_send_snapshot_frame(const gw_uart_snapshot_v1_t *snap, uint16_t
         return;
     }
     uart_send_frame(GW_UART_MSG_SNAPSHOT, seq, snap, sizeof(*snap));
-}
-
-static void queue_read_attr_if_cluster(const gw_device_uid_t *uid,
-                                       const gw_zb_endpoint_t *ep,
-                                       uint16_t cluster_id,
-                                       uint16_t attr_id,
-                                       uint32_t *req_count)
-{
-    if (!uid || !ep) {
-        return;
-    }
-    if (endpoint_has_in_cluster(ep, cluster_id)) {
-        if (gw_zigbee_read_attr(uid, ep->endpoint, cluster_id, attr_id) == ESP_OK && req_count) {
-            (*req_count)++;
-        }
-    }
-}
-
-static void uart_request_states_after_snapshot(void)
-{
-    gw_device_t *devices = (gw_device_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_t));
-    if (!devices) {
-        ESP_LOGW(TAG, "state sync: no mem for device list");
-        return;
-    }
-    size_t dev_count = gw_device_registry_list(devices, GW_DEVICE_MAX_DEVICES);
-    if (dev_count == 0) {
-        free(devices);
-        return;
-    }
-
-    gw_zb_endpoint_t *eps = (gw_zb_endpoint_t *)calloc(GW_DEVICE_MAX_ENDPOINTS, sizeof(gw_zb_endpoint_t));
-    if (!eps) {
-        ESP_LOGW(TAG, "state sync: no mem for endpoint list");
-        free(devices);
-        return;
-    }
-    uint32_t req_count = 0;
-    for (size_t i = 0; i < dev_count; i++) {
-        size_t ep_count = gw_device_registry_list_endpoints(&devices[i].device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
-        for (size_t ei = 0; ei < ep_count; ei++) {
-            queue_read_attr_if_cluster(&devices[i].device_uid, &eps[ei], 0x0006, 0x0000, &req_count); // onoff
-            queue_read_attr_if_cluster(&devices[i].device_uid, &eps[ei], 0x0008, 0x0000, &req_count); // level
-            queue_read_attr_if_cluster(&devices[i].device_uid, &eps[ei], 0x0300, 0x0003, &req_count); // color_x
-            queue_read_attr_if_cluster(&devices[i].device_uid, &eps[ei], 0x0300, 0x0004, &req_count); // color_y
-            queue_read_attr_if_cluster(&devices[i].device_uid, &eps[ei], 0x0300, 0x0007, &req_count); // color_temp
-        }
-    }
-
-    ESP_LOGI(TAG, "state sync queued %u read_attr requests", (unsigned)req_count);
-    free(eps);
-    free(devices);
-}
-
-static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
-{
-    if (!ep || cluster_id == 0) {
-        return false;
-    }
-    size_t n = ep->in_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : ep->in_cluster_count;
-    for (size_t i = 0; i < n; i++) {
-        if (ep->in_clusters[i] == cluster_id) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // Snapshot carries topology only (device + endpoint).
@@ -873,7 +806,6 @@ static void uart_snapshot_task(void *arg)
             if (fb_sent) {
                 gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
             }
-            uart_request_states_after_snapshot();
         }
         if (s_device_fb_requested) {
             s_device_fb_requested = false;
@@ -898,7 +830,6 @@ static void uart_snapshot_task(void *arg)
                 if (fb_sent) {
                     gw_event_bus_publish("device.changed", "zigbee", "", 0, "device_fb_ready");
                 }
-                uart_request_states_after_snapshot();
             }
             if (s_device_fb_requested) {
                 s_device_fb_requested = false;

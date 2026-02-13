@@ -16,11 +16,22 @@ bool ui_event_is_relevant(const gw_event_t *event)
     {
         return false;
     }
-    if (strcmp(event->type, "zigbee.attr_report") == 0 || strcmp(event->type, "zigbee.attr_read") == 0)
+    if (strcmp(event->type, "zigbee.attr_report") == 0 ||
+        strcmp(event->type, "zigbee.attr_read") == 0 ||
+        strcmp(event->type, "zigbee.read_attr") == 0)
     {
         return true;
     }
-    if (strcmp(event->type, "device.join") == 0 || strcmp(event->type, "device.leave") == 0 || strcmp(event->type, "device.changed") == 0)
+    if (strcmp(event->type, "zigbee.read_attr_resp") == 0 &&
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR))
+    {
+        return true;
+    }
+    if (strcmp(event->type, "device.join") == 0 || strcmp(event->type, "device.leave") == 0 ||
+        strcmp(event->type, "device.changed") == 0 || strcmp(event->type, "device.update") == 0)
     {
         return true;
     }

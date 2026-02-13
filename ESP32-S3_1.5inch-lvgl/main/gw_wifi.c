@@ -8,6 +8,7 @@
 
 #include "esp_check.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
@@ -112,9 +113,20 @@ static esp_err_t gw_wifi_init_once(void)
 
     static bool s_wifi_inited;
     if (!s_wifi_inited) {
-        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();        esp_err_t wifi_err = esp_wifi_init(&cfg);
-        if (wifi_err != ESP_OK) {            ESP_RETURN_ON_ERROR(wifi_err, TAG, "esp_wifi_init failed");
-        }        ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage failed");
+        ESP_LOGI(TAG,
+                 "Heap before esp_wifi_init: internal=%u largest_internal=%u dma=%u largest_dma=%u psram=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_err_t wifi_err = esp_wifi_init(&cfg);
+        if (wifi_err != ESP_OK) {
+            ESP_RETURN_ON_ERROR(wifi_err, TAG, "esp_wifi_init failed");
+        }
+        ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage failed");
         ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode failed");
         s_wifi_inited = true;
     }

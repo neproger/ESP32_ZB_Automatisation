@@ -12,8 +12,6 @@
 
 ESP_EVENT_DEFINE_BASE(GW_EVENT_BASE);
 
-static const char *TAG = "gw_event";
-
 static bool s_inited;
 
 // Event id generator. Ring buffer disabled to save RAM.

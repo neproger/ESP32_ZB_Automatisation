@@ -124,14 +124,18 @@ esp_err_t gw_device_storage_upsert(const gw_device_full_t *device)
     
     if (idx != (size_t)-1) {
         // Update existing device in place
-        const char *preserve_name = (device->name[0] == '\0') ? devices[idx].name : NULL;
+        char preserved_name[sizeof(devices[idx].name)] = {0};
+        const bool need_preserve_name = (device->name[0] == '\0');
+        if (need_preserve_name) {
+            strlcpy(preserved_name, devices[idx].name, sizeof(preserved_name));
+        }
         
         // Update device data
         memcpy(&devices[idx], device, sizeof(gw_device_full_t));
         
         // Restore name if needed
-        if (preserve_name) {
-            strlcpy(devices[idx].name, preserve_name, sizeof(devices[idx].name));
+        if (need_preserve_name) {
+            strlcpy(devices[idx].name, preserved_name, sizeof(devices[idx].name));
         }
         
         assign_default_name_if_needed(&devices[idx]);

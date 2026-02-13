@@ -66,6 +66,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(gw_event_bus_init());
 
     // Bring up display/LVGL first while internal + DMA-capable heap is still mostly free.
     esp_err_t err = devices_init();
@@ -76,7 +77,6 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG_APP, "UI started (display + touch + encoder + button)");
     }
 
-    ESP_ERROR_CHECK(gw_event_bus_init());
     ESP_ERROR_CHECK(gw_zb_model_init());
     ESP_ERROR_CHECK(gw_sensor_store_init());
     ESP_ERROR_CHECK(gw_state_store_init());
