@@ -19,12 +19,37 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG_APP = "s3_backend";
+static bool s_ui_started = false;
+
+static void ui_boot_task(void *arg)
+{
+    (void)arg;
+    static constexpr int64_t kUiWaitTimeoutUs = 30LL * 1000LL * 1000LL;
+    const int64_t t0 = esp_timer_get_time();
+
+    while (!(gw_zigbee_bootstrap_ready() && gw_zigbee_state_warmup_ready())) {
+        if ((esp_timer_get_time() - t0) >= kUiWaitTimeoutUs) {
+            ESP_LOGW(TAG_APP, "UI warmup wait timeout, starting UI with current data");
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    if (!s_ui_started) {
+        ui_app_init();
+        s_ui_started = true;
+        ESP_LOGI(TAG_APP, "UI started after bootstrap wait");
+    }
+
+    vTaskDelete(NULL);
+}
 
 static bool wifi_is_connected(void)
 {
@@ -67,14 +92,15 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_event_bus_init());
+    // Temporary log noise reduction for bring-up/debug sessions.
+    esp_log_level_set("gw_zigbee_uart", ESP_LOG_WARN);
+    esp_log_level_set("gw_event", ESP_LOG_WARN);
+    esp_log_level_set("gw_state_store", ESP_LOG_INFO);
 
     // Bring up display/LVGL first while internal + DMA-capable heap is still mostly free.
     esp_err_t err = devices_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG_APP, "Devices init failed: %s", esp_err_to_name(err));
-    } else {
-        ui_app_init();
-        ESP_LOGI(TAG_APP, "UI started (display + touch + encoder + button)");
     }
 
     ESP_ERROR_CHECK(gw_zb_model_init());
@@ -92,6 +118,15 @@ extern "C" void app_main(void)
     esp_err_t zb_link_err = gw_zigbee_link_start();
     if (zb_link_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
+    }
+
+    if (err == ESP_OK) {
+        if (xTaskCreate(ui_boot_task, "ui_boot", 4096, NULL, 4, NULL) != pdPASS) {
+            ESP_LOGW(TAG_APP, "ui_boot task create failed, starting UI immediately");
+            ui_app_init();
+            s_ui_started = true;
+            ESP_LOGI(TAG_APP, "UI started (fallback)");
+        }
     }
 
     ESP_ERROR_CHECK(gw_http_start());

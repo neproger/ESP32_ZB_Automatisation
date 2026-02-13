@@ -156,11 +156,18 @@ void gw_event_bus_publish_zb(const char *type,
                              const uint8_t *payload_cbor,
                              size_t payload_len)
 {
+    const bool is_attr_event =
+        (type && (
+            strcmp(type, "zigbee.attr_report") == 0 ||
+            strcmp(type, "zigbee.attr_read") == 0 ||
+            strcmp(type, "zigbee.read_attr") == 0 ||
+            strcmp(type, "zigbee.read_attr_resp") == 0));
+
     uint8_t flags = 0;
     if (endpoint > 0) flags |= GW_EVENT_PAYLOAD_HAS_ENDPOINT;
     if (cmd && cmd[0]) flags |= GW_EVENT_PAYLOAD_HAS_CMD;
-    if (cluster_id) flags |= GW_EVENT_PAYLOAD_HAS_CLUSTER;
-    if (attr_id) flags |= GW_EVENT_PAYLOAD_HAS_ATTR;
+    if (cluster_id || is_attr_event) flags |= GW_EVENT_PAYLOAD_HAS_CLUSTER;
+    if (attr_id || is_attr_event) flags |= GW_EVENT_PAYLOAD_HAS_ATTR;
     if (value_type != GW_EVENT_VALUE_NONE) flags |= GW_EVENT_PAYLOAD_HAS_VALUE;
     gw_event_bus_publish_internal(type, source, device_uid, short_addr, msg, flags, endpoint, cmd, cluster_id, attr_id,
                                   value_type, value_bool, value_i64, value_f64, value_text, payload_cbor, payload_len);

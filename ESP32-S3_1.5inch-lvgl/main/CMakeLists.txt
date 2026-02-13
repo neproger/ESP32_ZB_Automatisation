@@ -12,6 +12,7 @@ idf_component_register(
         "ui/ui_store.cpp"
         "ui/ui_actions.cpp"
         "ui/ui_events_bridge.cpp"
+        "ui/ui_widgets.cpp"
         "ui/ui_screen_devices.cpp"
     INCLUDE_DIRS
         "."

@@ -1,6 +1,7 @@
 #include "ui_app.hpp"
 
 #include <cstdint>
+#include <cstring>
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -36,9 +37,28 @@ void ui_tick_cb(lv_timer_t *timer)
     const size_t n = ui_events_bridge_drain(events, 8);
     for (size_t i = 0; i < n; ++i)
     {
-        if (s_store && ui_store_apply_event(s_store, &events[i]))
+        if (!s_store)
         {
-            s_render_requested = true;
+            continue;
+        }
+
+        const bool structural =
+            (strcmp(events[i].type, "device.join") == 0) ||
+            (strcmp(events[i].type, "device.leave") == 0) ||
+            (strcmp(events[i].type, "device.changed") == 0) ||
+            (strcmp(events[i].type, "device.update") == 0);
+
+        if (structural)
+        {
+            if (ui_store_apply_event(s_store, &events[i]))
+            {
+                s_render_requested = true;
+            }
+        }
+        else
+        {
+            (void)ui_store_apply_event(s_store, &events[i]);
+            ui_screen_devices_apply_state_event(s_store, &events[i]);
         }
     }
 

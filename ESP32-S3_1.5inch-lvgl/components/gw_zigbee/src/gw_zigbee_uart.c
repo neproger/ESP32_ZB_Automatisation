@@ -20,6 +20,7 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
 #include "gw_core/runtime_sync.h"
+#include "gw_core/state_store.h"
 
 static const char *TAG = "gw_zigbee_uart";
 
@@ -69,6 +70,7 @@ static int64_t s_snapshot_last_retry_us;
 static uint8_t s_snapshot_retry_count;
 static uint16_t s_snapshot_expected_devices;
 static uint16_t s_snapshot_received_devices;
+static bool s_bootstrap_ready;
 static uint16_t s_device_fb_transfer_id;
 static uint32_t s_device_fb_expected_len;
 static size_t s_device_fb_received_len;
@@ -370,6 +372,7 @@ static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
             s_snapshot_last_retry_us = 0;
             s_snapshot_expected_devices = snap->total_devices;
             s_snapshot_received_devices = 0;
+            s_bootstrap_ready = false;
             (void)gw_runtime_sync_snapshot_begin(snap->total_devices);
             ESP_LOGI(TAG, "Snapshot begin: total_devices=%u", (unsigned)snap->total_devices);
             break;
@@ -441,6 +444,7 @@ static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
                 ESP_LOGW(TAG, "Snapshot incomplete, requesting re-sync");
                 (void)request_snapshot_sync();
             } else {
+                s_bootstrap_ready = true;
                 // After a completed snapshot, always refresh the device flatbuffer.
                 // This guarantees frontend store sync after any snapshot recovery cycle.
                 (void)request_sync_cmd_async(GW_UART_CMD_SYNC_DEVICE_FB, "device fb sync");
@@ -465,17 +469,46 @@ static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster
     return false;
 }
 
-static void queue_read_attr_if_present(const gw_device_uid_t *uid,
+static bool state_key_present_and_valid(const gw_device_uid_t *uid, uint8_t endpoint, const char *key)
+{
+    if (!uid || !key || key[0] == '\0') {
+        return false;
+    }
+
+    gw_state_item_t item = {0};
+    if (gw_state_store_get(uid, endpoint, key, &item) != ESP_OK) {
+        return false;
+    }
+
+    if (strcmp(key, "temperature_c") == 0 && item.value_type == GW_STATE_VALUE_F32) {
+        // Common Zigbee invalid marker (0x8000) converted to Celsius.
+        if (item.value_f32 > -327.69f && item.value_f32 < -327.67f) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void queue_read_attr_if_missing(const gw_device_uid_t *uid,
                                        const gw_zb_endpoint_t *ep,
                                        uint16_t cluster_id,
                                        uint16_t attr_id,
-                                       uint32_t *ok_count)
+                                       const char *state_key,
+                                       uint32_t *ok_count,
+                                       uint32_t *missing_count)
 {
     if (!uid || !ep) {
         return;
     }
     if (!endpoint_has_in_cluster(ep, cluster_id)) {
         return;
+    }
+    if (state_key_present_and_valid(uid, ep->endpoint, state_key)) {
+        return;
+    }
+    if (missing_count) {
+        (*missing_count)++;
     }
     if (gw_zigbee_read_attr(uid, ep->endpoint, cluster_id, attr_id) == ESP_OK && ok_count) {
         (*ok_count)++;
@@ -487,6 +520,8 @@ static void initial_state_sync_task(void *arg)
 {
     (void)arg;
     uint32_t ok_count = 0;
+    uint32_t missing_before = 0;
+    uint32_t missing_after = 0;
 
     gw_device_t *devices = (gw_device_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_t));
     if (!devices) {
@@ -508,21 +543,38 @@ static void initial_state_sync_task(void *arg)
     }
 
     size_t dev_count = gw_device_registry_list(devices, GW_DEVICE_MAX_DEVICES);
-    for (size_t i = 0; i < dev_count; i++) {
-        size_t ep_count = gw_device_registry_list_endpoints(&devices[i].device_uid, eps, GW_ZB_MAX_ENDPOINTS);
-        for (size_t ei = 0; ei < ep_count; ei++) {
-            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0006, 0x0000, &ok_count);
-            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0008, 0x0000, &ok_count);
-            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0003, &ok_count);
-            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0004, &ok_count);
-            queue_read_attr_if_present(&devices[i].device_uid, &eps[ei], 0x0300, 0x0007, &ok_count);
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t *missing_ctr = (pass == 0) ? &missing_before : &missing_after;
+        for (size_t i = 0; i < dev_count; i++) {
+            size_t ep_count = gw_device_registry_list_endpoints(&devices[i].device_uid, eps, GW_ZB_MAX_ENDPOINTS);
+            for (size_t ei = 0; ei < ep_count; ei++) {
+                // Actuators
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0006, 0x0000, "onoff", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0008, 0x0000, "level", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0003, "color_x", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0004, "color_y", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0007, "color_temp_mireds", &ok_count, missing_ctr);
+                // Sensors and battery
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0402, 0x0000, "temperature_c", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0405, 0x0000, "humidity_pct", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0001, 0x0021, "battery_pct", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0001, 0x0020, "battery_mv", &ok_count, missing_ctr);
+                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0406, 0x0000, "occupancy", &ok_count, missing_ctr);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(900));
+        if (pass == 1 && missing_after == 0) {
+            break;
         }
     }
 
     free(eps);
     free(devices);
 
-    ESP_LOGI(TAG, "initial state sync done: read_attr ok=%u", (unsigned)ok_count);
+    ESP_LOGI(TAG, "initial state sync done: read_attr queued=%u missing(before=%u after=%u)",
+             (unsigned)ok_count,
+             (unsigned)missing_before,
+             (unsigned)missing_after);
     s_initial_state_sync_done = true;
     s_initial_state_sync_started = false;
     s_initial_state_sync_task = NULL;
@@ -1035,6 +1087,16 @@ esp_err_t gw_zigbee_sync_device_fb(void)
         return err;
     }
     return request_device_fb_sync();
+}
+
+bool gw_zigbee_bootstrap_ready(void)
+{
+    return s_bootstrap_ready;
+}
+
+bool gw_zigbee_state_warmup_ready(void)
+{
+    return s_initial_state_sync_done;
 }
 
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name)

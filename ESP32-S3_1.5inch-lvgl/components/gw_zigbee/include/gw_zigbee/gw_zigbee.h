@@ -37,6 +37,10 @@ typedef struct {
 esp_err_t gw_zigbee_link_start(void);
 // Request fresh device FlatBuffer snapshot from C6.
 esp_err_t gw_zigbee_sync_device_fb(void);
+// True after the first complete snapshot has been applied on S3.
+bool gw_zigbee_bootstrap_ready(void);
+// True when initial read_attr warmup task has queued all startup reads.
+bool gw_zigbee_state_warmup_ready(void);
 // Set user device name on C6 by UID.
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name);
 // Remove device from C6 device registry by UID.

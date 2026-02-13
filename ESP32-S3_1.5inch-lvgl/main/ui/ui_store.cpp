@@ -7,7 +7,7 @@
 
 namespace
 {
-static constexpr size_t UI_STATE_SNAPSHOT_CAP = 64;
+static constexpr size_t UI_STATE_SNAPSHOT_CAP = 256;
 static gw_state_item_t s_state_items[UI_STATE_SNAPSHOT_CAP];
 static gw_device_t s_devices_snapshot[UI_STORE_DEVICE_CAP];
 static gw_zb_endpoint_t s_eps_snapshot[UI_STORE_ENDPOINT_CAP];
@@ -209,11 +209,15 @@ void load_state_for_device(ui_device_vm_t *dev)
     {
         return;
     }
-    size_t count = gw_state_store_list(&dev->uid, s_state_items, UI_STATE_SNAPSHOT_CAP);
+    size_t count = gw_state_store_list_uid(&dev->uid, s_state_items, UI_STATE_SNAPSHOT_CAP);
     for (size_t i = 0; i < count; ++i)
     {
         for (size_t ep_i = 0; ep_i < dev->endpoint_count; ++ep_i)
         {
+            if (s_state_items[i].endpoint != dev->endpoints[ep_i].endpoint_id)
+            {
+                continue;
+            }
             apply_state_to_endpoint(&dev->endpoints[ep_i], &s_state_items[i]);
         }
     }
@@ -247,8 +251,8 @@ void ui_store_reload(ui_store_t *store)
         strlcpy(dst->name, s_devices_snapshot[i].name, sizeof(dst->name));
 
         const size_t ep_count = gw_device_registry_list_endpoints(&dst->uid, s_eps_snapshot, UI_STORE_ENDPOINT_CAP);
-        dst->endpoint_count = ep_count;
-        for (size_t ep_i = 0; ep_i < ep_count; ++ep_i)
+        dst->endpoint_count = (ep_count > UI_STORE_ENDPOINT_CAP) ? UI_STORE_ENDPOINT_CAP : ep_count;
+        for (size_t ep_i = 0; ep_i < dst->endpoint_count; ++ep_i)
         {
             ui_endpoint_vm_t *out_ep = &dst->endpoints[ep_i];
             memset(out_ep, 0, sizeof(*out_ep));

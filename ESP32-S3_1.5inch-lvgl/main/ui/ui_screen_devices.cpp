@@ -1,10 +1,10 @@
 #include "ui_screen_devices.hpp"
 
-#include <stdio.h>
 #include <string.h>
 
-#include "ui_actions.hpp"
+#include "gw_core/types.h"
 #include "ui_style.hpp"
+#include "ui_widgets.hpp"
 
 namespace
 {
@@ -13,177 +13,148 @@ lv_obj_t *s_title = nullptr;
 lv_obj_t *s_subtitle = nullptr;
 lv_obj_t *s_list = nullptr;
 
-enum class CtlKind : uint8_t
-{
-    OnOff = 1,
-    Level = 2,
-    ColorTemp = 3,
-};
+bool s_has_rendered_device = false;
+char s_rendered_uid[GW_DEVICE_UID_STRLEN] = {0};
+uint16_t s_rendered_short_addr = 0;
+size_t s_rendered_endpoint_count = 0;
+uint32_t s_rendered_signature = 0;
 
-typedef struct
+uint32_t fnv1a_hash_u32(uint32_t hash, uint32_t value)
 {
-    CtlKind kind;
-    gw_device_uid_t uid;
-    uint8_t endpoint;
-} ui_ctl_ctx_t;
-
-static ui_ctl_ctx_t s_ctx_pool[64];
-static size_t s_ctx_count = 0;
-
-ui_ctl_ctx_t *alloc_ctx(CtlKind kind, const gw_device_uid_t *uid, uint8_t endpoint)
-{
-    if (!uid || s_ctx_count >= (sizeof(s_ctx_pool) / sizeof(s_ctx_pool[0])))
-    {
-        return nullptr;
-    }
-    ui_ctl_ctx_t *ctx = &s_ctx_pool[s_ctx_count++];
-    memset(ctx, 0, sizeof(*ctx));
-    ctx->kind = kind;
-    ctx->uid = *uid;
-    ctx->endpoint = endpoint;
-    return ctx;
+    hash ^= value;
+    hash *= 16777619u;
+    return hash;
 }
 
-void on_switch_changed(lv_event_t *e)
+uint32_t calc_device_signature(const ui_device_vm_t *dev)
 {
-    ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
-    if (!ctx)
+    if (!dev)
+    {
+        return 0;
+    }
+    uint32_t hash = 2166136261u;
+    hash = fnv1a_hash_u32(hash, (uint32_t)dev->endpoint_count);
+    for (size_t i = 0; i < dev->endpoint_count; ++i)
+    {
+        const ui_endpoint_vm_t *ep = &dev->endpoints[i];
+        hash = fnv1a_hash_u32(hash, ep->endpoint_id);
+        hash = fnv1a_hash_u32(hash, ep->caps.onoff ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.level ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.color ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.temperature ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.humidity ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.battery ? 1u : 0u);
+        hash = fnv1a_hash_u32(hash, ep->caps.occupancy ? 1u : 0u);
+    }
+    return hash;
+}
+
+bool needs_rebuild(const ui_device_vm_t *dev)
+{
+    if (!dev)
+    {
+        return false;
+    }
+    if (!s_has_rendered_device)
+    {
+        return true;
+    }
+    if (strncmp(s_rendered_uid, dev->uid.uid, sizeof(s_rendered_uid)) != 0)
+    {
+        return true;
+    }
+    if (s_rendered_short_addr != dev->short_addr)
+    {
+        return true;
+    }
+    if (s_rendered_endpoint_count != dev->endpoint_count)
+    {
+        return true;
+    }
+    const uint32_t signature = calc_device_signature(dev);
+    if (s_rendered_signature != signature)
+    {
+        return true;
+    }
+    return false;
+}
+
+void apply_field_bool(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, bool value)
+{
+    ui_widget_value_t v = {};
+    v.type = UI_WIDGET_VALUE_BOOL;
+    v.has_value = has_value;
+    v.v.b = value;
+    (void)ui_widgets_set_state(device_uid, endpoint, key, &v);
+}
+
+void apply_field_u32(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, uint32_t value)
+{
+    ui_widget_value_t v = {};
+    v.type = UI_WIDGET_VALUE_U32;
+    v.has_value = has_value;
+    v.v.u32 = value;
+    (void)ui_widgets_set_state(device_uid, endpoint, key, &v);
+}
+
+void apply_field_f32(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, float value)
+{
+    ui_widget_value_t v = {};
+    v.type = UI_WIDGET_VALUE_F32;
+    v.has_value = has_value;
+    v.v.f32 = value;
+    (void)ui_widgets_set_state(device_uid, endpoint, key, &v);
+}
+
+void sync_endpoint_values(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
+{
+    if (!dev || !ep)
     {
         return;
     }
-    lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
-    const bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    (void)ui_actions_enqueue_onoff(&ctx->uid, ctx->endpoint, checked);
-}
-
-void on_slider_released(lv_event_t *e)
-{
-    ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
-    if (!ctx)
-    {
-        return;
-    }
-    lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
-    const int32_t value = lv_slider_get_value(slider);
-    (void)ui_actions_enqueue_level(&ctx->uid, ctx->endpoint, (uint8_t)value);
-}
-
-void on_color_temp_clicked(lv_event_t *e)
-{
-    ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
-    if (!ctx)
-    {
-        return;
-    }
-    (void)ui_actions_enqueue_color_temp(&ctx->uid, ctx->endpoint, ui_style::kWarmColorTempMireds);
-}
-
-void add_endpoint_card(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
-{
-    lv_obj_t *card = lv_obj_create(s_list);
-    lv_obj_set_width(card, lv_pct(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_all(card, ui_style::kCardPad, 0);
-    lv_obj_set_style_pad_row(card, ui_style::kCardRowGap, 0);
-    lv_obj_set_style_radius(card, ui_style::kCardRadius, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(ui_style::kCardBgHex), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(ui_style::kBorderHex), 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    lv_obj_t *hdr = lv_label_create(card);
-    lv_label_set_text_fmt(hdr, "EP%u (%s)", (unsigned)ep->endpoint_id, ep->kind[0] ? ep->kind : "endpoint");
-    lv_obj_set_style_text_color(hdr, lv_color_hex(ui_style::kCardTitleHex), 0);
+    const char *uid = dev->uid.uid;
+    const uint8_t endpoint = ep->endpoint_id;
 
     if (ep->caps.onoff)
     {
-        lv_obj_t *row = lv_obj_create(card);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, lv_pct(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        lv_obj_t *lbl = lv_label_create(row);
-        lv_label_set_text(lbl, "On/Off");
-        lv_obj_t *sw = lv_switch_create(row);
-        if (ep->has_onoff && ep->onoff)
-        {
-            lv_obj_add_state(sw, LV_STATE_CHECKED);
-        }
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, &dev->uid, ep->endpoint_id);
-        lv_obj_add_event_cb(sw, on_switch_changed, LV_EVENT_VALUE_CHANGED, ctx);
+        apply_field_bool(uid, endpoint, "onoff", ep->has_onoff, ep->onoff);
     }
-
     if (ep->caps.level)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text_fmt(lbl, "Level: %u", (unsigned)(ep->has_level ? ep->level : 0));
-        lv_obj_t *slider = lv_slider_create(card);
-        lv_obj_set_width(slider, lv_pct(100));
-        lv_slider_set_range(slider, ui_style::kLevelMin, ui_style::kLevelMax);
-        lv_slider_set_value(slider, (int32_t)(ep->has_level ? ep->level : 0), LV_ANIM_OFF);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::Level, &dev->uid, ep->endpoint_id);
-        lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, ctx);
+        apply_field_u32(uid, endpoint, "level", ep->has_level, ep->has_level ? ep->level : 0);
     }
-
     if (ep->caps.color)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text_fmt(lbl,
-                              "Color: X=%u Y=%u T=%u",
-                              (unsigned)(ep->has_color_x ? ep->color_x : 0),
-                              (unsigned)(ep->has_color_y ? ep->color_y : 0),
-                              (unsigned)(ep->has_color_temp_mireds ? ep->color_temp_mireds : 0));
-        lv_obj_t *btn = lv_button_create(card);
-        lv_obj_t *btn_lbl = lv_label_create(btn);
-        lv_label_set_text_fmt(btn_lbl, "Set Warm (%u)", (unsigned)ui_style::kWarmColorTempMireds);
-        lv_obj_center(btn_lbl);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::ColorTemp, &dev->uid, ep->endpoint_id);
-        lv_obj_add_event_cb(btn, on_color_temp_clicked, LV_EVENT_CLICKED, ctx);
+        apply_field_u32(uid, endpoint, "color_x", ep->has_color_x, ep->color_x);
+        apply_field_u32(uid, endpoint, "color_y", ep->has_color_y, ep->color_y);
+        apply_field_u32(uid, endpoint, "color_temp_mireds", ep->has_color_temp_mireds, ep->color_temp_mireds);
     }
-
     if (ep->caps.temperature)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        if (ep->has_temperature_c)
-        {
-            lv_label_set_text_fmt(lbl, "Temperature: %.1f C", ep->temperature_c);
-        }
-        else
-        {
-            lv_label_set_text(lbl, "Temperature: -");
-        }
+        apply_field_f32(uid, endpoint, "temperature_c", ep->has_temperature_c, ep->temperature_c);
     }
-
     if (ep->caps.humidity)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        if (ep->has_humidity_pct)
-        {
-            lv_label_set_text_fmt(lbl, "Humidity: %.1f %%", ep->humidity_pct);
-        }
-        else
-        {
-            lv_label_set_text(lbl, "Humidity: -");
-        }
+        apply_field_f32(uid, endpoint, "humidity_pct", ep->has_humidity_pct, ep->humidity_pct);
     }
-
     if (ep->caps.battery)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        if (ep->has_battery_pct)
-        {
-            lv_label_set_text_fmt(lbl, "Battery: %u %%", (unsigned)ep->battery_pct);
-        }
-        else
-        {
-            lv_label_set_text(lbl, "Battery: -");
-        }
+        apply_field_u32(uid, endpoint, "battery_pct", ep->has_battery_pct, ep->battery_pct);
     }
 }
+
+void sync_device_values(const ui_device_vm_t *dev)
+{
+    if (!dev)
+    {
+        return;
+    }
+    for (size_t i = 0; i < dev->endpoint_count; ++i)
+    {
+        sync_endpoint_values(dev, &dev->endpoints[i]);
+    }
+}
+
 } // namespace
 
 void ui_screen_devices_init(lv_obj_t *root)
@@ -215,6 +186,137 @@ void ui_screen_devices_init(lv_obj_t *root)
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
 }
 
+void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event_t *event)
+{
+    if (!store || !event || !s_root || !s_list || !s_title || !s_subtitle)
+    {
+        return;
+    }
+    if (!s_has_rendered_device || event->device_uid[0] == '\0')
+    {
+        return;
+    }
+    if (strncmp(s_rendered_uid, event->device_uid, sizeof(s_rendered_uid)) != 0)
+    {
+        return;
+    }
+    if ((event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) == 0 ||
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) == 0 ||
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) == 0 ||
+        (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) == 0)
+    {
+        return;
+    }
+
+    const uint8_t endpoint = event->payload_endpoint;
+    const uint16_t cluster = event->payload_cluster;
+    const uint16_t attr = event->payload_attr;
+    const uint8_t value_type = event->payload_value_type;
+
+    ui_widget_value_t value = {};
+    const char *key = nullptr;
+
+    if (cluster == 0x0006 && attr == 0x0000)
+    {
+        key = "onoff";
+        value.type = UI_WIDGET_VALUE_BOOL;
+        value.has_value = true;
+        if (value_type == GW_EVENT_VALUE_BOOL)
+        {
+            value.v.b = (event->payload_value_bool != 0);
+        }
+        else if (value_type == GW_EVENT_VALUE_I64)
+        {
+            value.v.b = (event->payload_value_i64 != 0);
+        }
+        else if (value_type == GW_EVENT_VALUE_F64)
+        {
+            value.v.b = (event->payload_value_f64 != 0.0);
+        }
+        else
+        {
+            return;
+        }
+    }
+    else if (cluster == 0x0008 && attr == 0x0000 && value_type == GW_EVENT_VALUE_I64)
+    {
+        key = "level";
+        value.type = UI_WIDGET_VALUE_U32;
+        value.has_value = true;
+        value.v.u32 = (uint32_t)event->payload_value_i64;
+    }
+    else if (cluster == 0x0402 && attr == 0x0000)
+    {
+        key = "temperature_c";
+        value.type = UI_WIDGET_VALUE_F32;
+        value.has_value = true;
+        if (value_type == GW_EVENT_VALUE_F64)
+        {
+            value.v.f32 = (float)event->payload_value_f64;
+        }
+        else if (value_type == GW_EVENT_VALUE_I64)
+        {
+            value.v.f32 = ((float)event->payload_value_i64) / 100.0f;
+        }
+        else
+        {
+            return;
+        }
+    }
+    else if (cluster == 0x0405 && attr == 0x0000)
+    {
+        key = "humidity_pct";
+        value.type = UI_WIDGET_VALUE_F32;
+        value.has_value = true;
+        if (value_type == GW_EVENT_VALUE_F64)
+        {
+            value.v.f32 = (float)event->payload_value_f64;
+        }
+        else if (value_type == GW_EVENT_VALUE_I64)
+        {
+            value.v.f32 = ((float)event->payload_value_i64) / 100.0f;
+        }
+        else
+        {
+            return;
+        }
+    }
+    else if (cluster == 0x0001 && attr == 0x0021 && value_type == GW_EVENT_VALUE_I64)
+    {
+        key = "battery_pct";
+        value.type = UI_WIDGET_VALUE_U32;
+        value.has_value = true;
+        value.v.u32 = (uint32_t)event->payload_value_i64;
+    }
+    else if (cluster == 0x0300 && attr == 0x0003 && value_type == GW_EVENT_VALUE_I64)
+    {
+        key = "color_x";
+        value.type = UI_WIDGET_VALUE_U32;
+        value.has_value = true;
+        value.v.u32 = (uint32_t)event->payload_value_i64;
+    }
+    else if (cluster == 0x0300 && attr == 0x0004 && value_type == GW_EVENT_VALUE_I64)
+    {
+        key = "color_y";
+        value.type = UI_WIDGET_VALUE_U32;
+        value.has_value = true;
+        value.v.u32 = (uint32_t)event->payload_value_i64;
+    }
+    else if (cluster == 0x0300 && attr == 0x0007 && value_type == GW_EVENT_VALUE_I64)
+    {
+        key = "color_temp_mireds";
+        value.type = UI_WIDGET_VALUE_U32;
+        value.has_value = true;
+        value.v.u32 = (uint32_t)event->payload_value_i64;
+    }
+    else
+    {
+        return;
+    }
+
+    (void)ui_widgets_set_state(event->device_uid, endpoint, key, &value);
+}
+
 void ui_screen_devices_render(const ui_store_t *store)
 {
     if (!store || !s_root || !s_list || !s_title || !s_subtitle)
@@ -222,14 +324,18 @@ void ui_screen_devices_render(const ui_store_t *store)
         return;
     }
 
-    s_ctx_count = 0;
-    lv_obj_clean(s_list);
-
     const ui_device_vm_t *dev = ui_store_active_device(store);
     if (!dev)
     {
         lv_label_set_text(s_title, "No devices");
         lv_label_set_text(s_subtitle, "Rotate encoder after devices join");
+        lv_obj_clean(s_list);
+        ui_widgets_reset();
+        s_has_rendered_device = false;
+        memset(s_rendered_uid, 0, sizeof(s_rendered_uid));
+        s_rendered_short_addr = 0;
+        s_rendered_endpoint_count = 0;
+        s_rendered_signature = 0;
         return;
     }
 
@@ -241,8 +347,19 @@ void ui_screen_devices_render(const ui_store_t *store)
                           (unsigned)dev->short_addr,
                           (unsigned)dev->endpoint_count);
 
-    for (size_t i = 0; i < dev->endpoint_count; ++i)
+    if (needs_rebuild(dev))
     {
-        add_endpoint_card(dev, &dev->endpoints[i]);
+        lv_obj_clean(s_list);
+        ui_widgets_reset();
+        for (size_t i = 0; i < dev->endpoint_count; ++i)
+        {
+            ui_widgets_create_endpoint_card(s_list, dev, &dev->endpoints[i]);
+        }
+        s_has_rendered_device = true;
+        strlcpy(s_rendered_uid, dev->uid.uid, sizeof(s_rendered_uid));
+        s_rendered_short_addr = dev->short_addr;
+        s_rendered_endpoint_count = dev->endpoint_count;
+        s_rendered_signature = calc_device_signature(dev);
+        sync_device_values(dev);
     }
 }

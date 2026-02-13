@@ -166,7 +166,7 @@ typedef struct {
 } GW_UART_PROTO_PACKED gw_uart_evt_v1_t;
 
 /* Снимок состояния C6 -> S3 (payload для GW_UART_MSG_SNAPSHOT). */
-#define GW_UART_SNAPSHOT_MAX_CLUSTERS 8
+#define GW_UART_SNAPSHOT_MAX_CLUSTERS 16
 typedef struct {
     uint8_t kind;                /* gw_uart_snapshot_kind_t */
     uint8_t flags;               /* зарезервировано */
@@ -198,6 +198,11 @@ typedef struct {
     char state_value_text[24];
     uint64_t state_ts_ms;
 } GW_UART_PROTO_PACKED gw_uart_snapshot_v1_t;
+
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+_Static_assert(sizeof(gw_uart_snapshot_v1_t) <= GW_UART_PROTO_MAX_PAYLOAD,
+               "gw_uart_snapshot_v1_t exceeds GW_UART_PROTO_MAX_PAYLOAD");
+#endif
 
 /* Chunk сырого device buffer (FlatBuffer) C6 -> S3. */
 #define GW_UART_DEVICE_FB_FLAG_BEGIN 0x01u

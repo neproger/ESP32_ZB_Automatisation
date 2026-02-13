@@ -167,7 +167,7 @@ static esp_err_t read_data(esp_lcd_touch_handle_t tp)
     portEXIT_CRITICAL(&tp->data.lock);
 
 
-    ESP_LOGE(TAG, "HF-IIC-read gs_id:%x f_num:%d state1:%x x:%d y:%d",gesture_id,point.num ,point.num,x, y);
+    ESP_LOGV(TAG, "touch gs_id:%x points:%d x:%d y:%d", gesture_id, point.num, x, y);
 
     return ESP_OK;
 }

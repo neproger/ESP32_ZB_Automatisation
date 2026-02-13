@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 // In-memory normalized device state for automations/conditions.
-// Keyed by (device_uid, key) where key is a stable string like:
+// Keyed by (device_uid, endpoint, key) where key is a stable string like:
 // - "onoff" (bool)
 // - "temperature_c" (float)
 // - "humidity_pct" (float)
@@ -21,7 +21,7 @@ extern "C" {
 // - "last_seen_ms" (uint64)
 
 #define GW_STATE_KEY_MAX 24
-#define GW_STATE_MAX_ITEMS 128
+#define GW_STATE_MAX_ITEMS 1024
 
 typedef enum {
     GW_STATE_VALUE_BOOL = 1,
@@ -32,6 +32,7 @@ typedef enum {
 
 typedef struct {
     gw_device_uid_t uid;
+    uint8_t endpoint;
     char key[GW_STATE_KEY_MAX];
     gw_state_value_type_t value_type;
     bool value_bool;
@@ -43,15 +44,17 @@ typedef struct {
 
 esp_err_t gw_state_store_init(void);
 
-esp_err_t gw_state_store_set_bool(const gw_device_uid_t *uid, const char *key, bool value, uint64_t ts_ms);
-esp_err_t gw_state_store_set_f32(const gw_device_uid_t *uid, const char *key, float value, uint64_t ts_ms);
-esp_err_t gw_state_store_set_u32(const gw_device_uid_t *uid, const char *key, uint32_t value, uint64_t ts_ms);
-esp_err_t gw_state_store_set_u64(const gw_device_uid_t *uid, const char *key, uint64_t value, uint64_t ts_ms);
+esp_err_t gw_state_store_set_bool(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, bool value, uint64_t ts_ms);
+esp_err_t gw_state_store_set_f32(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, float value, uint64_t ts_ms);
+esp_err_t gw_state_store_set_u32(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, uint32_t value, uint64_t ts_ms);
+esp_err_t gw_state_store_set_u64(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, uint64_t value, uint64_t ts_ms);
 
-esp_err_t gw_state_store_get(const gw_device_uid_t *uid, const char *key, gw_state_item_t *out);
-size_t gw_state_store_list(const gw_device_uid_t *uid, gw_state_item_t *out, size_t max_out);
+esp_err_t gw_state_store_get(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, gw_state_item_t *out);
+// Lookup latest value for key across all endpoints of device (used by legacy endpoint-agnostic consumers).
+esp_err_t gw_state_store_get_any(const gw_device_uid_t *uid, const char *key, gw_state_item_t *out);
+size_t gw_state_store_list(const gw_device_uid_t *uid, uint8_t endpoint, gw_state_item_t *out, size_t max_out);
+size_t gw_state_store_list_uid(const gw_device_uid_t *uid, gw_state_item_t *out, size_t max_out);
 
 #ifdef __cplusplus
 }
 #endif
-

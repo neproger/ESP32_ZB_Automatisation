@@ -284,7 +284,7 @@ static bool conditions_pass(const gw_automation_entry_t *entry)
         gw_device_uid_t uid = {0};
         strlcpy(uid.uid, uid_s, sizeof(uid.uid));
         gw_state_item_t st = {0};
-        if (gw_state_store_get(&uid, key, &st) != ESP_OK) return false;
+        if (gw_state_store_get_any(&uid, key, &st) != ESP_OK) return false;
 
         double actual_n = 0;
         bool actual_b = false;

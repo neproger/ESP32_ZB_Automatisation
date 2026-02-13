@@ -122,6 +122,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
 
     const uint16_t cluster = e->payload_cluster;
     const uint16_t attr = e->payload_attr;
+    const uint8_t endpoint = (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) ? e->payload_endpoint : 0;
 
     // Temperature (0x0402/0x0000), hundredths of Celsius.
     if (cluster == 0x0402 && attr == 0x0000) {
@@ -139,14 +140,14 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_type = GW_SENSOR_VALUE_I32;
             v.value_i32 = (int32_t)(celsius * 100.0f);
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_f32(uid, "temperature_c", celsius, e->ts_ms);
+            (void)gw_state_store_set_f32(uid, endpoint, "temperature_c", celsius, e->ts_ms);
         } else {
             int64_t raw = 0;
             if (value_as_i64(e, &raw)) {
                 v.value_type = GW_SENSOR_VALUE_I32;
                 v.value_i32 = (int32_t)raw;
                 (void)gw_sensor_store_upsert(&v);
-                (void)gw_state_store_set_f32(uid, "temperature_c", ((float)v.value_i32) / 100.0f, e->ts_ms);
+                (void)gw_state_store_set_f32(uid, endpoint, "temperature_c", ((float)v.value_i32) / 100.0f, e->ts_ms);
             }
         }
         return;
@@ -168,14 +169,14 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_type = GW_SENSOR_VALUE_U32;
             v.value_u32 = (uint32_t)(humidity * 100.0f);
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_f32(uid, "humidity_pct", humidity, e->ts_ms);
+            (void)gw_state_store_set_f32(uid, endpoint, "humidity_pct", humidity, e->ts_ms);
         } else {
             int64_t raw = 0;
             if (value_as_i64(e, &raw) && raw >= 0) {
                 v.value_type = GW_SENSOR_VALUE_U32;
                 v.value_u32 = (uint32_t)raw;
                 (void)gw_sensor_store_upsert(&v);
-                (void)gw_state_store_set_f32(uid, "humidity_pct", ((float)v.value_u32) / 100.0f, e->ts_ms);
+                (void)gw_state_store_set_f32(uid, endpoint, "humidity_pct", ((float)v.value_u32) / 100.0f, e->ts_ms);
             }
         }
         return;
@@ -195,7 +196,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_u32 = (uint32_t)pct;
             v.ts_ms = e->ts_ms;
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_u32(uid, "battery_pct", (uint32_t)pct, e->ts_ms);
+            (void)gw_state_store_set_u32(uid, endpoint, "battery_pct", (uint32_t)pct, e->ts_ms);
         }
         return;
     }
@@ -215,7 +216,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_u32 = mv;
             v.ts_ms = e->ts_ms;
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_u32(uid, "battery_mv", mv, e->ts_ms);
+            (void)gw_state_store_set_u32(uid, endpoint, "battery_mv", mv, e->ts_ms);
         }
         return;
     }
@@ -224,7 +225,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     if (cluster == 0x0006 && attr == 0x0000) {
         bool onoff = false;
         if (value_as_bool(e, &onoff)) {
-            (void)gw_state_store_set_bool(uid, "onoff", onoff, e->ts_ms);
+            (void)gw_state_store_set_bool(uid, endpoint, "onoff", onoff, e->ts_ms);
         }
         return;
     }
@@ -243,7 +244,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_u32 = (uint32_t)lvl;
             v.ts_ms = e->ts_ms;
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_u32(uid, "level", (uint32_t)lvl, e->ts_ms);
+            (void)gw_state_store_set_u32(uid, endpoint, "level", (uint32_t)lvl, e->ts_ms);
         }
         return;
     }
@@ -263,11 +264,11 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.ts_ms = e->ts_ms;
             (void)gw_sensor_store_upsert(&v);
             if (attr == 0x0003) {
-                (void)gw_state_store_set_u32(uid, "color_x", (uint32_t)raw, e->ts_ms);
+                (void)gw_state_store_set_u32(uid, endpoint, "color_x", (uint32_t)raw, e->ts_ms);
             } else if (attr == 0x0004) {
-                (void)gw_state_store_set_u32(uid, "color_y", (uint32_t)raw, e->ts_ms);
+                (void)gw_state_store_set_u32(uid, endpoint, "color_y", (uint32_t)raw, e->ts_ms);
             } else {
-                (void)gw_state_store_set_u32(uid, "color_temp_mireds", (uint32_t)raw, e->ts_ms);
+                (void)gw_state_store_set_u32(uid, endpoint, "color_temp_mireds", (uint32_t)raw, e->ts_ms);
             }
         }
         return;
@@ -277,7 +278,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     if (cluster == 0x0406 && attr == 0x0000) {
         bool occ = false;
         if (value_as_bool(e, &occ)) {
-            (void)gw_state_store_set_bool(uid, "occupancy", occ, e->ts_ms);
+            (void)gw_state_store_set_bool(uid, endpoint, "occupancy", occ, e->ts_ms);
         }
         return;
     }
@@ -286,7 +287,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     if (cluster == 0x0400 && attr == 0x0000) {
         int64_t raw = 0;
         if (value_as_i64(e, &raw) && raw >= 0) {
-            (void)gw_state_store_set_u32(uid, "illuminance_raw", (uint32_t)raw, e->ts_ms);
+            (void)gw_state_store_set_u32(uid, endpoint, "illuminance_raw", (uint32_t)raw, e->ts_ms);
         }
         return;
     }
@@ -305,7 +306,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             v.value_i32 = (int32_t)raw;
             v.ts_ms = e->ts_ms;
             (void)gw_sensor_store_upsert(&v);
-            (void)gw_state_store_set_f32(uid, "pressure_raw", (float)raw, e->ts_ms);
+            (void)gw_state_store_set_f32(uid, endpoint, "pressure_raw", (float)raw, e->ts_ms);
         }
         return;
     }
@@ -315,16 +316,16 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     (void)snprintf(key, sizeof(key), "cluster_%04x_attr_%04x", (unsigned)cluster, (unsigned)attr);
     switch ((gw_event_value_type_t)e->payload_value_type) {
         case GW_EVENT_VALUE_BOOL:
-            (void)gw_state_store_set_bool(uid, key, e->payload_value_bool != 0, e->ts_ms);
+            (void)gw_state_store_set_bool(uid, endpoint, key, e->payload_value_bool != 0, e->ts_ms);
             break;
         case GW_EVENT_VALUE_F64:
-            (void)gw_state_store_set_f32(uid, key, (float)e->payload_value_f64, e->ts_ms);
+            (void)gw_state_store_set_f32(uid, endpoint, key, (float)e->payload_value_f64, e->ts_ms);
             break;
         case GW_EVENT_VALUE_I64:
             if (e->payload_value_i64 >= 0) {
-                (void)gw_state_store_set_u64(uid, key, (uint64_t)e->payload_value_i64, e->ts_ms);
+                (void)gw_state_store_set_u64(uid, endpoint, key, (uint64_t)e->payload_value_i64, e->ts_ms);
             } else {
-                (void)gw_state_store_set_f32(uid, key, (float)e->payload_value_i64, e->ts_ms);
+                (void)gw_state_store_set_f32(uid, endpoint, key, (float)e->payload_value_i64, e->ts_ms);
             }
             break;
         default:
@@ -357,7 +358,16 @@ static void runtime_event_listener(const gw_event_t *event, void *user_ctx)
         return;
     }
 
-    if (strcmp(event->type, "zigbee.attr_report") == 0 || strcmp(event->type, "zigbee.attr_read") == 0) {
+    const bool is_state_event =
+        (strcmp(event->type, "zigbee.attr_report") == 0) ||
+        (strcmp(event->type, "zigbee.attr_read") == 0) ||
+        (strcmp(event->type, "zigbee.read_attr") == 0) ||
+        (strcmp(event->type, "zigbee.read_attr_resp") == 0 &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
+         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR));
+    if (is_state_event) {
         if (!have_uid) {
             return;
         }
