@@ -62,6 +62,74 @@ static ui_ctl_ctx_t s_ctx_pool[kMaxCtlCtx];
 static size_t s_ctx_count = 0;
 static field_entry_t s_fields[kMaxFieldEntries];
 static size_t s_field_count = 0;
+static lv_grad_dsc_t s_hue_grad = {};
+static bool s_hue_grad_ready = false;
+
+void ensure_hue_gradient(void)
+{
+    if (s_hue_grad_ready)
+    {
+        return;
+    }
+
+    lv_memzero(&s_hue_grad, sizeof(s_hue_grad));
+    s_hue_grad.dir = LV_GRAD_DIR_HOR;
+    s_hue_grad.extend = LV_GRAD_EXTEND_PAD;
+    s_hue_grad.stops_count = 7;
+
+    s_hue_grad.stops[0].frac = 0;
+    s_hue_grad.stops[0].color = lv_palette_main(LV_PALETTE_RED);
+    s_hue_grad.stops[0].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[1].frac = 42;
+    s_hue_grad.stops[1].color = lv_palette_main(LV_PALETTE_ORANGE);
+    s_hue_grad.stops[1].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[2].frac = 85;
+    s_hue_grad.stops[2].color = lv_palette_main(LV_PALETTE_YELLOW);
+    s_hue_grad.stops[2].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[3].frac = 128;
+    s_hue_grad.stops[3].color = lv_palette_main(LV_PALETTE_GREEN);
+    s_hue_grad.stops[3].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[4].frac = 170;
+    s_hue_grad.stops[4].color = lv_palette_main(LV_PALETTE_BLUE);
+    s_hue_grad.stops[4].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[5].frac = 213;
+    s_hue_grad.stops[5].color = lv_palette_main(LV_PALETTE_PURPLE);
+    s_hue_grad.stops[5].opa = LV_OPA_COVER;
+
+    s_hue_grad.stops[6].frac = 255;
+    s_hue_grad.stops[6].color = lv_palette_main(LV_PALETTE_RED);
+    s_hue_grad.stops[6].opa = LV_OPA_COVER;
+
+    s_hue_grad_ready = true;
+}
+
+void apply_hue_slider_style(lv_obj_t *slider)
+{
+    if (!slider)
+    {
+        return;
+    }
+
+    ensure_hue_gradient();
+
+    lv_obj_set_height(slider, 18);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_grad(slider, &s_hue_grad, LV_PART_MAIN);
+
+    // Keep track fully visible; knob indicates current hue position.
+    lv_obj_set_style_bg_opa(slider, LV_OPA_TRANSP, LV_PART_INDICATOR);
+
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0xffffff), LV_PART_KNOB);
+    lv_obj_set_style_border_color(slider, lv_color_hex(0x111827), LV_PART_KNOB);
+    lv_obj_set_style_border_width(slider, 2, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(slider, 2, LV_PART_KNOB);
+}
 
 void set_value_1dp(lv_obj_t *label, const char *prefix, float v, const char *suffix)
 {
@@ -533,11 +601,11 @@ void ui_widgets_reset(void)
     memset(s_fields, 0, sizeof(s_fields));
 }
 
-void ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
+lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
 {
     if (!parent || !dev || !ep)
     {
-        return;
+        return nullptr;
     }
 
     lv_obj_t *card = lv_obj_create(parent);
@@ -549,19 +617,16 @@ void ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev
     lv_obj_set_style_radius(card, ui_style::kCardRadius, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(ui_style::kCardBgHex), 0);
     lv_obj_set_style_border_color(card, lv_color_hex(ui_style::kBorderHex), 0);
+    lv_obj_set_style_text_font(card, ui_style::kFontBody, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    lv_obj_t *hdr = lv_label_create(card);
-    lv_label_set_text_fmt(hdr, "EP%u (%s)", (unsigned)ep->endpoint_id, ep->kind[0] ? ep->kind : "endpoint");
-    lv_obj_set_style_text_color(hdr, lv_color_hex(ui_style::kCardTitleHex), 0);
 
     if (ep->caps.onoff)
     {
         lv_obj_t *row = lv_obj_create(card);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, lv_pct(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_height(row, 56);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -569,6 +634,7 @@ void ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev
         lv_obj_t *lbl = lv_label_create(row);
         lv_label_set_text(lbl, "On/Off");
         lv_obj_t *sw = lv_switch_create(row);
+        lv_obj_set_size(sw, 84, 46);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, &dev->uid, ep->endpoint_id);
         lv_obj_add_event_cb(sw, on_switch_changed, LV_EVENT_VALUE_CHANGED, ctx);
         register_field(&dev->uid, ep->endpoint_id, "onoff", FieldKind::Switch, sw, nullptr);
@@ -593,6 +659,7 @@ void ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev
         lv_obj_t *slider_h = lv_slider_create(card);
         lv_obj_set_width(slider_h, lv_pct(100));
         lv_slider_set_range(slider_h, 0, 359);
+        apply_hue_slider_style(slider_h);
 
         lv_obj_t *lbl_s = lv_label_create(card);
         lv_label_set_text(lbl_s, "Saturation: 100 %");
@@ -649,6 +716,8 @@ void ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev
         lv_label_set_text(lbl, "Battery: -");
         register_field(&dev->uid, ep->endpoint_id, "battery_pct", FieldKind::ValueLabel, lbl, nullptr);
     }
+
+    return card;
 }
 
 bool ui_widgets_set_state(const char *device_uid, uint8_t endpoint, const char *key, const ui_widget_value_t *value)

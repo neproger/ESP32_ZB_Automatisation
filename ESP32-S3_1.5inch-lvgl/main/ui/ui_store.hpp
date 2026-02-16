@@ -46,6 +46,7 @@ typedef struct
     gw_device_uid_t uid;
     uint16_t short_addr;
     char name[32];
+    size_t active_endpoint_idx;
     size_t endpoint_count;
     ui_endpoint_vm_t endpoints[UI_STORE_ENDPOINT_CAP];
 } ui_device_vm_t;
@@ -62,5 +63,6 @@ void ui_store_reload(ui_store_t *store);
 bool ui_store_apply_event(ui_store_t *store, const gw_event_t *event);
 bool ui_store_next_device(ui_store_t *store);
 bool ui_store_prev_device(ui_store_t *store);
+bool ui_store_next_endpoint(ui_store_t *store);
+bool ui_store_prev_endpoint(ui_store_t *store);
 const ui_device_vm_t *ui_store_active_device(const ui_store_t *store);
-

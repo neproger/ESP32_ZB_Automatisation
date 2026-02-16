@@ -249,6 +249,7 @@ void ui_store_reload(ui_store_t *store)
         dst->uid = s_devices_snapshot[i].device_uid;
         dst->short_addr = s_devices_snapshot[i].short_addr;
         strlcpy(dst->name, s_devices_snapshot[i].name, sizeof(dst->name));
+        dst->active_endpoint_idx = 0;
 
         const size_t ep_count = gw_device_registry_list_endpoints(&dst->uid, s_eps_snapshot, UI_STORE_ENDPOINT_CAP);
         dst->endpoint_count = (ep_count > UI_STORE_ENDPOINT_CAP) ? UI_STORE_ENDPOINT_CAP : ep_count;
@@ -339,6 +340,42 @@ bool ui_store_prev_device(ui_store_t *store)
     else
     {
         store->active_device_idx--;
+    }
+    return true;
+}
+
+bool ui_store_next_endpoint(ui_store_t *store)
+{
+    if (!store) {
+        return false;
+    }
+    if (store->device_count == 0 || store->active_device_idx >= store->device_count) {
+        return false;
+    }
+    ui_device_vm_t *dev = &store->devices[store->active_device_idx];
+    if (!dev || dev->endpoint_count <= 1) {
+        return false;
+    }
+    dev->active_endpoint_idx = (dev->active_endpoint_idx + 1) % dev->endpoint_count;
+    return true;
+}
+
+bool ui_store_prev_endpoint(ui_store_t *store)
+{
+    if (!store) {
+        return false;
+    }
+    if (store->device_count == 0 || store->active_device_idx >= store->device_count) {
+        return false;
+    }
+    ui_device_vm_t *dev = &store->devices[store->active_device_idx];
+    if (!dev || dev->endpoint_count <= 1) {
+        return false;
+    }
+    if (dev->active_endpoint_idx == 0) {
+        dev->active_endpoint_idx = dev->endpoint_count - 1;
+    } else {
+        dev->active_endpoint_idx--;
     }
     return true;
 }

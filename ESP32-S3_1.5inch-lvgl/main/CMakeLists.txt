@@ -14,10 +14,16 @@ idf_component_register(
         "ui/ui_events_bridge.cpp"
         "ui/ui_widgets.cpp"
         "ui/ui_screen_devices.cpp"
+        "${CMAKE_SOURCE_DIR}/fonts/Montserrat_20.c"
+        "${CMAKE_SOURCE_DIR}/fonts/Montserrat_30.c"
+        "${CMAKE_SOURCE_DIR}/fonts/Montserrat_40.c"
+        "${CMAKE_SOURCE_DIR}/fonts/Montserrat_50.c"
+        "${CMAKE_SOURCE_DIR}/fonts/Montserrat_70.c"
     INCLUDE_DIRS
         "."
         "devices"
         "ui"
+        "../fonts"
     REQUIRES
         freertos
         esp_timer

@@ -239,7 +239,7 @@ extern "C" void app_main(void)
     }
 
     if (kEnableHttpServer) {
-        if (xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        if (xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
             ESP_LOGW(TAG_APP, "http_start task create failed, starting HTTP inline");
             log_heap_caps("before_http_start");
             ESP_ERROR_CHECK(gw_http_start());
@@ -253,6 +253,5 @@ extern "C" void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
-
 
 

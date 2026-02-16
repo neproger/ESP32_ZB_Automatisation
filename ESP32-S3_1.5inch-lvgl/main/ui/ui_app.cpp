@@ -29,6 +29,30 @@ void request_render()
     s_render_requested = true;
 }
 
+void ui_gesture_cb(lv_event_t *event)
+{
+    (void)event;
+    if (!s_store) {
+        return;
+    }
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+
+    const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    bool changed = false;
+    if (dir == LV_DIR_BOTTOM) {
+        changed = ui_store_prev_endpoint(s_store);
+    } else if (dir == LV_DIR_TOP) {
+        changed = ui_store_next_endpoint(s_store);
+    }
+
+    if (changed) {
+        request_render();
+    }
+}
+
 void ui_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -98,6 +122,7 @@ void ui_app_init(void)
 
     lv_obj_t *scr = lv_screen_active();
     ui_screen_devices_init(scr);
+    lv_obj_add_event_cb(scr, ui_gesture_cb, LV_EVENT_GESTURE, nullptr);
     ui_screen_devices_render(s_store);
     s_last_render_ms = (uint64_t)(esp_timer_get_time() / 1000);
     lv_timer_create(ui_tick_cb, 100, nullptr);

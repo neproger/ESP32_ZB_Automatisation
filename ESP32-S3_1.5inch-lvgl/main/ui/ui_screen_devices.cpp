@@ -1,4 +1,4 @@
-#include "ui_screen_devices.hpp"
+﻿#include "ui_screen_devices.hpp"
 
 #include <string.h>
 
@@ -11,12 +11,13 @@ namespace
 lv_obj_t *s_root = nullptr;
 lv_obj_t *s_title = nullptr;
 lv_obj_t *s_subtitle = nullptr;
-lv_obj_t *s_list = nullptr;
+lv_obj_t *s_card = nullptr;
 
 bool s_has_rendered_device = false;
 char s_rendered_uid[GW_DEVICE_UID_STRLEN] = {0};
 uint16_t s_rendered_short_addr = 0;
 size_t s_rendered_endpoint_count = 0;
+size_t s_rendered_active_endpoint_idx = 0;
 uint32_t s_rendered_signature = 0;
 
 uint32_t fnv1a_hash_u32(uint32_t hash, uint32_t value)
@@ -71,12 +72,36 @@ bool needs_rebuild(const ui_device_vm_t *dev)
     {
         return true;
     }
+    if (s_rendered_active_endpoint_idx != dev->active_endpoint_idx)
+    {
+        return true;
+    }
     const uint32_t signature = calc_device_signature(dev);
     if (s_rendered_signature != signature)
     {
         return true;
     }
     return false;
+}
+
+void relayout_card_under_subtitle(void)
+{
+    if (!s_root || !s_subtitle || !s_card)
+    {
+        return;
+    }
+
+    lv_obj_align_to(s_card, s_subtitle, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    lv_obj_update_layout(s_root);
+
+    const int32_t root_h = lv_obj_get_height(s_root);
+    const int32_t card_y = lv_obj_get_y(s_card);
+    int32_t card_h = root_h - card_y - ui_style::kCardBottomOffset;
+    if (card_h < 40)
+    {
+        card_h = 40;
+    }
+    lv_obj_set_height(s_card, card_h);
 }
 
 void apply_field_bool(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, bool value)
@@ -143,16 +168,18 @@ void sync_endpoint_values(const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
     }
 }
 
-void sync_device_values(const ui_device_vm_t *dev)
+void sync_active_endpoint_values(const ui_device_vm_t *dev)
 {
-    if (!dev)
+    if (!dev || dev->endpoint_count == 0)
     {
         return;
     }
-    for (size_t i = 0; i < dev->endpoint_count; ++i)
+    size_t ep_idx = dev->active_endpoint_idx;
+    if (ep_idx >= dev->endpoint_count)
     {
-        sync_endpoint_values(dev, &dev->endpoints[i]);
+        ep_idx = 0;
     }
+    sync_endpoint_values(dev, &dev->endpoints[ep_idx]);
 }
 
 } // namespace
@@ -162,33 +189,24 @@ void ui_screen_devices_init(lv_obj_t *root)
     s_root = root;
     s_title = lv_label_create(root);
     s_subtitle = lv_label_create(root);
-    s_list = lv_obj_create(root);
 
     lv_obj_set_style_bg_color(root, lv_color_hex(ui_style::kScreenBgHex), 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
-    lv_obj_align(s_title, LV_ALIGN_TOP_LEFT, ui_style::kTitleX, ui_style::kTitleY);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
     lv_obj_set_style_text_color(s_title, lv_color_hex(ui_style::kTitleTextHex), 0);
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_title, ui_style::kFontTitle, 0);
 
-    lv_obj_align(s_subtitle, LV_ALIGN_TOP_LEFT, ui_style::kSubtitleX, ui_style::kSubtitleY);
+    // subtitle
+    lv_obj_align_to(s_subtitle, s_title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(ui_style::kSubtitleTextHex), 0);
+    lv_obj_set_style_text_font(s_subtitle, ui_style::kFontSubtitle, 0);
 
-    lv_obj_set_size(s_list, ui_style::kListWidth, ui_style::kListHeight);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, ui_style::kListBottomOffsetY);
-    lv_obj_set_style_pad_all(s_list, ui_style::kListPad, 0);
-    lv_obj_set_style_pad_row(s_list, ui_style::kListItemGap, 0);
-    lv_obj_set_style_bg_color(s_list, lv_color_hex(ui_style::kPanelBgHex), 0);
-    lv_obj_set_style_border_color(s_list, lv_color_hex(ui_style::kBorderHex), 0);
-    lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
 }
 
 void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event_t *event)
 {
-    if (!store || !event || !s_root || !s_list || !s_title || !s_subtitle)
+    if (!store || !event || !s_root || !s_title || !s_subtitle)
     {
         return;
     }
@@ -200,6 +218,18 @@ void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event
     {
         return;
     }
+    const ui_device_vm_t *dev = ui_store_active_device(store);
+    if (!dev || dev->endpoint_count == 0)
+    {
+        return;
+    }
+    size_t ep_idx = dev->active_endpoint_idx;
+    if (ep_idx >= dev->endpoint_count)
+    {
+        ep_idx = 0;
+    }
+    const uint8_t active_ep = dev->endpoints[ep_idx].endpoint_id;
+
     if ((event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) == 0 ||
         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) == 0 ||
         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) == 0 ||
@@ -209,6 +239,10 @@ void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event
     }
 
     const uint8_t endpoint = event->payload_endpoint;
+    if (endpoint != active_ep)
+    {
+        return;
+    }
     const uint16_t cluster = event->payload_cluster;
     const uint16_t attr = event->payload_attr;
     const uint8_t value_type = event->payload_value_type;
@@ -319,7 +353,7 @@ void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event
 
 void ui_screen_devices_render(const ui_store_t *store)
 {
-    if (!store || !s_root || !s_list || !s_title || !s_subtitle)
+    if (!store || !s_root || !s_title || !s_subtitle)
     {
         return;
     }
@@ -329,37 +363,69 @@ void ui_screen_devices_render(const ui_store_t *store)
     {
         lv_label_set_text(s_title, "No devices");
         lv_label_set_text(s_subtitle, "Rotate encoder after devices join");
-        lv_obj_clean(s_list);
+        lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
+        lv_obj_align_to(s_subtitle, s_title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+        if (s_card)
+        {
+            lv_obj_delete(s_card);
+            s_card = nullptr;
+        }
         ui_widgets_reset();
         s_has_rendered_device = false;
         memset(s_rendered_uid, 0, sizeof(s_rendered_uid));
         s_rendered_short_addr = 0;
         s_rendered_endpoint_count = 0;
+        s_rendered_active_endpoint_idx = 0;
         s_rendered_signature = 0;
         return;
     }
 
-    lv_label_set_text_fmt(s_title, "%s (%s)", dev->name[0] ? dev->name : "device", dev->uid.uid);
+    size_t active_ep_idx = dev->active_endpoint_idx;
+    if (active_ep_idx >= dev->endpoint_count)
+    {
+        active_ep_idx = 0;
+    }
+    const ui_endpoint_vm_t *active_ep = (dev->endpoint_count > 0) ? &dev->endpoints[active_ep_idx] : nullptr;
+
+    // lv_label_set_text_fmt(s_title, "%s (%s)", dev->name[0] ? dev->name : "device", dev->uid.uid);
+    lv_label_set_text_fmt(s_title, "%s", dev->name[0] ? dev->name : "device");
+    const char *ep_kind = (active_ep && active_ep->kind[0]) ? active_ep->kind : "endpoint";
     lv_label_set_text_fmt(s_subtitle,
-                          "Device %u/%u  short: 0x%04X  endpoints: %u",
-                          (unsigned)(store->active_device_idx + 1),
-                          (unsigned)store->device_count,
-                          (unsigned)dev->short_addr,
-                          (unsigned)dev->endpoint_count);
+                          "#%u/%u - %s",
+                          (unsigned)(active_ep_idx + 1),
+                          (unsigned)dev->endpoint_count,
+                          ep_kind);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
+    lv_obj_align_to(s_subtitle, s_title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    if (s_card)
+    {
+        relayout_card_under_subtitle();
+    }
 
     if (needs_rebuild(dev))
     {
-        lv_obj_clean(s_list);
-        ui_widgets_reset();
-        for (size_t i = 0; i < dev->endpoint_count; ++i)
+        if (s_card)
         {
-            ui_widgets_create_endpoint_card(s_list, dev, &dev->endpoints[i]);
+            lv_obj_delete(s_card);
+            s_card = nullptr;
+        }
+        ui_widgets_reset();
+        if (active_ep)
+        {
+            s_card = ui_widgets_create_endpoint_card(s_root, dev, active_ep);
+            if (s_card)
+            {
+                lv_obj_set_width(s_card, ui_style::kListWidth);
+                relayout_card_under_subtitle();
+            }
         }
         s_has_rendered_device = true;
         strlcpy(s_rendered_uid, dev->uid.uid, sizeof(s_rendered_uid));
         s_rendered_short_addr = dev->short_addr;
         s_rendered_endpoint_count = dev->endpoint_count;
+        s_rendered_active_endpoint_idx = active_ep_idx;
         s_rendered_signature = calc_device_signature(dev);
-        sync_device_values(dev);
+        sync_active_endpoint_values(dev);
     }
 }
+
