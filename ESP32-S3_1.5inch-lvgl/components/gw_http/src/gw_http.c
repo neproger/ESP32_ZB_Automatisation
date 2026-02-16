@@ -21,6 +21,19 @@ static httpd_handle_t s_server;
 static uint16_t s_server_port;
 static bool s_spiffs_mounted;
 
+static void log_heap_caps(const char *stage)
+{
+    ESP_LOGI(TAG,
+             "Heap %s: internal=%u (largest=%u) dma=%u (largest=%u) psram=%u (largest=%u)",
+             stage ? stage : "-",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
+
 static esp_err_t gw_http_spiffs_init(void)
 {
     if (s_spiffs_mounted) {
@@ -169,6 +182,7 @@ esp_err_t gw_http_start(void)
         return ESP_OK;
     }
 
+    log_heap_caps("before_http_start");
     (void)gw_http_spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -224,15 +238,12 @@ esp_err_t gw_http_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG,
-             "Heap before WS register: internal=%u dma=%u psram=%u",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    log_heap_caps("before_ws_register");
     err = gw_ws_register(s_server);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "WebSocket disabled due to init failure: %s", esp_err_to_name(err));
     }
+    log_heap_caps("after_ws_register");
 
     err = httpd_register_uri_handler(s_server, &static_uri);
     if (err != ESP_OK) {
@@ -249,6 +260,7 @@ esp_err_t gw_http_start(void)
     } else {
         ESP_LOGI(TAG, "HTTP server started");
     }
+    log_heap_caps("after_http_start");
     return ESP_OK;
 }
 

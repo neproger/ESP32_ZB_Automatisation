@@ -17,6 +17,7 @@
 #include "gw_core/event_bus.h"
 
 static const char *TAG = "gw_ws";
+static const bool kWsUsePsram = false;
 
 typedef struct {
     int fd;
@@ -107,7 +108,13 @@ static bool cbor_wr_reserve(cbor_wr_t *w, size_t add)
     if (w->len + add <= w->cap) return true;
     size_t new_cap = w->cap ? w->cap : 128;
     while (new_cap < w->len + add) new_cap *= 2;
-    uint8_t *nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *nb = NULL;
+    if (kWsUsePsram) {
+        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!nb) {
+        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     if (!nb) {
         nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_8BIT);
     }
@@ -215,7 +222,13 @@ static esp_err_t ws_send_cbor_async(int fd, const uint8_t *buf, size_t len)
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t *copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *copy = NULL;
+    if (kWsUsePsram) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!copy) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     if (!copy) {
         copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_8BIT);
     }
@@ -539,7 +552,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
     if (frame.len > 0) {
-        uint8_t *buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        uint8_t *buf = NULL;
+        if (kWsUsePsram) {
+            buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!buf) {
+            buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
         if (!buf) {
             buf = (uint8_t *)heap_caps_malloc(frame.len, MALLOC_CAP_8BIT);
         }
@@ -560,17 +579,34 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     s_server = server;
     memset(s_clients, 0, sizeof(s_clients));
     s_event_q_caps_alloc = false;
-    s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (kWsUsePsram) {
+        s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_event_q) {
+            s_event_q_caps_alloc = true;
+        }
+    }
+    if (!s_event_q) {
+        s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_event_q) {
+            s_event_q_caps_alloc = true;
+        }
+    }
     if (!s_event_q) {
         s_event_q = xQueueCreate(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t));
-    } else {
-        s_event_q_caps_alloc = true;
+        s_event_q_caps_alloc = false;
     }
     if (!s_event_q) {
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    UBaseType_t task_ok = pdFAIL;
+    if (kWsUsePsram) {
+        task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (task_ok != pdPASS) {
+        task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (task_ok != pdPASS) {
         if (s_event_q_caps_alloc) {
             vQueueDeleteWithCaps(s_event_q);
         } else {
