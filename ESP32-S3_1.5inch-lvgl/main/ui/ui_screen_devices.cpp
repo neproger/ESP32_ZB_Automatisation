@@ -1,4 +1,4 @@
-#include "ui_screen_devices.hpp"
+﻿#include "ui_screen_devices.hpp"
 
 #include <string.h>
 
@@ -137,7 +137,6 @@ void sync_item_values(const ui_group_item_vm_t *item)
     if (ep->caps.color) {
         apply_field_u32(uid, endpoint, "color_x", ep->has_color_x, ep->color_x);
         apply_field_u32(uid, endpoint, "color_y", ep->has_color_y, ep->color_y);
-        apply_field_u32(uid, endpoint, "color_temp_mireds", ep->has_color_temp_mireds, ep->color_temp_mireds);
     }
     if (ep->caps.temperature) {
         apply_field_f32(uid, endpoint, "temperature_c", ep->has_temperature_c, ep->temperature_c);
@@ -245,11 +244,6 @@ void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event
         value.type = UI_WIDGET_VALUE_U32;
         value.has_value = true;
         value.v.u32 = (uint32_t)event->payload_value_i64;
-    } else if (cluster == 0x0300 && attr == 0x0007 && value_type == GW_EVENT_VALUE_I64) {
-        key = "color_temp_mireds";
-        value.type = UI_WIDGET_VALUE_U32;
-        value.has_value = true;
-        value.v.u32 = (uint32_t)event->payload_value_i64;
     } else {
         return;
     }
@@ -307,12 +301,10 @@ void ui_screen_devices_render(const ui_store_t *store)
     }
 
     lv_label_set_text_fmt(s_subtitle,
-                          "#%u/%u - %s · ep%u (%s)",
+                          "#%u/%u %s",
                           (unsigned)(group->active_item_idx + 1),
                           (unsigned)group->item_count,
-                          item->label[0] ? item->label : (item->device_name[0] ? item->device_name : item->uid.uid),
-                          (unsigned)item->endpoint_id,
-                          item->endpoint.kind[0] ? item->endpoint.kind : "endpoint");
+                          item->label[0] ? item->label : (item->device_name[0] ? item->device_name : item->uid.uid));
     lv_obj_align_to(s_subtitle, s_title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
     if (s_card) {
         relayout_card_under_subtitle();

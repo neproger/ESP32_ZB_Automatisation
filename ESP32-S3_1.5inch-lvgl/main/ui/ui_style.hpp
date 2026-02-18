@@ -40,5 +40,4 @@ static constexpr int32_t kCardRowGap = 6;
 // Controls
 static constexpr uint16_t kLevelMin = 0;
 static constexpr uint16_t kLevelMax = 254;
-static constexpr uint16_t kWarmColorTempMireds = 370;
 } // namespace ui_style

@@ -40,8 +40,6 @@ typedef struct
     uint16_t color_x;
     bool has_color_y;
     uint16_t color_y;
-    bool has_color_temp_mireds;
-    uint16_t color_temp_mireds;
 } ui_endpoint_vm_t;
 
 typedef struct

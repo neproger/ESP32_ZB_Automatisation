@@ -68,10 +68,9 @@ bool ui_mapper_supports_key(const ui_endpoint_caps_t *caps, const char *key)
     {
         return caps->occupancy;
     }
-    if (strcmp(key, "color_x") == 0 || strcmp(key, "color_y") == 0 || strcmp(key, "color_temp_mireds") == 0)
+    if (strcmp(key, "color_x") == 0 || strcmp(key, "color_y") == 0)
     {
         return caps->color;
     }
     return false;
 }
-

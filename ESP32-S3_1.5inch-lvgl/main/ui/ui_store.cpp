@@ -83,9 +83,6 @@ void apply_state_to_endpoint(ui_endpoint_vm_t *ep, const gw_state_item_t *st)
     } else if (strcmp(st->key, "color_y") == 0 && st->value_type == GW_STATE_VALUE_U32 && ep->caps.color) {
         ep->has_color_y = true;
         ep->color_y = (uint16_t)st->value_u32;
-    } else if (strcmp(st->key, "color_temp_mireds") == 0 && st->value_type == GW_STATE_VALUE_U32 && ep->caps.color) {
-        ep->has_color_temp_mireds = true;
-        ep->color_temp_mireds = (uint16_t)st->value_u32;
     }
 }
 
@@ -171,13 +168,6 @@ bool apply_value_from_event(ui_endpoint_vm_t *ep, const gw_event_t *event)
         const bool changed = (!ep->has_color_y) || (ep->color_y != v);
         ep->has_color_y = true;
         ep->color_y = v;
-        return changed;
-    }
-    if (cluster == 0x0300 && attr == 0x0007 && value_type == GW_EVENT_VALUE_I64) {
-        const uint16_t v = (uint16_t)event->payload_value_i64;
-        const bool changed = (!ep->has_color_temp_mireds) || (ep->color_temp_mireds != v);
-        ep->has_color_temp_mireds = true;
-        ep->color_temp_mireds = v;
         return changed;
     }
     return false;

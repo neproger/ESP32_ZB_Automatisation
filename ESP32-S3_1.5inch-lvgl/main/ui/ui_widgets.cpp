@@ -14,8 +14,7 @@ enum class CtlKind : uint8_t
 {
     OnOff = 1,
     Level = 2,
-    ColorTemp = 3,
-    ColorHS = 4,
+    ColorHS = 3,
 };
 
 typedef struct
@@ -413,16 +412,6 @@ void on_slider_released(lv_event_t *e)
     (void)ui_actions_enqueue_level(&ctx->uid, ctx->endpoint, (uint8_t)value);
 }
 
-void on_color_temp_clicked(lv_event_t *e)
-{
-    ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
-    if (!ctx)
-    {
-        return;
-    }
-    (void)ui_actions_enqueue_color_temp(&ctx->uid, ctx->endpoint, ui_style::kWarmColorTempMireds);
-}
-
 void on_color_hs_released(lv_event_t *e)
 {
     ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
@@ -518,11 +507,11 @@ void value_label_set_state(field_entry_t *entry, const ui_widget_value_t *value)
     {
         if (value->has_value && value->type == UI_WIDGET_VALUE_F32)
         {
-            set_value_1dp(entry->obj, "Temperature: ", value->v.f32, " C");
+            set_value_1dp(entry->obj, "", value->v.f32, " C");
         }
         else
         {
-            lv_label_set_text(entry->obj, "Temperature: -");
+            lv_label_set_text(entry->obj, "-");
         }
         return;
     }
@@ -531,11 +520,11 @@ void value_label_set_state(field_entry_t *entry, const ui_widget_value_t *value)
     {
         if (value->has_value && value->type == UI_WIDGET_VALUE_F32)
         {
-            set_value_1dp(entry->obj, "Humidity: ", value->v.f32, " %");
+            set_value_1dp(entry->obj, "", value->v.f32, " %");
         }
         else
         {
-            lv_label_set_text(entry->obj, "Humidity: -");
+            lv_label_set_text(entry->obj, "-");
         }
         return;
     }
@@ -553,43 +542,13 @@ void value_label_set_state(field_entry_t *entry, const ui_widget_value_t *value)
         return;
     }
 
-    if (strncmp(entry->key, "color_x", sizeof(entry->key)) == 0)
+    if (strncmp(entry->key, "color_x", sizeof(entry->key)) == 0 ||
+        strncmp(entry->key, "color_y", sizeof(entry->key)) == 0)
     {
-        if (value->has_value && value->type == UI_WIDGET_VALUE_U32)
-        {
-            lv_label_set_text_fmt(entry->obj, "Color X: %u", (unsigned)value->v.u32);
-        }
-        else
-        {
-            lv_label_set_text(entry->obj, "Color X: -");
-        }
+        // XY state drives HS sliders in color_state_set_state; no dedicated label output.
         return;
     }
 
-    if (strncmp(entry->key, "color_y", sizeof(entry->key)) == 0)
-    {
-        if (value->has_value && value->type == UI_WIDGET_VALUE_U32)
-        {
-            lv_label_set_text_fmt(entry->obj, "Color Y: %u", (unsigned)value->v.u32);
-        }
-        else
-        {
-            lv_label_set_text(entry->obj, "Color Y: -");
-        }
-        return;
-    }
-
-    if (strncmp(entry->key, "color_temp_mireds", sizeof(entry->key)) == 0)
-    {
-        if (value->has_value && value->type == UI_WIDGET_VALUE_U32)
-        {
-            lv_label_set_text_fmt(entry->obj, "Color Temp: %u", (unsigned)value->v.u32);
-        }
-        else
-        {
-            lv_label_set_text(entry->obj, "Color Temp: -");
-        }
-    }
 }
 } // namespace
 
@@ -614,9 +573,10 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(card, ui_style::kCardPad, 0);
     lv_obj_set_style_pad_row(card, ui_style::kCardRowGap, 0);
-    lv_obj_set_style_radius(card, ui_style::kCardRadius, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(ui_style::kCardBgHex), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(ui_style::kBorderHex), 0);
+    // Transparent container: keep only layout, no visual panel under widgets.
+    lv_obj_set_style_radius(card, 0, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_text_font(card, ui_style::kFontBody, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -683,31 +643,62 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
         // State keys still come as Zigbee xy; map them to this HS control.
         register_field(uid, ep->endpoint_id, "color_x", FieldKind::ColorState, slider_h, nullptr);
         register_field(uid, ep->endpoint_id, "color_y", FieldKind::ColorState, slider_h, nullptr);
-
-        lv_obj_t *lbl_t = lv_label_create(card);
-        lv_label_set_text(lbl_t, "Color Temp: -");
-        register_field(uid, ep->endpoint_id, "color_temp_mireds", FieldKind::ValueLabel, lbl_t, nullptr);
-
-        lv_obj_t *btn = lv_button_create(card);
-        lv_obj_t *btn_lbl = lv_label_create(btn);
-        lv_label_set_text_fmt(btn_lbl, "Set Warm (%u)", (unsigned)ui_style::kWarmColorTempMireds);
-        lv_obj_center(btn_lbl);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::ColorTemp, uid, ep->endpoint_id);
-        lv_obj_add_event_cb(btn, on_color_temp_clicked, LV_EVENT_CLICKED, ctx);
     }
 
-    if (ep->caps.temperature)
+    if (ep->caps.temperature || ep->caps.humidity)
     {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text(lbl, "Temperature: -");
-        register_field(uid, ep->endpoint_id, "temperature_c", FieldKind::ValueLabel, lbl, nullptr);
-    }
+        lv_obj_t *metrics_row = lv_obj_create(card);
+        lv_obj_remove_style_all(metrics_row);
+        lv_obj_set_width(metrics_row, lv_pct(100));
+        lv_obj_set_height(metrics_row, LV_SIZE_CONTENT);
+        lv_obj_clear_flag(metrics_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_pad_column(metrics_row, 8, 0);
+        lv_obj_set_flex_flow(metrics_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(metrics_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-    if (ep->caps.humidity)
-    {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text(lbl, "Humidity: -");
-        register_field(uid, ep->endpoint_id, "humidity_pct", FieldKind::ValueLabel, lbl, nullptr);
+        if (ep->caps.temperature)
+        {
+            lv_obj_t *temp_card = lv_obj_create(metrics_row);
+            lv_obj_set_size(temp_card, lv_pct(48), LV_SIZE_CONTENT);
+            lv_obj_clear_flag(temp_card, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_style_pad_all(temp_card, 8, 0);
+            lv_obj_set_style_bg_color(temp_card, lv_color_hex(ui_style::kPanelBgHex), 0);
+            lv_obj_set_style_border_color(temp_card, lv_color_hex(ui_style::kBorderHex), 0);
+            lv_obj_set_style_radius(temp_card, 8, 0);
+            lv_obj_set_flex_flow(temp_card, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(temp_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+            lv_obj_t *temp_title = lv_label_create(temp_card);
+            lv_label_set_text(temp_title, "Temperature");
+            lv_obj_set_style_text_color(temp_title, lv_color_hex(ui_style::kSubtitleTextHex), 0);
+
+            lv_obj_t *temp_value = lv_label_create(temp_card);
+            lv_label_set_text(temp_value, "-");
+            lv_obj_set_style_text_color(temp_value, lv_color_hex(ui_style::kTitleTextHex), 0);
+            register_field(uid, ep->endpoint_id, "temperature_c", FieldKind::ValueLabel, temp_value, nullptr);
+        }
+
+        if (ep->caps.humidity)
+        {
+            lv_obj_t *hum_card = lv_obj_create(metrics_row);
+            lv_obj_set_size(hum_card, lv_pct(48), LV_SIZE_CONTENT);
+            lv_obj_clear_flag(hum_card, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_style_pad_all(hum_card, 8, 0);
+            lv_obj_set_style_bg_color(hum_card, lv_color_hex(ui_style::kPanelBgHex), 0);
+            lv_obj_set_style_border_color(hum_card, lv_color_hex(ui_style::kBorderHex), 0);
+            lv_obj_set_style_radius(hum_card, 8, 0);
+            lv_obj_set_flex_flow(hum_card, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(hum_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+            lv_obj_t *hum_title = lv_label_create(hum_card);
+            lv_label_set_text(hum_title, "Humidity");
+            lv_obj_set_style_text_color(hum_title, lv_color_hex(ui_style::kSubtitleTextHex), 0);
+
+            lv_obj_t *hum_value = lv_label_create(hum_card);
+            lv_label_set_text(hum_value, "-");
+            lv_obj_set_style_text_color(hum_value, lv_color_hex(ui_style::kTitleTextHex), 0);
+            register_field(uid, ep->endpoint_id, "humidity_pct", FieldKind::ValueLabel, hum_value, nullptr);
+        }
     }
 
     if (ep->caps.battery)

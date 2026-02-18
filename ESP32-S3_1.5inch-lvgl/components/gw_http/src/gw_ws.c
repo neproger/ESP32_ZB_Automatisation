@@ -36,7 +36,7 @@ static portMUX_TYPE s_client_lock = portMUX_INITIALIZER_UNLOCKED;
 #define GW_WS_MAX_CLIENTS 2
 #define GW_WS_EVENT_Q_CAP 4
 #define GW_WS_EVENT_TASK_PRIO 2
-#define GW_WS_EVENT_TASK_STACK 2048
+#define GW_WS_EVENT_TASK_STACK 4096
 static gw_ws_client_t s_clients[GW_WS_MAX_CLIENTS];
 static QueueHandle_t s_event_q;
 static TaskHandle_t s_event_task;

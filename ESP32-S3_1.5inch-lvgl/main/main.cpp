@@ -112,7 +112,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_runtime_sync_init());
     log_heap_caps("after_core_init");
 
-    // Start backend after UI init.
+    // Start Zigbee UART backend before display/UI to prioritize Wi-Fi and HTTP bring-up.
     esp_err_t zb_link_err = gw_zigbee_link_start();
     if (zb_link_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
