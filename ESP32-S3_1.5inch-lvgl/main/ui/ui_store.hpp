@@ -5,12 +5,15 @@
 
 #include "gw_core/device_registry.h"
 #include "gw_core/event_bus.h"
+#include "gw_core/group_store.h"
 #include "gw_core/state_store.h"
 #include "gw_core/zb_model.h"
 #include "ui_mapper.hpp"
 
 static constexpr size_t UI_STORE_DEVICE_CAP = 64;
 static constexpr size_t UI_STORE_ENDPOINT_CAP = 8;
+static constexpr size_t UI_STORE_GROUP_CAP = 24;
+static constexpr size_t UI_STORE_GROUP_ITEM_CAP = 32;
 
 typedef struct
 {
@@ -45,24 +48,35 @@ typedef struct
 {
     gw_device_uid_t uid;
     uint16_t short_addr;
-    char name[32];
-    size_t active_endpoint_idx;
-    size_t endpoint_count;
-    ui_endpoint_vm_t endpoints[UI_STORE_ENDPOINT_CAP];
-} ui_device_vm_t;
+    char device_name[32];
+    char label[32];
+    uint8_t endpoint_id;
+    uint32_t order;
+    ui_endpoint_vm_t endpoint;
+} ui_group_item_vm_t;
 
 typedef struct
 {
-    size_t device_count;
-    size_t active_device_idx;
-    ui_device_vm_t devices[UI_STORE_DEVICE_CAP];
+    char id[GW_GROUP_ID_MAX];
+    char name[GW_GROUP_NAME_MAX];
+    size_t active_item_idx;
+    size_t item_count;
+    ui_group_item_vm_t items[UI_STORE_GROUP_ITEM_CAP];
+} ui_group_vm_t;
+
+typedef struct
+{
+    size_t group_count;
+    size_t active_group_idx;
+    ui_group_vm_t groups[UI_STORE_GROUP_CAP];
 } ui_store_t;
 
 void ui_store_init(ui_store_t *store);
 void ui_store_reload(ui_store_t *store);
 bool ui_store_apply_event(ui_store_t *store, const gw_event_t *event);
-bool ui_store_next_device(ui_store_t *store);
-bool ui_store_prev_device(ui_store_t *store);
-bool ui_store_next_endpoint(ui_store_t *store);
-bool ui_store_prev_endpoint(ui_store_t *store);
-const ui_device_vm_t *ui_store_active_device(const ui_store_t *store);
+bool ui_store_next_group(ui_store_t *store);
+bool ui_store_prev_group(ui_store_t *store);
+bool ui_store_next_item(ui_store_t *store);
+bool ui_store_prev_item(ui_store_t *store);
+const ui_group_vm_t *ui_store_active_group(const ui_store_t *store);
+const ui_group_item_vm_t *ui_store_active_item(const ui_store_t *store);

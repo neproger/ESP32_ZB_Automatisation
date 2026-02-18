@@ -189,12 +189,15 @@ esp_err_t gw_http_start(void)
     config.uri_match_fn = httpd_uri_match_wildcard;
     // Keep HTTP below Zigbee/rules so UI traffic cannot delay automations.
     config.task_priority = 4;
-    config.max_open_sockets = 4;
+    // Keep room for one browser tab + one WS socket.
+    config.max_open_sockets = 2;
     config.lru_purge_enable = true;
-    // REST + WS + SPA assets can easily exceed the default handler slots.
-    config.max_uri_handlers = 18;
-    // WS/events and CBOR encoding can be stack-hungry in the httpd task.
+    // REST + WS + SPA wildcard handlers.
+    config.max_uri_handlers = 24;
+    // Keep enough stack headroom for SPIFFS/HTTP handlers and flash/cache-critical paths.
     config.stack_size = 6144;
+    config.recv_wait_timeout = 4;
+    config.send_wait_timeout = 4;
     // HTTPD handles SPIFFS/NVS paths; its stack must stay in internal RAM
     // because flash operations can run with cache disabled.
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;

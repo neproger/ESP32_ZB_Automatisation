@@ -28,5 +28,5 @@ typedef struct
 } ui_widget_value_t;
 
 void ui_widgets_reset(void);
-lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep);
+lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_t *uid, const ui_endpoint_vm_t *ep);
 bool ui_widgets_set_state(const char *device_uid, uint8_t endpoint, const char *key, const ui_widget_value_t *value);

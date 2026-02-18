@@ -43,9 +43,9 @@ void ui_gesture_cb(lv_event_t *event)
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     bool changed = false;
     if (dir == LV_DIR_BOTTOM) {
-        changed = ui_store_prev_endpoint(s_store);
+        changed = ui_store_prev_item(s_store);
     } else if (dir == LV_DIR_TOP) {
-        changed = ui_store_next_endpoint(s_store);
+        changed = ui_store_next_item(s_store);
     }
 
     if (changed) {
@@ -70,7 +70,8 @@ void ui_tick_cb(lv_timer_t *timer)
             (strcmp(events[i].type, "device.join") == 0) ||
             (strcmp(events[i].type, "device.leave") == 0) ||
             (strcmp(events[i].type, "device.changed") == 0) ||
-            (strcmp(events[i].type, "device.update") == 0);
+            (strcmp(events[i].type, "device.update") == 0) ||
+            (strcmp(events[i].type, "group.changed") == 0);
 
         if (structural)
         {
@@ -130,7 +131,7 @@ void ui_app_init(void)
     lvgl_port_unlock();
 
     ESP_ERROR_CHECK(ui_events_bridge_init());
-    ESP_LOGI(TAG_UI, "Device UI initialized");
+    ESP_LOGI(TAG_UI, "Group UI initialized");
 }
 
 extern "C" void LVGL_knob_event(void *event)
@@ -142,14 +143,14 @@ extern "C" void LVGL_knob_event(void *event)
     const int ev = (int)(intptr_t)event;
     if (ev == KNOB_RIGHT)
     {
-        if (ui_store_next_device(s_store))
+        if (ui_store_next_group(s_store))
         {
             request_render();
         }
     }
     else if (ev == KNOB_LEFT)
     {
-        if (ui_store_prev_device(s_store))
+        if (ui_store_prev_group(s_store))
         {
             request_render();
         }

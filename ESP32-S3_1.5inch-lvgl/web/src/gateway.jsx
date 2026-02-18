@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { fetchBinary, fetchCbor } from './api.js'
 import { cborDecode } from './cbor.js'
 import { parseDeviceBlob } from './deviceBlob.js'
+import { groupsReload } from './groupsStore.js'
 
 function wsUrl(path) {
 	const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
@@ -12,6 +13,21 @@ function wsUrl(path) {
 
 function normalizeUid(v) {
 	return String(v ?? '').trim().toLowerCase()
+}
+
+function buildStateMap(items) {
+	const out = {}
+	;(Array.isArray(items) ? items : []).forEach((it) => {
+		const uid = normalizeUid(it?.device_id)
+		const epNum = Number(it?.endpoint_id ?? 0)
+		const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : '')
+		const key = String(it?.key ?? '')
+		if (!uid || !ep || !key) return
+		if (!out[uid]) out[uid] = {}
+		if (!out[uid][ep]) out[uid][ep] = {}
+		out[uid][ep][key] = it?.value ?? null
+	})
+	return out
 }
 
 const GatewayContext = createContext(null)
@@ -43,6 +59,13 @@ export function GatewayProvider({ children }) {
 		const list = Array.isArray(data?.automations) ? data.automations : []
 		setAutomations(list)
 		return list
+	}, [])
+
+	const loadStateSnapshot = useCallback(async () => {
+		const data = await fetchCbor('/api/state')
+		const next = buildStateMap(data?.items)
+		setDeviceStates(next)
+		return next
 	}, [])
 
 	useEffect(() => {
@@ -109,8 +132,11 @@ export function GatewayProvider({ children }) {
 						const evType = String(data?.event_type ?? '')
 						if (evType === 'device.changed') {
 							loadDevices().catch(() => {})
+							loadStateSnapshot().catch(() => {})
 						} else if (evType === 'automation.changed') {
 							loadAutomations().catch(() => {})
+						} else if (evType === 'group.changed') {
+							groupsReload().catch(() => {})
 						}
 					}
 				} catch {
@@ -139,12 +165,13 @@ export function GatewayProvider({ children }) {
 			cleanup()
 			setWsStatus('disconnected')
 		}
-	}, [loadAutomations, loadDevices])
+	}, [loadAutomations, loadDevices, loadStateSnapshot])
 
 	useEffect(() => {
 		loadDevices().catch(() => {})
 		loadAutomations().catch(() => {})
-	}, [loadDevices, loadAutomations])
+		loadStateSnapshot().catch(() => {})
+	}, [loadDevices, loadAutomations, loadStateSnapshot])
 
 	const value = useMemo(
 		() => ({

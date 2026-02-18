@@ -1,102 +1,122 @@
 ﻿//UTF-8
 //Device.jsx
 import { Link, useParams } from 'react-router-dom'
-import { useCallback, useMemo, useState } from 'react'
-import { describeAttr, describeCluster, describeDeviceId, describeProfile, formatSensorValue, hex16 } from '../zigbee/zcl.js'
-import { execAction } from '../api.js'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { describeCluster, describeDeviceId, describeProfile, hex16 } from '../zigbee/zcl.js'
 import { useGateway } from '../gateway.jsx'
+import EndpointWidgets from '../components/EndpointWidgets.jsx'
+import {
+	endpointLabelGet,
+	endpointLabelSet,
+	groupGetForEndpoint,
+	groupSetForEndpoint,
+	groupsList,
+	groupsReload,
+	groupsSubscribe,
+} from '../groupsStore.js'
 
 function normalizeUid(v) {
 	return String(v ?? '').trim().toLowerCase()
 }
 
-function renderSensorValue(s) {
-	return formatSensorValue(s)
+function listToLines(v) {
+	return Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : []
 }
 
-function listToText(v) {
-	return Array.isArray(v) ? v.map((x) => String(x ?? '')).filter(Boolean).join(', ') : ''
-}
-
-function clamp01(v) {
-	if (!Number.isFinite(v)) return 0
-	return Math.max(0, Math.min(1, v))
-}
-
-function srgbToLinear(v) {
-	const x = v / 255
-	return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4
-}
-
-function rgbHexToXy(hex) {
-	const s = String(hex ?? '').replace('#', '').trim()
-	if (s.length !== 6) return { x: 0, y: 0 }
-	const r = parseInt(s.slice(0, 2), 16)
-	const g = parseInt(s.slice(2, 4), 16)
-	const b = parseInt(s.slice(4, 6), 16)
-	if (![r, g, b].every((n) => Number.isFinite(n))) return { x: 0, y: 0 }
-
-	// Convert sRGB -> linear -> XYZ (D65) -> xy (CIE 1931).
-	const rl = srgbToLinear(r)
-	const gl = srgbToLinear(g)
-	const bl = srgbToLinear(b)
-
-	const X = rl * 0.4124 + gl * 0.3576 + bl * 0.1805
-	const Y = rl * 0.2126 + gl * 0.7152 + bl * 0.0722
-	const Z = rl * 0.0193 + gl * 0.1192 + bl * 0.9505
-	const sum = X + Y + Z
-	const x = sum > 0 ? X / sum : 0
-	const y = sum > 0 ? Y / sum : 0
-
-	return {
-		x: Math.round(clamp01(x) * 65535),
-		y: Math.round(clamp01(y) * 65535),
+function formatStateValue(v) {
+	if (typeof v === 'boolean') return v ? 'true' : 'false'
+	if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '-'
+	if (typeof v === 'string') return v
+	if (v == null) return '-'
+	try {
+		return JSON.stringify(v)
+	} catch {
+		return String(v)
 	}
 }
 
-function linearToSrgbByte(v) {
-	const x = Math.max(0, v)
-	const s = x <= 0.0031308 ? (12.92 * x) : (1.055 * x ** (1 / 2.4) - 0.055)
-	return Math.max(0, Math.min(255, Math.round(s * 255)))
+async function copyTextToClipboard(text) {
+	if (navigator?.clipboard?.writeText) {
+		await navigator.clipboard.writeText(text)
+		return
+	}
+	const ta = document.createElement('textarea')
+	ta.value = text
+	ta.setAttribute('readonly', '')
+	ta.style.position = 'absolute'
+	ta.style.left = '-9999px'
+	document.body.appendChild(ta)
+	ta.select()
+	document.execCommand('copy')
+	document.body.removeChild(ta)
 }
 
-function xyToRgbHex(xRaw, yRaw) {
-	const x = Number(xRaw) / 65535
-	const y = Number(yRaw) / 65535
-	if (!Number.isFinite(x) || !Number.isFinite(y) || y <= 0) return '#ffffff'
+const ENDPOINT_COLUMNS = [
+	{ id: 'endpoint', label: 'Endpoint' },
+	{ id: 'kind', label: 'Kind' },
+	{ id: 'profile', label: 'Profile' },
+	{ id: 'device', label: 'Device' },
+	{ id: 'controls', label: 'Controls' },
+	{ id: 'accepts', label: 'Accepts' },
+	{ id: 'emits', label: 'Emits' },
+	{ id: 'reports', label: 'Reports' },
+	{ id: 'live_state', label: 'Live state' },
+	{ id: 'group', label: 'Group' },
+	{ id: 'in_clusters', label: 'In clusters' },
+	{ id: 'out_clusters', label: 'Out clusters' },
+]
 
-	const Y = 1
-	const X = (Y / y) * x
-	const Z = (Y / y) * (1 - x - y)
-
-	let rl = X * 3.2406 + Y * -1.5372 + Z * -0.4986
-	let gl = X * -0.9689 + Y * 1.8758 + Z * 0.0415
-	let bl = X * 0.0557 + Y * -0.204 + Z * 1.057
-
-	const maxV = Math.max(rl, gl, bl, 1)
-	rl /= maxV
-	gl /= maxV
-	bl /= maxV
-
-	const r = linearToSrgbByte(rl)
-	const g = linearToSrgbByte(gl)
-	const b = linearToSrgbByte(bl)
-	const hex = (n) => n.toString(16).padStart(2, '0')
-	return `#${hex(r)}${hex(g)}${hex(b)}`
+const DEVICE_COLUMNS_KEY = 'gw_device_columns_v1'
+const DEFAULT_COLUMN_VISIBILITY = {
+	endpoint: true,
+	kind: true,
+	profile: true,
+	device: true,
+	controls: true,
+	accepts: false,
+	emits: false,
+	reports: false,
+	live_state: true,
+	group: true,
+	in_clusters: false,
+	out_clusters: false,
 }
 
-function toNumberOrNull(v) {
-	const n = Number(v)
-	return Number.isFinite(n) ? n : null
+function loadColumnVisibility() {
+	try {
+		const raw = window.localStorage.getItem(DEVICE_COLUMNS_KEY)
+		if (!raw) return { ...DEFAULT_COLUMN_VISIBILITY }
+		const parsed = JSON.parse(raw)
+		if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_COLUMN_VISIBILITY }
+		return { ...DEFAULT_COLUMN_VISIBILITY, ...parsed }
+	} catch {
+		return { ...DEFAULT_COLUMN_VISIBILITY }
+	}
 }
 
 export default function Device() {
 	const { uid } = useParams()
 	const { devices, deviceStates, reloadDevices } = useGateway()
-	const [levelByEndpoint, setLevelByEndpoint] = useState(() => new Map())
-	const [colorByEndpoint, setColorByEndpoint] = useState(() => new Map())
-	const [tempKByEndpoint, setTempKByEndpoint] = useState(() => new Map())
 	const [status, setStatus] = useState('')
+	const [columnsOpen, setColumnsOpen] = useState(false)
+	const [columnVisible, setColumnVisible] = useState(loadColumnVisibility)
+	const [groups, setGroups] = useState(() => groupsList())
+	const [labelDraftByEndpoint, setLabelDraftByEndpoint] = useState({})
+
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(DEVICE_COLUMNS_KEY, JSON.stringify(columnVisible))
+		} catch {
+			// ignore storage errors
+		}
+	}, [columnVisible])
+
+	useEffect(() => {
+		const refresh = () => setGroups(groupsList())
+		const unsub = groupsSubscribe(refresh)
+		groupsReload().catch(() => {})
+		return () => unsub()
+	}, [])
 
 	const device = useMemo(() => {
 		const u = normalizeUid(uid)
@@ -105,9 +125,8 @@ export default function Device() {
 
 	const endpoints = useMemo(() => (Array.isArray(device?.endpoints) ? device.endpoints : []), [device])
 	const sensors = useMemo(() => (Array.isArray(device?.sensors) ? device.sensors : []), [device])
-
 	const sortedEndpoints = useMemo(() => {
-		const items = Array.isArray(endpoints) ? [...endpoints] : []
+		const items = [...endpoints]
 		items.sort((a, b) => Number(a?.endpoint ?? 0) - Number(b?.endpoint ?? 0))
 		return items
 	}, [endpoints])
@@ -117,195 +136,94 @@ export default function Device() {
 		return (u && deviceStates?.[u]) ? deviceStates[u] : {}
 	}, [uid, deviceStates])
 
-	const sortedSensors = useMemo(() => {
-		const items = Array.isArray(sensors) ? [...sensors] : []
-		items.sort((a, b) => {
-			const ak = `${a?.endpoint ?? 0}:${a?.cluster_id ?? 0}:${a?.attr_id ?? 0}`
-			const bk = `${b?.endpoint ?? 0}:${b?.cluster_id ?? 0}:${b?.attr_id ?? 0}`
-			return ak.localeCompare(bk)
+	useEffect(() => {
+		const duid = String(device?.device_uid ?? uid ?? '')
+		const next = {}
+		;(Array.isArray(device?.endpoints) ? device.endpoints : []).forEach((e) => {
+			const ep = Number(e?.endpoint ?? 0)
+			if (ep <= 0) return
+			next[String(ep)] = endpointLabelGet(duid, ep)
 		})
-		return items
-	}, [sensors])
+		setLabelDraftByEndpoint(next)
+	}, [device, uid, groups])
 
-	const getSensorValue = useCallback(
-		(endpoint, clusterId, attrId) => {
-			const ep = Number(endpoint)
-			const item = sortedSensors.find(
-				(s) =>
-					Number(s?.endpoint ?? 0) === ep &&
-					Number(s?.cluster_id ?? 0) === Number(clusterId) &&
-					Number(s?.attr_id ?? 0) === Number(attrId),
-			)
-			if (!item) return null
-			if (item?.value_u32 != null) return toNumberOrNull(item.value_u32)
-			if (item?.value_i32 != null) return toNumberOrNull(item.value_i32)
-			return null
-		},
-		[sortedSensors],
-	)
-
-	const getEndpointState = useCallback(
-		(endpoint) => {
-			const ep = String(Number(endpoint ?? 0))
-			return {
-				...((liveStateByEndpoint && liveStateByEndpoint[ep]) || {}),
-			}
-		},
-		[liveStateByEndpoint],
-	)
-
-	const getLevelValue = useCallback(
-		(endpoint) => {
-			const ep = Number(endpoint)
-			if (levelByEndpoint.has(ep)) return Number(levelByEndpoint.get(ep))
-			const st = getEndpointState(ep)
-			const fromState = toNumberOrNull(st?.level)
-			if (fromState != null) return Math.max(0, Math.min(254, Math.round(fromState)))
-			const fromSensor = getSensorValue(ep, 0x0008, 0x0000)
-			if (fromSensor != null) return Math.max(0, Math.min(254, Math.round(fromSensor)))
-			return 0
-		},
-		[levelByEndpoint, getEndpointState, getSensorValue],
-	)
-
-	const getOnOffValue = useCallback(
-		(endpoint) => {
-			const ep = Number(endpoint)
-			const st = getEndpointState(ep)
-			if (typeof st?.onoff === 'boolean') return st.onoff
-			const fromSensor = getSensorValue(ep, 0x0006, 0x0000)
-			if (fromSensor != null) return Number(fromSensor) !== 0
-			return false
-		},
-		[getEndpointState, getSensorValue],
-	)
-
-	const getTempKValue = useCallback(
-		(endpoint) => {
-			const ep = Number(endpoint)
-			if (tempKByEndpoint.has(ep)) return Number(tempKByEndpoint.get(ep))
-			const st = getEndpointState(ep)
-			const miredFromState = toNumberOrNull(st?.color_temp_mireds)
-			const miredFromSensor = getSensorValue(ep, 0x0300, 0x0007)
-			const mired = miredFromState ?? miredFromSensor
-			if (mired != null && mired > 0) {
-				return Math.max(2000, Math.min(6500, Math.round(1_000_000 / mired)))
-			}
-			return 3000
-		},
-		[tempKByEndpoint, getEndpointState, getSensorValue],
-	)
-
-	const getColorValue = useCallback(
-		(endpoint) => {
-			const ep = Number(endpoint)
-			if (colorByEndpoint.has(ep)) return String(colorByEndpoint.get(ep))
-			const st = getEndpointState(ep)
-			const x = toNumberOrNull(st?.color_x) ?? getSensorValue(ep, 0x0300, 0x0003)
-			const y = toNumberOrNull(st?.color_y) ?? getSensorValue(ep, 0x0300, 0x0004)
-			if (x != null && y != null) return xyToRgbHex(x, y)
-			return '#ffffff'
-		},
-		[colorByEndpoint, getEndpointState, getSensorValue],
-	)
-
-	const hasAccept = useCallback((ep, prefix) => {
-		const arr = Array.isArray(ep?.accepts) ? ep.accepts : []
-		return arr.some((x) => String(x ?? '').startsWith(prefix))
+	const copyJson = useCallback(async (label, data) => {
+		try {
+			await copyTextToClipboard(JSON.stringify(data, null, 2))
+			setStatus(`${label} JSON copied`)
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		}
 	}, [])
 
-	const sendOnOff = useCallback(
-		async (endpoint, cmd) => {
-			const u = normalizeUid(uid)
-			if (!u) return
-			setStatus('Sending...')
-			try {
-				await execAction({
-					type: 'zigbee',
-					cmd: `onoff.${cmd}`,
-					device_uid: u,
-					endpoint,
-				})
-				setStatus('')
-			} catch (e) {
-				setStatus(String(e?.message ?? e))
-			}
-		},
-		[uid],
-	)
+	const copyEndpointJson = useCallback(async (e) => {
+		const endpointId = Number(e?.endpoint ?? 0)
+		const payload = {
+			device_uid: String(device?.device_uid ?? uid ?? ''),
+			device_name: String(device?.name ?? ''),
+			short_addr: Number(device?.short_addr ?? 0),
+			endpoint: endpointId,
+			meta: e ?? {},
+			label: String(labelDraftByEndpoint[String(endpointId)] ?? ''),
+			live_state: (liveStateByEndpoint && liveStateByEndpoint[String(endpointId)]) || {},
+			sensors: sensors.filter((s) => Number(s?.endpoint ?? 0) === endpointId),
+		}
+		await copyJson(`Endpoint ${endpointId}`, payload)
+	}, [copyJson, device, uid, liveStateByEndpoint, sensors, labelDraftByEndpoint])
 
-	const sendLevel = useCallback(
-		async (endpoint) => {
-			const u = normalizeUid(uid)
-			const level = getLevelValue(endpoint)
-			if (!u) return
-			if (!Number.isFinite(level)) return
-			setStatus('Sending...')
-			try {
-				await execAction({
-					type: 'zigbee',
-					cmd: 'level.move_to_level',
-					device_uid: u,
-					endpoint,
-					level: Math.max(0, Math.min(254, Math.round(level))),
-					transition_ms: 300,
-				})
-				setStatus('')
-			} catch (e) {
-				setStatus(String(e?.message ?? e))
-			}
-		},
-		[uid, getLevelValue],
-	)
+	const copyDeviceJson = useCallback(async () => {
+		await copyJson('Device', {
+			device: device ?? null,
+			live_state: liveStateByEndpoint ?? {},
+			endpoints: sortedEndpoints.map((e) => ({
+				...(e ?? {}),
+				label: String(labelDraftByEndpoint[String(Number(e?.endpoint ?? 0))] ?? ''),
+				live_state: (liveStateByEndpoint && liveStateByEndpoint[String(Number(e?.endpoint ?? 0))]) || {},
+				sensors: sensors.filter((s) => Number(s?.endpoint ?? 0) === Number(e?.endpoint ?? 0)),
+			})),
+			sensors,
+		})
+	}, [copyJson, device, liveStateByEndpoint, sortedEndpoints, sensors, labelDraftByEndpoint])
 
-	const sendColor = useCallback(
-		async (endpoint) => {
-			const u = normalizeUid(uid)
-			const hex = String(getColorValue(endpoint))
-			if (!u) return
-			const { x, y } = rgbHexToXy(hex)
-			setStatus('Sending...')
-			try {
-				await execAction({
-					type: 'zigbee',
-					cmd: 'color.move_to_color_xy',
-					device_uid: u,
-					endpoint,
-					x,
-					y,
-					transition_ms: 400,
-				})
-				setStatus('')
-			} catch (e) {
-				setStatus(String(e?.message ?? e))
-			}
-		},
-		[uid, getColorValue],
-	)
+	const showCol = useCallback((id) => columnVisible[id] !== false, [columnVisible])
+	const endpointColSpan = useMemo(() => ENDPOINT_COLUMNS.filter((c) => showCol(c.id)).length, [showCol])
 
-	const sendTemp = useCallback(
-		async (endpoint) => {
-			const u = normalizeUid(uid)
-			const k = Number(getTempKValue(endpoint))
-			if (!u || !Number.isFinite(k) || k <= 0) return
-			const mireds = Math.round(1_000_000 / k)
-			setStatus('Sending...')
-			try {
-				await execAction({
-					type: 'zigbee',
-					cmd: 'color.move_to_color_temperature',
-					device_uid: u,
-					endpoint,
-					mireds,
-					transition_ms: 600,
-				})
-				setStatus('')
-			} catch (e) {
-				setStatus(String(e?.message ?? e))
-			}
-		},
-		[uid, getTempKValue],
-	)
+	const endpointGroupId = useCallback((endpoint) => {
+		const duid = String(device?.device_uid ?? uid ?? '')
+		return groupGetForEndpoint(duid, Number(endpoint ?? 0))
+	}, [device, uid])
+
+	const onEndpointGroupChange = useCallback(async (endpoint, groupId) => {
+		const duid = String(device?.device_uid ?? uid ?? '')
+		try {
+			await groupSetForEndpoint(duid, Number(endpoint ?? 0), groupId)
+			setStatus('Группа endpoint обновлена')
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		}
+	}, [device, uid])
+
+	const onEndpointLabelChange = useCallback((endpoint, value) => {
+		setLabelDraftByEndpoint((prev) => ({
+			...prev,
+			[String(Number(endpoint ?? 0))]: String(value ?? ''),
+		}))
+	}, [])
+
+	const saveEndpointLabel = useCallback(async (endpoint) => {
+		const duid = String(device?.device_uid ?? uid ?? '')
+		const ep = Number(endpoint ?? 0)
+		if (!duid || ep <= 0) return
+		const nextValue = String(labelDraftByEndpoint[String(ep)] ?? '').trim()
+		const prevValue = String(endpointLabelGet(duid, ep) ?? '').trim()
+		if (nextValue === prevValue) return
+		try {
+			await endpointLabelSet(duid, ep, nextValue)
+			setStatus('Имя endpoint сохранено')
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		}
+	}, [device, uid, labelDraftByEndpoint])
 
 	return (
 		<div className="page">
@@ -313,19 +231,36 @@ export default function Device() {
 				<div>
 					<h1>Device</h1>
 					<div className="muted">
-						{device?.name ? (
-							<>
-								<span>{String(device.name)}</span> <span className="muted">В·</span>{' '}
-							</>
-						) : null}
+						{device?.name ? <><span>{String(device.name)}</span> <span className="muted">·</span> </> : null}
 						<code>{String(uid ?? '')}</code>
 					</div>
 				</div>
 				<div className="row">
 					<button onClick={reloadDevices}>Refresh</button>
-					<Link className="navlink" to="/devices">
-						Back
-					</Link>
+					<button onClick={copyDeviceJson}>Copy Device JSON</button>
+					<div style={{ position: 'relative' }}>
+						<button onClick={() => setColumnsOpen((v) => !v)}>Columns</button>
+						{columnsOpen ? (
+							<div className="card" style={{ position: 'absolute', right: 0, top: '110%', zIndex: 20, padding: 10, minWidth: 220 }}>
+								{ENDPOINT_COLUMNS.map((c) => (
+									<label key={c.id} className="row" style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+										<input
+											type="checkbox"
+											checked={showCol(c.id)}
+											onChange={(ev) =>
+												setColumnVisible((prev) => ({
+													...prev,
+													[c.id]: Boolean(ev?.target?.checked),
+												}))
+											}
+										/>
+										<span>{c.label}</span>
+									</label>
+								))}
+							</div>
+						) : null}
+					</div>
+					<Link className="navlink" to="/devices">Back</Link>
 				</div>
 			</div>
 
@@ -336,180 +271,114 @@ export default function Device() {
 					<table>
 						<thead>
 							<tr>
-								<th>Endpoint</th>
-								<th>Kind</th>
-								<th>Profile</th>
-								<th>Device</th>
-								<th>Controls</th>
-								<th>Accepts</th>
-								<th>Emits</th>
-								<th>Reports</th>
-								<th>In clusters</th>
-								<th>Out clusters</th>
+								{showCol('endpoint') ? <th>Endpoint</th> : null}
+								{showCol('kind') ? <th>Kind</th> : null}
+								{showCol('profile') ? <th>Profile</th> : null}
+								{showCol('device') ? <th>Device</th> : null}
+								{showCol('controls') ? <th>Controls</th> : null}
+								{showCol('accepts') ? <th>Accepts</th> : null}
+								{showCol('emits') ? <th>Emits</th> : null}
+								{showCol('reports') ? <th>Reports</th> : null}
+								{showCol('live_state') ? <th>Live state</th> : null}
+								{showCol('group') ? <th>Group</th> : null}
+								{showCol('in_clusters') ? <th>In clusters</th> : null}
+								{showCol('out_clusters') ? <th>Out clusters</th> : null}
 							</tr>
 						</thead>
 						<tbody>
 							{sortedEndpoints.length === 0 ? (
 								<tr>
-									<td colSpan={10} className="muted">
-										No endpoints discovered yet.
-									</td>
+									<td colSpan={endpointColSpan} className="muted">No endpoints discovered yet.</td>
 								</tr>
 							) : (
-								sortedEndpoints.map((e, index) => (
-									<tr key={index}>
-										<td>
-											<code>{String(e?.endpoint ?? '')}</code>
-										</td>
-										<td className="muted">{String(e?.kind ?? '')}</td>
-										<td className="muted">
-											{hex16(e?.profile_id)}
-											{describeProfile(e?.profile_id)?.name ? ` (${describeProfile(e?.profile_id).name})` : ''}
-										</td>
-										<td className="muted">
-											{hex16(e?.device_id)}
-											{describeDeviceId(e?.device_id)?.name ? ` (${describeDeviceId(e?.device_id).name})` : ''}
-										</td>
-										<td>
-											<div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
-												{hasAccept(e, 'onoff.') ? (
-													<>
-														<label className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-															<input
-																type="checkbox"
-																checked={getOnOffValue(Number(e?.endpoint ?? 0))}
-																onChange={(ev) => sendOnOff(Number(e?.endpoint ?? 1), ev?.target?.checked ? 'on' : 'off')}
-															/>
-															On
-														</label>
-														<button onClick={() => sendOnOff(Number(e?.endpoint ?? 1), 'toggle')}>Toggle</button>
-													</>
-												) : null}
-
-												{hasAccept(e, 'level.move_to_level') || hasAccept(e, 'level.') ? (
-													<>
-														<input
-															type="range"
-															min={0}
-															max={254}
-															value={getLevelValue(Number(e?.endpoint ?? 0))}
-															onChange={(ev) => {
-																const v = Number(ev?.target?.value ?? 0)
-																setLevelByEndpoint((prev) => {
-																	const next = new Map(prev)
-																	next.set(Number(e?.endpoint ?? 0), v)
-																	return next
-																})
-															}}
-														/>
-														<button onClick={() => sendLevel(Number(e?.endpoint ?? 1))}>Set</button>
-													</>
-												) : null}
-
-												{hasAccept(e, 'color.move_to_color_xy') || hasAccept(e, 'color.') ? (
-													<>
-														<input
-															type="color"
-															value={getColorValue(Number(e?.endpoint ?? 0))}
-															onChange={(ev) => {
-																const v = String(ev?.target?.value ?? '#ffffff')
-																setColorByEndpoint((prev) => {
-																	const next = new Map(prev)
-																	next.set(Number(e?.endpoint ?? 0), v)
-																	return next
-																})
-															}}
-															title="Color (xy)"
-														/>
-														<button onClick={() => sendColor(Number(e?.endpoint ?? 1))}>Set</button>
-													</>
-												) : null}
-
-												{hasAccept(e, 'color.move_to_color_temperature') ? (
-													<>
-														<input
-															type="range"
-															min={2000}
-															max={6500}
-															step={100}
-															value={getTempKValue(Number(e?.endpoint ?? 0))}
-															onChange={(ev) => {
-																const v = Number(ev?.target?.value ?? 3000)
-																setTempKByEndpoint((prev) => {
-																	const next = new Map(prev)
-																	next.set(Number(e?.endpoint ?? 0), v)
-																	return next
-																})
-															}}
-															title="Color temperature (K)"
-														/>
-														<button onClick={() => sendTemp(Number(e?.endpoint ?? 1))}>Set</button>
-													</>
-												) : null}
-											</div>
-										</td>
-										<td className="mono" style={{ flexWrap: 'wrap' }}>{listToText(e?.accepts)}</td>
-										<td className="mono" style={{ flexWrap: 'wrap' }}>{listToText(e?.emits)}</td>
-										<td className="mono">{listToText(e?.reports)}</td>
-										<td className="mono">
-											{Array.isArray(e?.in_clusters)
-												? e.in_clusters
-													.map((c) => <div key={c}>{`${hex16(c)}${describeCluster(c)?.name ? ` ${describeCluster(c).name}` : ''}`}</div>)
-												: ''}
-										</td>
-										<td className="mono">
-											{Array.isArray(e?.out_clusters)
-												? e.out_clusters
-													.map((c) => <div key={c}>{`${hex16(c)}${describeCluster(c)?.name ? ` ${describeCluster(c).name}` : ''}`}</div>)
-												: ''}
-										</td>
-									</tr>
-								))
-							)}
-						</tbody>
-					</table>
-				</div>
-			</div>
-
-			<div style={{ height: 12 }} />
-
-			<div className="card">
-				<div className="table-wrap">
-					<table>
-						<thead>
-							<tr>
-								<th>Endpoint</th>
-								<th>Cluster</th>
-								<th>Attr</th>
-								<th>Value</th>
-								<th>ts_ms</th>
-							</tr>
-						</thead>
-						<tbody>
-							{sortedSensors.length === 0 ? (
-								<tr>
-									<td colSpan={5} className="muted">
-										No sensor values yet (wait for reports or initial reads).
-									</td>
-								</tr>
-							) : (
-								sortedSensors.map((s, idx) => (
-									<tr key={`${idx}-${s?.endpoint}-${s?.cluster_id}-${s?.attr_id}`}>
-										<td>
-											<code>{String(s?.endpoint ?? '')}</code>
-										</td>
-										<td className="muted">
-											{hex16(s?.cluster_id)}
-											{describeCluster(s?.cluster_id)?.name ? ` (${describeCluster(s?.cluster_id).name})` : ''}
-										</td>
-										<td className="muted">
-											{hex16(s?.attr_id)}
-											{describeAttr(s?.cluster_id, s?.attr_id)?.name ? ` (${describeAttr(s?.cluster_id, s?.attr_id).name})` : ''}
-										</td>
-										<td className="mono">{renderSensorValue(s)}</td>
-										<td className="muted">{String(s?.ts_ms ?? '')}</td>
-									</tr>
-								))
+								sortedEndpoints.map((e, index) => {
+									const endpointId = Number(e?.endpoint ?? 0)
+									const endpointState = (liveStateByEndpoint && liveStateByEndpoint[String(endpointId)]) || {}
+									const endpointLabel = String(labelDraftByEndpoint[String(endpointId)] ?? '').trim()
+									return (
+										<tr key={index}>
+											{showCol('endpoint') ? (
+												<td>
+													{endpointLabel ? <div style={{ marginBottom: 6, fontWeight: 600 }}>{endpointLabel}</div> : null}
+													<code>{String(e?.endpoint ?? '')}</code>
+													<div style={{ marginTop: 6 }}>
+														<button onClick={() => copyEndpointJson(e)}>Copy JSON</button>
+													</div>
+												</td>
+											) : null}
+											{showCol('kind') ? <td className="muted">{String(e?.kind ?? '')}</td> : null}
+											{showCol('profile') ? (
+												<td className="muted">
+													{hex16(e?.profile_id)}
+													{describeProfile(e?.profile_id)?.name ? ` (${describeProfile(e?.profile_id).name})` : ''}
+												</td>
+											) : null}
+											{showCol('device') ? (
+												<td className="muted">
+													{hex16(e?.device_id)}
+													{describeDeviceId(e?.device_id)?.name ? ` (${describeDeviceId(e?.device_id).name})` : ''}
+												</td>
+											) : null}
+											{showCol('controls') ? (
+												<td>
+													<EndpointWidgets
+														endpoint={e}
+														deviceUid={String(device?.device_uid ?? uid ?? '')}
+														liveStateByEndpoint={liveStateByEndpoint}
+														sensors={sensors}
+														onStatus={setStatus}
+													/>
+												</td>
+											) : null}
+											{showCol('accepts') ? <td className="mono">{listToLines(e?.accepts).map((a) => <div key={a}>{a}</div>)}</td> : null}
+											{showCol('emits') ? <td className="mono">{listToLines(e?.emits).map((a) => <div key={a}>{a}</div>)}</td> : null}
+											{showCol('reports') ? <td className="mono">{listToLines(e?.reports).map((a) => <div key={a}>{a}</div>)}</td> : null}
+											{showCol('live_state') ? (
+												<td className="mono">
+													{Object.entries(endpointState).length === 0
+														? '-'
+														: Object.entries(endpointState).map(([k, v]) => <div key={k}>{`${k}: ${formatStateValue(v)}`}</div>)}
+												</td>
+											) : null}
+											{showCol('group') ? (
+												<td>
+													<input
+														value={String(labelDraftByEndpoint[String(endpointId)] ?? '')}
+														onChange={(ev) => onEndpointLabelChange(endpointId, ev?.target?.value)}
+														onBlur={() => saveEndpointLabel(endpointId)}
+														placeholder="Endpoint name"
+														style={{ marginBottom: 8, minWidth: 160 }}
+													/>
+													<select
+														value={endpointGroupId(endpointId)}
+														onChange={(ev) => onEndpointGroupChange(endpointId, String(ev?.target?.value ?? ''))}
+													>
+														<option value="">- no group -</option>
+														{groups.map((g) => (
+															<option key={String(g?.id ?? '')} value={String(g?.id ?? '')}>
+																{String(g?.name ?? g?.id ?? '')}
+															</option>
+														))}
+													</select>
+												</td>
+											) : null}
+											{showCol('in_clusters') ? (
+												<td className="mono">
+													{Array.isArray(e?.in_clusters)
+														? e.in_clusters.map((c) => <div key={c}>{`${hex16(c)}${describeCluster(c)?.name ? ` ${describeCluster(c).name}` : ''}`}</div>)
+														: ''}
+												</td>
+											) : null}
+											{showCol('out_clusters') ? (
+												<td className="mono">
+													{Array.isArray(e?.out_clusters)
+														? e.out_clusters.map((c) => <div key={c}>{`${hex16(c)}${describeCluster(c)?.name ? ` ${describeCluster(c).name}` : ''}`}</div>)
+														: ''}
+												</td>
+											) : null}
+										</tr>
+									)
+								})
 							)}
 						</tbody>
 					</table>

@@ -601,9 +601,9 @@ void ui_widgets_reset(void)
     memset(s_fields, 0, sizeof(s_fields));
 }
 
-lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t *dev, const ui_endpoint_vm_t *ep)
+lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_t *uid, const ui_endpoint_vm_t *ep)
 {
-    if (!parent || !dev || !ep)
+    if (!parent || !uid || !ep)
     {
         return nullptr;
     }
@@ -635,9 +635,9 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t
         lv_label_set_text(lbl, "On/Off");
         lv_obj_t *sw = lv_switch_create(row);
         lv_obj_set_size(sw, 84, 46);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, &dev->uid, ep->endpoint_id);
+        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, uid, ep->endpoint_id);
         lv_obj_add_event_cb(sw, on_switch_changed, LV_EVENT_VALUE_CHANGED, ctx);
-        register_field(&dev->uid, ep->endpoint_id, "onoff", FieldKind::Switch, sw, nullptr);
+        register_field(uid, ep->endpoint_id, "onoff", FieldKind::Switch, sw, nullptr);
     }
 
     if (ep->caps.level)
@@ -647,9 +647,9 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t
         lv_obj_t *slider = lv_slider_create(card);
         lv_obj_set_width(slider, lv_pct(100));
         lv_slider_set_range(slider, ui_style::kLevelMin, ui_style::kLevelMax);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::Level, &dev->uid, ep->endpoint_id);
+        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::Level, uid, ep->endpoint_id);
         lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, ctx);
-        register_field(&dev->uid, ep->endpoint_id, "level", FieldKind::Slider, slider, lbl);
+        register_field(uid, ep->endpoint_id, "level", FieldKind::Slider, slider, lbl);
     }
 
     if (ep->caps.color)
@@ -668,7 +668,7 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t
         lv_slider_set_range(slider_s, 0, 100);
         lv_slider_set_value(slider_s, 100, LV_ANIM_OFF);
 
-        ui_ctl_ctx_t *hs_ctx = alloc_ctx(CtlKind::ColorHS, &dev->uid, ep->endpoint_id);
+        ui_ctl_ctx_t *hs_ctx = alloc_ctx(CtlKind::ColorHS, uid, ep->endpoint_id);
         if (hs_ctx)
         {
             hs_ctx->slider_hue = slider_h;
@@ -681,18 +681,18 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t
         }
 
         // State keys still come as Zigbee xy; map them to this HS control.
-        register_field(&dev->uid, ep->endpoint_id, "color_x", FieldKind::ColorState, slider_h, nullptr);
-        register_field(&dev->uid, ep->endpoint_id, "color_y", FieldKind::ColorState, slider_h, nullptr);
+        register_field(uid, ep->endpoint_id, "color_x", FieldKind::ColorState, slider_h, nullptr);
+        register_field(uid, ep->endpoint_id, "color_y", FieldKind::ColorState, slider_h, nullptr);
 
         lv_obj_t *lbl_t = lv_label_create(card);
         lv_label_set_text(lbl_t, "Color Temp: -");
-        register_field(&dev->uid, ep->endpoint_id, "color_temp_mireds", FieldKind::ValueLabel, lbl_t, nullptr);
+        register_field(uid, ep->endpoint_id, "color_temp_mireds", FieldKind::ValueLabel, lbl_t, nullptr);
 
         lv_obj_t *btn = lv_button_create(card);
         lv_obj_t *btn_lbl = lv_label_create(btn);
         lv_label_set_text_fmt(btn_lbl, "Set Warm (%u)", (unsigned)ui_style::kWarmColorTempMireds);
         lv_obj_center(btn_lbl);
-        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::ColorTemp, &dev->uid, ep->endpoint_id);
+        ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::ColorTemp, uid, ep->endpoint_id);
         lv_obj_add_event_cb(btn, on_color_temp_clicked, LV_EVENT_CLICKED, ctx);
     }
 
@@ -700,21 +700,21 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const ui_device_vm_t
     {
         lv_obj_t *lbl = lv_label_create(card);
         lv_label_set_text(lbl, "Temperature: -");
-        register_field(&dev->uid, ep->endpoint_id, "temperature_c", FieldKind::ValueLabel, lbl, nullptr);
+        register_field(uid, ep->endpoint_id, "temperature_c", FieldKind::ValueLabel, lbl, nullptr);
     }
 
     if (ep->caps.humidity)
     {
         lv_obj_t *lbl = lv_label_create(card);
         lv_label_set_text(lbl, "Humidity: -");
-        register_field(&dev->uid, ep->endpoint_id, "humidity_pct", FieldKind::ValueLabel, lbl, nullptr);
+        register_field(uid, ep->endpoint_id, "humidity_pct", FieldKind::ValueLabel, lbl, nullptr);
     }
 
     if (ep->caps.battery)
     {
         lv_obj_t *lbl = lv_label_create(card);
         lv_label_set_text(lbl, "Battery: -");
-        register_field(&dev->uid, ep->endpoint_id, "battery_pct", FieldKind::ValueLabel, lbl, nullptr);
+        register_field(uid, ep->endpoint_id, "battery_pct", FieldKind::ValueLabel, lbl, nullptr);
     }
 
     return card;

@@ -16,7 +16,10 @@
 #include "gw_core/automation_store.h"
 #include "gw_core/cbor.h"
 #include "gw_core/device_fb_store.h"
+#include "gw_core/device_registry.h"
 #include "gw_core/event_bus.h"
+#include "gw_core/group_store.h"
+#include "gw_core/state_store.h"
 #include "gw_zigbee/gw_zigbee.h"
 
 
@@ -41,6 +44,11 @@ static esp_err_t api_automation_detail_patch_handler(httpd_req_t *req);
 static esp_err_t api_automation_detail_delete_handler(httpd_req_t *req);
 static esp_err_t api_automation_post_handler(httpd_req_t *req);
 static esp_err_t api_actions_post_handler(httpd_req_t *req);
+static esp_err_t api_state_get_handler(httpd_req_t *req);
+static esp_err_t api_groups_get_handler(httpd_req_t *req);
+static esp_err_t api_groups_post_handler(httpd_req_t *req);
+static esp_err_t api_group_items_get_handler(httpd_req_t *req);
+static esp_err_t api_group_items_post_handler(httpd_req_t *req);
 
 static int hex_digit(int c)
 {
@@ -1019,6 +1027,304 @@ static esp_err_t api_actions_post_handler(httpd_req_t *req)
     return send_err;
 }
 
+static esp_err_t api_state_get_handler(httpd_req_t *req)
+{
+    static const size_t kMaxDevices = 64;
+    static const size_t kMaxStateItems = 1024;
+
+    gw_device_t *devices = (gw_device_t *)calloc(kMaxDevices, sizeof(gw_device_t));
+    gw_state_item_t *items = (gw_state_item_t *)calloc(kMaxStateItems, sizeof(gw_state_item_t));
+    if (!devices || !items) {
+        free(devices);
+        free(items);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_OK;
+    }
+
+    const size_t dev_count = gw_device_registry_list(devices, kMaxDevices);
+    size_t total = 0;
+    for (size_t i = 0; i < dev_count && total < kMaxStateItems; i++) {
+        const size_t left = kMaxStateItems - total;
+        total += gw_state_store_list_uid(&devices[i].device_uid, &items[total], left);
+    }
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "items");
+    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, total);
+    for (size_t i = 0; rc == ESP_OK && i < total; i++) {
+        rc = gw_cbor_writer_map(&w, 5);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_id");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].uid.uid);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint_id");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].endpoint);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "key");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].key);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "value");
+        if (rc == ESP_OK) {
+            switch (items[i].value_type) {
+                case GW_STATE_VALUE_BOOL:
+                    rc = gw_cbor_writer_bool(&w, items[i].value_bool);
+                    break;
+                case GW_STATE_VALUE_F32:
+                    rc = gw_cbor_writer_f64(&w, (double)items[i].value_f32);
+                    break;
+                case GW_STATE_VALUE_U32:
+                    rc = gw_cbor_writer_u64(&w, items[i].value_u32);
+                    break;
+                case GW_STATE_VALUE_U64:
+                    rc = gw_cbor_writer_u64(&w, items[i].value_u64);
+                    break;
+                default:
+                    rc = gw_cbor_writer_null(&w);
+                    break;
+            }
+        }
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ts_ms");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].ts_ms);
+    }
+
+    free(devices);
+    free(items);
+
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_groups_get_handler(httpd_req_t *req)
+{
+    const size_t max_groups = 24;
+    gw_group_entry_t *groups = (gw_group_entry_t *)calloc(max_groups, sizeof(gw_group_entry_t));
+    if (!groups) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_OK;
+    }
+    const size_t count = gw_group_store_list(groups, max_groups);
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "groups");
+    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, count);
+    for (size_t i = 0; rc == ESP_OK && i < count; i++) {
+        rc = gw_cbor_writer_map(&w, 4);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "id");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, groups[i].id);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "name");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, groups[i].name);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "created_at_ms");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, groups[i].created_at_ms);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "updated_at_ms");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, groups[i].updated_at_ms);
+    }
+
+    free(groups);
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_groups_post_handler(httpd_req_t *req)
+{
+    // CBOR: { op: "create"|"rename"|"delete", id?: string, name?: string }
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cbor");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t op_s = {0};
+    char op[16] = {0};
+    if (!cbor_map_find_val_buf(buf, len, "op", &op_s) || !cbor_text_copy(&op_s, op, sizeof(op))) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing op");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t id_s = {0};
+    gw_cbor_slice_t name_s = {0};
+    char id[GW_GROUP_ID_MAX] = {0};
+    char name[GW_GROUP_NAME_MAX] = {0};
+    if (cbor_map_find_val_buf(buf, len, "id", &id_s)) (void)cbor_text_copy(&id_s, id, sizeof(id));
+    if (cbor_map_find_val_buf(buf, len, "name", &name_s)) (void)cbor_text_copy(&name_s, name, sizeof(name));
+
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    gw_group_entry_t created = {0};
+    if (strcmp(op, "create") == 0) {
+        err = gw_group_store_create(id[0] ? id : NULL, name, &created);
+    } else if (strcmp(op, "rename") == 0) {
+        err = gw_group_store_rename(id, name);
+    } else if (strcmp(op, "delete") == 0) {
+        err = gw_group_store_remove(id);
+    } else {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unsupported op");
+        return ESP_OK;
+    }
+    free(buf);
+
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND) {
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "group not found");
+        } else if (err == ESP_ERR_NO_MEM) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "group store full");
+        } else {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+        }
+        return ESP_OK;
+    }
+
+    gw_event_bus_publish("group.changed", "rest", "", 0, op);
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 3);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "op");
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, op);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "id");
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, strcmp(op, "create") == 0 ? created.id : id);
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_group_items_get_handler(httpd_req_t *req)
+{
+    const size_t max_items = 256;
+    gw_group_item_t *items = (gw_group_item_t *)calloc(max_items, sizeof(gw_group_item_t));
+    if (!items) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_OK;
+    }
+    const size_t count = gw_group_store_list_items(items, max_items);
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "items");
+    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, count);
+    for (size_t i = 0; rc == ESP_OK && i < count; i++) {
+        rc = gw_cbor_writer_map(&w, 5);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "group_id");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].group_id);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_uid");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].device_uid.uid);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].endpoint);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "order");
+        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].order);
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "label");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].label);
+    }
+    free(items);
+
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_group_items_post_handler(httpd_req_t *req)
+{
+    // CBOR:
+    // { op: "set"|"remove"|"reorder"|"label", group_id?: string, device_uid: string, endpoint: number, order?: number, label?: string }
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cbor");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t op_s = {0};
+    char op[16] = {0};
+    if (!cbor_map_find_val_buf(buf, len, "op", &op_s) || !cbor_text_copy(&op_s, op, sizeof(op))) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing op");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t uid_s = {0};
+    gw_cbor_slice_t ep_s = {0};
+    if (!cbor_map_find_val_buf(buf, len, "device_uid", &uid_s) || !cbor_map_find_val_buf(buf, len, "endpoint", &ep_s)) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing device_uid/endpoint");
+        return ESP_OK;
+    }
+
+    gw_device_uid_t uid = {0};
+    uint8_t endpoint = 0;
+    if (!cbor_text_copy(&uid_s, uid.uid, sizeof(uid.uid)) || !cbor_slice_to_u8(&ep_s, &endpoint) || endpoint == 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad device_uid/endpoint");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t group_s = {0};
+    char group_id[GW_GROUP_ID_MAX] = {0};
+    if (cbor_map_find_val_buf(buf, len, "group_id", &group_s)) {
+        (void)cbor_text_copy(&group_s, group_id, sizeof(group_id));
+    }
+
+    gw_cbor_slice_t order_s = {0};
+    uint32_t order = 0;
+    if (cbor_map_find_val_buf(buf, len, "order", &order_s)) {
+        (void)cbor_slice_to_u32(&order_s, &order);
+    }
+    gw_cbor_slice_t label_s = {0};
+    char label[32] = {0};
+    const bool has_label = cbor_map_find_val_buf(buf, len, "label", &label_s) && cbor_text_copy(&label_s, label, sizeof(label));
+
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (strcmp(op, "set") == 0) {
+        err = gw_group_store_set_endpoint(group_id, &uid, endpoint);
+        if (err == ESP_OK && has_label) {
+            err = gw_group_store_set_endpoint_label(&uid, endpoint, label);
+        }
+    } else if (strcmp(op, "remove") == 0) {
+        err = gw_group_store_remove_endpoint(&uid, endpoint);
+    } else if (strcmp(op, "reorder") == 0) {
+        err = gw_group_store_reorder_endpoint(group_id, &uid, endpoint, order);
+    } else if (strcmp(op, "label") == 0) {
+        err = gw_group_store_set_endpoint_label(&uid, endpoint, label);
+    } else {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unsupported op");
+        return ESP_OK;
+    }
+    free(buf);
+
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND) {
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "item not found");
+        } else if (err == ESP_ERR_NO_MEM) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "group items full");
+        } else {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+        }
+        return ESP_OK;
+    }
+
+    gw_event_bus_publish("group.changed", "rest", "", 0, op);
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
 esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
 {
     if (!server) {
@@ -1067,6 +1373,12 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .handler = api_actions_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t api_state_get_uri = {
+        .uri = "/api/state",
+        .method = HTTP_GET,
+        .handler = api_state_get_handler,
+        .user_ctx = NULL,
+    };
     static const httpd_uri_t api_devices_remove_post_uri = {
         .uri = "/api/devices/remove",
         .method = HTTP_POST,
@@ -1077,6 +1389,30 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .uri = "/api/network/permit_join",
         .method = HTTP_POST,
         .handler = api_network_permit_join_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_groups_get_uri = {
+        .uri = "/api/groups",
+        .method = HTTP_GET,
+        .handler = api_groups_get_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_groups_post_uri = {
+        .uri = "/api/groups",
+        .method = HTTP_POST,
+        .handler = api_groups_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_group_items_get_uri = {
+        .uri = "/api/groups/items",
+        .method = HTTP_GET,
+        .handler = api_group_items_get_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_group_items_post_uri = {
+        .uri = "/api/groups/items",
+        .method = HTTP_POST,
+        .handler = api_group_items_post_handler,
         .user_ctx = NULL,
     };
 
@@ -1108,11 +1444,31 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
+    err = httpd_register_uri_handler(server, &api_state_get_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
     err = httpd_register_uri_handler(server, &api_devices_remove_post_uri);
     if (err != ESP_OK) {
         return err;
     }
     err = httpd_register_uri_handler(server, &api_network_permit_join_post_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_groups_get_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_groups_post_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_group_items_get_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_group_items_post_uri);
     if (err != ESP_OK) {
         return err;
     }
