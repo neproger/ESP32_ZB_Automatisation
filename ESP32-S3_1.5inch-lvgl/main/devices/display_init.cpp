@@ -17,6 +17,7 @@ static bool s_bk_ledc_inited = false;
 static ledc_mode_t s_bk_ledc_mode = LEDC_LOW_SPEED_MODE;
 static ledc_timer_t s_bk_ledc_timer = LEDC_TIMER_0;
 static ledc_channel_t s_bk_ledc_channel = LEDC_CHANNEL_0;
+static constexpr uint8_t kDefaultBrightness = 204; // 80% of 255
 
 // Panel vendor init commands (SH8601)
 static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
@@ -74,7 +75,7 @@ esp_err_t devices_display_init(void)
             return err;
         }
 
-        err = ledc_set_duty(s_bk_ledc_mode, s_bk_ledc_channel, 230);
+        err = ledc_set_duty(s_bk_ledc_mode, s_bk_ledc_channel, kDefaultBrightness);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG_DISPLAY, "Backlight LEDC set duty failed: %s", esp_err_to_name(err));

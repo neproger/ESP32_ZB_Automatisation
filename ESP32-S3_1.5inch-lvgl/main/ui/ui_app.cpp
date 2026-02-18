@@ -11,6 +11,7 @@
 #include "iot_button.h"
 #include "iot_knob.h"
 
+#include "devices_init.h"
 #include "ui_events_bridge.hpp"
 #include "ui_screen_devices.hpp"
 #include "ui_store.hpp"
@@ -22,6 +23,8 @@ static const char *TAG_UI = "ui_app";
 static ui_store_t *s_store = nullptr;
 static bool s_render_requested = false;
 static uint64_t s_last_render_ms = 0;
+static bool s_display_enabled = true;
+static constexpr uint8_t kDisplayBrightness80Pct = 204;
 static constexpr uint32_t kMinRenderIntervalMs = 150;
 
 void request_render()
@@ -160,5 +163,19 @@ extern "C" void LVGL_knob_event(void *event)
 extern "C" void LVGL_button_event(void *event)
 {
     const int ev = (int)(intptr_t)event;
-    (void)ev;
+    if (ev != BUTTON_SINGLE_CLICK)
+    {
+        return;
+    }
+
+    s_display_enabled = !s_display_enabled;
+    if (s_display_enabled)
+    {
+        (void)devices_display_set_enabled(true);
+        (void)devices_display_set_brightness(kDisplayBrightness80Pct);
+    }
+    else
+    {
+        (void)devices_display_set_enabled(false);
+    }
 }
