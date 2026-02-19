@@ -91,8 +91,11 @@ static bool gw_http_uri_looks_like_asset(const char *uri)
 static esp_err_t gw_http_send_spiffs_file(httpd_req_t *req, const char *uri_path)
 {
     if (!s_spiffs_mounted) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "web fs not mounted");
-        return ESP_OK;
+        esp_err_t mnt_err = gw_http_spiffs_init();
+        if (mnt_err != ESP_OK) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "web fs mount failed");
+            return ESP_OK;
+        }
     }
 
     char fullpath[256];
@@ -128,11 +131,6 @@ static esp_err_t gw_http_send_spiffs_file(httpd_req_t *req, const char *uri_path
 
     fclose(f);
     return httpd_resp_send_chunk(req, NULL, 0);
-}
-
-static esp_err_t index_get_handler(httpd_req_t *req)
-{
-    return gw_http_send_spiffs_file(req, "/index.html");
 }
 
 static esp_err_t static_get_handler(httpd_req_t *req)
@@ -183,7 +181,6 @@ esp_err_t gw_http_start(void)
     }
 
     log_heap_caps("before_http_start");
-    (void)gw_http_spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -193,9 +190,9 @@ esp_err_t gw_http_start(void)
     config.max_open_sockets = 2;
     config.lru_purge_enable = true;
     // REST + WS + SPA wildcard handlers.
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 20;
     // Keep enough stack headroom for SPIFFS/HTTP handlers and flash/cache-critical paths.
-    config.stack_size = 6144;
+    config.stack_size = 5120;
     config.recv_wait_timeout = 4;
     config.send_wait_timeout = 4;
     // HTTPD handles SPIFFS/NVS paths; its stack must stay in internal RAM
@@ -210,27 +207,12 @@ esp_err_t gw_http_start(void)
         return err;
     }
 
-    static const httpd_uri_t index_uri = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = index_get_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t static_uri = {
         .uri = "/*",
         .method = HTTP_GET,
         .handler = static_get_handler,
         .user_ctx = NULL,
     };
-
-    err = httpd_register_uri_handler(s_server, &index_uri);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register index uri failed: %s", esp_err_to_name(err));
-        httpd_stop(s_server);
-        s_server = NULL;
-        s_server_port = 0;
-        return err;
-    }
 
     err = gw_http_register_rest_endpoints(s_server);
     if (err != ESP_OK) {

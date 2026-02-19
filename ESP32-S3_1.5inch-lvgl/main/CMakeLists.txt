@@ -15,6 +15,7 @@ idf_component_register(
         "ui/ui_events_bridge.cpp"
         "ui/ui_widgets.cpp"
         "ui/ui_screen_devices.cpp"
+        "ui/ui_screen_saver.cpp"
         "${CMAKE_SOURCE_DIR}/fonts/Montserrat_20.c"
         "${CMAKE_SOURCE_DIR}/fonts/Montserrat_30.c"
         "${CMAKE_SOURCE_DIR}/fonts/Montserrat_40.c"

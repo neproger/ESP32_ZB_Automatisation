@@ -253,6 +253,11 @@ code {
   font-weight: 600;
 }
 
+.endpoint-title-row {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
 @media (max-width: 760px) {
   .content {
     padding: 12px;

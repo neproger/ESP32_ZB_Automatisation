@@ -63,6 +63,7 @@ typedef enum {
     GW_UART_CMD_SYNC_DEVICE_FB = 10, /* запрос сырого device FlatBuffer снимка */
     GW_UART_CMD_SET_DEVICE_NAME = 11, /* device_uid + value_text */
     GW_UART_CMD_REMOVE_DEVICE = 12, /* device_uid */
+    GW_UART_CMD_WIFI_CONFIG_SET = 13, /* value_blob: ssid\0password\0 */
 } gw_uart_cmd_id_t;
 
 typedef enum {
@@ -136,6 +137,7 @@ typedef struct {
     int64_t value_i64;
     float value_f32;
     char value_text[24];
+    char value_blob[96];
 } GW_UART_PROTO_PACKED gw_uart_cmd_req_v1_t;
 
 /* Ответ C6 -> S3 (payload для GW_UART_MSG_CMD_RSP). */

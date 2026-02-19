@@ -22,14 +22,28 @@ function endpointKey(deviceUid, endpoint) {
 	return `${normalizeUid(deviceUid)}::${Number(endpoint ?? 0)}`
 }
 
+function normalizeGroupItems(items) {
+	const list = Array.isArray(items) ? items : []
+	return list
+		.map((it) => {
+			const group_id = String(it?.group_id ?? '')
+			const device_uid = normalizeUid(it?.device_uid)
+			const endpoint_id = Number(it?.endpoint_id ?? 0)
+			const order = Number(it?.order ?? 0)
+			const label = String(it?.label ?? '')
+			return { group_id, device_uid, endpoint_id, order, label }
+		})
+		.filter((it) => it.group_id && it.device_uid && it.endpoint_id > 0)
+}
+
 function rebuildMaps(items) {
 	const members = {}
 	const labels = {}
-	const list = Array.isArray(items) ? items : []
+	const list = normalizeGroupItems(items)
 	list.forEach((it) => {
 		const gid = String(it?.group_id ?? '')
 		const uid = normalizeUid(it?.device_uid)
-		const ep = Number(it?.endpoint ?? 0)
+		const ep = Number(it?.endpoint_id ?? 0)
 		if (!uid || ep <= 0) return
 		const key = endpointKey(uid, ep)
 		if (gid) members[key] = gid
@@ -117,9 +131,9 @@ export async function groupSetForEndpoint(deviceUid, endpoint, groupId) {
 	const gid = String(groupId ?? '')
 	if (!uid || ep <= 0) return false
 	if (!gid) {
-		await postCbor('/api/groups/items', { op: 'remove', device_uid: uid, endpoint: ep })
+		await postCbor('/api/groups/items', { op: 'remove', device_uid: uid, endpoint_id: ep })
 	} else {
-		await postCbor('/api/groups/items', { op: 'set', group_id: gid, device_uid: uid, endpoint: ep })
+		await postCbor('/api/groups/items', { op: 'set', group_id: gid, device_uid: uid, endpoint_id: ep })
 	}
 	await groupsReload()
 	return true
@@ -132,9 +146,30 @@ export async function endpointLabelSet(deviceUid, endpoint, label) {
 	await postCbor('/api/groups/items', {
 		op: 'label',
 		device_uid: uid,
-		endpoint: ep,
+		endpoint_id: ep,
 		label: String(label ?? ''),
 	})
+	await groupsReload()
+	return true
+}
+
+export async function groupReorder(groupId, orderedItems) {
+	const gid = String(groupId ?? '')
+	if (!gid) return false
+	const list = Array.isArray(orderedItems) ? orderedItems : []
+	for (let i = 0; i < list.length; i += 1) {
+		const it = list[i] || {}
+		const uid = normalizeUid(it?.device_uid)
+		const ep = Number(it?.endpoint_id ?? 0)
+		if (!uid || ep <= 0) continue
+		await postCbor('/api/groups/items', {
+			op: 'reorder',
+			group_id: gid,
+			device_uid: uid,
+			endpoint_id: ep,
+			order: i + 1,
+		})
+	}
 	await groupsReload()
 	return true
 }

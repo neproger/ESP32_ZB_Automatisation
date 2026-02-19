@@ -45,6 +45,8 @@ bool gw_zigbee_state_warmup_ready(void);
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name);
 // Remove device from C6 device registry by UID.
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid);
+// Push active S3 Wi-Fi credentials to C6 cloud client (ssid\0password).
+esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *password);
 
 // Allow new devices to join the network for `seconds`.
 esp_err_t gw_zigbee_permit_join(uint8_t seconds);

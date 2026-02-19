@@ -194,6 +194,8 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "SET_DEVICE_NAME";
         case GW_UART_CMD_REMOVE_DEVICE:
             return "REMOVE_DEVICE";
+        case GW_UART_CMD_WIFI_CONFIG_SET:
+            return "WIFI_CONFIG_SET";
         default:
             return "UNKNOWN";
     }
@@ -1119,6 +1121,31 @@ esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid)
     gw_uart_cmd_req_v1_t req = {0};
     req.cmd_id = GW_UART_CMD_REMOVE_DEVICE;
     fill_uid(req.device_uid, uid);
+    return send_cmd_wait_rsp(&req);
+}
+
+esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *password)
+{
+    if (!ssid || !ssid[0] || !password) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_WIFI_CONFIG_SET;
+
+    const size_t blob_cap = sizeof(req.value_blob);
+    const size_t ssid_len = strnlen(ssid, 32);
+    const size_t pass_len = strnlen(password, 64);
+    // Need: ssid + '\0' + password + '\0'
+    if (ssid_len == 0 || (ssid_len + 1 + pass_len + 1) > blob_cap) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memcpy(req.value_blob, ssid, ssid_len);
+    req.value_blob[ssid_len] = '\0';
+    memcpy(req.value_blob + ssid_len + 1, password, pass_len);
+    req.value_blob[ssid_len + 1 + pass_len] = '\0';
+
     return send_cmd_wait_rsp(&req);
 }
 

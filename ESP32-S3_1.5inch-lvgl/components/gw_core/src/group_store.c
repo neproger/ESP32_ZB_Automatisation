@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -53,7 +54,7 @@ static uint32_t now_ms(void)
 static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
 {
     if (!a || !b) return false;
-    return strncmp(a->uid, b->uid, sizeof(a->uid)) == 0;
+    return strcasecmp(a->uid, b->uid) == 0;
 }
 
 static size_t find_group_idx(const char *id)
@@ -118,21 +119,6 @@ size_t gw_group_store_list_items(gw_group_item_t *out, size_t max_out)
     memcpy(out, s_items_storage.data, count * sizeof(gw_group_item_t));
     portEXIT_CRITICAL(&s_items_storage.lock);
     return count;
-}
-
-size_t gw_group_store_list_items_for_group(const char *group_id, gw_group_item_t *out, size_t max_out)
-{
-    if (!ready() || !group_id || !out || max_out == 0) return 0;
-    size_t copied = 0;
-    portENTER_CRITICAL(&s_items_storage.lock);
-    const gw_group_item_t *items = (const gw_group_item_t *)s_items_storage.data;
-    for (size_t i = 0; i < s_items_storage.count && copied < max_out; i++) {
-        if (strncmp(items[i].group_id, group_id, sizeof(items[i].group_id)) == 0) {
-            out[copied++] = items[i];
-        }
-    }
-    portEXIT_CRITICAL(&s_items_storage.lock);
-    return copied;
 }
 
 esp_err_t gw_group_store_create(const char *id_opt, const char *name, gw_group_entry_t *out_created)

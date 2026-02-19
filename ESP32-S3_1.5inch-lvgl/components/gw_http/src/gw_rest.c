@@ -49,6 +49,8 @@ static esp_err_t api_groups_get_handler(httpd_req_t *req);
 static esp_err_t api_groups_post_handler(httpd_req_t *req);
 static esp_err_t api_group_items_get_handler(httpd_req_t *req);
 static esp_err_t api_group_items_post_handler(httpd_req_t *req);
+static esp_err_t gw_http_send_group_store_error(httpd_req_t *req, esp_err_t err, const char *not_found_msg, const char *no_mem_msg);
+static esp_err_t gw_http_send_cbor_ok(httpd_req_t *req);
 
 static int hex_digit(int c)
 {
@@ -765,6 +767,31 @@ static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
     return send_err;
 }
 
+static esp_err_t gw_http_send_group_store_error(httpd_req_t *req, esp_err_t err, const char *not_found_msg, const char *no_mem_msg)
+{
+    if (err == ESP_ERR_NOT_FOUND) {
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, not_found_msg ? not_found_msg : "not found");
+    }
+    if (err == ESP_ERR_NO_MEM) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, no_mem_msg ? no_mem_msg : "store full");
+    }
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
+}
+
+static esp_err_t gw_http_send_cbor_ok(httpd_req_t *req)
+{
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
+    esp_err_t send_err = (rc == ESP_OK)
+                             ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                             : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
 static esp_err_t api_network_permit_join_post_handler(httpd_req_t *req)
 {
     // Body (CBOR): { seconds?: number } (default 180)
@@ -1169,13 +1196,7 @@ static esp_err_t api_groups_post_handler(httpd_req_t *req)
     free(buf);
 
     if (err != ESP_OK) {
-        if (err == ESP_ERR_NOT_FOUND) {
-            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "group not found");
-        } else if (err == ESP_ERR_NO_MEM) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "group store full");
-        } else {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
-        }
+        gw_http_send_group_store_error(req, err, "group not found", "group store full");
         return ESP_OK;
     }
 
@@ -1217,7 +1238,7 @@ static esp_err_t api_group_items_get_handler(httpd_req_t *req)
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].group_id);
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_uid");
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].device_uid.uid);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint");
+        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint_id");
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].endpoint);
         if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "order");
         if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].order);
@@ -1235,7 +1256,7 @@ static esp_err_t api_group_items_get_handler(httpd_req_t *req)
 static esp_err_t api_group_items_post_handler(httpd_req_t *req)
 {
     // CBOR:
-    // { op: "set"|"remove"|"reorder"|"label", group_id?: string, device_uid: string, endpoint: number, order?: number, label?: string }
+    // { op: "set"|"remove"|"reorder"|"label", group_id?: string, device_uid: string, endpoint_id: number, order?: number, label?: string }
     uint8_t *buf = NULL;
     size_t len = 0;
     if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
@@ -1253,9 +1274,9 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
 
     gw_cbor_slice_t uid_s = {0};
     gw_cbor_slice_t ep_s = {0};
-    if (!cbor_map_find_val_buf(buf, len, "device_uid", &uid_s) || !cbor_map_find_val_buf(buf, len, "endpoint", &ep_s)) {
+    if (!cbor_map_find_val_buf(buf, len, "device_uid", &uid_s) || !cbor_map_find_val_buf(buf, len, "endpoint_id", &ep_s)) {
         free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing device_uid/endpoint");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing device_uid/endpoint_id");
         return ESP_OK;
     }
 
@@ -1263,7 +1284,7 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
     uint8_t endpoint = 0;
     if (!cbor_text_copy(&uid_s, uid.uid, sizeof(uid.uid)) || !cbor_slice_to_u8(&ep_s, &endpoint) || endpoint == 0) {
         free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad device_uid/endpoint");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad device_uid/endpoint_id");
         return ESP_OK;
     }
 
@@ -1275,8 +1296,9 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
 
     gw_cbor_slice_t order_s = {0};
     uint32_t order = 0;
+    bool has_order = false;
     if (cbor_map_find_val_buf(buf, len, "order", &order_s)) {
-        (void)cbor_slice_to_u32(&order_s, &order);
+        has_order = cbor_slice_to_u32(&order_s, &order);
     }
     gw_cbor_slice_t label_s = {0};
     char label[32] = {0};
@@ -1291,6 +1313,11 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
     } else if (strcmp(op, "remove") == 0) {
         err = gw_group_store_remove_endpoint(&uid, endpoint);
     } else if (strcmp(op, "reorder") == 0) {
+        if (!has_order || order == 0) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing/bad order");
+            return ESP_OK;
+        }
         err = gw_group_store_reorder_endpoint(group_id, &uid, endpoint, order);
     } else if (strcmp(op, "label") == 0) {
         err = gw_group_store_set_endpoint_label(&uid, endpoint, label);
@@ -1302,27 +1329,13 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
     free(buf);
 
     if (err != ESP_OK) {
-        if (err == ESP_ERR_NOT_FOUND) {
-            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "item not found");
-        } else if (err == ESP_ERR_NO_MEM) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "group items full");
-        } else {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, esp_err_to_name(err));
-        }
+        gw_http_send_group_store_error(req, err, "item not found", "group items full");
         return ESP_OK;
     }
 
     gw_event_bus_publish("group.changed", "rest", "", 0, op);
 
-    gw_cbor_writer_t w;
-    gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
-    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
-    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
-                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
-    gw_cbor_writer_free(&w);
-    return send_err;
+    return gw_http_send_cbor_ok(req);
 }
 
 esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)

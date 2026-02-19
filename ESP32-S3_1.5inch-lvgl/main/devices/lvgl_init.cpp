@@ -72,11 +72,11 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
 
     lvgl_port_cfg_t lvgl_cfg = {};
     lvgl_cfg.task_priority = 5;
-    lvgl_cfg.task_stack = 6144;
+    lvgl_cfg.task_stack = 7168;
     lvgl_cfg.task_affinity = 1;
     lvgl_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    lvgl_cfg.task_max_sleep_ms = 40;
-    lvgl_cfg.timer_period_ms = 10;
+    lvgl_cfg.task_max_sleep_ms = 60;
+    lvgl_cfg.timer_period_ms = 20;
     esp_err_t err = lvgl_port_init(&lvgl_cfg);
     if (err != ESP_OK)
     {
@@ -100,11 +100,19 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
             .name = "dma_internal_8lines",
         },
         {
+            .draw_lines = 4,
+            .double_buffer = false,
+            .buff_dma = false,
+            .buff_spiram = true,
+            .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
+            .name = "psram_draw_4lines",
+        },
+        {
             .draw_lines = 8,
             .double_buffer = false,
             .buff_dma = false,
             .buff_spiram = true,
-            .trans_size = LCD_H_RES * 2, // one RGB565 line DMA chunk
+            .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
             .name = "psram_draw_8lines",
         },
         {
@@ -112,7 +120,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
             .double_buffer = false,
             .buff_dma = false,
             .buff_spiram = true,
-            .trans_size = LCD_H_RES * 2, // one RGB565 line DMA chunk
+            .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
             .name = "psram_draw_dma_xfer",
         },
         {

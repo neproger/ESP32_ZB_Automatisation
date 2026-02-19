@@ -7,7 +7,8 @@ import { useGateway } from '../gateway.jsx'
 import EndpointWidgets from '../components/EndpointWidgets.jsx'
 import {
 	endpointLabelGet,
-	groupMembersMap,
+	groupItemsList,
+	groupReorder,
 	groupsCreate,
 	groupsDelete,
 	groupsList,
@@ -16,24 +17,19 @@ import {
 	groupsSubscribe,
 } from '../groupsStore.js'
 
-function parseMemberKey(k) {
-	const s = String(k ?? '')
-	const parts = s.split('::')
-	if (parts.length !== 2) return { uid: '', endpoint: 0 }
-	return { uid: parts[0], endpoint: Number(parts[1] ?? 0) }
-}
-
 export default function Groups() {
 	const { devices, deviceStates } = useGateway()
 	const [name, setName] = useState('')
 	const [status, setStatus] = useState('')
 	const [groups, setGroups] = useState(() => groupsList())
-	const [members, setMembers] = useState(() => groupMembersMap())
+	const [items, setItems] = useState(() => groupItemsList())
+	const [localOrder, setLocalOrder] = useState({})
+	const [savingGroupId, setSavingGroupId] = useState('')
 
 	useEffect(() => {
 		const refresh = () => {
 			setGroups(groupsList())
-			setMembers(groupMembersMap())
+			setItems(groupItemsList())
 		}
 		const unsub = groupsSubscribe(refresh)
 		groupsReload().catch(() => {})
@@ -49,30 +45,77 @@ export default function Groups() {
 		return map
 	}, [devices])
 
-	const groupTiles = useMemo(() => {
+	const backendGroupTiles = useMemo(() => {
 		const out = {}
-		Object.entries(members || {}).forEach(([k, gid]) => {
-			const groupId = String(gid ?? '')
-			if (!groupId) return
-			const { uid, endpoint } = parseMemberKey(k)
-			if (!uid || endpoint <= 0) return
+		const list = Array.isArray(items) ? [...items] : []
+		list.sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0))
+		list.forEach((it) => {
+			const groupId = String(it?.group_id ?? '')
+			const uid = String(it?.device_uid ?? '').trim().toLowerCase()
+			const endpoint = Number(it?.endpoint_id ?? 0)
+			if (!groupId || !uid || endpoint <= 0) return
 
-			const d = deviceByUid[String(uid).toLowerCase()]
+			const d = deviceByUid[uid]
 			const ep = (Array.isArray(d?.endpoints) ? d.endpoints : []).find((e) => Number(e?.endpoint ?? 0) === endpoint)
 			if (!d || !ep) return
 
 			if (!out[groupId]) out[groupId] = []
 			out[groupId].push({
 				groupId,
+				device_uid: uid,
+				endpoint_id: endpoint,
+				order: Number(it?.order ?? 0),
 				device: d,
 				endpoint: ep,
 				label: endpointLabelGet(uid, endpoint),
 				sensors: Array.isArray(d?.sensors) ? d.sensors : [],
-				liveStateByEndpoint: deviceStates?.[String(uid).toLowerCase()] || {},
+				liveStateByEndpoint: deviceStates?.[uid] || {},
 			})
 		})
 		return out
-	}, [members, deviceByUid, deviceStates])
+	}, [items, deviceByUid, deviceStates])
+
+	const groupTiles = useMemo(() => {
+		const out = {}
+		Object.keys(backendGroupTiles).forEach((gid) => {
+			const fromLocal = localOrder[gid]
+			out[gid] = Array.isArray(fromLocal) && fromLocal.length > 0 ? fromLocal : backendGroupTiles[gid]
+		})
+		return out
+	}, [backendGroupTiles, localOrder])
+
+	const reorderLocal = useCallback((gid, fromIdx, toIdx) => {
+		setLocalOrder((prev) => {
+			const current = Array.isArray(prev?.[gid]) && prev[gid].length > 0
+				? [...prev[gid]]
+				: [...(backendGroupTiles[gid] || [])]
+			if (fromIdx < 0 || fromIdx >= current.length || toIdx < 0 || toIdx >= current.length) {
+				return prev
+			}
+			const [moved] = current.splice(fromIdx, 1)
+			current.splice(toIdx, 0, moved)
+			return { ...prev, [gid]: current }
+		})
+	}, [backendGroupTiles])
+
+	const persistOrder = useCallback(async (gid) => {
+		const ordered = localOrder?.[gid]
+		if (!Array.isArray(ordered) || ordered.length === 0) return
+		setSavingGroupId(gid)
+		try {
+			await groupReorder(gid, ordered)
+			setStatus('Порядок виджетов сохранен')
+			setLocalOrder((prev) => {
+				const next = { ...(prev || {}) }
+				delete next[gid]
+				return next
+			})
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		} finally {
+			setSavingGroupId('')
+		}
+	}, [localOrder])
 
 	const onCreate = useCallback(async () => {
 		try {
@@ -142,6 +185,8 @@ export default function Groups() {
 				{groups.map((g) => {
 					const gid = String(g?.id ?? '')
 					const items = groupTiles[gid] || []
+					const hasLocalChanges = Array.isArray(localOrder?.[gid]) && localOrder[gid].length > 0
+					const isSaving = savingGroupId === gid
 					return (
 						<div key={gid} className="card group-tile">
 							<div className="group-tile-head">
@@ -150,6 +195,9 @@ export default function Groups() {
 									<div className="muted">{gid}</div>
 								</div>
 								<div className="row">
+									<button disabled={!hasLocalChanges || isSaving} onClick={() => persistOrder(gid)}>
+										{isSaving ? 'Saving...' : 'Save order'}
+									</button>
 									<button onClick={() => onRename(g)}>Rename</button>
 									<button onClick={() => onDelete(g)}>Delete</button>
 								</div>
@@ -167,8 +215,16 @@ export default function Groups() {
 										return (
 											<div key={`${gid}-${devName}-${endpointId}-${idx}`} className="endpoint-tile">
 												<div className="endpoint-tile-head">
-													<div className="endpoint-title">{endpointLabel || devName}</div>
-													<div className="muted">EP{endpointId}{kindName ? ` · ${kindName}` : ''}</div>
+													<div className="row endpoint-title-row">
+														<div>
+															<div className="endpoint-title">{endpointLabel || devName}</div>
+															<div className="muted">EP{endpointId}{kindName ? ` · ${kindName}` : ''}</div>
+														</div>
+														<div className="row">
+															<button disabled={idx <= 0} onClick={() => reorderLocal(gid, idx, idx - 1)}>↑</button>
+															<button disabled={idx >= items.length - 1} onClick={() => reorderLocal(gid, idx, idx + 1)}>↓</button>
+														</div>
+													</div>
 												</div>
 												<EndpointWidgets
 													endpoint={item.endpoint}

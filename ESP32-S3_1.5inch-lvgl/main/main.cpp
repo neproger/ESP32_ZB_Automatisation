@@ -12,6 +12,7 @@
 #include "gw_core/state_store.h"
 #include "gw_core/rules_engine.h"
 #include "gw_core/runtime_sync.h"
+#include "gw_core/net_time.h"
 #include "gw_core/zb_model.h"
 #include "gw_zigbee/gw_zigbee.h"
 
@@ -24,10 +25,13 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <cstring>
+#include <cstdio>
 
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
 static bool s_http_started = false;
+static volatile bool s_ui_ready_for_http = false;
 
 static void log_heap_caps(const char *stage)
 {
@@ -48,10 +52,28 @@ static bool wifi_is_connected(void)
     return (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
 }
 
+static bool http_has_memory_headroom(void)
+{
+    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+    // Pragmatic gate for tight-memory profile:
+    // - keep a small internal margin for httpd task/handlers
+    // - DMA can be low because LVGL/display already occupies most of it
+    return (free_internal >= 8 * 1024) &&
+           (largest_internal >= 5 * 1024) &&
+           (free_dma >= 1024) &&
+           (largest_dma >= 768);
+}
+
 static void wifi_connect_task(void *arg)
 {
     (void)arg;
     bool ps_configured = false;
+    bool c6_wifi_synced = false;
+    char last_ssid[33] = {0};
+    char last_pass[65] = {0};
     for (;;) {
         if (!wifi_is_connected()) {
             esp_err_t wifi_err = gw_wifi_connect_multi();
@@ -61,9 +83,42 @@ static void wifi_connect_task(void *arg)
                 continue;
             }
             ps_configured = false;
+            c6_wifi_synced = false;
         }
 
-        if (kEnableHttpServer && !s_http_started) {
+        if (!c6_wifi_synced) {
+            wifi_config_t wifi_cfg = {};
+            if (esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg) == ESP_OK) {
+                const char *ssid = (const char *)wifi_cfg.sta.ssid;
+                const char *pass = (const char *)wifi_cfg.sta.password;
+                if (ssid[0] != '\0') {
+                    const bool changed = (strcmp(last_ssid, ssid) != 0) || (strcmp(last_pass, pass) != 0);
+                    if (changed) {
+                        esp_err_t sync_err = gw_zigbee_set_c6_wifi_credentials(ssid, pass);
+                        if (sync_err != ESP_OK) {
+                            ESP_LOGW(TAG_APP, "C6 Wi-Fi creds sync failed (%s)", esp_err_to_name(sync_err));
+                        } else {
+                            snprintf(last_ssid, sizeof(last_ssid), "%s", ssid);
+                            snprintf(last_pass, sizeof(last_pass), "%s", pass);
+                            ESP_LOGI(TAG_APP, "C6 Wi-Fi credentials synced");
+                        }
+                    }
+                    c6_wifi_synced = true;
+                }
+            }
+        }
+
+        if (kEnableHttpServer && s_ui_ready_for_http && !s_http_started) {
+            if (!http_has_memory_headroom()) {
+                ESP_LOGW(TAG_APP,
+                         "HTTP start deferred: internal=%u largest=%u dma=%u largest_dma=%u",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                continue;
+            }
             log_heap_caps("before_http_start");
             esp_err_t http_err = gw_http_start();
             if (http_err != ESP_OK) {
@@ -110,6 +165,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_group_store_init());
     ESP_ERROR_CHECK(gw_rules_init());
     ESP_ERROR_CHECK(gw_runtime_sync_init());
+    ESP_ERROR_CHECK(gw_net_time_init(NULL));
     log_heap_caps("after_core_init");
 
     // Start Zigbee UART backend before display/UI to prioritize Wi-Fi and HTTP bring-up.
@@ -123,21 +179,16 @@ extern "C" void app_main(void)
     esp_err_t wifi_boot_err = gw_wifi_connect_multi();
     if (wifi_boot_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Initial Wi-Fi connect failed (%s)", esp_err_to_name(wifi_boot_err));
-    } else if (kEnableHttpServer && !s_http_started) {
-        log_heap_caps("before_http_start");
-        esp_err_t http_err = gw_http_start();
-        if (http_err != ESP_OK) {
-            ESP_LOGW(TAG_APP, "HTTP start failed (%s), will retry in wifi task", esp_err_to_name(http_err));
-        } else {
-            s_http_started = true;
-            log_heap_caps("after_http_start");
-        }
     }
 
-    if (xTaskCreateWithCaps(wifi_connect_task, "wifi_connect", 4096, NULL, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    // This task may mount SPIFFS (flash operations). Stack must be internal RAM.
+    if (xTaskCreateWithCaps(wifi_connect_task, "wifi_connect", 6144, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG_APP, "wifi_connect task create failed");
     }
     log_heap_caps("after_wifi_task_create");
+    if (kEnableHttpServer) {
+        ESP_LOGI(TAG_APP, "HTTP start deferred until UI init completes");
+    }
 
     if (!kEnableHttpServer) {
         ESP_LOGW(TAG_APP, "HTTP/WS disabled for UI stability test");
@@ -149,6 +200,7 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG_APP, "Devices init failed: %s", esp_err_to_name(err));
     } else {
         ui_app_init();
+        s_ui_ready_for_http = true;
         ESP_LOGI(TAG_APP, "UI started");
     }
     log_heap_caps("after_devices_ui_init");

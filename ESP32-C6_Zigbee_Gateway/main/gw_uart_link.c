@@ -21,6 +21,7 @@
 #include "gw_core/gw_uart_proto.h"
 #include "gw_core/types.h"
 #include "gw_zigbee/gw_zigbee.h"
+#include "gw_cloud_sync.h"
 
 #define GW_UART_PORT UART_NUM_1
 #define GW_UART_BAUD 230400
@@ -119,6 +120,12 @@ static bool is_forwardable_event(const char *type)
         return true;
     }
     if (strcmp(type, "device.changed") == 0) {
+        return true;
+    }
+    if (strncmp(type, "system.", 7) == 0) {
+        return true;
+    }
+    if (strncmp(type, "system_", 7) == 0) {
         return true;
     }
     return false;
@@ -711,6 +718,23 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
             }
             return err;
         }
+        case GW_UART_CMD_WIFI_CONFIG_SET: {
+            const char *ssid = req->value_blob;
+            size_t ssid_len = strnlen(ssid, sizeof(req->value_blob));
+            if (ssid_len == 0 || ssid_len >= sizeof(req->value_blob)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            const char *password = ssid + ssid_len + 1;
+            if (password >= req->value_blob + sizeof(req->value_blob)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            size_t pass_room = (size_t)(req->value_blob + sizeof(req->value_blob) - password);
+            size_t pass_len = strnlen(password, pass_room);
+            if (pass_len >= pass_room) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_cloud_sync_set_wifi_credentials(ssid, password);
+        }
         default:
             return ESP_ERR_NOT_SUPPORTED;
     }
@@ -727,6 +751,7 @@ static void handle_cmd_req(const gw_uart_proto_frame_t *frame)
     }
     req.device_uid[sizeof(req.device_uid) - 1] = '\0';
     req.value_text[sizeof(req.value_text) - 1] = '\0';
+    req.value_blob[sizeof(req.value_blob) - 1] = '\0';
 
     uint32_t req_id = req.req_id ? req.req_id : frame->seq;
     if ((gw_uart_cmd_id_t)req.cmd_id == GW_UART_CMD_SYNC_SNAPSHOT ||

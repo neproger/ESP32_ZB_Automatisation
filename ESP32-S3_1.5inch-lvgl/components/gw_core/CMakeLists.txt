@@ -18,6 +18,7 @@ idf_component_register(
         "src/action_exec.c"
         "src/cbor.c"
         "src/gw_uart_proto.c"
+        "src/net_time.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES
@@ -26,6 +27,7 @@ idf_component_register(
         log
         nvs_flash
         spiffs
+        esp_netif
         gw_zigbee
         json
 )
