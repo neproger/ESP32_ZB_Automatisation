@@ -599,8 +599,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 ESP_LOGI(TAG, "Start network formation");
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
             } else {
-                esp_zb_bdb_open_network(180);
-                ESP_LOGI(TAG, "Device rebooted");
+                ESP_LOGI(TAG, "Device rebooted (join closed by default, open via Web UI permit_join)");
             }
         } else {
             ESP_LOGE(TAG, "Failed to initialize Zigbee stack (status: %s)", esp_err_to_name(err_status));

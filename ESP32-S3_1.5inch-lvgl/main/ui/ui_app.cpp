@@ -12,9 +12,11 @@
 #include "iot_knob.h"
 
 #include "devices_init.h"
+#include "ui_control_ack.hpp"
 #include "ui_events_bridge.hpp"
 #include "ui_screen_devices.hpp"
 #include "ui_store.hpp"
+#include "ui_widgets.hpp"
 
 namespace
 {
@@ -26,6 +28,7 @@ static uint64_t s_last_render_ms = 0;
 static bool s_display_enabled = true;
 static constexpr uint8_t kDisplayBrightness80Pct = 204;
 static constexpr uint32_t kMinRenderIntervalMs = 150;
+static constexpr uint32_t kControlAckTimeoutMs = 1800;
 
 void request_render()
 {
@@ -59,6 +62,8 @@ void ui_gesture_cb(lv_event_t *event)
 void ui_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    ui_control_ack_poll_timeouts(now_ms, kControlAckTimeoutMs);
 
     gw_event_t events[8] = {};
     const size_t n = ui_events_bridge_drain(events, 8);
@@ -87,6 +92,15 @@ void ui_tick_cb(lv_timer_t *timer)
         {
             (void)ui_store_apply_event(s_store, &events[i]);
             ui_screen_devices_apply_state_event(s_store, &events[i]);
+        }
+    }
+
+    if (s_store)
+    {
+        const ui_group_item_vm_t *item = ui_store_active_item(s_store);
+        if (item)
+        {
+            ui_widgets_refresh_ack(item->uid.uid, item->endpoint_id);
         }
     }
 

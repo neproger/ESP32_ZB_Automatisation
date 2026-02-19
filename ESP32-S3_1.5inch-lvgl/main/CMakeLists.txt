@@ -11,6 +11,7 @@ idf_component_register(
         "ui/ui_mapper.cpp"
         "ui/ui_store.cpp"
         "ui/ui_actions.cpp"
+        "ui/ui_control_ack.cpp"
         "ui/ui_events_bridge.cpp"
         "ui/ui_widgets.cpp"
         "ui/ui_screen_devices.cpp"

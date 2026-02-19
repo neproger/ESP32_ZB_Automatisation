@@ -104,7 +104,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
             .double_buffer = false,
             .buff_dma = false,
             .buff_spiram = true,
-            .trans_size = LCD_H_RES * 4,
+            .trans_size = LCD_H_RES * 2, // one RGB565 line DMA chunk
             .name = "psram_draw_8lines",
         },
         {
@@ -112,7 +112,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
             .double_buffer = false,
             .buff_dma = false,
             .buff_spiram = true,
-            .trans_size = LCD_H_RES * 4,
+            .trans_size = LCD_H_RES * 2, // one RGB565 line DMA chunk
             .name = "psram_draw_dma_xfer",
         },
         {

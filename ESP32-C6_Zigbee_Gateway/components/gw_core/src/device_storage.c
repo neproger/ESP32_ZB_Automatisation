@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -31,6 +32,117 @@ static const gw_storage_desc_t s_device_storage_desc = {
 static size_t find_device_index_by_uid(const gw_device_uid_t *uid);
 static size_t find_device_index_by_short(uint16_t short_addr);
 static void assign_default_name_if_needed(gw_device_full_t *device);
+static bool uid_to_u64(const char *uid, uint64_t *out);
+static bool uid_equals(const char *a, const char *b);
+static bool merge_duplicate_into(gw_device_full_t *dst, const gw_device_full_t *src);
+static bool dedupe_loaded_devices(void);
+
+static bool uid_to_u64(const char *uid, uint64_t *out)
+{
+    if (!uid || !out) {
+        return false;
+    }
+    const char *p = uid;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        p += 2;
+    }
+    if (*p == '\0') {
+        return false;
+    }
+    char *end = NULL;
+    unsigned long long v = strtoull(p, &end, 16);
+    if (!end || *end != '\0') {
+        return false;
+    }
+    *out = (uint64_t)v;
+    return true;
+}
+
+static bool uid_equals(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return false;
+    }
+    uint64_t va = 0;
+    uint64_t vb = 0;
+    if (uid_to_u64(a, &va) && uid_to_u64(b, &vb)) {
+        return va == vb;
+    }
+    return strcasecmp(a, b) == 0;
+}
+
+static bool merge_duplicate_into(gw_device_full_t *dst, const gw_device_full_t *src)
+{
+    if (!dst || !src) {
+        return false;
+    }
+    bool changed = false;
+    if (src->last_seen_ms > dst->last_seen_ms) {
+        dst->last_seen_ms = src->last_seen_ms;
+        changed = true;
+    }
+    if (dst->name[0] == '\0' && src->name[0] != '\0') {
+        strlcpy(dst->name, src->name, sizeof(dst->name));
+        changed = true;
+    }
+    if (!dst->has_onoff && src->has_onoff) {
+        dst->has_onoff = true;
+        changed = true;
+    }
+    if (!dst->has_button && src->has_button) {
+        dst->has_button = true;
+        changed = true;
+    }
+    if (src->short_addr != 0 && dst->short_addr == 0) {
+        dst->short_addr = src->short_addr;
+        changed = true;
+    }
+    if (src->endpoint_count > dst->endpoint_count) {
+        dst->endpoint_count = src->endpoint_count;
+        changed = true;
+    }
+    for (size_t i = 0; i < GW_DEVICE_MAX_ENDPOINTS; i++) {
+        const gw_device_endpoint_t *se = &src->endpoints[i];
+        gw_device_endpoint_t *de = &dst->endpoints[i];
+        if (de->profile_id == 0 && se->profile_id != 0) {
+            *de = *se;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+static bool dedupe_loaded_devices(void)
+{
+    if (!s_initialized || s_device_storage.count < 2) {
+        return false;
+    }
+
+    gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
+    bool changed = false;
+    size_t i = 0;
+    while (i < s_device_storage.count) {
+        size_t j = i + 1;
+        while (j < s_device_storage.count) {
+            if (!uid_equals(devices[i].device_uid.uid, devices[j].device_uid.uid)) {
+                j++;
+                continue;
+            }
+
+            (void)merge_duplicate_into(&devices[i], &devices[j]);
+
+            for (size_t k = j + 1; k < s_device_storage.count; k++) {
+                devices[k - 1] = devices[k];
+            }
+            s_device_storage.count--;
+            memset(&devices[s_device_storage.count], 0, sizeof(gw_device_full_t));
+            changed = true;
+        }
+        i++;
+    }
+
+    return changed;
+}
 
 esp_err_t gw_device_storage_init(void)
 {
@@ -45,6 +157,10 @@ esp_err_t gw_device_storage_init(void)
     }
 
     s_initialized = true;
+    if (dedupe_loaded_devices()) {
+        ESP_LOGW(TAG, "Deduplicated devices on load, persisting cleaned registry");
+        (void)gw_storage_save(&s_device_storage);
+    }
     ESP_LOGI(TAG, "Device storage initialized with %zu devices", s_device_storage.count);
     return ESP_OK;
 }
@@ -57,7 +173,7 @@ static size_t find_device_index_by_uid(const gw_device_uid_t *uid)
 
     gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
     for (size_t i = 0; i < s_device_storage.count; i++) {
-        if (strncmp(uid->uid, devices[i].device_uid.uid, sizeof(uid->uid)) == 0) {
+        if (uid_equals(uid->uid, devices[i].device_uid.uid)) {
             return i;
         }
     }

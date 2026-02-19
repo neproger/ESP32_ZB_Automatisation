@@ -6,6 +6,7 @@
 
 #include "gw_core/types.h"
 #include "ui_actions.hpp"
+#include "ui_control_ack.hpp"
 #include "ui_style.hpp"
 
 namespace
@@ -63,6 +64,7 @@ static field_entry_t s_fields[kMaxFieldEntries];
 static size_t s_field_count = 0;
 static lv_grad_dsc_t s_hue_grad = {};
 static bool s_hue_grad_ready = false;
+static constexpr lv_state_t kStateError = LV_STATE_USER_1;
 
 void ensure_hue_gradient(void)
 {
@@ -388,16 +390,45 @@ void refresh_color_controls(ui_ctl_ctx_t *ctx, uint16_t hue, uint8_t sat, bool u
     ctx->has_cached_hs = true;
 }
 
-void on_switch_changed(lv_event_t *e)
+void on_switch_tapped(lv_event_t *e)
 {
     ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
     if (!ctx)
     {
         return;
     }
-    lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
-    const bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    (void)ui_actions_enqueue_onoff(&ctx->uid, ctx->endpoint, checked);
+    field_entry_t *entry = find_field(ctx->uid.uid, ctx->endpoint, "onoff");
+    if (!entry)
+    {
+        return;
+    }
+
+    // Ignore user taps while command is in-flight.
+    if (ui_control_ack_is_pending(ctx->uid.uid, ctx->endpoint, "onoff"))
+    {
+        return;
+    }
+
+    bool has_confirmed = false;
+    bool confirmed = false;
+    (void)ui_control_ack_get_confirmed_bool(ctx->uid.uid, ctx->endpoint, "onoff", &has_confirmed, &confirmed);
+    const bool target = has_confirmed ? !confirmed : true;
+
+    if (!ui_control_ack_begin(ctx->uid.uid, ctx->endpoint, "onoff"))
+    {
+        return;
+    }
+    lv_obj_remove_state(entry->obj, kStateError);
+    lv_obj_add_state(entry->obj, LV_STATE_DISABLED);
+
+    const esp_err_t err = ui_actions_enqueue_onoff(&ctx->uid, ctx->endpoint, target);
+    if (err != ESP_OK)
+    {
+        // Send failed immediately; unlock control and keep confirmed state.
+        ui_control_ack_fail(ctx->uid.uid, ctx->endpoint, "onoff");
+        lv_obj_remove_state(entry->obj, LV_STATE_DISABLED);
+        lv_obj_add_state(entry->obj, kStateError);
+    }
 }
 
 void on_slider_released(lv_event_t *e)
@@ -437,6 +468,20 @@ void switch_set_state(field_entry_t *entry, const ui_widget_value_t *value)
     {
         return;
     }
+
+    ui_control_ack_confirm_bool(entry->device_uid, entry->endpoint, "onoff", value->has_value, value->has_value && value->v.b);
+    const ui_control_ack_status_t st = ui_control_ack_get_status(entry->device_uid, entry->endpoint, "onoff");
+    if (st == UI_CONTROL_ACK_PENDING) {
+        lv_obj_add_state(entry->obj, LV_STATE_DISABLED);
+    } else {
+        lv_obj_remove_state(entry->obj, LV_STATE_DISABLED);
+    }
+    if (st == UI_CONTROL_ACK_ERROR) {
+        lv_obj_add_state(entry->obj, kStateError);
+    } else {
+        lv_obj_remove_state(entry->obj, kStateError);
+    }
+
     if (value->has_value && value->v.b)
     {
         lv_obj_add_state(entry->obj, LV_STATE_CHECKED);
@@ -558,6 +603,7 @@ void ui_widgets_reset(void)
     s_field_count = 0;
     memset(s_ctx_pool, 0, sizeof(s_ctx_pool));
     memset(s_fields, 0, sizeof(s_fields));
+    ui_control_ack_reset();
 }
 
 lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_t *uid, const ui_endpoint_vm_t *ep)
@@ -595,8 +641,14 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
         lv_label_set_text(lbl, "On/Off");
         lv_obj_t *sw = lv_switch_create(row);
         lv_obj_set_size(sw, 84, 46);
+        lv_obj_set_style_border_width(sw, 2, LV_PART_MAIN | kStateError);
+        lv_obj_set_style_border_color(sw, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN | kStateError);
+        lv_obj_set_style_bg_color(sw, lv_palette_lighten(LV_PALETTE_RED, 4), LV_PART_MAIN | kStateError);
+        // Prevent native optimistic toggle; this control reflects only confirmed state.
+        lv_obj_clear_flag(sw, LV_OBJ_FLAG_CLICKABLE);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, uid, ep->endpoint_id);
-        lv_obj_add_event_cb(sw, on_switch_changed, LV_EVENT_VALUE_CHANGED, ctx);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, on_switch_tapped, LV_EVENT_CLICKED, ctx);
         register_field(uid, ep->endpoint_id, "onoff", FieldKind::Switch, sw, nullptr);
     }
 
@@ -738,4 +790,23 @@ bool ui_widgets_set_state(const char *device_uid, uint8_t endpoint, const char *
     }
 
     return true;
+}
+
+void ui_widgets_refresh_ack(const char *device_uid, uint8_t endpoint)
+{
+    field_entry_t *entry = find_field(device_uid, endpoint, "onoff");
+    if (!entry || entry->kind != FieldKind::Switch || !entry->obj) {
+        return;
+    }
+    const ui_control_ack_status_t st = ui_control_ack_get_status(device_uid, endpoint, "onoff");
+    if (st == UI_CONTROL_ACK_PENDING) {
+        lv_obj_add_state(entry->obj, LV_STATE_DISABLED);
+    } else {
+        lv_obj_remove_state(entry->obj, LV_STATE_DISABLED);
+    }
+    if (st == UI_CONTROL_ACK_ERROR) {
+        lv_obj_add_state(entry->obj, kStateError);
+    } else {
+        lv_obj_remove_state(entry->obj, kStateError);
+    }
 }
