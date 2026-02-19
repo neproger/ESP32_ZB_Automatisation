@@ -92,14 +92,6 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
 
     const lvgl_disp_profile_t profiles[] = {
         {
-            .draw_lines = 8,
-            .double_buffer = false,
-            .buff_dma = true,
-            .buff_spiram = false,
-            .trans_size = 0,
-            .name = "dma_internal_8lines",
-        },
-        {
             .draw_lines = 4,
             .double_buffer = false,
             .buff_dma = false,
@@ -114,6 +106,14 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
             .buff_spiram = true,
             .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
             .name = "psram_draw_8lines",
+        },
+        {
+            .draw_lines = 8,
+            .double_buffer = false,
+            .buff_dma = true,
+            .buff_spiram = false,
+            .trans_size = 0,
+            .name = "dma_internal_8lines",
         },
         {
             .draw_lines = LCD_DRAW_BUFF_HEIGHT,
