@@ -27,6 +27,8 @@ static bool s_cloud_initialized = false;
 static char s_wifi_ssid[33];
 static char s_wifi_password[65];
 
+esp_err_t gw_cloud_sync_start_net_services(void);
+
 static void publish_time_sync(uint64_t epoch_ms)
 {
     char msg[64];
@@ -127,6 +129,7 @@ esp_err_t gw_cloud_sync_set_wifi_credentials(const char *ssid, const char *passw
     strlcpy(s_wifi_password, password, sizeof(s_wifi_password));
 
     if (s_cloud_initialized) {
+        (void)gw_cloud_sync_start_net_services();
         return ESP_OK;
     }
 
@@ -139,7 +142,7 @@ esp_err_t gw_cloud_sync_set_wifi_credentials(const char *ssid, const char *passw
         .ntp_server = "pool.ntp.org",
         .sync_interval_ms = kTimeIntervalMs,
         .sync_timeout_ms = 8000,
-        .sync_on_init = false,
+        .sync_on_init = true,
     };
     err = gw_net_time_init(&tcfg);
     if (err != ESP_OK) {
@@ -151,7 +154,7 @@ esp_err_t gw_cloud_sync_set_wifi_credentials(const char *ssid, const char *passw
         .longitude = kWeatherLon,
         .refresh_interval_ms = kWeatherIntervalMs,
         .request_timeout_ms = 8000,
-        .refresh_on_init = false,
+        .refresh_on_init = true,
     };
     err = gw_weather_init(&wcfg);
     if (err != ESP_OK) {
@@ -159,6 +162,31 @@ esp_err_t gw_cloud_sync_set_wifi_credentials(const char *ssid, const char *passw
     }
 
     s_cloud_initialized = true;
+    (void)gw_cloud_sync_start_net_services();
     gw_event_bus_publish("system.cloud_ready", "cloud", "", 0, "time/weather client started");
     return ESP_OK;
+}
+
+esp_err_t gw_cloud_sync_start_net_services(void)
+{
+    if (!s_cloud_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!gw_wifi_sta_is_connected()) {
+        ESP_LOGW(TAG, "net services kick skipped: wifi has no IP yet");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t t_err = gw_net_time_request_sync();
+    if (t_err != ESP_OK && t_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "net time request failed: %s", esp_err_to_name(t_err));
+    }
+
+    esp_err_t w_err = gw_weather_request_refresh();
+    if (w_err != ESP_OK && w_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "weather request failed: %s", esp_err_to_name(w_err));
+    }
+
+    ESP_LOGI(TAG, "net services kick requested");
+    return (t_err == ESP_OK || w_err == ESP_OK) ? ESP_OK : ESP_FAIL;
 }

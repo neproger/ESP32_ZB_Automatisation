@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "gw_core/zb_classify.h"
 
 namespace
@@ -10,11 +11,11 @@ namespace
 static constexpr size_t UI_STATE_SNAPSHOT_CAP = 256;
 static constexpr size_t UI_GROUP_ITEM_SNAPSHOT_CAP = 256;
 
-static gw_state_item_t s_state_items[UI_STATE_SNAPSHOT_CAP];
-static gw_device_t s_devices_snapshot[UI_STORE_DEVICE_CAP];
-static gw_zb_endpoint_t s_eps_snapshot[UI_STORE_ENDPOINT_CAP];
-static gw_group_entry_t s_groups_snapshot[UI_STORE_GROUP_CAP];
-static gw_group_item_t s_group_items_snapshot[UI_GROUP_ITEM_SNAPSHOT_CAP];
+EXT_RAM_BSS_ATTR static gw_state_item_t s_state_items[UI_STATE_SNAPSHOT_CAP];
+EXT_RAM_BSS_ATTR static gw_device_t s_devices_snapshot[UI_STORE_DEVICE_CAP];
+EXT_RAM_BSS_ATTR static gw_zb_endpoint_t s_eps_snapshot[UI_STORE_ENDPOINT_CAP];
+EXT_RAM_BSS_ATTR static gw_group_entry_t s_groups_snapshot[UI_STORE_GROUP_CAP];
+EXT_RAM_BSS_ATTR static gw_group_item_t s_group_items_snapshot[UI_GROUP_ITEM_SNAPSHOT_CAP];
 
 size_t find_group_idx(ui_store_t *store, const char *group_id)
 {

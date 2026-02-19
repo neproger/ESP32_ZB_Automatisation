@@ -19,6 +19,7 @@ static const char *TAG = "gw_weather";
 
 static const uint32_t kDefaultRefreshIntervalMs = 60u * 60u * 1000u;
 static const uint32_t kDefaultRequestTimeoutMs = 8000u;
+static const uint32_t kRetryIntervalMs = 5000u;
 static const size_t kWeatherTaskStackBytes = 8192;
 static const char *kDefaultWeatherBaseUrl = "http://api.open-meteo.com/v1/forecast";
 
@@ -123,44 +124,23 @@ static void weather_task(void *arg)
 {
     (void)arg;
 
-    if (s_cfg.refresh_on_init) {
-        gw_weather_snapshot_t snap = {0};
-        const esp_err_t first_err = fetch_snapshot(&snap);
-        if (first_err == ESP_OK) {
-            portENTER_CRITICAL(&s_lock);
-            s_snapshot = snap;
-            portEXIT_CRITICAL(&s_lock);
-            ESP_LOGI(TAG, "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d",
-                     (double)snap.temperature_c,
-                     (double)snap.humidity_pct,
-                     (double)snap.wind_speed_kmh,
-                     snap.weather_code);
-        } else {
-            ESP_LOGW(TAG, "weather bootstrap failed: %s", esp_err_to_name(first_err));
-        }
-        portENTER_CRITICAL(&s_lock);
-        s_bootstrap_done = true;
-        portEXIT_CRITICAL(&s_lock);
-    } else {
-        portENTER_CRITICAL(&s_lock);
-        s_bootstrap_done = true;
-        portEXIT_CRITICAL(&s_lock);
-    }
-
     const TickType_t interval_ticks = pdMS_TO_TICKS(s_cfg.refresh_interval_ms);
+    const TickType_t retry_ticks = pdMS_TO_TICKS(kRetryIntervalMs);
+    TickType_t wait_ticks = 0;
     for (;;) {
-        const uint32_t sig = ulTaskNotifyTake(pdTRUE, interval_ticks);
-        (void)sig;
+        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
 
         gw_weather_snapshot_t snap = {0};
         esp_err_t err = fetch_snapshot(&snap);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "weather update failed: %s", esp_err_to_name(err));
+            wait_ticks = retry_ticks;
             continue;
         }
 
         portENTER_CRITICAL(&s_lock);
         s_snapshot = snap;
+        s_bootstrap_done = true;
         portEXIT_CRITICAL(&s_lock);
 
         ESP_LOGI(TAG, "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d",
@@ -168,6 +148,7 @@ static void weather_task(void *arg)
                  (double)snap.humidity_pct,
                  (double)snap.wind_speed_kmh,
                  snap.weather_code);
+        wait_ticks = interval_ticks;
     }
 }
 

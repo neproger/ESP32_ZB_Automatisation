@@ -15,6 +15,7 @@
 #include "esp_wifi.h"
 
 #include "gw_core/event_bus.h"
+#include "gw_core/net_time.h"
 #include "gw_http/gw_http.h"
 
 #if defined(__has_include) && __has_include("wifi_aps_config.h")
@@ -45,6 +46,7 @@ typedef struct
 static gw_wifi_ctx_t s_ctx;
 static esp_netif_t *s_netif_sta;
 static bool s_wifi_started;
+extern esp_err_t gw_weather_request_refresh(void) __attribute__((weak));
 static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -70,6 +72,18 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
         s_ctx.retries = 0;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+
+        esp_err_t time_err = gw_net_time_request_sync();
+        if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "Immediate time sync request failed: %s", esp_err_to_name(time_err));
+        }
+
+        if (gw_weather_request_refresh) {
+            esp_err_t weather_err = gw_weather_request_refresh();
+            if (weather_err != ESP_OK && weather_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "Immediate weather refresh request failed: %s", esp_err_to_name(weather_err));
+            }
+        }
 
         uint16_t port = gw_http_get_port();
         {

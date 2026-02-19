@@ -16,6 +16,7 @@ static const char *TAG = "gw_net_time";
 
 static const uint32_t kDefaultSyncIntervalMs = 6u * 60u * 60u * 1000u;
 static const uint32_t kDefaultSyncTimeoutMs = 8000u;
+static const uint32_t kRetryIntervalMs = 5000u;
 static const char *kDefaultNtpServer = "pool.ntp.org";
 static const uint32_t kTimeTaskStackWords = 3072;
 
@@ -90,18 +91,13 @@ static void time_task(void *arg)
 {
     (void)arg;
 
-    if (s_cfg.sync_on_init) {
-        (void)perform_sync_once();
-    }
-
     const TickType_t interval_ticks = pdMS_TO_TICKS((s_cfg.sync_interval_ms > 0) ? s_cfg.sync_interval_ms : kDefaultSyncIntervalMs);
+    const TickType_t retry_ticks = pdMS_TO_TICKS(kRetryIntervalMs);
+    TickType_t wait_ticks = 0;
     for (;;) {
-        const uint32_t sig = ulTaskNotifyTake(pdTRUE, interval_ticks);
-        if (sig > 0) {
-            (void)perform_sync_once();
-            continue;
-        }
-        (void)perform_sync_once();
+        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
+        const esp_err_t err = perform_sync_once();
+        wait_ticks = (err == ESP_OK) ? interval_ticks : retry_ticks;
     }
 }
 

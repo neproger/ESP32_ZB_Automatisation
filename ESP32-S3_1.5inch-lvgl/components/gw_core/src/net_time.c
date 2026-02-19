@@ -1,6 +1,7 @@
 #include "gw_core/net_time.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -12,10 +13,13 @@
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"
 
+#include "gw_core/event_bus.h"
+
 static const char *TAG = "gw_net_time";
 
 static const uint32_t kDefaultSyncIntervalMs = 6u * 60u * 60u * 1000u;
 static const uint32_t kDefaultSyncTimeoutMs = 8000u;
+static const uint32_t kRetryIntervalMs = 5000u;
 static const char *kDefaultNtpServer = "pool.ntp.org";
 static const uint32_t kTimeTaskStackWords = 3072;
 
@@ -57,6 +61,8 @@ static void update_ref_from_system_time(void)
 
 static esp_err_t perform_sync_once(void)
 {
+    ESP_LOGI(TAG, "time sync attempt start (server=%s)", s_cfg.ntp_server ? s_cfg.ntp_server : kDefaultNtpServer);
+
     if (!s_sntp_inited) {
         esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(s_cfg.ntp_server ? s_cfg.ntp_server : kDefaultNtpServer);
         cfg.start = true;
@@ -78,11 +84,15 @@ static esp_err_t perform_sync_once(void)
     esp_err_t err = esp_netif_sntp_sync_wait(wait_ticks);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SNTP sync timeout/fail: %s", esp_err_to_name(err));
+        gw_event_bus_publish("net_time.sync_failed", "net_time", "", 0, esp_err_to_name(err));
         return err;
     }
 
     update_ref_from_system_time();
     ESP_LOGI(TAG, "time synced, epoch_ms=%llu", (unsigned long long)gw_net_time_last_sync_ms());
+    char msg[64];
+    (void)snprintf(msg, sizeof(msg), "epoch_ms=%llu", (unsigned long long)gw_net_time_last_sync_ms());
+    gw_event_bus_publish("net_time.synced", "net_time", "", 0, msg);
     return ESP_OK;
 }
 
@@ -90,18 +100,13 @@ static void time_task(void *arg)
 {
     (void)arg;
 
-    if (s_cfg.sync_on_init) {
-        (void)perform_sync_once();
-    }
-
     const TickType_t interval_ticks = pdMS_TO_TICKS((s_cfg.sync_interval_ms > 0) ? s_cfg.sync_interval_ms : kDefaultSyncIntervalMs);
+    const TickType_t retry_ticks = pdMS_TO_TICKS(kRetryIntervalMs);
+    TickType_t wait_ticks = 0; // Immediate first sync on startup.
     for (;;) {
-        const uint32_t sig = ulTaskNotifyTake(pdTRUE, interval_ticks);
-        if (sig > 0) {
-            (void)perform_sync_once();
-            continue;
-        }
-        (void)perform_sync_once();
+        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
+        const esp_err_t err = perform_sync_once();
+        wait_ticks = (err == ESP_OK) ? interval_ticks : retry_ticks;
     }
 }
 
@@ -125,9 +130,7 @@ esp_err_t gw_net_time_init(const gw_net_time_cfg_t *cfg)
     if (s_cfg.sync_timeout_ms == 0) {
         s_cfg.sync_timeout_ms = kDefaultSyncTimeoutMs;
     }
-    if (!cfg) {
-        s_cfg.sync_on_init = true;
-    }
+    // Always do immediate first sync in time_task; cfg.sync_on_init is ignored.
 
     BaseType_t ok = xTaskCreateWithCaps(
         time_task,

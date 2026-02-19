@@ -98,7 +98,8 @@ esp_err_t devices_display_init(void)
     buscfg.data1_io_num = PIN_LCD_DATA1;
     buscfg.data2_io_num = PIN_LCD_DATA2;
     buscfg.data3_io_num = PIN_LCD_DATA3;
-    buscfg.max_transfer_sz = LCD_H_RES * LCD_V_RES * LCD_BIT_PER_PIXEL / 8;
+    // Keep SPI DMA descriptor pool small: we never transfer a full frame in one transaction.
+    buscfg.max_transfer_sz = LCD_H_RES * LCD_SPI_MAX_TRANSFER_LINES * LCD_BIT_PER_PIXEL / 8;
     esp_err_t err = spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (err != ESP_OK)
     {

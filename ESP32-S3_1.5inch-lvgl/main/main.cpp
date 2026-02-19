@@ -30,6 +30,8 @@
 
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
+static constexpr TickType_t kC6SyncRetryBackoff = pdMS_TO_TICKS(15000);
+static constexpr TickType_t kC6SyncRefreshPeriod = pdMS_TO_TICKS(5 * 60 * 1000);
 static bool s_http_started = false;
 static volatile bool s_ui_ready_for_http = false;
 
@@ -72,9 +74,13 @@ static void wifi_connect_task(void *arg)
     (void)arg;
     bool ps_configured = false;
     bool c6_wifi_synced = false;
+    bool c6_net_services_unsupported = false;
     char last_ssid[33] = {0};
     char last_pass[65] = {0};
+    TickType_t next_c6_sync_retry_tick = 0;
+    TickType_t last_c6_sync_tick = 0;
     for (;;) {
+        const TickType_t now_tick = xTaskGetTickCount();
         if (!wifi_is_connected()) {
             esp_err_t wifi_err = gw_wifi_connect_multi();
             if (wifi_err != ESP_OK) {
@@ -84,26 +90,51 @@ static void wifi_connect_task(void *arg)
             }
             ps_configured = false;
             c6_wifi_synced = false;
+            c6_net_services_unsupported = false;
+            next_c6_sync_retry_tick = 0;
+            last_c6_sync_tick = 0;
         }
 
-        if (!c6_wifi_synced) {
+        const bool retry_window_open =
+            (next_c6_sync_retry_tick == 0) || ((int32_t)(now_tick - next_c6_sync_retry_tick) >= 0);
+        if (retry_window_open) {
             wifi_config_t wifi_cfg = {};
             if (esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg) == ESP_OK) {
                 const char *ssid = (const char *)wifi_cfg.sta.ssid;
                 const char *pass = (const char *)wifi_cfg.sta.password;
                 if (ssid[0] != '\0') {
                     const bool changed = (strcmp(last_ssid, ssid) != 0) || (strcmp(last_pass, pass) != 0);
-                    if (changed) {
+                    const bool periodic_refresh = (last_c6_sync_tick != 0) && ((now_tick - last_c6_sync_tick) >= kC6SyncRefreshPeriod);
+                    if (!c6_wifi_synced || changed || periodic_refresh) {
                         esp_err_t sync_err = gw_zigbee_set_c6_wifi_credentials(ssid, pass);
                         if (sync_err != ESP_OK) {
                             ESP_LOGW(TAG_APP, "C6 Wi-Fi creds sync failed (%s)", esp_err_to_name(sync_err));
+                            c6_wifi_synced = false;
+                            next_c6_sync_retry_tick = now_tick + kC6SyncRetryBackoff;
                         } else {
                             snprintf(last_ssid, sizeof(last_ssid), "%s", ssid);
                             snprintf(last_pass, sizeof(last_pass), "%s", pass);
                             ESP_LOGI(TAG_APP, "C6 Wi-Fi credentials synced");
+                            c6_wifi_synced = true;
+                            next_c6_sync_retry_tick = 0;
+                            last_c6_sync_tick = now_tick;
+
+                            esp_err_t svc_err = gw_zigbee_start_c6_net_services();
+                            if (svc_err == ESP_OK) {
+                                c6_net_services_unsupported = false;
+                                ESP_LOGI(TAG_APP, "C6 net services start requested");
+                            } else if (svc_err == ESP_ERR_NOT_SUPPORTED) {
+                                if (!c6_net_services_unsupported) {
+                                    ESP_LOGW(TAG_APP, "C6 firmware does not support NET_SERVICES_START yet");
+                                }
+                                c6_net_services_unsupported = true;
+                            } else {
+                                ESP_LOGW(TAG_APP, "C6 net services start failed (%s)", esp_err_to_name(svc_err));
+                                c6_wifi_synced = false;
+                                next_c6_sync_retry_tick = now_tick + kC6SyncRetryBackoff;
+                            }
                         }
                     }
-                    c6_wifi_synced = true;
                 }
             }
         }

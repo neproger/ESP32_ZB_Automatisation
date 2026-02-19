@@ -13,12 +13,14 @@
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
+#include "gw_core/event_bus.h"
 #include "gw_core/net_fetch.h"
 
 static const char *TAG = "gw_weather";
 
 static const uint32_t kDefaultRefreshIntervalMs = 60u * 60u * 1000u;
 static const uint32_t kDefaultRequestTimeoutMs = 8000u;
+static const uint32_t kRetryIntervalMs = 5000u;
 static const size_t kWeatherTaskStackBytes = 8192;
 static const char *kDefaultWeatherBaseUrl = "http://api.open-meteo.com/v1/forecast";
 
@@ -75,10 +77,13 @@ static esp_err_t fetch_snapshot(gw_weather_snapshot_t *out_snapshot)
         return ESP_ERR_NO_MEM;
     }
 
+    ESP_LOGI(TAG, "weather fetch start lat=%.6f lon=%.6f", s_cfg.latitude, s_cfg.longitude);
+
     int http_status = 0;
     esp_err_t err = gw_net_fetch_get_text(url, &fetch_cfg, body, 2048, &http_status);
     free(url);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "weather fetch transport failed: err=%s http=%d", esp_err_to_name(err), http_status);
         free(body);
         return err;
     }
@@ -115,6 +120,7 @@ static esp_err_t fetch_snapshot(gw_weather_snapshot_t *out_snapshot)
     }
 
     *out_snapshot = snap;
+    ESP_LOGI(TAG, "weather fetch ok: http=%d observed=%s", http_status, snap.observed_time);
     cJSON_Delete(root);
     return ESP_OK;
 }
@@ -123,44 +129,24 @@ static void weather_task(void *arg)
 {
     (void)arg;
 
-    if (s_cfg.refresh_on_init) {
-        gw_weather_snapshot_t snap = {0};
-        const esp_err_t first_err = fetch_snapshot(&snap);
-        if (first_err == ESP_OK) {
-            portENTER_CRITICAL(&s_lock);
-            s_snapshot = snap;
-            portEXIT_CRITICAL(&s_lock);
-            ESP_LOGI(TAG, "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d",
-                     (double)snap.temperature_c,
-                     (double)snap.humidity_pct,
-                     (double)snap.wind_speed_kmh,
-                     snap.weather_code);
-        } else {
-            ESP_LOGW(TAG, "weather bootstrap failed: %s", esp_err_to_name(first_err));
-        }
-        portENTER_CRITICAL(&s_lock);
-        s_bootstrap_done = true;
-        portEXIT_CRITICAL(&s_lock);
-    } else {
-        portENTER_CRITICAL(&s_lock);
-        s_bootstrap_done = true;
-        portEXIT_CRITICAL(&s_lock);
-    }
-
     const TickType_t interval_ticks = pdMS_TO_TICKS(s_cfg.refresh_interval_ms);
+    const TickType_t retry_ticks = pdMS_TO_TICKS(kRetryIntervalMs);
+    TickType_t wait_ticks = 0; // Immediate first fetch on startup.
     for (;;) {
-        const uint32_t sig = ulTaskNotifyTake(pdTRUE, interval_ticks);
-        (void)sig;
+        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
 
         gw_weather_snapshot_t snap = {0};
         esp_err_t err = fetch_snapshot(&snap);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "weather update failed: %s", esp_err_to_name(err));
+            gw_event_bus_publish("weather.update_failed", "weather", "", 0, esp_err_to_name(err));
+            wait_ticks = retry_ticks;
             continue;
         }
 
         portENTER_CRITICAL(&s_lock);
         s_snapshot = snap;
+        s_bootstrap_done = true;
         portEXIT_CRITICAL(&s_lock);
 
         ESP_LOGI(TAG, "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d",
@@ -168,6 +154,14 @@ static void weather_task(void *arg)
                  (double)snap.humidity_pct,
                  (double)snap.wind_speed_kmh,
                  snap.weather_code);
+        char msg[96];
+        (void)snprintf(msg, sizeof(msg), "t=%.1f h=%.1f wind=%.1f code=%d",
+                       (double)snap.temperature_c,
+                       (double)snap.humidity_pct,
+                       (double)snap.wind_speed_kmh,
+                       snap.weather_code);
+        gw_event_bus_publish("weather.updated", "weather", "", 0, msg);
+        wait_ticks = interval_ticks;
     }
 }
 
@@ -188,9 +182,7 @@ esp_err_t gw_weather_init(const gw_weather_cfg_t *cfg)
     if (s_cfg.request_timeout_ms == 0) {
         s_cfg.request_timeout_ms = kDefaultRequestTimeoutMs;
     }
-    if (!cfg) {
-        s_cfg.refresh_on_init = true;
-    }
+    // Always do immediate first fetch in weather_task; cfg.refresh_on_init is ignored.
     if (s_cfg.latitude < -90.0 || s_cfg.latitude > 90.0 || s_cfg.longitude < -180.0 || s_cfg.longitude > 180.0) {
         return ESP_ERR_INVALID_ARG;
     }

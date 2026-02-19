@@ -735,6 +735,8 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
             }
             return gw_cloud_sync_set_wifi_credentials(ssid, password);
         }
+        case GW_UART_CMD_NET_SERVICES_START:
+            return gw_cloud_sync_start_net_services();
         default:
             return ESP_ERR_NOT_SUPPORTED;
     }

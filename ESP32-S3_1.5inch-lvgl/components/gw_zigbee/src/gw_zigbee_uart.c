@@ -196,6 +196,8 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "REMOVE_DEVICE";
         case GW_UART_CMD_WIFI_CONFIG_SET:
             return "WIFI_CONFIG_SET";
+        case GW_UART_CMD_NET_SERVICES_START:
+            return "NET_SERVICES_START";
         default:
             return "UNKNOWN";
     }
@@ -1146,6 +1148,13 @@ esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *passwo
     memcpy(req.value_blob + ssid_len + 1, password, pass_len);
     req.value_blob[ssid_len + 1 + pass_len] = '\0';
 
+    return send_cmd_wait_rsp(&req);
+}
+
+esp_err_t gw_zigbee_start_c6_net_services(void)
+{
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_NET_SERVICES_START;
     return send_cmd_wait_rsp(&req);
 }
 

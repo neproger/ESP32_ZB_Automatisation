@@ -9,9 +9,11 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
@@ -54,13 +56,14 @@ typedef struct {
 } rules_cache_t;
 
 static portMUX_TYPE s_cache_lock = portMUX_INITIALIZER_UNLOCKED;
-static rules_cache_t s_cache_a;
-static rules_cache_t s_cache_b;
+EXT_RAM_BSS_ATTR static rules_cache_t s_cache_a;
+EXT_RAM_BSS_ATTR static rules_cache_t s_cache_b;
 static rules_cache_t *s_cache = &s_cache_a;
 static bool s_cache_use_a = true;
 
 static bool s_inited;
 static QueueHandle_t s_q;
+static bool s_q_caps_alloc;
 static TaskHandle_t s_task;
 
 static const char *strtab_at(const gw_automation_entry_t *entry, uint32_t off)
@@ -594,19 +597,49 @@ esp_err_t gw_rules_init(void)
         return ESP_OK;
     }
 
-    s_q = xQueueCreate(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t));
+    s_q_caps_alloc = false;
+    s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_q) {
+        s_q_caps_alloc = true;
+    }
+    if (!s_q) {
+        s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_q) {
+            s_q_caps_alloc = true;
+        }
+    }
+    if (!s_q) {
+        s_q = xQueueCreate(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t));
+        s_q_caps_alloc = false;
+    }
     if (!s_q) {
         return ESP_ERR_NO_MEM;
     }
 
-    if (xTaskCreateWithCaps(rules_task,
-                            "rules",
-                            4096,
-                            NULL,
-                            GW_RULES_TASK_PRIO,
-                            &s_task,
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        vQueueDelete(s_q);
+    BaseType_t task_ok = xTaskCreateWithCaps(rules_task,
+                                             "rules",
+                                             4096,
+                                             NULL,
+                                             GW_RULES_TASK_PRIO,
+                                             &s_task,
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (task_ok != pdPASS) {
+        task_ok = xTaskCreateWithCaps(rules_task,
+                                      "rules",
+                                      4096,
+                                      NULL,
+                                      GW_RULES_TASK_PRIO,
+                                      &s_task,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (task_ok != pdPASS) {
+        if (s_q_caps_alloc) {
+            vQueueDeleteWithCaps(s_q);
+        } else {
+            vQueueDelete(s_q);
+        }
+        s_q = NULL;
+        s_q_caps_alloc = false;
         return ESP_FAIL;
     }
 

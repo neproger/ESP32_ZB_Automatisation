@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_spiffs.h"
@@ -28,8 +29,11 @@ esp_err_t gw_storage_init(gw_storage_t *storage, const gw_storage_desc_t *desc, 
     storage->backend = backend;
     storage->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
 
-    // Allocate in-memory cache
-    storage->data = calloc(desc->max_items, desc->item_size);
+    // Prefer PSRAM for storage caches; fall back to generic heap.
+    storage->data = heap_caps_calloc(desc->max_items, desc->item_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!storage->data) {
+        storage->data = heap_caps_calloc(desc->max_items, desc->item_size, MALLOC_CAP_8BIT);
+    }
     if (!storage->data) {
         ESP_LOGE(TAG, "Failed to allocate memory for storage cache");
         return ESP_ERR_NO_MEM;
