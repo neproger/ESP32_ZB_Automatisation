@@ -19,6 +19,7 @@
 #include "ui_store.hpp"
 #include "ui_style.hpp"
 #include "ui_widgets.hpp"
+#include "gw_core/project_settings.h"
 
 namespace
 {
@@ -32,9 +33,18 @@ static bool s_ui_ready = false;
 static bool s_saver_active = false;
 static lv_obj_t *s_splash = nullptr;
 static constexpr uint8_t kDisplayBrightness80Pct = 204;
-static constexpr uint32_t kMinRenderIntervalMs = 150;
+static constexpr uint32_t kMinRenderIntervalMs = 50;
+static constexpr uint32_t kUiTickPeriodMs = 33;
 static constexpr uint32_t kControlAckTimeoutMs = 1800;
-static constexpr uint32_t kScreensaverTimeoutMs = 4000;
+
+uint32_t screensaver_timeout_ms()
+{
+    gw_project_settings_t cfg = {};
+    if (gw_project_settings_get(&cfg) == ESP_OK) {
+        return cfg.screensaver_timeout_ms;
+    }
+    return 4000;
+}
 
 void request_render()
 {
@@ -165,6 +175,11 @@ void ui_tick_cb(lv_timer_t *timer)
             (strcmp(events[i].type, "device.update") == 0) ||
             (strcmp(events[i].type, "group.changed") == 0);
 
+        if (strcmp(events[i].type, "net_time.tz_updated") == 0)
+        {
+            ui_screen_saver_invalidate_time();
+        }
+
         if (structural)
         {
             if (ui_store_apply_event(s_store, &events[i]))
@@ -192,7 +207,7 @@ void ui_tick_cb(lv_timer_t *timer)
 
     lv_display_t *display = lv_display_get_default();
     const uint32_t inactive_ms = display ? lv_display_get_inactive_time(display) : 0;
-    if (s_ui_ready && !s_saver_active && inactive_ms >= kScreensaverTimeoutMs)
+    if (s_ui_ready && !s_saver_active && inactive_ms >= screensaver_timeout_ms())
     {
         s_saver_active = true;
         ui_screen_saver_show(true);
@@ -244,7 +259,7 @@ void ui_app_init(void)
     splash_show(true);
     s_ui_ready = false;
     s_last_render_ms = 0;
-    lv_timer_create(ui_tick_cb, 100, nullptr);
+    lv_timer_create(ui_tick_cb, kUiTickPeriodMs, nullptr);
 
     lvgl_port_unlock();
 

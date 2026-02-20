@@ -35,6 +35,7 @@ static const char *TAG = "gw_wifi";
 
 #define GW_WIFI_CONNECTED_BIT BIT0
 #define GW_WIFI_FAIL_BIT      BIT1
+static const uint64_t kMinTimeResyncPeriodMs = 6ULL * 60ULL * 60ULL * 1000ULL;
 
 typedef struct
 {
@@ -72,9 +73,20 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
         s_ctx.retries = 0;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
-        esp_err_t time_err = gw_net_time_request_sync();
-        if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "Immediate time sync request failed: %s", esp_err_to_name(time_err));
+        bool request_time_sync = true;
+        if (gw_net_time_is_synced()) {
+            const uint64_t now_ms = gw_net_time_now_ms();
+            const uint64_t last_sync_ms = gw_net_time_last_sync_ms();
+            if (now_ms > 0 && last_sync_ms > 0 && now_ms >= last_sync_ms &&
+                (now_ms - last_sync_ms) < kMinTimeResyncPeriodMs) {
+                request_time_sync = false;
+            }
+        }
+        if (request_time_sync) {
+            esp_err_t time_err = gw_net_time_request_sync();
+            if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "Immediate time sync request failed: %s", esp_err_to_name(time_err));
+            }
         }
 
         uint16_t port = gw_http_get_port();

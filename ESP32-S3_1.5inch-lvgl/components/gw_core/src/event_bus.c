@@ -45,10 +45,16 @@ static bool event_should_go_to_out_queue(const char *type)
     if (strcmp(type, "device.changed") == 0 || strcmp(type, "automation.changed") == 0) {
         return true;
     }
+    if (strcmp(type, "settings.changed") == 0) {
+        return true;
+    }
     if (strncmp(type, "zigbee.", 7) == 0 || strncmp(type, "zigbee_", 7) == 0) {
         return true;
     }
     if (strncmp(type, "automation.", 11) == 0) {
+        return true;
+    }
+    if (strncmp(type, "settings.", 9) == 0) {
         return true;
     }
     return false;

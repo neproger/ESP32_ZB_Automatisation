@@ -32,7 +32,8 @@ bool ui_event_is_relevant(const gw_event_t *event)
     }
     if (strcmp(event->type, "device.join") == 0 || strcmp(event->type, "device.leave") == 0 ||
         strcmp(event->type, "device.changed") == 0 || strcmp(event->type, "device.update") == 0 ||
-        strcmp(event->type, "group.changed") == 0)
+        strcmp(event->type, "group.changed") == 0 ||
+        strcmp(event->type, "net_time.tz_updated") == 0)
     {
         return true;
     }

@@ -55,7 +55,7 @@ esp_err_t s3_geoip_http_fetch_once(int timeout_ms, s3_geoip_result_t *out_result
         out_error[0] = '\0';
     }
 
-    const char *url = "http://ip-api.com/json/?fields=status,message,city,regionName,lat,lon";
+    const char *url = "http://ip-api.com/json/?fields=status,message,city,regionName,lat,lon,timezone,offset";
     char *body = (char *)calloc(1, 2048);
     if (!body) {
         return set_error(out_error, out_error_size, "no mem for response");
@@ -119,6 +119,8 @@ esp_err_t s3_geoip_http_fetch_once(int timeout_ms, s3_geoip_result_t *out_result
 
     const cJSON *city = cJSON_GetObjectItemCaseSensitive(root, "city");
     const cJSON *region = cJSON_GetObjectItemCaseSensitive(root, "regionName");
+    const cJSON *timezone = cJSON_GetObjectItemCaseSensitive(root, "timezone");
+    const cJSON *offset = cJSON_GetObjectItemCaseSensitive(root, "offset");
     const cJSON *lat = cJSON_GetObjectItemCaseSensitive(root, "lat");
     const cJSON *lon = cJSON_GetObjectItemCaseSensitive(root, "lon");
     if (!cJSON_IsNumber(lat) || !cJSON_IsNumber(lon)) {
@@ -129,14 +131,19 @@ esp_err_t s3_geoip_http_fetch_once(int timeout_ms, s3_geoip_result_t *out_result
     out_result->valid = true;
     out_result->latitude = lat->valuedouble;
     out_result->longitude = lon->valuedouble;
+    if (cJSON_IsNumber(offset)) {
+        out_result->utc_offset_sec = (int32_t)offset->valuedouble;
+    }
     if (cJSON_IsString(city) && city->valuestring) {
         strlcpy(out_result->city, city->valuestring, sizeof(out_result->city));
     }
     if (cJSON_IsString(region) && region->valuestring) {
         strlcpy(out_result->region, region->valuestring, sizeof(out_result->region));
     }
+    if (cJSON_IsString(timezone) && timezone->valuestring) {
+        strlcpy(out_result->timezone, timezone->valuestring, sizeof(out_result->timezone));
+    }
 
     cJSON_Delete(root);
     return ESP_OK;
 }
-

@@ -75,7 +75,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     lvgl_cfg.task_stack = 7168;
     lvgl_cfg.task_affinity = 1;
     lvgl_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    lvgl_cfg.task_max_sleep_ms = 20;
+    lvgl_cfg.task_max_sleep_ms = 10;
     lvgl_cfg.timer_period_ms = 10;
     esp_err_t err = lvgl_port_init(&lvgl_cfg);
     if (err != ESP_OK)

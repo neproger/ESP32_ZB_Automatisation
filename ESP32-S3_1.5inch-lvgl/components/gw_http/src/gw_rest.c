@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "esp_err.h"
 #include "esp_http_server.h"
@@ -19,6 +20,7 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/group_store.h"
+#include "gw_core/project_settings.h"
 #include "gw_core/state_store.h"
 #include "gw_zigbee/gw_zigbee.h"
 
@@ -49,6 +51,8 @@ static esp_err_t api_groups_get_handler(httpd_req_t *req);
 static esp_err_t api_groups_post_handler(httpd_req_t *req);
 static esp_err_t api_group_items_get_handler(httpd_req_t *req);
 static esp_err_t api_group_items_post_handler(httpd_req_t *req);
+static esp_err_t api_settings_get_handler(httpd_req_t *req);
+static esp_err_t api_settings_post_handler(httpd_req_t *req);
 static esp_err_t gw_http_send_group_store_error(httpd_req_t *req, esp_err_t err, const char *not_found_msg, const char *no_mem_msg);
 static esp_err_t gw_http_send_cbor_ok(httpd_req_t *req);
 
@@ -213,6 +217,44 @@ static bool cbor_slice_to_u8(const gw_cbor_slice_t *s, uint8_t *out)
     if (!cbor_slice_to_u32(s, &v) || v > 0xff) return false;
     *out = (uint8_t)v;
     return true;
+}
+
+static bool cbor_slice_to_i32(const gw_cbor_slice_t *s, int32_t *out)
+{
+    if (!s || !out) return false;
+    int64_t iv = 0;
+    if (gw_cbor_slice_to_i64(s, &iv) && iv >= INT32_MIN && iv <= INT32_MAX) {
+        *out = (int32_t)iv;
+        return true;
+    }
+    uint64_t uv = 0;
+    if (gw_cbor_slice_to_u64(s, &uv) && uv <= INT32_MAX) {
+        *out = (int32_t)uv;
+        return true;
+    }
+    return false;
+}
+
+static bool cbor_slice_to_bool(const gw_cbor_slice_t *s, bool *out)
+{
+    if (!s || !out || !s->ptr || s->len == 0) {
+        return false;
+    }
+    gw_cbor_reader_t r;
+    gw_cbor_reader_init(&r, s->ptr, s->len);
+    uint8_t b = 0;
+    if (!gw_cbor_read_u8(&r, &b)) {
+        return false;
+    }
+    if (b == 0xf4) {
+        *out = false;
+        return true;
+    }
+    if (b == 0xf5) {
+        *out = true;
+        return true;
+    }
+    return false;
 }
 
 static bool cbor_array_slices(const gw_cbor_slice_t *arr, gw_cbor_slice_t **out_items, uint32_t *out_count)
@@ -1058,6 +1100,7 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
 {
     static const size_t kMaxDevices = 64;
     static const size_t kMaxStateItems = 1024;
+    static const char *kWeatherUid = "0xWEATHER000000001";
 
     gw_device_t *devices = (gw_device_t *)calloc(kMaxDevices, sizeof(gw_device_t));
     gw_state_item_t *items = (gw_state_item_t *)calloc(kMaxStateItems, sizeof(gw_state_item_t));
@@ -1069,10 +1112,20 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
     }
 
     const size_t dev_count = gw_device_registry_list(devices, kMaxDevices);
+    bool has_weather_uid = false;
     size_t total = 0;
     for (size_t i = 0; i < dev_count && total < kMaxStateItems; i++) {
+        if (strncmp(devices[i].device_uid.uid, kWeatherUid, sizeof(devices[i].device_uid.uid)) == 0) {
+            has_weather_uid = true;
+        }
         const size_t left = kMaxStateItems - total;
         total += gw_state_store_list_uid(&devices[i].device_uid, &items[total], left);
+    }
+    if (!has_weather_uid && total < kMaxStateItems) {
+        gw_device_uid_t weather_uid = {0};
+        strlcpy(weather_uid.uid, kWeatherUid, sizeof(weather_uid.uid));
+        const size_t left = kMaxStateItems - total;
+        total += gw_state_store_list_uid(&weather_uid, &items[total], left);
     }
 
     gw_cbor_writer_t w;
@@ -1102,6 +1155,9 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
                     break;
                 case GW_STATE_VALUE_U64:
                     rc = gw_cbor_writer_u64(&w, items[i].value_u64);
+                    break;
+                case GW_STATE_VALUE_TEXT:
+                    rc = gw_cbor_writer_text(&w, items[i].value_text);
                     break;
                 default:
                     rc = gw_cbor_writer_null(&w);
@@ -1338,6 +1394,115 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
     return gw_http_send_cbor_ok(req);
 }
 
+static esp_err_t api_settings_get_handler(httpd_req_t *req)
+{
+    gw_project_settings_t cfg = {0};
+    esp_err_t err = gw_project_settings_get(&cfg);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings unavailable");
+        return ESP_OK;
+    }
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 1);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "settings");
+    if (rc == ESP_OK) rc = gw_cbor_writer_map(&w, 5);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "screensaver_timeout_ms");
+    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.screensaver_timeout_ms);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "weather_success_interval_ms");
+    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.weather_success_interval_ms);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "weather_retry_interval_ms");
+    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.weather_retry_interval_ms);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "timezone_auto");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, cfg.timezone_auto);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "timezone_offset_min");
+    if (rc == ESP_OK) rc = gw_cbor_writer_i64(&w, cfg.timezone_offset_min);
+
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_settings_post_handler(httpd_req_t *req)
+{
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    if (gw_http_recv_body(req, &buf, &len) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cbor");
+        return ESP_OK;
+    }
+
+    gw_project_settings_t next = {0};
+    if (gw_project_settings_get(&next) != ESP_OK) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings unavailable");
+        return ESP_OK;
+    }
+
+    gw_cbor_slice_t s = {0};
+    uint32_t u32 = 0;
+    int32_t i32 = 0;
+    bool b = false;
+
+    if (cbor_map_find_val_buf(buf, len, "screensaver_timeout_ms", &s)) {
+        if (!cbor_slice_to_u32(&s, &u32)) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad screensaver_timeout_ms");
+            return ESP_OK;
+        }
+        next.screensaver_timeout_ms = u32;
+    }
+    if (cbor_map_find_val_buf(buf, len, "weather_success_interval_ms", &s)) {
+        if (!cbor_slice_to_u32(&s, &u32)) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad weather_success_interval_ms");
+            return ESP_OK;
+        }
+        next.weather_success_interval_ms = u32;
+    }
+    if (cbor_map_find_val_buf(buf, len, "weather_retry_interval_ms", &s)) {
+        if (!cbor_slice_to_u32(&s, &u32)) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad weather_retry_interval_ms");
+            return ESP_OK;
+        }
+        next.weather_retry_interval_ms = u32;
+    }
+    if (cbor_map_find_val_buf(buf, len, "timezone_auto", &s)) {
+        if (!cbor_slice_to_bool(&s, &b)) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad timezone_auto");
+            return ESP_OK;
+        }
+        next.timezone_auto = b;
+    }
+    if (cbor_map_find_val_buf(buf, len, "timezone_offset_min", &s)) {
+        if (!cbor_slice_to_i32(&s, &i32)) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad timezone_offset_min");
+            return ESP_OK;
+        }
+        next.timezone_offset_min = (int16_t)i32;
+    }
+    free(buf);
+
+    if (!gw_project_settings_validate(&next)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "settings out of range");
+        return ESP_OK;
+    }
+
+    esp_err_t err = gw_project_settings_set(&next);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings persist failed");
+        return ESP_OK;
+    }
+
+    gw_event_bus_publish("settings.changed", "rest", "", 0, "updated");
+    return gw_http_send_cbor_ok(req);
+}
+
 esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
 {
     if (!server) {
@@ -1428,6 +1593,18 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .handler = api_group_items_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t api_settings_get_uri = {
+        .uri = "/api/settings",
+        .method = HTTP_GET,
+        .handler = api_settings_get_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_settings_post_uri = {
+        .uri = "/api/settings",
+        .method = HTTP_POST,
+        .handler = api_settings_post_handler,
+        .user_ctx = NULL,
+    };
 
     esp_err_t err = httpd_register_uri_handler(server, &api_devices_flatbuffer_get_uri);
     if (err != ESP_OK) {
@@ -1482,6 +1659,14 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         return err;
     }
     err = httpd_register_uri_handler(server, &api_group_items_post_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_settings_get_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_settings_post_uri);
     if (err != ESP_OK) {
         return err;
     }

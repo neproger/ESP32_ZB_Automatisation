@@ -37,6 +37,7 @@ export function GatewayProvider({ children }) {
 	const [automations, setAutomations] = useState([])
 	const [events, setEvents] = useState([])
 	const [deviceStates, setDeviceStates] = useState({})
+	const [projectSettings, setProjectSettings] = useState(null)
 	const [wsStatus, setWsStatus] = useState('disconnected')
 
 	const wsRef = useRef(null)
@@ -65,6 +66,13 @@ export function GatewayProvider({ children }) {
 		const data = await fetchCbor('/api/state')
 		const next = buildStateMap(data?.items)
 		setDeviceStates(next)
+		return next
+	}, [])
+
+	const loadSettings = useCallback(async () => {
+		const data = await fetchCbor('/api/settings')
+		const next = data?.settings && typeof data.settings === 'object' ? data.settings : null
+		setProjectSettings(next)
 		return next
 	}, [])
 
@@ -137,6 +145,8 @@ export function GatewayProvider({ children }) {
 							loadAutomations().catch(() => {})
 						} else if (evType === 'group.changed') {
 							groupsReload().catch(() => {})
+						} else if (evType === 'settings.changed') {
+							loadSettings().catch(() => {})
 						}
 					}
 				} catch {
@@ -165,13 +175,14 @@ export function GatewayProvider({ children }) {
 			cleanup()
 			setWsStatus('disconnected')
 		}
-	}, [loadAutomations, loadDevices, loadStateSnapshot])
+	}, [loadAutomations, loadDevices, loadStateSnapshot, loadSettings])
 
 	useEffect(() => {
 		loadDevices().catch(() => {})
 		loadAutomations().catch(() => {})
 		loadStateSnapshot().catch(() => {})
-	}, [loadDevices, loadAutomations, loadStateSnapshot])
+		loadSettings().catch(() => {})
+	}, [loadDevices, loadAutomations, loadStateSnapshot, loadSettings])
 
 	const value = useMemo(
 		() => ({
@@ -179,11 +190,13 @@ export function GatewayProvider({ children }) {
 			automations,
 			events,
 			deviceStates,
+			projectSettings,
 			wsStatus,
 			reloadDevices: loadDevices,
 			reloadAutomations: loadAutomations,
+			reloadSettings: loadSettings,
 		}),
-		[devices, automations, events, deviceStates, wsStatus, loadDevices, loadAutomations],
+		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations, loadSettings],
 	)
 
 	return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>

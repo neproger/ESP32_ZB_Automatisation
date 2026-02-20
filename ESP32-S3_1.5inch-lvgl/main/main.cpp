@@ -9,6 +9,7 @@
 #include "gw_core/device_fb_store.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/group_store.h"
+#include "gw_core/project_settings.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
 #include "gw_core/rules_engine.h"
@@ -129,7 +130,7 @@ extern "C" void app_main(void)
     // Temporary log noise reduction for bring-up/debug sessions.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_WARN);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
-    esp_log_level_set("gw_state_store", ESP_LOG_INFO);
+    esp_log_level_set("gw_state_store", ESP_LOG_WARN);
 
     ESP_ERROR_CHECK(gw_zb_model_init());
     ESP_ERROR_CHECK(gw_sensor_store_init());
@@ -138,6 +139,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_device_fb_store_init());
     ESP_ERROR_CHECK(gw_automation_store_init());
     ESP_ERROR_CHECK(gw_group_store_init());
+    ESP_ERROR_CHECK(gw_project_settings_init());
     ESP_ERROR_CHECK(gw_rules_init());
     ESP_ERROR_CHECK(gw_runtime_sync_init());
     ESP_ERROR_CHECK(gw_net_time_init(NULL));

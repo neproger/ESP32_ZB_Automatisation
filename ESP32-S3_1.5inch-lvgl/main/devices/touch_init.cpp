@@ -15,7 +15,7 @@ static const char *TAG_TOUCH = "devices_touch";
 
 // Touch controller configuration (CST816S over I2C)
 #define TOUCH_I2C_NUM I2C_NUM_0
-#define TOUCH_I2C_CLK_HZ (100000)
+#define TOUCH_I2C_CLK_HZ (400000)
 #define PIN_TOUCH_SCL (GPIO_NUM_3)
 #define PIN_TOUCH_SDA (GPIO_NUM_1)
 #define PIN_TOUCH_RST (GPIO_NUM_2)
@@ -81,20 +81,18 @@ esp_err_t devices_touch_init(esp_lcd_touch_handle_t *out_handle)
     tp_cfg.flags.mirror_y = 0;
 
 #ifdef ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG
-    // Keep I2C settings aligned with current display/touch stack.
-    const esp_lcd_panel_io_i2c_config_t tp_io_config = {
-        .dev_addr = ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS,
-        .on_color_trans_done = NULL,
-        .user_ctx = NULL,
-        .control_phase_bytes = 1,
-        .dc_bit_offset = 0,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-        .flags = {
-            .dc_low_on_data = 0,
-            .disable_control_phase = 1,
-        },
-    };
+    // Legacy panel-io i2c driver takes clock from i2c_param_config().
+    // Do not set scl_speed_hz in panel-io config.
+    esp_lcd_panel_io_i2c_config_t tp_io_config = {};
+    tp_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS;
+    tp_io_config.on_color_trans_done = NULL;
+    tp_io_config.user_ctx = NULL;
+    tp_io_config.control_phase_bytes = 1;
+    tp_io_config.dc_bit_offset = 0;
+    tp_io_config.lcd_cmd_bits = 8;
+    tp_io_config.lcd_param_bits = 8;
+    tp_io_config.flags.dc_low_on_data = 0;
+    tp_io_config.flags.disable_control_phase = 1;
     err = esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)TOUCH_I2C_NUM, &tp_io_config, &s_tp_io_handle);
     if (err != ESP_OK)
     {
@@ -121,7 +119,6 @@ esp_err_t devices_touch_init(esp_lcd_touch_handle_t *out_handle)
     return ESP_OK;
 #else
     ESP_LOGW(TAG_TOUCH, "CST816S touch driver not available, skipping touch init");
-    (void)tp_io_handle;
     s_touch_handle = NULL;
     s_tp_io_handle = NULL;
     s_touch_inited = false;

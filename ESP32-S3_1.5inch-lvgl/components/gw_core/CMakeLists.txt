@@ -8,6 +8,7 @@ idf_component_register(
         "src/device_registry.c"
         "src/automation_store.c"
         "src/group_store.c"
+        "src/project_settings.c"
         "src/automation_compiled.c"
         "src/zb_model.c"
         "src/zb_classify.c"

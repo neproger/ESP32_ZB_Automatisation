@@ -21,6 +21,42 @@ size_t s_rendered_group_items = 0;
 size_t s_rendered_active_item_idx = 0;
 uint32_t s_rendered_signature = 0;
 
+void note_user_activity_from_ui(lv_event_t *event)
+{
+    (void)event;
+    lv_display_t *display = lv_display_get_default();
+    if (display) {
+        lv_display_trigger_activity(display);
+    }
+}
+
+void enable_event_bubble_recursive(lv_obj_t *obj)
+{
+    if (!obj) {
+        return;
+    }
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_EVENT_BUBBLE);
+    const uint32_t child_count = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < child_count; ++i) {
+        lv_obj_t *child = lv_obj_get_child(obj, (int32_t)i);
+        enable_event_bubble_recursive(child);
+    }
+}
+
+void add_activity_handler_recursive(lv_obj_t *obj)
+{
+    if (!obj) {
+        return;
+    }
+    lv_obj_add_event_cb(obj, note_user_activity_from_ui, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(obj, note_user_activity_from_ui, LV_EVENT_PRESSING, nullptr);
+    const uint32_t child_count = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < child_count; ++i) {
+        lv_obj_t *child = lv_obj_get_child(obj, (int32_t)i);
+        add_activity_handler_recursive(child);
+    }
+}
+
 uint32_t fnv1a_hash_u32(uint32_t hash, uint32_t value)
 {
     hash ^= value;
@@ -167,6 +203,14 @@ void ui_screen_devices_init(lv_obj_t *root)
     lv_obj_align_to(s_subtitle, s_title, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
     lv_obj_set_style_text_color(s_subtitle, lv_color_hex(ui_style::kSubtitleTextHex), 0);
     lv_obj_set_style_text_font(s_subtitle, ui_style::kFontSubtitle, 0);
+
+    // Centralized activity handlers for all visible objects.
+    lv_obj_add_event_cb(root, note_user_activity_from_ui, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(root, note_user_activity_from_ui, LV_EVENT_PRESSING, nullptr);
+    enable_event_bubble_recursive(s_title);
+    enable_event_bubble_recursive(s_subtitle);
+    add_activity_handler_recursive(s_title);
+    add_activity_handler_recursive(s_subtitle);
 }
 
 void ui_screen_devices_apply_state_event(const ui_store_t *store, const gw_event_t *event)
@@ -319,6 +363,8 @@ void ui_screen_devices_render(const ui_store_t *store)
         s_card = ui_widgets_create_endpoint_card(s_root, &item->uid, &item->endpoint);
         if (s_card) {
             lv_obj_set_width(s_card, ui_style::kListWidth);
+            enable_event_bubble_recursive(s_card);
+            add_activity_handler_recursive(s_card);
             relayout_card_under_subtitle();
         }
         s_has_rendered = true;

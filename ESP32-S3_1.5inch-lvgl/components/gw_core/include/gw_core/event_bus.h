@@ -61,7 +61,7 @@ typedef struct {
     uint8_t payload_value_bool;
     int64_t payload_value_i64;
     double payload_value_f64;
-    char payload_value_text[24];
+    char payload_value_text[64];
 } gw_event_t;
 
 typedef void (*gw_event_bus_listener_t)(const gw_event_t *event, void *user_ctx);

@@ -326,7 +326,8 @@ static bool is_state_event_type(const char *type)
     }
     return (strcmp(type, "zigbee.attr_report") == 0) ||
            (strcmp(type, "zigbee.attr_read") == 0) ||
-           (strcmp(type, "zigbee.read_attr") == 0);
+           (strcmp(type, "zigbee.read_attr") == 0) ||
+           (strcmp(type, "device.state") == 0);
 }
 
 static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
@@ -382,7 +383,11 @@ static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
                 (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR))) {
         out_type = "device.state";
         data_kind = DATA_DEVICE_STATE;
-        map_state_key(e->payload_cluster, e->payload_attr, state_key, sizeof(state_key));
+        if ((e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) && e->payload_cmd[0] != '\0') {
+            strlcpy(state_key, e->payload_cmd, sizeof(state_key));
+        } else {
+            map_state_key(e->payload_cluster, e->payload_attr, state_key, sizeof(state_key));
+        }
     } else if (strcmp(e->type, "device.join") == 0 || strcmp(e->type, "zigbee.device_join") == 0) {
         out_type = "device.event";
         data_kind = DATA_DEVICE_EVENT;
@@ -392,7 +397,8 @@ static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
         data_kind = DATA_DEVICE_EVENT;
         device_event_name = "leave";
     } else if (strncmp(e->type, "zigbee.", 7) == 0 || strncmp(e->type, "zigbee_", 7) == 0 ||
-               strncmp(e->type, "device.", 7) == 0 || strncmp(e->type, "automation.", 11) == 0) {
+               strncmp(e->type, "device.", 7) == 0 || strncmp(e->type, "automation.", 11) == 0 ||
+               strncmp(e->type, "settings.", 9) == 0) {
         out_type = "gateway.event";
         data_kind = DATA_GENERIC;
     } else {

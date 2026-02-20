@@ -2,6 +2,10 @@
 
 #include "lvgl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Icons for weather conditions (LVGL images)
 
 extern const lv_image_dsc_t clear;
@@ -23,4 +27,8 @@ extern const lv_image_dsc_t windy_variant;
 
 // Fallback icon (used for unknown/exceptional conditions)
 extern const lv_image_dsc_t alien;
+
+#ifdef __cplusplus
+}
+#endif
 

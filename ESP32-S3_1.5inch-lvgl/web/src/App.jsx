@@ -8,7 +8,9 @@ import Device from './pages/Device.jsx'
 import Events from './pages/Events.jsx'
 import Automations from './pages/Automations.jsx'
 import Groups from './pages/Groups.jsx'
+import Settings from './pages/Settings.jsx'
 import { GatewayProvider } from './gateway.jsx'
+import WeatherHeaderWidget from './components/WeatherHeaderWidget.jsx'
 
 const THEME_KEY = 'gw_theme'
 
@@ -45,7 +47,11 @@ function App() {
           <NavLink to="/groups" className={({ isActive }) => (isActive ? 'navlink active' : 'navlink')}>
             Groups
           </NavLink>
+          <NavLink to="/settings" className={({ isActive }) => (isActive ? 'navlink active' : 'navlink')}>
+            Settings
+          </NavLink>
           <div className="nav-spacer" />
+          <WeatherHeaderWidget />
           <button className="theme-toggle" onClick={toggleTheme}>
             {theme === 'dark' ? 'Light theme' : 'Dark theme'}
           </button>
@@ -59,6 +65,7 @@ function App() {
             <Route path="/events" element={<Events />} />
             <Route path="/automations" element={<Automations />} />
             <Route path="/groups" element={<Groups />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/devices" replace />} />
           </Routes>
         </main>

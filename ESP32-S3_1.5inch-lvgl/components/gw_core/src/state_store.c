@@ -85,9 +85,36 @@ static void state_value_to_str(const gw_state_item_t *item, char *out, size_t ou
         case GW_STATE_VALUE_U64:
             (void)snprintf(out, out_size, "u64:%llu", (unsigned long long)item->value_u64);
             break;
+        case GW_STATE_VALUE_TEXT:
+            (void)snprintf(out, out_size, "text:%s", item->value_text);
+            break;
         default:
             strlcpy(out, "unknown", out_size);
             break;
+    }
+}
+
+static bool state_value_equals(const gw_state_item_t *a, const gw_state_item_t *b)
+{
+    if (!a || !b) {
+        return false;
+    }
+    if (a->value_type != b->value_type) {
+        return false;
+    }
+    switch (a->value_type) {
+        case GW_STATE_VALUE_BOOL:
+            return a->value_bool == b->value_bool;
+        case GW_STATE_VALUE_F32:
+            return a->value_f32 == b->value_f32;
+        case GW_STATE_VALUE_U32:
+            return a->value_u32 == b->value_u32;
+        case GW_STATE_VALUE_U64:
+            return a->value_u64 == b->value_u64;
+        case GW_STATE_VALUE_TEXT:
+            return strncmp(a->value_text, b->value_text, sizeof(a->value_text)) == 0;
+        default:
+            return false;
     }
 }
 
@@ -135,8 +162,13 @@ static esp_err_t upsert_item(const gw_state_item_t *item)
     portENTER_CRITICAL(&s_lock);
     size_t idx = find_idx_locked(&item->uid, item->endpoint, item->key);
     if (idx != (size_t)-1) {
-        s_items[idx] = *item;
-        op = OP_UPDATE;
+        if (state_value_equals(&s_items[idx], item)) {
+            s_items[idx].ts_ms = item->ts_ms;
+            op = OP_NONE;
+        } else {
+            s_items[idx] = *item;
+            op = OP_UPDATE;
+        }
         count_after = s_item_count;
         portEXIT_CRITICAL(&s_lock);
         goto log_and_return;
@@ -166,12 +198,12 @@ log_and_return:
     if (op == OP_UPDATE) {
         char vbuf[32];
         state_value_to_str(item, vbuf, sizeof(vbuf));
-        ESP_LOGI(TAG, "state update uid=%s ep=%u key=%s value=%s ts=%llu",
+        ESP_LOGD(TAG, "state update uid=%s ep=%u key=%s value=%s ts=%llu",
                  item->uid.uid, (unsigned)item->endpoint, item->key, vbuf, (unsigned long long)item->ts_ms);
     } else if (op == OP_INSERT) {
         char vbuf[32];
         state_value_to_str(item, vbuf, sizeof(vbuf));
-        ESP_LOGI(TAG, "state insert uid=%s ep=%u key=%s value=%s ts=%llu items=%u/%u",
+        ESP_LOGD(TAG, "state insert uid=%s ep=%u key=%s value=%s ts=%llu items=%u/%u",
                  item->uid.uid, (unsigned)item->endpoint, item->key, vbuf,
                  (unsigned long long)item->ts_ms, (unsigned)count_after, (unsigned)s_item_cap);
     } else if (op == OP_EVICT) {
@@ -251,6 +283,21 @@ esp_err_t gw_state_store_set_u64(const gw_device_uid_t *uid, uint8_t endpoint, c
     strlcpy(item.key, key, sizeof(item.key));
     item.value_type = GW_STATE_VALUE_U64;
     item.value_u64 = value;
+    item.ts_ms = ts_ms;
+    return upsert_item(&item);
+}
+
+esp_err_t gw_state_store_set_text(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, const char *value, uint64_t ts_ms)
+{
+    if (uid == NULL || key == NULL || key[0] == '\0' || value == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_state_item_t item = {0};
+    item.uid = *uid;
+    item.endpoint = endpoint;
+    strlcpy(item.key, key, sizeof(item.key));
+    item.value_type = GW_STATE_VALUE_TEXT;
+    strlcpy(item.value_text, value, sizeof(item.value_text));
     item.ts_ms = ts_ms;
     return upsert_item(&item);
 }

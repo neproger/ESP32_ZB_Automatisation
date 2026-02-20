@@ -65,6 +65,23 @@ static size_t s_field_count = 0;
 static lv_grad_dsc_t s_hue_grad = {};
 static bool s_hue_grad_ready = false;
 static constexpr lv_state_t kStateError = LV_STATE_USER_1;
+static constexpr lv_style_selector_t kSelMainError =
+    static_cast<lv_style_selector_t>(static_cast<uint32_t>(LV_PART_MAIN) |
+                                     static_cast<uint32_t>(kStateError));
+
+void note_user_activity_local(void)
+{
+    lv_display_t *display = lv_display_get_default();
+    if (display) {
+        lv_display_trigger_activity(display);
+    }
+}
+
+void on_touch_activity(lv_event_t *e)
+{
+    (void)e;
+    note_user_activity_local();
+}
 
 void ensure_hue_gradient(void)
 {
@@ -392,6 +409,11 @@ void refresh_color_controls(ui_ctl_ctx_t *ctx, uint16_t hue, uint8_t sat, bool u
 
 void on_switch_tapped(lv_event_t *e)
 {
+    note_user_activity_local();
+    lv_indev_t *indev = lv_indev_active();
+    if (indev && lv_indev_get_gesture_dir(indev) != LV_DIR_NONE) {
+        return;
+    }
     ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
     if (!ctx)
     {
@@ -433,6 +455,7 @@ void on_switch_tapped(lv_event_t *e)
 
 void on_slider_released(lv_event_t *e)
 {
+    note_user_activity_local();
     ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
     if (!ctx)
     {
@@ -445,6 +468,7 @@ void on_slider_released(lv_event_t *e)
 
 void on_color_hs_released(lv_event_t *e)
 {
+    note_user_activity_local();
     ui_ctl_ctx_t *ctx = (ui_ctl_ctx_t *)lv_event_get_user_data(e);
     if (!ctx || !ctx->slider_hue || !ctx->slider_sat)
     {
@@ -641,14 +665,15 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
         lv_label_set_text(lbl, "On/Off");
         lv_obj_t *sw = lv_switch_create(row);
         lv_obj_set_size(sw, 84, 46);
-        lv_obj_set_style_border_width(sw, 2, LV_PART_MAIN | kStateError);
-        lv_obj_set_style_border_color(sw, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN | kStateError);
-        lv_obj_set_style_bg_color(sw, lv_palette_lighten(LV_PALETTE_RED, 4), LV_PART_MAIN | kStateError);
+        lv_obj_set_style_border_width(sw, 2, kSelMainError);
+        lv_obj_set_style_border_color(sw, lv_palette_main(LV_PALETTE_RED), kSelMainError);
+        lv_obj_set_style_bg_color(sw, lv_palette_lighten(LV_PALETTE_RED, 4), kSelMainError);
         // Prevent native optimistic toggle; this control reflects only confirmed state.
         lv_obj_clear_flag(sw, LV_OBJ_FLAG_CLICKABLE);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::OnOff, uid, ep->endpoint_id);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(row, on_switch_tapped, LV_EVENT_CLICKED, ctx);
+        lv_obj_add_event_cb(row, on_touch_activity, LV_EVENT_PRESSED, nullptr);
+        lv_obj_add_event_cb(row, on_switch_tapped, LV_EVENT_SHORT_CLICKED, ctx);
         register_field(uid, ep->endpoint_id, "onoff", FieldKind::Switch, sw, nullptr);
     }
 
@@ -660,6 +685,8 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
         lv_obj_set_width(slider, lv_pct(100));
         lv_slider_set_range(slider, ui_style::kLevelMin, ui_style::kLevelMax);
         ui_ctl_ctx_t *ctx = alloc_ctx(CtlKind::Level, uid, ep->endpoint_id);
+        lv_obj_add_event_cb(slider, on_touch_activity, LV_EVENT_PRESSED, nullptr);
+        lv_obj_add_event_cb(slider, on_touch_activity, LV_EVENT_PRESSING, nullptr);
         lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, ctx);
         register_field(uid, ep->endpoint_id, "level", FieldKind::Slider, slider, lbl);
     }
@@ -688,6 +715,10 @@ lv_obj_t *ui_widgets_create_endpoint_card(lv_obj_t *parent, const gw_device_uid_
             hs_ctx->label_hue = lbl_h;
             hs_ctx->label_sat = lbl_s;
             refresh_color_controls(hs_ctx, 0, 100, true);
+            lv_obj_add_event_cb(slider_h, on_touch_activity, LV_EVENT_PRESSED, nullptr);
+            lv_obj_add_event_cb(slider_h, on_touch_activity, LV_EVENT_PRESSING, nullptr);
+            lv_obj_add_event_cb(slider_s, on_touch_activity, LV_EVENT_PRESSED, nullptr);
+            lv_obj_add_event_cb(slider_s, on_touch_activity, LV_EVENT_PRESSING, nullptr);
             lv_obj_add_event_cb(slider_h, on_color_hs_released, LV_EVENT_RELEASED, hs_ctx);
             lv_obj_add_event_cb(slider_s, on_color_hs_released, LV_EVENT_RELEASED, hs_ctx);
         }
