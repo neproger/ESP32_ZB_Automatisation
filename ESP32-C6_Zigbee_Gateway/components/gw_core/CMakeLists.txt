@@ -15,9 +15,6 @@ idf_component_register(
         "src/action_exec.c"
         "src/cbor.c"
         "src/gw_uart_proto.c"
-        "src/net_fetch.c"
-        "src/net_time.c"
-        "src/weather.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES
@@ -28,7 +25,5 @@ idf_component_register(
         spiffs
         gw_zigbee
         json
-        esp_http_client
-        esp_netif
 )
 

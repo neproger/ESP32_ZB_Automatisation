@@ -21,7 +21,6 @@
 #include "gw_core/gw_uart_proto.h"
 #include "gw_core/types.h"
 #include "gw_zigbee/gw_zigbee.h"
-#include "gw_cloud_sync.h"
 
 #define GW_UART_PORT UART_NUM_1
 #define GW_UART_BAUD 230400
@@ -718,25 +717,10 @@ static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
             }
             return err;
         }
-        case GW_UART_CMD_WIFI_CONFIG_SET: {
-            const char *ssid = req->value_blob;
-            size_t ssid_len = strnlen(ssid, sizeof(req->value_blob));
-            if (ssid_len == 0 || ssid_len >= sizeof(req->value_blob)) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            const char *password = ssid + ssid_len + 1;
-            if (password >= req->value_blob + sizeof(req->value_blob)) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            size_t pass_room = (size_t)(req->value_blob + sizeof(req->value_blob) - password);
-            size_t pass_len = strnlen(password, pass_room);
-            if (pass_len >= pass_room) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_cloud_sync_set_wifi_credentials(ssid, password);
-        }
+        case GW_UART_CMD_WIFI_CONFIG_SET:
+            return ESP_ERR_NOT_SUPPORTED;
         case GW_UART_CMD_NET_SERVICES_START:
-            return gw_cloud_sync_start_net_services();
+            return ESP_ERR_NOT_SUPPORTED;
         default:
             return ESP_ERR_NOT_SUPPORTED;
     }

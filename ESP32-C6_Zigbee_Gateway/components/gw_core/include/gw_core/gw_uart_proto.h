@@ -63,8 +63,8 @@ typedef enum {
     GW_UART_CMD_SYNC_DEVICE_FB = 10, /* запрос сырого device FlatBuffer снимка */
     GW_UART_CMD_SET_DEVICE_NAME = 11, /* device_uid + value_text */
     GW_UART_CMD_REMOVE_DEVICE = 12, /* device_uid */
-    GW_UART_CMD_WIFI_CONFIG_SET = 13, /* value_blob: ssid\0password\0 */
-    GW_UART_CMD_NET_SERVICES_START = 14, /* trigger immediate time/weather sync */
+    GW_UART_CMD_WIFI_CONFIG_SET = 13, /* deprecated on C6 (unsupported) */
+    GW_UART_CMD_NET_SERVICES_START = 14, /* deprecated on C6 (unsupported) */
 } gw_uart_cmd_id_t;
 
 typedef enum {

@@ -2,6 +2,9 @@ idf_component_register(
     SRCS
         "main.cpp"
         "gw_wifi.c"
+        "s3_geoip_http.c"
+        "s3_weather_http.c"
+        "s3_weather_service.c"
         "devices/devices_init.cpp"
         "devices/display_init.cpp"
         "devices/lvgl_init.cpp"
@@ -39,6 +42,8 @@ idf_component_register(
         esp_netif
         esp_event
         nvs_flash
+        esp_http_client
+        json
         gw_core
         gw_http
         gw_zigbee
