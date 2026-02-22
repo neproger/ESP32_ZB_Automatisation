@@ -18,6 +18,7 @@ esp_err_t gw_automation_store_get(const char *id, gw_automation_entry_t *out);
 esp_err_t gw_automation_store_put_cbor(const uint8_t *buf, size_t len);
 esp_err_t gw_automation_store_remove(const char *id);
 esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled);
+esp_err_t gw_automation_store_remove_all(void);
 
 #ifdef __cplusplus
 }

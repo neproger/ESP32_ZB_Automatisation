@@ -72,14 +72,6 @@ static void safe_copy_str(char *dst, size_t dst_size, const char *src)
     strlcpy(dst, src, dst_size);
 }
 
-void gw_event_bus_publish_ex(const char *type,
-                            const char *source,
-                            const char *device_uid,
-                            uint16_t short_addr,
-                            const char *msg,
-                            const uint8_t *payload_cbor,
-                            size_t payload_len);
-
 static void gw_event_bus_publish_internal(const char *type,
                                           const char *source,
                                           const char *device_uid,
@@ -114,14 +106,6 @@ esp_err_t gw_event_bus_init(void)
 
     s_inited = true;
     return ESP_OK;
-}
-
-esp_err_t gw_event_bus_post(gw_event_id_t id, const void *data, size_t data_size, TickType_t ticks_to_wait)
-{
-    if (!s_inited) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    return esp_event_post(GW_EVENT_BASE, (int32_t)id, data, data_size, ticks_to_wait);
 }
 
 uint32_t gw_event_bus_last_id(void)
@@ -177,18 +161,6 @@ void gw_event_bus_publish_zb(const char *type,
     if (value_type != GW_EVENT_VALUE_NONE) flags |= GW_EVENT_PAYLOAD_HAS_VALUE;
     gw_event_bus_publish_internal(type, source, device_uid, short_addr, msg, flags, endpoint, cmd, cluster_id, attr_id,
                                   value_type, value_bool, value_i64, value_f64, value_text, payload_cbor, payload_len);
-}
-
-void gw_event_bus_publish_ex(const char *type,
-                            const char *source,
-                            const char *device_uid,
-                            uint16_t short_addr,
-                            const char *msg,
-                            const uint8_t *payload_cbor,
-                            size_t payload_len)
-{
-    gw_event_bus_publish_internal(type, source, device_uid, short_addr, msg, 0, 0, NULL, 0, 0,
-                                  GW_EVENT_VALUE_NONE, false, 0, 0.0, NULL, payload_cbor, payload_len);
 }
 
 static void gw_event_bus_publish_internal(const char *type,
@@ -283,17 +255,6 @@ static void gw_event_bus_publish_internal(const char *type,
              (unsigned)e.short_addr);
 
     gw_event_bus_record_event(&e);
-}
-
-size_t gw_event_bus_list_since(uint32_t since_id, gw_event_t *out, size_t max_out, uint32_t *out_last_id)
-{
-    (void)since_id;
-    (void)out;
-    (void)max_out;
-    if (out_last_id) {
-        *out_last_id = gw_event_bus_last_id();
-    }
-    return 0;
 }
 
 esp_err_t gw_event_bus_add_listener(gw_event_bus_listener_t cb, void *user_ctx)

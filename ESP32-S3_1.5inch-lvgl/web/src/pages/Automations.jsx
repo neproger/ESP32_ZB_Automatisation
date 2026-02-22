@@ -217,6 +217,18 @@ export default function Automations() {
 		}
 	}
 
+	const resetAllAutomations = async () => {
+		if (!window.confirm('Remove ALL automations? This cannot be undone.')) return
+		setStatus('')
+		try {
+			await postCbor('/api/automations/reset', {})
+			setStatus('All automations removed (waiting WS sync)')
+			setDraft(null)
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		}
+	}
+
 	return (
 		<div className="page">
 			<div className="header">
@@ -227,6 +239,7 @@ export default function Automations() {
 				<div className="row">
 					<button onClick={load}>Refresh</button>
 					<button onClick={startNew}>New</button>
+					<button onClick={resetAllAutomations}>Reset all</button>
 				</div>
 			</div>
 

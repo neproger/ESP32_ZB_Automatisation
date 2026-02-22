@@ -18,16 +18,6 @@ extern "C" {
 ESP_EVENT_DECLARE_BASE(GW_EVENT_BASE);
 
 typedef enum {
-    GW_EVENT_SYSTEM_BOOT = 1,
-    GW_EVENT_API_REQUEST = 100,
-    GW_EVENT_API_RESPONSE,
-    GW_EVENT_ZIGBEE_RAW = 200,
-    GW_EVENT_ZIGBEE_NORMALIZED,
-    GW_EVENT_RULE_ACTION = 300,
-    GW_EVENT_RULE_RESULT,
-} gw_event_id_t;
-
-typedef enum {
     GW_EVENT_PAYLOAD_HAS_ENDPOINT = 1 << 0,
     GW_EVENT_PAYLOAD_HAS_CMD      = 1 << 1,
     GW_EVENT_PAYLOAD_HAS_CLUSTER  = 1 << 2,
@@ -67,19 +57,10 @@ typedef struct {
 typedef void (*gw_event_bus_listener_t)(const gw_event_t *event, void *user_ctx);
 
 esp_err_t gw_event_bus_init(void);
-esp_err_t gw_event_bus_post(gw_event_id_t id, const void *data, size_t data_size, TickType_t ticks_to_wait);
 
 // Lightweight, in-memory event log for UI/debugging.
 uint32_t gw_event_bus_last_id(void);
 void gw_event_bus_publish(const char *type, const char *source, const char *device_uid, uint16_t short_addr, const char *msg);
-// Publish a CBOR payload alongside a human-readable msg.
-void gw_event_bus_publish_ex(const char *type,
-                            const char *source,
-                            const char *device_uid,
-                            uint16_t short_addr,
-                            const char *msg,
-                            const uint8_t *payload_cbor,
-                            size_t payload_len);
 // Helper: publish a structured CBOR payload without forcing callers to build a human msg.
 void gw_event_bus_publish_cbor(const char *type, const char *source, const char *device_uid, uint16_t short_addr, const uint8_t *payload_cbor, size_t payload_len);
 // Publish Zigbee events with parsed payload fields (for fast rules evaluation).
@@ -99,7 +80,6 @@ void gw_event_bus_publish_zb(const char *type,
                              const char *value_text,
                              const uint8_t *payload_cbor,
                              size_t payload_len);
-size_t gw_event_bus_list_since(uint32_t since_id, gw_event_t *out, size_t max_out, uint32_t *out_last_id);
 
 // Optional listeners called for each gw_event_bus_publish(). Keep callbacks fast and non-blocking.
 esp_err_t gw_event_bus_add_listener(gw_event_bus_listener_t cb, void *user_ctx);

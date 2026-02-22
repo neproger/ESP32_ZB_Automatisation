@@ -44,6 +44,7 @@ static esp_err_t api_network_permit_join_post_handler(httpd_req_t *req);
 static esp_err_t api_automations_get_handler(httpd_req_t *req);
 static esp_err_t api_automation_detail_patch_handler(httpd_req_t *req);
 static esp_err_t api_automation_detail_delete_handler(httpd_req_t *req);
+static esp_err_t api_automations_reset_post_handler(httpd_req_t *req);
 static esp_err_t api_automation_post_handler(httpd_req_t *req);
 static esp_err_t api_actions_post_handler(httpd_req_t *req);
 static esp_err_t api_state_get_handler(httpd_req_t *req);
@@ -441,12 +442,18 @@ static esp_err_t cbor_write_automation_condition(gw_cbor_writer_t *w,
     if (rc != ESP_OK) return rc;
     rc = gw_cbor_writer_text(w, "ref");
     if (rc != ESP_OK) return rc;
-    rc = gw_cbor_writer_map(w, 2);
+    rc = gw_cbor_writer_map(w, cond->endpoint ? 3 : 2);
     if (rc != ESP_OK) return rc;
     rc = gw_cbor_writer_text(w, "device_uid");
     if (rc != ESP_OK) return rc;
     rc = gw_cbor_writer_text(w, automation_string_at(entry, cond->device_uid_off));
     if (rc != ESP_OK) return rc;
+    if (cond->endpoint) {
+        rc = gw_cbor_writer_text(w, "endpoint");
+        if (rc != ESP_OK) return rc;
+        rc = gw_cbor_writer_u64(w, cond->endpoint);
+        if (rc != ESP_OK) return rc;
+    }
     rc = gw_cbor_writer_text(w, "key");
     if (rc != ESP_OK) return rc;
     rc = gw_cbor_writer_text(w, automation_string_at(entry, cond->key_off));
@@ -882,6 +889,12 @@ static esp_err_t api_automations_get_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
         return ESP_OK;
     }
+    gw_automation_entry_t *entry = (gw_automation_entry_t *)calloc(1, sizeof(gw_automation_entry_t));
+    if (!entry) {
+        free(metas);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_OK;
+    }
     size_t count = gw_automation_store_list_meta(metas, max_autos);
     gw_cbor_writer_t w;
     gw_cbor_writer_init(&w);
@@ -891,30 +904,31 @@ static esp_err_t api_automations_get_handler(httpd_req_t *req)
     if (rc == ESP_OK) {
         for (size_t i = 0; i < count; i++) {
             const gw_automation_meta_t *meta = &metas[i];
-            gw_automation_entry_t entry = {0};
-            rc = gw_automation_store_get(meta->id, &entry);
+            memset(entry, 0, sizeof(*entry));
+            rc = gw_automation_store_get(meta->id, entry);
             if (rc != ESP_OK) break;
 
             rc = gw_cbor_writer_map(&w, 4);
             if (rc != ESP_OK) break;
             rc = gw_cbor_writer_text(&w, "id");
             if (rc != ESP_OK) break;
-            rc = gw_cbor_writer_text(&w, entry.id);
+            rc = gw_cbor_writer_text(&w, entry->id);
             if (rc != ESP_OK) break;
             rc = gw_cbor_writer_text(&w, "name");
             if (rc != ESP_OK) break;
-            rc = gw_cbor_writer_text(&w, entry.name);
+            rc = gw_cbor_writer_text(&w, entry->name);
             if (rc != ESP_OK) break;
             rc = gw_cbor_writer_text(&w, "enabled");
             if (rc != ESP_OK) break;
-            rc = gw_cbor_writer_bool(&w, entry.enabled);
+            rc = gw_cbor_writer_bool(&w, entry->enabled);
             if (rc != ESP_OK) break;
             rc = gw_cbor_writer_text(&w, "automation");
             if (rc != ESP_OK) break;
-            rc = cbor_write_automation_definition(&w, &entry);
+            rc = cbor_write_automation_definition(&w, entry);
             if (rc != ESP_OK) break;
         }
     }
+    free(entry);
     free(metas);
     esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
@@ -1039,6 +1053,18 @@ static esp_err_t api_automation_post_handler(httpd_req_t *req)
                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
     gw_cbor_writer_free(&w);
     return send_err;
+}
+
+static esp_err_t api_automations_reset_post_handler(httpd_req_t *req)
+{
+    esp_err_t err = gw_automation_store_remove_all();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reset failed");
+        return ESP_OK;
+    }
+
+    gw_event_bus_publish("automation.changed", "rest", "", 0, "reset");
+    return gw_http_send_cbor_ok(req);
 }
 
 static esp_err_t api_actions_post_handler(httpd_req_t *req)
@@ -1533,6 +1559,12 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .handler = api_automation_post_handler,
         .user_ctx = NULL,
     };
+    static const httpd_uri_t api_automations_reset_post_uri = {
+        .uri = "/api/automations/reset",
+        .method = HTTP_POST,
+        .handler = api_automations_reset_post_handler,
+        .user_ctx = NULL,
+    };
     static const httpd_uri_t api_automations_detail_patch_uri = {
         .uri = "/api/automations/*",
         .method = HTTP_PATCH,
@@ -1619,6 +1651,10 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         return err;
     }
     err = httpd_register_uri_handler(server, &api_automations_post_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_register_uri_handler(server, &api_automations_reset_post_uri);
     if (err != ESP_OK) {
         return err;
     }

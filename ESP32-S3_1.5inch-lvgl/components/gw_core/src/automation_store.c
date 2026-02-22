@@ -112,35 +112,77 @@ static esp_err_t compile_automation_cbor(const uint8_t *buf, size_t len, gw_auto
         const char *id = compiled.strings + src_auto->id_off;
         const char *name = compiled.strings + src_auto->name_off;
 
+        // Reject oversize automations explicitly instead of silently truncating.
+        if (src_auto->triggers_count > GW_AUTO_MAX_TRIGGERS) {
+            ESP_LOGE(TAG,
+                     "Automation '%s' has %u triggers, max is %u",
+                     id ? id : "",
+                     (unsigned)src_auto->triggers_count,
+                     (unsigned)GW_AUTO_MAX_TRIGGERS);
+            gw_auto_compiled_free(&compiled);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (src_auto->conditions_count > GW_AUTO_MAX_CONDITIONS) {
+            ESP_LOGE(TAG,
+                     "Automation '%s' has %u conditions, max is %u",
+                     id ? id : "",
+                     (unsigned)src_auto->conditions_count,
+                     (unsigned)GW_AUTO_MAX_CONDITIONS);
+            gw_auto_compiled_free(&compiled);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (src_auto->actions_count > GW_AUTO_MAX_ACTIONS) {
+            ESP_LOGE(TAG,
+                     "Automation '%s' has %u actions, max is %u",
+                     id ? id : "",
+                     (unsigned)src_auto->actions_count,
+                     (unsigned)GW_AUTO_MAX_ACTIONS);
+            gw_auto_compiled_free(&compiled);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (compiled.hdr.strings_size > GW_AUTO_MAX_STRING_TABLE_BYTES) {
+            ESP_LOGE(TAG,
+                     "Automation '%s' string table size %u exceeds max %u",
+                     id ? id : "",
+                     (unsigned)compiled.hdr.strings_size,
+                     (unsigned)GW_AUTO_MAX_STRING_TABLE_BYTES);
+            gw_auto_compiled_free(&compiled);
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        // Defensive bounds checks for compiled section indexes.
+        if ((src_auto->triggers_index + src_auto->triggers_count) > compiled.hdr.trigger_count_total ||
+            (src_auto->conditions_index + src_auto->conditions_count) > compiled.hdr.condition_count_total ||
+            (src_auto->actions_index + src_auto->actions_count) > compiled.hdr.action_count_total) {
+            ESP_LOGE(TAG, "Compiled automation '%s' has invalid section indexes", id ? id : "");
+            gw_auto_compiled_free(&compiled);
+            return ESP_ERR_INVALID_SIZE;
+        }
+
         // Copy metadata
         strlcpy(out_entry->id, id ? id : "", sizeof(out_entry->id));
         strlcpy(out_entry->name, name ? name : "", sizeof(out_entry->name));
         out_entry->enabled = src_auto->enabled ? true : false;
 
-        // Copy arrays (limited by storage format)
-        out_entry->triggers_count = src_auto->triggers_count < GW_AUTO_MAX_TRIGGERS ?
-                                  src_auto->triggers_count : GW_AUTO_MAX_TRIGGERS;
+        // Copy arrays (already validated against storage limits above).
+        out_entry->triggers_count = (uint8_t)src_auto->triggers_count;
         for (uint8_t i = 0; i < out_entry->triggers_count; i++) {
             out_entry->triggers[i] = compiled.triggers[src_auto->triggers_index + i];
         }
 
-        out_entry->conditions_count = src_auto->conditions_count < GW_AUTO_MAX_CONDITIONS ?
-                                   src_auto->conditions_count : GW_AUTO_MAX_CONDITIONS;
+        out_entry->conditions_count = (uint8_t)src_auto->conditions_count;
         for (uint8_t i = 0; i < out_entry->conditions_count; i++) {
             out_entry->conditions[i] = compiled.conditions[src_auto->conditions_index + i];
         }
 
-        out_entry->actions_count = src_auto->actions_count < GW_AUTO_MAX_ACTIONS ?
-                                 src_auto->actions_count : GW_AUTO_MAX_ACTIONS;
+        out_entry->actions_count = (uint8_t)src_auto->actions_count;
         for (uint8_t i = 0; i < out_entry->actions_count; i++) {
             out_entry->actions[i] = compiled.actions[src_auto->actions_index + i];
         }
 
-        // Copy string table (truncated if needed)
-        size_t string_size = compiled.hdr.strings_size < GW_AUTO_MAX_STRING_TABLE_BYTES ?
-                           compiled.hdr.strings_size : GW_AUTO_MAX_STRING_TABLE_BYTES;
-        out_entry->string_table_size = string_size;
-        memcpy(out_entry->string_table, compiled.strings, string_size);
+        // Copy string table (already validated against storage limits above).
+        out_entry->string_table_size = (uint16_t)compiled.hdr.strings_size;
+        memcpy(out_entry->string_table, compiled.strings, compiled.hdr.strings_size);
     }
 
     gw_auto_compiled_free(&compiled);
@@ -206,38 +248,47 @@ esp_err_t gw_automation_store_put_cbor(const uint8_t *buf, size_t len)
     if (!s_initialized || !buf || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    gw_automation_entry_t compiled_entry;
-    esp_err_t err = compile_automation_cbor(buf, len, &compiled_entry);
+    gw_automation_entry_t *compiled_entry = (gw_automation_entry_t *)calloc(1, sizeof(gw_automation_entry_t));
+    if (!compiled_entry) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t err = compile_automation_cbor(buf, len, compiled_entry);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to compile automation: %s", esp_err_to_name(err));
+        free(compiled_entry);
         return err;
     }
 
-    if (compiled_entry.id[0] == '\0' || compiled_entry.name[0] == '\0') {
+    if (compiled_entry->id[0] == '\0' || compiled_entry->name[0] == '\0') {
+        free(compiled_entry);
         return ESP_ERR_INVALID_ARG;
     }
-    if (strlen(compiled_entry.id) >= GW_AUTOMATION_ID_MAX || strlen(compiled_entry.name) >= GW_AUTOMATION_NAME_MAX) {
+    if (strlen(compiled_entry->id) >= GW_AUTOMATION_ID_MAX || strlen(compiled_entry->name) >= GW_AUTOMATION_NAME_MAX) {
+        free(compiled_entry);
         return ESP_ERR_INVALID_ARG;
     }
 
     portENTER_CRITICAL(&s_automation_storage.lock);
     
-    size_t idx = find_automation_index_by_id(compiled_entry.id);
+    size_t idx = find_automation_index_by_id(compiled_entry->id);
     gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
     
     if (idx != (size_t)-1) {
         // Update existing automation
-        automations[idx] = compiled_entry;
+        automations[idx] = *compiled_entry;
     } else {
         // Add new automation
         if (s_automation_storage.count >= AUTOMATION_STORAGE_MAX_ITEMS) {
             portEXIT_CRITICAL(&s_automation_storage.lock);
+            free(compiled_entry);
             return ESP_ERR_NO_MEM;
         }
-        automations[s_automation_storage.count++] = compiled_entry;
+        automations[s_automation_storage.count++] = *compiled_entry;
     }
     
     portEXIT_CRITICAL(&s_automation_storage.lock);
+    free(compiled_entry);
     
     return automation_storage_save_locked();
 }
@@ -284,6 +335,22 @@ esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled)
     gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
     automations[idx].enabled = enabled;
     
+    portEXIT_CRITICAL(&s_automation_storage.lock);
+
+    return automation_storage_save_locked();
+}
+
+esp_err_t gw_automation_store_remove_all(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    portENTER_CRITICAL(&s_automation_storage.lock);
+    if (s_automation_storage.data && s_automation_storage.count > 0) {
+        memset(s_automation_storage.data, 0, s_automation_storage.count * sizeof(gw_automation_entry_t));
+    }
+    s_automation_storage.count = 0;
     portEXIT_CRITICAL(&s_automation_storage.lock);
 
     return automation_storage_save_locked();

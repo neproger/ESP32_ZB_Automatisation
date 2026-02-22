@@ -28,10 +28,10 @@ typedef struct {
 
 // These limits are a trade-off between flexibility and memory usage.
 // They can be tuned after analyzing typical use cases.
-#define GW_AUTO_MAX_TRIGGERS           4
-#define GW_AUTO_MAX_CONDITIONS         8
-#define GW_AUTO_MAX_ACTIONS            8
-#define GW_AUTO_MAX_STRING_TABLE_BYTES 256
+#define GW_AUTO_MAX_TRIGGERS           8
+#define GW_AUTO_MAX_CONDITIONS         16
+#define GW_AUTO_MAX_ACTIONS            16
+#define GW_AUTO_MAX_STRING_TABLE_BYTES 512
 
 // --- Low-level binary structs and enums for automations (moved from automation_compiled.h) ---
 
@@ -82,7 +82,9 @@ typedef struct {
 typedef struct {
     uint8_t op;        // gw_auto_op_t
     uint8_t val_type;  // gw_auto_val_type_t
-    uint16_t reserved;
+    uint8_t endpoint;  // 0 = any endpoint, otherwise 1..240
+    uint8_t reserved0;
+    uint16_t reserved1;
     uint32_t device_uid_off; // string table offset (required)
     uint32_t key_off;        // string table offset (required), e.g. "temperature_c"
     union {
@@ -128,6 +130,14 @@ typedef struct {
     uint16_t string_table_size;
     char string_table[GW_AUTO_MAX_STRING_TABLE_BYTES];
 } gw_automation_entry_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(gw_automation_entry_t) <= 4096,
+              "gw_automation_entry_t too large; review stack usage and storage limits");
+#else
+_Static_assert(sizeof(gw_automation_entry_t) <= 4096,
+               "gw_automation_entry_t too large; review stack usage and storage limits");
+#endif
 
 // Lightweight metadata view for UI/status, does not need the full compiled body.
 typedef struct {

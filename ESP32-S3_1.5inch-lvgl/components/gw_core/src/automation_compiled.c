@@ -434,6 +434,7 @@ static esp_err_t compile_conditions(const gw_cbor_slice_t *cond_items,
         }
         gw_cbor_slice_t uid_s = {0};
         gw_cbor_slice_t key_s = {0};
+        gw_cbor_slice_t endpoint_s = {0};
         if (!cbor_map_find_val(&ref_s, "device_uid", &uid_s) || !uid_s.ptr) {
             set_err(err, err_size, "missing condition.ref.device_uid");
             return ESP_ERR_INVALID_ARG;
@@ -466,6 +467,7 @@ static esp_err_t compile_conditions(const gw_cbor_slice_t *cond_items,
             return ESP_ERR_INVALID_ARG;
         }
 
+        conds[i].endpoint = 0; // endpoint-agnostic by default
         conds[i].op = (uint8_t)op;
         if (!cbor_text_to_strtab(&uid_s, st, &conds[i].device_uid_off)) {
             set_err(err, err_size, "bad condition.ref.device_uid");
@@ -474,6 +476,15 @@ static esp_err_t compile_conditions(const gw_cbor_slice_t *cond_items,
         if (!cbor_text_to_strtab(&key_s, st, &conds[i].key_off)) {
             set_err(err, err_size, "bad condition.ref.key");
             return ESP_ERR_INVALID_ARG;
+        }
+        if (cbor_map_find_val(&ref_s, "endpoint", &endpoint_s)) {
+            bool ok_ep = false;
+            uint16_t ep = parse_u16_any_cbor(&endpoint_s, &ok_ep);
+            if (!ok_ep || ep == 0 || ep > 240) {
+                set_err(err, err_size, "bad condition.ref.endpoint");
+                return ESP_ERR_INVALID_ARG;
+            }
+            conds[i].endpoint = (uint8_t)ep;
         }
 
         if (cbor_map_find_val(c, "value", &value_s)) {
