@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "gw_wifi.c"
+        "s3_http_client.c"
         "s3_geoip_http.c"
         "s3_weather_http.c"
         "s3_weather_service.c"

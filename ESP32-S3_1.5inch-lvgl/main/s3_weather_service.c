@@ -1,14 +1,12 @@
 #include "s3_weather_service.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
@@ -22,28 +20,34 @@
 
 static const char *TAG = "s3_weather_svc";
 
-static const double kFallbackLat = 43.238949;
-static const double kFallbackLon = 76.889709;
 static const char *kWeatherUid = "0xWEATHER000000001";
 static const uint8_t kWeatherEndpoint = 1;
+static const uint64_t kGeoRefreshPeriodMs = 6ULL * 60ULL * 60ULL * 1000ULL;
 
 static TaskHandle_t s_task;
 static bool s_started;
 static bool s_listener_registered;
 static bool s_geo_ready;
-static double s_geo_lat = kFallbackLat;
-static double s_geo_lon = kFallbackLon;
+static double s_geo_lat = 0.0;
+static double s_geo_lon = 0.0;
 static char s_geo_timezone[48] = {0};
 static int32_t s_geo_offset_sec = 0;
 static char s_location[64] = "Locating...";
+static uint64_t s_last_geo_refresh_ms = 0;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void persist_timezone_to_state_store(const char *tz_name);
 
-static bool wifi_is_connected_local(void)
+static TickType_t ms_to_ticks_safe(uint32_t ms)
 {
-    wifi_ap_record_t ap = {0};
-    return (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+    const uint64_t ticks = ((uint64_t)ms * (uint64_t)configTICK_RATE_HZ) / 1000ULL;
+    if (ticks == 0) {
+        return (ms > 0) ? 1 : 0;
+    }
+    if (ticks > (uint64_t)portMAX_DELAY) {
+        return portMAX_DELAY;
+    }
+    return (TickType_t)ticks;
 }
 
 static uint64_t now_ts_ms(void)
@@ -109,18 +113,18 @@ static TickType_t weather_retry_ticks(void)
 {
     gw_project_settings_t cfg = {0};
     if (gw_project_settings_get(&cfg) == ESP_OK) {
-        return pdMS_TO_TICKS(cfg.weather_retry_interval_ms);
+        return ms_to_ticks_safe(cfg.weather_retry_interval_ms);
     }
-    return pdMS_TO_TICKS(10 * 1000);
+    return ms_to_ticks_safe(10 * 1000);
 }
 
 static TickType_t weather_success_ticks(void)
 {
     gw_project_settings_t cfg = {0};
     if (gw_project_settings_get(&cfg) == ESP_OK) {
-        return pdMS_TO_TICKS(cfg.weather_success_interval_ms);
+        return ms_to_ticks_safe(cfg.weather_success_interval_ms);
     }
-    return pdMS_TO_TICKS(60 * 60 * 1000);
+    return ms_to_ticks_safe(60 * 60 * 1000);
 }
 
 static void apply_timezone_from_settings_or_geo(const s3_geoip_result_t *geo)
@@ -128,16 +132,22 @@ static void apply_timezone_from_settings_or_geo(const s3_geoip_result_t *geo)
     gw_project_settings_t cfg = {0};
     if (gw_project_settings_get(&cfg) != ESP_OK) {
         if (geo) {
-            apply_timezone_if_present(geo->timezone);
-            apply_timezone_offset_if_present(geo->utc_offset_sec);
+            if (geo->timezone[0]) {
+                apply_timezone_if_present(geo->timezone);
+            } else {
+                apply_timezone_offset_if_present(geo->utc_offset_sec);
+            }
         }
         return;
     }
 
     if (cfg.timezone_auto) {
         if (geo) {
-            apply_timezone_if_present(geo->timezone);
-            apply_timezone_offset_if_present(geo->utc_offset_sec);
+            if (geo->timezone[0]) {
+                apply_timezone_if_present(geo->timezone);
+            } else {
+                apply_timezone_offset_if_present(geo->utc_offset_sec);
+            }
         }
         return;
     }
@@ -253,6 +263,21 @@ static void persist_location_to_state_store(const char *location)
                             GW_EVENT_VALUE_TEXT, false, 0, 0.0, location, NULL, 0);
 }
 
+static void persist_weather_status_to_state_store(const char *status)
+{
+    if (!status) {
+        return;
+    }
+
+    gw_device_uid_t uid = {0};
+    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
+    const uint64_t ts_ms = now_ts_ms();
+    (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_status", status, ts_ms);
+    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_status",
+                            kWeatherEndpoint, "weather_status", 0, 0,
+                            GW_EVENT_VALUE_TEXT, false, 0, 0.0, status, NULL, 0);
+}
+
 static void persist_timezone_to_state_store(const char *tz_name)
 {
     if (!tz_name || !tz_name[0]) {
@@ -269,7 +294,10 @@ static void persist_timezone_to_state_store(const char *tz_name)
 
 static esp_err_t ensure_geo_location(void)
 {
-    if (s_geo_ready) {
+    const uint64_t now_ms = now_ts_ms();
+    const bool refresh_due = (s_last_geo_refresh_ms == 0) ||
+                             (now_ms > 0 && (now_ms - s_last_geo_refresh_ms) >= kGeoRefreshPeriodMs);
+    if (s_geo_ready && !refresh_due) {
         return ESP_OK;
     }
 
@@ -278,8 +306,13 @@ static esp_err_t ensure_geo_location(void)
     esp_err_t geo_err = s3_geoip_http_fetch_once(8000, &geo, err, sizeof(err));
     if (geo_err != ESP_OK || !geo.valid) {
         ESP_LOGW(TAG, "geoip failed: err=%s detail=%s", esp_err_to_name(geo_err), err[0] ? err : "-");
-        set_location_text("Location unknown");
-        persist_location_to_state_store("Location unknown");
+        if (geo_err == ESP_ERR_INVALID_RESPONSE) {
+            set_location_text("Location service error");
+            persist_location_to_state_store("Location service error");
+        } else {
+            set_location_text("Location unavailable");
+            persist_location_to_state_store("Location unavailable");
+        }
         return ESP_FAIL;
     }
 
@@ -289,6 +322,7 @@ static esp_err_t ensure_geo_location(void)
     strlcpy(s_geo_timezone, geo.timezone, sizeof(s_geo_timezone));
     s_geo_offset_sec = geo.utc_offset_sec;
     s_geo_ready = true;
+    s_last_geo_refresh_ms = now_ms;
     portEXIT_CRITICAL(&s_lock);
 
     char loc[64] = {0};
@@ -303,6 +337,7 @@ static esp_err_t ensure_geo_location(void)
     }
     set_location_text(loc);
     persist_location_to_state_store(loc);
+    persist_weather_status_to_state_store("location_ready");
     apply_timezone_from_settings_or_geo(&geo);
     char tz_name[48] = {0};
     timezone_label_for_state(tz_name, sizeof(tz_name), &geo);
@@ -350,14 +385,6 @@ static void weather_task(void *arg)
     (void)arg;
 
     for (;;) {
-        if (!wifi_is_connected_local()) {
-            ESP_LOGW(TAG, "weather fetch skipped: Wi-Fi not connected");
-            set_location_text("Wi-Fi disconnected");
-            persist_location_to_state_store("Wi-Fi disconnected");
-            vTaskDelay(weather_retry_ticks());
-            continue;
-        }
-
         if (ensure_geo_location() != ESP_OK) {
             vTaskDelay(weather_retry_ticks());
             continue;
@@ -373,11 +400,17 @@ static void weather_task(void *arg)
         if (fetch_err != ESP_OK || !res.valid) {
             ESP_LOGW(TAG, "weather fetch failed: err=%s detail=%s",
                      esp_err_to_name(fetch_err), err[0] ? err : "-");
+            if (fetch_err == ESP_ERR_INVALID_RESPONSE) {
+                persist_weather_status_to_state_store("weather_service_error");
+            } else {
+                persist_weather_status_to_state_store("weather_unavailable");
+            }
             vTaskDelay(weather_retry_ticks());
             continue;
         }
 
         persist_weather_to_state_store(&res);
+        persist_weather_status_to_state_store("weather_ready");
         ESP_LOGI(TAG,
                  "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d obs=%s",
                  (double)res.temperature_c,
@@ -410,6 +443,7 @@ esp_err_t s3_weather_service_start(void)
 
     s_started = true;
     persist_location_to_state_store("Locating...");
+    persist_weather_status_to_state_store("starting");
     if (!s_listener_registered) {
         if (gw_event_bus_add_listener(settings_event_listener, NULL) == ESP_OK) {
             s_listener_registered = true;

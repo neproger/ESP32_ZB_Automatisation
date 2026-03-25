@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "gw_core/zb_model.h"
@@ -13,6 +14,7 @@ extern "C" {
 // Note: "device type" is profile-specific; this is a practical heuristic based on ZCL clusters
 // present on the endpoint (server clusters => accepts commands/reports; client clusters => emits commands).
 const char *gw_zb_endpoint_kind(const gw_zb_endpoint_t *ep);
+bool gw_zb_endpoint_is_button_like(const gw_zb_endpoint_t *ep);
 
 // Returns the list of supported verbs for the endpoint.
 // Items are string literals; `out` may be NULL to query required count.

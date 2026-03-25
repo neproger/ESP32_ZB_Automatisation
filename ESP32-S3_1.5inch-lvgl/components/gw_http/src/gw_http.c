@@ -16,6 +16,7 @@
 #include "gw_http/gw_ws.h"
 
 static const char *TAG = "gw_http";
+static const uint16_t GW_HTTP_SERVER_STACK = 10240;
 
 static httpd_handle_t s_server;
 static uint16_t s_server_port;
@@ -191,8 +192,9 @@ esp_err_t gw_http_start(void)
     config.lru_purge_enable = true;
     // REST + WS + SPA wildcard handlers.
     config.max_uri_handlers = 20;
-    // Keep enough stack headroom for SPIFFS/HTTP handlers and flash/cache-critical paths.
-    config.stack_size = 5120;
+    // REST handlers build CBOR snapshots and static file serving touches SPIFFS/flash paths.
+    // Keep a generous internal-RAM stack here; browser refresh/remove hits this task directly.
+    config.stack_size = GW_HTTP_SERVER_STACK;
     config.recv_wait_timeout = 4;
     config.send_wait_timeout = 4;
     // HTTPD handles SPIFFS/NVS paths; its stack must stay in internal RAM

@@ -15,7 +15,9 @@ const ZCL = {
 	GROUPS: 0x0004,
 	SCENES: 0x0005,
 	ONOFF: 0x0006,
+	TIME: 0x000A,
 	LEVEL: 0x0008,
+	OTA: 0x0019,
 	COLOR_CONTROL: 0x0300,
 	ILLUMINANCE: 0x0400,
 	TEMPERATURE: 0x0402,
@@ -23,6 +25,32 @@ const ZCL = {
 	FLOW: 0x0404,
 	HUMIDITY: 0x0405,
 	OCCUPANCY: 0x0406,
+}
+
+function kindFromStandardDeviceType(ep) {
+	if (Number(ep?.profile_id ?? 0) !== 0x0104) return null
+	switch (Number(ep?.device_id ?? -1)) {
+		case 0x0100:
+		case 0x0108:
+			return 'relay'
+		case 0x0101:
+			return 'dimmable_light'
+		case 0x0102:
+			return 'color_light'
+		case 0x0103:
+			return 'switch'
+		case 0x0104:
+		case 0x0105:
+			return 'dimmer_switch'
+		case 0x0107:
+			return 'occupancy_sensor'
+		case 0x010d:
+			return 'temperature_sensor'
+		case 0x010e:
+			return 'illuminance_sensor'
+		default:
+			return null
+	}
 }
 
 function readCString(bytes, offset, len) {
@@ -45,13 +73,29 @@ function hasCluster(list, clusterId) {
 	return Array.isArray(list) && list.includes(clusterId)
 }
 
+function isButtonLikeEndpoint(ep) {
+	const onoffSrv = hasCluster(ep?.in_clusters, ZCL.ONOFF)
+	const powerSrv = hasCluster(ep?.in_clusters, ZCL.POWER_CONFIG)
+	const levelSrv = hasCluster(ep?.in_clusters, ZCL.LEVEL)
+	const colorSrv = hasCluster(ep?.in_clusters, ZCL.COLOR_CONTROL)
+	const onoffCli = hasCluster(ep?.out_clusters, ZCL.ONOFF)
+	if (!onoffSrv || !powerSrv || levelSrv || colorSrv || onoffCli) return false
+
+	const out = Array.isArray(ep?.out_clusters) ? ep.out_clusters : []
+	return out.every((clusterId) => clusterId === ZCL.TIME || clusterId === ZCL.OTA)
+}
+
 function classifyKind(ep, device) {
+	const standardKind = kindFromStandardDeviceType(ep)
+	if (standardKind) return standardKind
+
 	const onoffSrv = hasCluster(ep.in_clusters, ZCL.ONOFF)
 	const onoffCli = hasCluster(ep.out_clusters, ZCL.ONOFF)
 	const levelSrv = hasCluster(ep.in_clusters, ZCL.LEVEL)
 	const colorSrv = hasCluster(ep.in_clusters, ZCL.COLOR_CONTROL)
 	const levelCli = hasCluster(ep.out_clusters, ZCL.LEVEL)
 	const isButtonDevice = Boolean(device?.has_button)
+	const buttonLike = isButtonLikeEndpoint(ep)
 
 	const tempSrv = hasCluster(ep.in_clusters, ZCL.TEMPERATURE)
 	const humSrv = hasCluster(ep.in_clusters, ZCL.HUMIDITY)
@@ -61,6 +105,7 @@ function classifyKind(ep, device) {
 	const flowSrv = hasCluster(ep.in_clusters, ZCL.FLOW)
 
 	if (colorSrv) return 'color_light'
+	if (buttonLike) return 'switch'
 
 	if (onoffCli) {
 		if (levelCli) return 'dimmer_switch'
@@ -90,6 +135,7 @@ function classifyKind(ep, device) {
 
 function endpointAccepts(ep) {
 	const out = []
+	if (isButtonLikeEndpoint(ep)) return out
 	if (hasCluster(ep.in_clusters, ZCL.ONOFF)) {
 		out.push('onoff.off', 'onoff.on', 'onoff.toggle', 'onoff.off_with_effect', 'onoff.on_with_recall_global_scene', 'onoff.on_with_timed_off')
 	}

@@ -1127,6 +1127,7 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
     static const size_t kMaxDevices = 64;
     static const size_t kMaxStateItems = 1024;
     static const char *kWeatherUid = "0xWEATHER000000001";
+    static const char *kWifiUid = "0xWIFI000000000001";
 
     gw_device_t *devices = (gw_device_t *)calloc(kMaxDevices, sizeof(gw_device_t));
     gw_state_item_t *items = (gw_state_item_t *)calloc(kMaxStateItems, sizeof(gw_state_item_t));
@@ -1139,10 +1140,14 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
 
     const size_t dev_count = gw_device_registry_list(devices, kMaxDevices);
     bool has_weather_uid = false;
+    bool has_wifi_uid = false;
     size_t total = 0;
     for (size_t i = 0; i < dev_count && total < kMaxStateItems; i++) {
         if (strncmp(devices[i].device_uid.uid, kWeatherUid, sizeof(devices[i].device_uid.uid)) == 0) {
             has_weather_uid = true;
+        }
+        if (strncmp(devices[i].device_uid.uid, kWifiUid, sizeof(devices[i].device_uid.uid)) == 0) {
+            has_wifi_uid = true;
         }
         const size_t left = kMaxStateItems - total;
         total += gw_state_store_list_uid(&devices[i].device_uid, &items[total], left);
@@ -1152,6 +1157,12 @@ static esp_err_t api_state_get_handler(httpd_req_t *req)
         strlcpy(weather_uid.uid, kWeatherUid, sizeof(weather_uid.uid));
         const size_t left = kMaxStateItems - total;
         total += gw_state_store_list_uid(&weather_uid, &items[total], left);
+    }
+    if (!has_wifi_uid && total < kMaxStateItems) {
+        gw_device_uid_t wifi_uid = {0};
+        strlcpy(wifi_uid.uid, kWifiUid, sizeof(wifi_uid.uid));
+        const size_t left = kMaxStateItems - total;
+        total += gw_state_store_list_uid(&wifi_uid, &items[total], left);
     }
 
     gw_cbor_writer_t w;

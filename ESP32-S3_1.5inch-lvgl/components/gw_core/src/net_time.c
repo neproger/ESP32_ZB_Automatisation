@@ -8,7 +8,6 @@
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"
@@ -32,6 +31,18 @@ static uint64_t s_mono_ref_ms = 0;
 static uint64_t s_last_sync_epoch_ms = 0;
 static gw_net_time_cfg_t s_cfg = {0};
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static TickType_t ms_to_ticks_safe(uint32_t ms)
+{
+    const uint64_t ticks = ((uint64_t)ms * (uint64_t)configTICK_RATE_HZ) / 1000ULL;
+    if (ticks == 0) {
+        return (ms > 0) ? 1 : 0;
+    }
+    if (ticks > (uint64_t)portMAX_DELAY) {
+        return portMAX_DELAY;
+    }
+    return (TickType_t)ticks;
+}
 
 static uint64_t mono_now_ms(void)
 {
@@ -80,7 +91,7 @@ static esp_err_t perform_sync_once(void)
         }
     }
 
-    const TickType_t wait_ticks = pdMS_TO_TICKS((s_cfg.sync_timeout_ms > 0) ? s_cfg.sync_timeout_ms : kDefaultSyncTimeoutMs);
+    const TickType_t wait_ticks = ms_to_ticks_safe((s_cfg.sync_timeout_ms > 0) ? s_cfg.sync_timeout_ms : kDefaultSyncTimeoutMs);
     esp_err_t err = esp_netif_sntp_sync_wait(wait_ticks);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SNTP sync timeout/fail: %s", esp_err_to_name(err));
@@ -100,11 +111,13 @@ static void time_task(void *arg)
 {
     (void)arg;
 
-    const TickType_t interval_ticks = pdMS_TO_TICKS((s_cfg.sync_interval_ms > 0) ? s_cfg.sync_interval_ms : kDefaultSyncIntervalMs);
-    const TickType_t retry_ticks = pdMS_TO_TICKS(kRetryIntervalMs);
+    const TickType_t interval_ticks = ms_to_ticks_safe((s_cfg.sync_interval_ms > 0) ? s_cfg.sync_interval_ms : kDefaultSyncIntervalMs);
+    const TickType_t retry_ticks = ms_to_ticks_safe(kRetryIntervalMs);
     TickType_t wait_ticks = 0; // Immediate first sync on startup.
     for (;;) {
-        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
+        if (wait_ticks > 0) {
+            vTaskDelay(wait_ticks);
+        }
         const esp_err_t err = perform_sync_once();
         wait_ticks = (err == ESP_OK) ? interval_ticks : retry_ticks;
     }
@@ -130,7 +143,6 @@ esp_err_t gw_net_time_init(const gw_net_time_cfg_t *cfg)
     if (s_cfg.sync_timeout_ms == 0) {
         s_cfg.sync_timeout_ms = kDefaultSyncTimeoutMs;
     }
-    // Always do immediate first sync in time_task; cfg.sync_on_init is ignored.
 
     BaseType_t ok = xTaskCreateWithCaps(
         time_task,
@@ -218,13 +230,4 @@ uint64_t gw_net_time_last_sync_ms(void)
     ts = s_last_sync_epoch_ms;
     portEXIT_CRITICAL(&s_lock);
     return ts;
-}
-
-esp_err_t gw_net_time_request_sync(void)
-{
-    if (!s_initialized || !s_task) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    BaseType_t ok = xTaskNotifyGive(s_task);
-    return (ok == pdPASS) ? ESP_OK : ESP_FAIL;
 }

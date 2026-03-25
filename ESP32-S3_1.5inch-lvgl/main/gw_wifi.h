@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-esp_err_t gw_wifi_connect_multi(void);
+esp_err_t gw_wifi_start(void);
 
 #ifdef __cplusplus
 }

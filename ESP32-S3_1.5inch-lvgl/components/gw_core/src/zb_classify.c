@@ -8,6 +8,8 @@
 #define ZCL_CLUSTER_GROUPS           0x0004
 #define ZCL_CLUSTER_SCENES           0x0005
 #define ZCL_CLUSTER_ONOFF            0x0006
+#define ZCL_CLUSTER_TIME             0x000A
+#define ZCL_CLUSTER_OTA              0x0019
 #define ZCL_CLUSTER_LEVEL            0x0008
 #define ZCL_CLUSTER_COLOR_CONTROL    0x0300
 #define ZCL_CLUSTER_ILLUMINANCE      0x0400
@@ -41,10 +43,78 @@ static size_t copy_items(const char *const *items, size_t count, const char **ou
     return n;
 }
 
+static const char *kind_from_standard_device_type(const gw_zb_endpoint_t *ep)
+{
+    if (!ep || ep->profile_id != 0x0104) {
+        return NULL;
+    }
+
+    switch (ep->device_id) {
+        case 0x0100:
+        case 0x0108:
+            return "relay";
+        case 0x0101:
+            return "dimmable_light";
+        case 0x0102:
+            return "color_light";
+        case 0x0103:
+            return "switch";
+        case 0x0104:
+        case 0x0105:
+            return "dimmer_switch";
+        case 0x0107:
+            return "occupancy_sensor";
+        case 0x010D:
+            return "temperature_sensor";
+        case 0x010E:
+            return "illuminance_sensor";
+        default:
+            return NULL;
+    }
+}
+
+static bool out_clusters_fit_button_pattern(const gw_zb_endpoint_t *ep)
+{
+    if (!ep) {
+        return false;
+    }
+    for (uint8_t i = 0; i < ep->out_cluster_count; i++) {
+        const uint16_t cluster = ep->out_clusters[i];
+        if (cluster != ZCL_CLUSTER_TIME && cluster != ZCL_CLUSTER_OTA) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool gw_zb_endpoint_is_button_like(const gw_zb_endpoint_t *ep)
+{
+    if (!ep) {
+        return false;
+    }
+
+    const bool onoff_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_ONOFF);
+    const bool power_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_POWER_CONFIG);
+    const bool level_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_LEVEL);
+    const bool color_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_COLOR_CONTROL);
+    const bool onoff_cli = cluster_list_has(ep->out_clusters, ep->out_cluster_count, ZCL_CLUSTER_ONOFF);
+
+    if (!onoff_srv || !power_srv || level_srv || color_srv || onoff_cli) {
+        return false;
+    }
+
+    return out_clusters_fit_button_pattern(ep);
+}
+
 const char *gw_zb_endpoint_kind(const gw_zb_endpoint_t *ep)
 {
     if (!ep) {
         return "unknown";
+    }
+
+    const char *standard_kind = kind_from_standard_device_type(ep);
+    if (standard_kind) {
+        return standard_kind;
     }
 
     const bool onoff_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_ONOFF);
@@ -52,6 +122,7 @@ const char *gw_zb_endpoint_kind(const gw_zb_endpoint_t *ep)
     const bool level_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_LEVEL);
     const bool color_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_COLOR_CONTROL);
 
+    const bool button_like = gw_zb_endpoint_is_button_like(ep);
     const bool temp_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_TEMPERATURE);
     const bool hum_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_HUMIDITY);
     const bool occ_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_OCCUPANCY);
@@ -59,12 +130,15 @@ const char *gw_zb_endpoint_kind(const gw_zb_endpoint_t *ep)
     const bool press_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_PRESSURE);
     const bool flow_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_FLOW);
 
-    // Actuators / lights
+    // Fallback classification for endpoints that do not expose a meaningful standard device_id.
     if (color_srv) {
         return "color_light";
     }
     if (level_srv && onoff_srv) {
         return "dimmable_light";
+    }
+    if (button_like) {
+        return "switch";
     }
     if (onoff_srv) {
         return "relay";
@@ -100,6 +174,9 @@ size_t gw_zb_endpoint_accepts(const gw_zb_endpoint_t *ep, const char **out, size
     size_t n = 0;
 
     if (ep) {
+        if (gw_zb_endpoint_is_button_like(ep)) {
+            return copy_items(items, n, out, max_out);
+        }
         const bool onoff_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_ONOFF);
         const bool level_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_LEVEL);
         const bool color_srv = cluster_list_has(ep->in_clusters, ep->in_cluster_count, ZCL_CLUSTER_COLOR_CONTROL);

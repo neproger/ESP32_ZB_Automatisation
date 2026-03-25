@@ -5,6 +5,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 #include "esp_check.h"
 #include "esp_event.h"
@@ -12,10 +14,11 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 
 #include "gw_core/event_bus.h"
-#include "gw_core/net_time.h"
+#include "gw_core/state_store.h"
 #include "gw_http/gw_http.h"
 
 #if defined(__has_include) && __has_include("wifi_aps_config.h")
@@ -32,10 +35,13 @@ static const size_t GW_WIFI_APS_COUNT = 0;
 #endif
 
 static const char *TAG = "gw_wifi";
+static const char *kWifiUid = "0xWIFI000000000001";
+static const uint8_t kWifiEndpoint = 1;
 
 #define GW_WIFI_CONNECTED_BIT BIT0
 #define GW_WIFI_FAIL_BIT      BIT1
-static const uint64_t kMinTimeResyncPeriodMs = 6ULL * 60ULL * 60ULL * 1000ULL;
+static const TickType_t kReconnectRetryTicks = pdMS_TO_TICKS(10000);
+static const TickType_t kSteadyPollTicks = pdMS_TO_TICKS(3000);
 
 typedef struct
 {
@@ -47,6 +53,86 @@ typedef struct
 static gw_wifi_ctx_t s_ctx;
 static esp_netif_t *s_netif_sta;
 static bool s_wifi_started;
+static TaskHandle_t s_service_task;
+static bool s_service_started;
+static char s_last_ssid[33];
+
+static uint64_t wifi_now_ms(void)
+{
+    return (uint64_t)(esp_timer_get_time() / 1000ULL);
+}
+
+static void wifi_state_uid(gw_device_uid_t *out_uid)
+{
+    if (!out_uid) {
+        return;
+    }
+    memset(out_uid, 0, sizeof(*out_uid));
+    strlcpy(out_uid->uid, kWifiUid, sizeof(out_uid->uid));
+}
+
+static void wifi_state_publish_text(const char *key, const char *value, uint64_t ts_ms)
+{
+    gw_device_uid_t uid = {0};
+    wifi_state_uid(&uid);
+    (void)gw_state_store_set_text(&uid, kWifiEndpoint, key, value ? value : "", ts_ms);
+    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+                            kWifiEndpoint, key, 0, 0,
+                            GW_EVENT_VALUE_TEXT, false, 0, 0.0, value ? value : "", NULL, 0);
+}
+
+static void wifi_state_publish_bool(const char *key, bool value, uint64_t ts_ms)
+{
+    gw_device_uid_t uid = {0};
+    wifi_state_uid(&uid);
+    (void)gw_state_store_set_bool(&uid, kWifiEndpoint, key, value, ts_ms);
+    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+                            kWifiEndpoint, key, 0, 0,
+                            GW_EVENT_VALUE_BOOL, value, 0, 0.0, NULL, NULL, 0);
+}
+
+static void wifi_state_publish_u32(const char *key, uint32_t value, uint64_t ts_ms)
+{
+    gw_device_uid_t uid = {0};
+    wifi_state_uid(&uid);
+    (void)gw_state_store_set_u32(&uid, kWifiEndpoint, key, value, ts_ms);
+    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+                            kWifiEndpoint, key, 0, 0,
+                            GW_EVENT_VALUE_I64, false, (int64_t)value, 0.0, NULL, NULL, 0);
+}
+
+static void wifi_state_publish_u64(const char *key, uint64_t value, uint64_t ts_ms)
+{
+    gw_device_uid_t uid = {0};
+    wifi_state_uid(&uid);
+    (void)gw_state_store_set_u64(&uid, kWifiEndpoint, key, value, ts_ms);
+    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+                            kWifiEndpoint, key, 0, 0,
+                            GW_EVENT_VALUE_I64, false, (int64_t)value, 0.0, NULL, NULL, 0);
+}
+
+static void wifi_state_update(const char *status,
+                              bool connected,
+                              const char *ssid,
+                              const char *ip,
+                              const char *last_error,
+                              uint32_t retries)
+{
+    const uint64_t ts_ms = wifi_now_ms();
+    wifi_state_publish_text("wifi_status", status ? status : "", ts_ms);
+    wifi_state_publish_bool("wifi_connected", connected, ts_ms);
+    wifi_state_publish_text("wifi_ssid", ssid ? ssid : "", ts_ms);
+    wifi_state_publish_text("wifi_ip", ip ? ip : "", ts_ms);
+    wifi_state_publish_text("wifi_error", last_error ? last_error : "", ts_ms);
+    wifi_state_publish_u32("wifi_retries", retries, ts_ms);
+    wifi_state_publish_u64("wifi_updated_ms", ts_ms, ts_ms);
+}
+
+static bool wifi_is_connected_local(void)
+{
+    wifi_ap_record_t ap = {0};
+    return (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+}
 static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -58,10 +144,12 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
             s_ctx.retries++;
             ESP_LOGW(TAG, "Wi-Fi disconnected, retry %d/%d", s_ctx.retries, s_ctx.max_retries);
             (void)snprintf(msg, sizeof(msg), "disconnected: reason=%u retry %d/%d", disc ? (unsigned)disc->reason : 0U, s_ctx.retries, s_ctx.max_retries);
+            wifi_state_update("reconnecting", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
             gw_event_bus_publish("wifi_disconnected", "wifi", "", 0, msg);
             esp_wifi_connect();
         } else {
             (void)snprintf(msg, sizeof(msg), "disconnected: reason=%u retries exhausted", disc ? (unsigned)disc->reason : 0U);
+            wifi_state_update("failed", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
             gw_event_bus_publish("wifi_connect_failed", "wifi", "", 0, msg);
             xEventGroupSetBits(s_ctx.event_group, GW_WIFI_FAIL_BIT);
         }
@@ -72,22 +160,9 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
         s_ctx.retries = 0;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-
-        bool request_time_sync = true;
-        if (gw_net_time_is_synced()) {
-            const uint64_t now_ms = gw_net_time_now_ms();
-            const uint64_t last_sync_ms = gw_net_time_last_sync_ms();
-            if (now_ms > 0 && last_sync_ms > 0 && now_ms >= last_sync_ms &&
-                (now_ms - last_sync_ms) < kMinTimeResyncPeriodMs) {
-                request_time_sync = false;
-            }
-        }
-        if (request_time_sync) {
-            esp_err_t time_err = gw_net_time_request_sync();
-            if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
-                ESP_LOGW(TAG, "Immediate time sync request failed: %s", esp_err_to_name(time_err));
-            }
-        }
+        char ip_buf[20];
+        (void)snprintf(ip_buf, sizeof(ip_buf), IPSTR, IP2STR(&event->ip_info.ip));
+        wifi_state_update("online", true, s_last_ssid, ip_buf, "", 0);
 
         uint16_t port = gw_http_get_port();
         {
@@ -197,6 +272,7 @@ static esp_err_t gw_wifi_scan_build_candidates(gw_wifi_candidate_t *candidates, 
 {
     ESP_RETURN_ON_FALSE(candidates != NULL && out_count != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid args");
     *out_count = 0;
+    wifi_state_update("scanning", false, s_last_ssid, "", "", 0);
 
     wifi_scan_config_t scan_cfg = {0};
     scan_cfg.show_hidden = true;
@@ -207,6 +283,7 @@ static esp_err_t gw_wifi_scan_build_candidates(gw_wifi_candidate_t *candidates, 
     ESP_RETURN_ON_ERROR(esp_wifi_scan_get_ap_num(&ap_num), TAG, "esp_wifi_scan_get_ap_num failed");
     if (ap_num == 0) {
         ESP_LOGW(TAG, "Scan found 0 APs");
+        wifi_state_update("scan_empty", false, s_last_ssid, "", "scan found 0 APs", 0);
         gw_event_bus_publish("wifi_scan", "wifi", "", 0, "scan found 0 APs");
         return ESP_OK;
     }
@@ -254,6 +331,7 @@ static esp_err_t gw_wifi_scan_build_candidates(gw_wifi_candidate_t *candidates, 
         ESP_LOGW(TAG, "No known SSIDs found in scan results (configured=%u, scanned=%u, fetched=%u)",
                  (unsigned)GW_WIFI_APS_COUNT, (unsigned)ap_num, (unsigned)fetch_num);
         gw_wifi_log_scan_results(records, fetch_num);
+        wifi_state_update("scan_no_match", false, "", "", "no known SSIDs found", 0);
         gw_event_bus_publish("wifi_scan", "wifi", "", 0, "no known SSIDs found in scan results");
         free(records);
         return ESP_OK;
@@ -282,9 +360,11 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
     xEventGroupClearBits(s_ctx.event_group, GW_WIFI_CONNECTED_BIT | GW_WIFI_FAIL_BIT);
 
     ESP_LOGI(TAG, "Connecting to SSID: %s", ap->ssid);
+    strlcpy(s_last_ssid, ap->ssid, sizeof(s_last_ssid));
     {
         char msg[96];
         (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
+        wifi_state_update("connecting", false, s_last_ssid, "", "", 0);
         gw_event_bus_publish("wifi_connecting", "wifi", "", 0, msg);
     }
 
@@ -318,6 +398,7 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
         {
             char msg[96];
             (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
+            wifi_state_update("connected", true, s_last_ssid, "", "", 0);
             gw_event_bus_publish("wifi_connected", "wifi", "", 0, msg);
         }
         return ESP_OK;
@@ -327,12 +408,13 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
     {
         char msg[96];
         (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
+        wifi_state_update("failed", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
         gw_event_bus_publish("wifi_connect_failed", "wifi", "", 0, msg);
     }
     return ESP_FAIL;
 }
 
-esp_err_t gw_wifi_connect_multi(void)
+static esp_err_t gw_wifi_connect_multi(void)
 {
     ESP_RETURN_ON_ERROR(gw_wifi_init_once(), TAG, "Wi-Fi init failed");
 
@@ -363,6 +445,57 @@ esp_err_t gw_wifi_connect_multi(void)
     }
 
     return ESP_FAIL;
+}
+
+static void gw_wifi_service_task(void *arg)
+{
+    (void)arg;
+
+    bool ps_configured = false;
+    for (;;) {
+        if (!wifi_is_connected_local()) {
+            ps_configured = false;
+            esp_err_t wifi_err = gw_wifi_connect_multi();
+            if (wifi_err != ESP_OK) {
+                ESP_LOGW(TAG, "Wi-Fi reconnect attempt failed (%s), retry in 10s", esp_err_to_name(wifi_err));
+                vTaskDelay(kReconnectRetryTicks);
+                continue;
+            }
+        }
+
+        if (!ps_configured) {
+            (void)esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+            ps_configured = true;
+        }
+
+        vTaskDelay(kSteadyPollTicks);
+    }
+}
+
+esp_err_t gw_wifi_start(void)
+{
+    if (s_service_started) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(gw_wifi_init_once(), TAG, "Wi-Fi init failed");
+    wifi_state_update("starting", false, "", "", "", 0);
+
+    BaseType_t ok = xTaskCreateWithCaps(
+        gw_wifi_service_task,
+        "gw_wifi",
+        6144,
+        NULL,
+        3,
+        &s_service_task,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        s_service_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_service_started = true;
+    return ESP_OK;
 }
 
 

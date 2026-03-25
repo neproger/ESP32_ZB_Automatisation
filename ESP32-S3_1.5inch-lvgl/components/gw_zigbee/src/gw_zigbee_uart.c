@@ -45,6 +45,7 @@ static const char *TAG = "gw_zigbee_uart";
 #define GW_UART_TX_BUF_SIZE    2048
 #define GW_UART_EVT_Q_LEN      8
 #define GW_UART_RX_TASK_STACK  8192
+#define GW_INIT_STATE_TASK_STACK 10240
 #define GW_SNAPSHOT_IDLE_TIMEOUT_US  (3000000LL)
 #define GW_SNAPSHOT_RETRY_GAP_US     (1000000LL)
 #define GW_SNAPSHOT_RETRY_MAX        6
@@ -591,7 +592,7 @@ static void start_initial_state_sync_once(void)
         return;
     }
     s_initial_state_sync_started = true;
-    if (xTaskCreate(initial_state_sync_task, "zb_init_state", 6144, NULL, 5, &s_initial_state_sync_task) != pdPASS) {
+    if (xTaskCreate(initial_state_sync_task, "zb_init_state", GW_INIT_STATE_TASK_STACK, NULL, 5, &s_initial_state_sync_task) != pdPASS) {
         s_initial_state_sync_started = false;
         s_initial_state_sync_task = NULL;
         ESP_LOGW(TAG, "initial state sync task create failed");

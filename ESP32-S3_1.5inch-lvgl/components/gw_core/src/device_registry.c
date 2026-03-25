@@ -1,8 +1,49 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage_bridge.h"
+#include "gw_core/zb_classify.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+static void derive_caps_from_topology(gw_device_t *device)
+{
+    if (!device || device->device_uid.uid[0] == '\0') {
+        return;
+    }
+
+    gw_zb_endpoint_t eps[GW_ZB_MAX_ENDPOINTS] = {0};
+    const size_t count = gw_zb_model_list_endpoints(&device->device_uid, eps, GW_ZB_MAX_ENDPOINTS);
+    if (count == 0) {
+        return;
+    }
+
+    bool any_button = false;
+    bool any_actuator = false;
+    for (size_t i = 0; i < count; i++) {
+        const char *kind = gw_zb_endpoint_kind(&eps[i]);
+        const bool is_button =
+            (strcmp(kind, "switch") == 0) ||
+            (strcmp(kind, "dimmer_switch") == 0);
+        const bool is_actuator =
+            (strcmp(kind, "relay") == 0) ||
+            (strcmp(kind, "dimmable_light") == 0) ||
+            (strcmp(kind, "color_light") == 0);
+
+        if (is_button) {
+            any_button = true;
+        }
+        if (is_actuator) {
+            any_actuator = true;
+        }
+    }
+
+    if (any_button) {
+        device->has_button = true;
+        if (!any_actuator) {
+            device->has_onoff = false;
+        }
+    }
+}
 
 esp_err_t gw_device_registry_init(void)
 {
@@ -43,6 +84,7 @@ esp_err_t gw_device_registry_get(const gw_device_uid_t *uid, gw_device_t *out_de
     out_device->last_seen_ms = full_device.last_seen_ms;
     out_device->has_onoff = full_device.has_onoff;
     out_device->has_button = full_device.has_button;
+    derive_caps_from_topology(out_device);
     return ESP_OK;
 }
 
@@ -78,6 +120,7 @@ size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
         out_devices[i].last_seen_ms = full_devices[i].last_seen_ms;
         out_devices[i].has_onoff = full_devices[i].has_onoff;
         out_devices[i].has_button = full_devices[i].has_button;
+        derive_caps_from_topology(&out_devices[i]);
     }
     free(full_devices);
     return count;
