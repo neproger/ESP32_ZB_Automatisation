@@ -7,6 +7,7 @@
 static bool s_inited;
 static gw_zb_endpoint_t s_eps[GW_ZB_MAX_ENDPOINTS];
 static size_t s_ep_count;
+static uint32_t s_version_seq;
 
 static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
 {
@@ -20,6 +21,7 @@ esp_err_t gw_zb_model_init(void)
 {
     s_inited = true;
     s_ep_count = 0;
+    s_version_seq = 0;
     memset(s_eps, 0, sizeof(s_eps));
     return ESP_OK;
 }
@@ -32,7 +34,18 @@ esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
 
     for (size_t i = 0; i < s_ep_count; i++) {
         if (uid_equals(&s_eps[i].uid, &ep->uid) && s_eps[i].endpoint == ep->endpoint) {
+            const bool changed =
+                (s_eps[i].short_addr != ep->short_addr) ||
+                (s_eps[i].profile_id != ep->profile_id) ||
+                (s_eps[i].device_id != ep->device_id) ||
+                (s_eps[i].in_cluster_count != ep->in_cluster_count) ||
+                (s_eps[i].out_cluster_count != ep->out_cluster_count) ||
+                (memcmp(s_eps[i].in_clusters, ep->in_clusters, sizeof(s_eps[i].in_clusters)) != 0) ||
+                (memcmp(s_eps[i].out_clusters, ep->out_clusters, sizeof(s_eps[i].out_clusters)) != 0);
             s_eps[i] = *ep;
+            if (changed) {
+                s_eps[i].version = ++s_version_seq;
+            }
             return ESP_OK;
         }
     }
@@ -41,7 +54,9 @@ esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
         return ESP_ERR_NO_MEM;
     }
 
-    s_eps[s_ep_count++] = *ep;
+    s_eps[s_ep_count] = *ep;
+    s_eps[s_ep_count].version = ++s_version_seq;
+    s_ep_count++;
     
     // Auto-sync to persistent storage when new endpoint is discovered
     (void)gw_device_registry_sync_endpoints(&ep->uid);

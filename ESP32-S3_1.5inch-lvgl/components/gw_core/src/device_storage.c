@@ -16,6 +16,7 @@ static const size_t DEVICE_STORAGE_MAX_DEVICES = GW_DEVICE_MAX_DEVICES;
 
 static gw_storage_t s_device_storage;
 static bool s_initialized = false;
+static uint32_t s_version_seq = 0;
 
 // Storage descriptor
 static const gw_storage_desc_t s_device_storage_desc = {
@@ -31,6 +32,7 @@ static const gw_storage_desc_t s_device_storage_desc = {
 static size_t find_device_index_by_uid(const gw_device_uid_t *uid);
 static size_t find_device_index_by_short(uint16_t short_addr);
 static void assign_default_name_if_needed(gw_device_full_t *device);
+static uint32_t next_version(void);
 
 esp_err_t gw_device_storage_init(void)
 {
@@ -47,6 +49,11 @@ esp_err_t gw_device_storage_init(void)
     s_initialized = true;
     ESP_LOGI(TAG, "Device storage initialized with %zu devices", s_device_storage.count);
     return ESP_OK;
+}
+
+static uint32_t next_version(void)
+{
+    return ++s_version_seq;
 }
 
 static size_t find_device_index_by_uid(const gw_device_uid_t *uid)
@@ -125,9 +132,21 @@ esp_err_t gw_device_storage_upsert(const gw_device_full_t *device)
     if (idx != (size_t)-1) {
         // Update existing device in place
         const char *preserve_name = (device->name[0] == '\0') ? devices[idx].name : NULL;
+        const uint32_t prev_version = devices[idx].version;
+        const bool changed =
+            (devices[idx].short_addr != device->short_addr) ||
+            (strncmp(devices[idx].name, device->name, sizeof(devices[idx].name)) != 0 && device->name[0] != '\0') ||
+            (devices[idx].last_seen_ms != device->last_seen_ms) ||
+            (devices[idx].has_onoff != device->has_onoff) ||
+            (devices[idx].has_button != device->has_button);
         
         // Update device data
         memcpy(&devices[idx], device, sizeof(gw_device_full_t));
+        if (changed) {
+            devices[idx].version = next_version();
+        } else {
+            devices[idx].version = prev_version;
+        }
         
         // Restore name if needed
         if (preserve_name) {
@@ -148,6 +167,7 @@ esp_err_t gw_device_storage_upsert(const gw_device_full_t *device)
     
     // Copy directly to storage array
     memcpy(&devices[s_device_storage.count], device, sizeof(gw_device_full_t));
+    devices[s_device_storage.count].version = next_version();
     assign_default_name_if_needed(&devices[s_device_storage.count]);
     s_device_storage.count++;
     
@@ -235,6 +255,7 @@ esp_err_t gw_device_storage_set_name(const gw_device_uid_t *uid, const char *nam
     
     gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
     strlcpy(devices[idx].name, name, sizeof(devices[idx].name));
+    devices[idx].version = next_version();
     
     portEXIT_CRITICAL(&s_device_storage.lock);
     return gw_storage_save(&s_device_storage);

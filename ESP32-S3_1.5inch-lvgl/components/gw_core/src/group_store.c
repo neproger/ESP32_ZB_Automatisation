@@ -22,6 +22,7 @@ static const size_t GROUP_ITEMS_MAX = 256;
 static gw_storage_t s_groups_storage;
 static gw_storage_t s_items_storage;
 static bool s_initialized = false;
+static uint32_t s_version_seq = 0;
 
 static const gw_storage_desc_t s_groups_desc = {
     .key = "groups",
@@ -51,6 +52,11 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
 
+static uint32_t next_version(void)
+{
+    return ++s_version_seq;
+}
+
 static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
 {
     if (!a || !b) return false;
@@ -70,6 +76,23 @@ static size_t find_group_idx(const char *id)
 static bool group_exists(const char *id)
 {
     return find_group_idx(id) != (size_t)-1;
+}
+
+static bool touch_group_version(const char *group_id, uint32_t updated_at_ms)
+{
+    if (!group_id || !ready()) return false;
+
+    bool touched = false;
+    portENTER_CRITICAL(&s_groups_storage.lock);
+    size_t idx = find_group_idx(group_id);
+    if (idx != (size_t)-1) {
+        gw_group_entry_t *groups = (gw_group_entry_t *)s_groups_storage.data;
+        groups[idx].version = next_version();
+        groups[idx].updated_at_ms = updated_at_ms;
+        touched = true;
+    }
+    portEXIT_CRITICAL(&s_groups_storage.lock);
+    return touched;
 }
 
 static esp_err_t persist_all(void)
@@ -147,6 +170,7 @@ esp_err_t gw_group_store_create(const char *id_opt, const char *name, gw_group_e
     gw_group_entry_t entry = {0};
     strlcpy(entry.id, id, sizeof(entry.id));
     strlcpy(entry.name, name, sizeof(entry.name));
+    entry.version = next_version();
     entry.created_at_ms = now_ms();
     entry.updated_at_ms = entry.created_at_ms;
     groups[s_groups_storage.count++] = entry;
@@ -170,6 +194,7 @@ esp_err_t gw_group_store_rename(const char *id, const char *name)
     }
     gw_group_entry_t *groups = (gw_group_entry_t *)s_groups_storage.data;
     strlcpy(groups[idx].name, name, sizeof(groups[idx].name));
+    groups[idx].version = next_version();
     groups[idx].updated_at_ms = now_ms();
     portEXIT_CRITICAL(&s_groups_storage.lock);
 
@@ -216,6 +241,8 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
     if (!ready() || !group_id || !device_uid || endpoint == 0) return ESP_ERR_INVALID_ARG;
     if (!group_exists(group_id)) return ESP_ERR_NOT_FOUND;
 
+    char moved_from_group_id[GW_GROUP_ID_MAX] = {0};
+    const uint32_t updated_at_ms = now_ms();
     portENTER_CRITICAL(&s_items_storage.lock);
     gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
 
@@ -228,6 +255,7 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
                 break;
             }
             // Remove mapping to old group.
+            strlcpy(moved_from_group_id, items[i].group_id, sizeof(moved_from_group_id));
             for (size_t j = i + 1; j < s_items_storage.count; j++) {
                 items[j - 1] = items[j];
             }
@@ -238,8 +266,10 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
     }
 
     if (existing_idx != (size_t)-1) {
-        items[existing_idx].order = now_ms();
+        items[existing_idx].order = updated_at_ms;
+        items[existing_idx].version = next_version();
         portEXIT_CRITICAL(&s_items_storage.lock);
+        (void)touch_group_version(group_id, updated_at_ms);
         return persist_all();
     }
 
@@ -252,10 +282,15 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
     strlcpy(item.group_id, group_id, sizeof(item.group_id));
     item.device_uid = *device_uid;
     item.endpoint = endpoint;
-    item.order = now_ms();
+    item.version = next_version();
+    item.order = updated_at_ms;
     items[s_items_storage.count++] = item;
 
     portEXIT_CRITICAL(&s_items_storage.lock);
+    if (moved_from_group_id[0] != '\0') {
+        (void)touch_group_version(moved_from_group_id, updated_at_ms);
+    }
+    (void)touch_group_version(group_id, updated_at_ms);
     return persist_all();
 }
 
@@ -264,6 +299,8 @@ esp_err_t gw_group_store_remove_endpoint(const gw_device_uid_t *device_uid, uint
     if (!ready() || !device_uid || endpoint == 0) return ESP_ERR_INVALID_ARG;
 
     bool removed = false;
+    char removed_group_id[GW_GROUP_ID_MAX] = {0};
+    const uint32_t updated_at_ms = now_ms();
     portENTER_CRITICAL(&s_items_storage.lock);
     gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
     size_t write = 0;
@@ -271,6 +308,9 @@ esp_err_t gw_group_store_remove_endpoint(const gw_device_uid_t *device_uid, uint
         const bool drop = uid_equals(&items[i].device_uid, device_uid) && items[i].endpoint == endpoint;
         if (drop) {
             removed = true;
+            if (removed_group_id[0] == '\0') {
+                strlcpy(removed_group_id, items[i].group_id, sizeof(removed_group_id));
+            }
             continue;
         }
         if (write != i) items[write] = items[i];
@@ -283,6 +323,9 @@ esp_err_t gw_group_store_remove_endpoint(const gw_device_uid_t *device_uid, uint
     portEXIT_CRITICAL(&s_items_storage.lock);
 
     if (!removed) return ESP_OK;
+    if (removed_group_id[0] != '\0') {
+        (void)touch_group_version(removed_group_id, updated_at_ms);
+    }
     return persist_all();
 }
 
@@ -291,6 +334,7 @@ esp_err_t gw_group_store_reorder_endpoint(const char *group_id, const gw_device_
     if (!ready() || !group_id || !device_uid || endpoint == 0) return ESP_ERR_INVALID_ARG;
 
     bool updated = false;
+    const uint32_t updated_at_ms = now_ms();
     portENTER_CRITICAL(&s_items_storage.lock);
     gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
     for (size_t i = 0; i < s_items_storage.count; i++) {
@@ -298,12 +342,14 @@ esp_err_t gw_group_store_reorder_endpoint(const char *group_id, const gw_device_
         if (!uid_equals(&items[i].device_uid, device_uid)) continue;
         if (items[i].endpoint != endpoint) continue;
         items[i].order = order;
+        items[i].version = next_version();
         updated = true;
         break;
     }
     portEXIT_CRITICAL(&s_items_storage.lock);
 
     if (!updated) return ESP_ERR_NOT_FOUND;
+    (void)touch_group_version(group_id, updated_at_ms);
     return persist_all();
 }
 
@@ -312,17 +358,24 @@ esp_err_t gw_group_store_set_endpoint_label(const gw_device_uid_t *device_uid, u
     if (!ready() || !device_uid || endpoint == 0 || !label) return ESP_ERR_INVALID_ARG;
 
     bool updated = false;
+    char group_id[GW_GROUP_ID_MAX] = {0};
+    const uint32_t updated_at_ms = now_ms();
     portENTER_CRITICAL(&s_items_storage.lock);
     gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
     for (size_t i = 0; i < s_items_storage.count; i++) {
         if (!uid_equals(&items[i].device_uid, device_uid)) continue;
         if (items[i].endpoint != endpoint) continue;
         strlcpy(items[i].label, label, sizeof(items[i].label));
+        items[i].version = next_version();
+        strlcpy(group_id, items[i].group_id, sizeof(group_id));
         updated = true;
         break;
     }
     portEXIT_CRITICAL(&s_items_storage.lock);
 
     if (!updated) return ESP_ERR_NOT_FOUND;
+    if (group_id[0] != '\0') {
+        (void)touch_group_version(group_id, updated_at_ms);
+    }
     return persist_all();
 }

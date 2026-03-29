@@ -60,6 +60,7 @@ esp_err_t gw_device_registry_upsert(const gw_device_t *device)
     full_device.device_uid = device->device_uid;
     full_device.short_addr = device->short_addr;
     strlcpy(full_device.name, device->name, sizeof(full_device.name));
+    full_device.version = device->version;
     full_device.last_seen_ms = device->last_seen_ms;
     full_device.has_onoff = device->has_onoff;
     full_device.has_button = device->has_button;
@@ -81,6 +82,7 @@ esp_err_t gw_device_registry_get(const gw_device_uid_t *uid, gw_device_t *out_de
     out_device->device_uid = full_device.device_uid;
     out_device->short_addr = full_device.short_addr;
     strlcpy(out_device->name, full_device.name, sizeof(out_device->name));
+    out_device->version = full_device.version;
     out_device->last_seen_ms = full_device.last_seen_ms;
     out_device->has_onoff = full_device.has_onoff;
     out_device->has_button = full_device.has_button;
@@ -117,6 +119,7 @@ size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
         out_devices[i].device_uid = full_devices[i].device_uid;
         out_devices[i].short_addr = full_devices[i].short_addr;
         strlcpy(out_devices[i].name, full_devices[i].name, sizeof(out_devices[i].name));
+        out_devices[i].version = full_devices[i].version;
         out_devices[i].last_seen_ms = full_devices[i].last_seen_ms;
         out_devices[i].has_onoff = full_devices[i].has_onoff;
         out_devices[i].has_button = full_devices[i].has_button;

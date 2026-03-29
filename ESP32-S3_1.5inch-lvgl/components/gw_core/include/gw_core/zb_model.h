@@ -22,6 +22,7 @@ typedef struct {
     gw_device_uid_t uid;
     uint16_t short_addr;
     uint8_t endpoint;
+    uint32_t version;
     uint16_t profile_id;
     uint16_t device_id;
     uint8_t in_cluster_count;

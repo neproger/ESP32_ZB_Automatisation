@@ -36,6 +36,7 @@ typedef struct {
     gw_device_uid_t uid;
     uint8_t endpoint;
     char key[GW_STATE_KEY_MAX];
+    uint32_t version;
     gw_state_value_type_t value_type;
     bool value_bool;
     float value_f32;

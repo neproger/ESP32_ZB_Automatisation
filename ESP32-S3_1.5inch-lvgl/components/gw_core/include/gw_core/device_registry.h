@@ -13,6 +13,7 @@ typedef struct {
     gw_device_uid_t device_uid;
     uint16_t short_addr;
     char name[32];
+    uint32_t version;
     uint64_t last_seen_ms;
     bool has_onoff;
     bool has_button;

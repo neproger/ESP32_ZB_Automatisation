@@ -14,6 +14,7 @@ static bool s_inited;
 static gw_state_item_t *s_items;
 static size_t s_item_count;
 static size_t s_item_cap;
+static uint32_t s_version_seq;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
@@ -136,6 +137,7 @@ esp_err_t gw_state_store_init(void)
 
     s_inited = true;
     s_item_count = 0;
+    s_version_seq = 0;
     memset(s_items, 0, s_item_cap * sizeof(gw_state_item_t));
     portEXIT_CRITICAL(&s_lock);
 
@@ -156,8 +158,11 @@ static esp_err_t upsert_item(const gw_state_item_t *item)
         OP_EVICT = 3,
     } op = OP_NONE;
     gw_state_item_t evicted = {0};
+    gw_state_item_t next = {0};
     bool has_evicted = false;
     size_t count_after = 0;
+
+    next = *item;
 
     portENTER_CRITICAL(&s_lock);
     size_t idx = find_idx_locked(&item->uid, item->endpoint, item->key);
@@ -166,7 +171,8 @@ static esp_err_t upsert_item(const gw_state_item_t *item)
             s_items[idx].ts_ms = item->ts_ms;
             op = OP_NONE;
         } else {
-            s_items[idx] = *item;
+            next.version = ++s_version_seq;
+            s_items[idx] = next;
             op = OP_UPDATE;
         }
         count_after = s_item_count;
@@ -175,7 +181,8 @@ static esp_err_t upsert_item(const gw_state_item_t *item)
     }
 
     if (s_item_count < s_item_cap) {
-        s_items[s_item_count++] = *item;
+        next.version = ++s_version_seq;
+        s_items[s_item_count++] = next;
         op = OP_INSERT;
         count_after = s_item_count;
         portEXIT_CRITICAL(&s_lock);
@@ -189,7 +196,8 @@ static esp_err_t upsert_item(const gw_state_item_t *item)
     }
     evicted = s_items[idx];
     has_evicted = true;
-    s_items[idx] = *item;
+    next.version = ++s_version_seq;
+    s_items[idx] = next;
     op = OP_EVICT;
     count_after = s_item_count;
     portEXIT_CRITICAL(&s_lock);
