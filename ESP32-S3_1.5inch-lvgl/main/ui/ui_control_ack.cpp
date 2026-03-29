@@ -19,10 +19,6 @@ typedef struct
 
     bool has_bool;
     bool bool_value;
-    bool has_u32;
-    uint32_t u32_value;
-    bool has_f32;
-    float f32_value;
 } ack_entry_t;
 
 static constexpr size_t kMaxAckEntries = 96;
@@ -91,13 +87,6 @@ ack_entry_t *find_or_create_entry(const char *device_uid, uint8_t endpoint, cons
     return nullptr;
 }
 } // namespace
-
-void ui_control_ack_reset(void)
-{
-    if (s_entries) {
-        memset(s_entries, 0, kMaxAckEntries * sizeof(ack_entry_t));
-    }
-}
 
 bool ui_control_ack_begin(const char *device_uid, uint8_t endpoint, const char *key)
 {
@@ -193,62 +182,6 @@ bool ui_control_ack_get_confirmed_bool(const char *device_uid, uint8_t endpoint,
     }
     if (out_value) {
         *out_value = e->bool_value;
-    }
-    return true;
-}
-
-void ui_control_ack_confirm_u32(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, uint32_t value)
-{
-    ack_entry_t *e = find_or_create_entry(device_uid, endpoint, key);
-    if (!e) {
-        return;
-    }
-    e->pending = false;
-    e->error = false;
-    e->pending_since_ms = 0;
-    e->has_u32 = has_value;
-    e->u32_value = value;
-}
-
-bool ui_control_ack_get_confirmed_u32(const char *device_uid, uint8_t endpoint, const char *key, bool *out_has_value, uint32_t *out_value)
-{
-    ack_entry_t *e = find_entry(device_uid, endpoint, key);
-    if (!e) {
-        return false;
-    }
-    if (out_has_value) {
-        *out_has_value = e->has_u32;
-    }
-    if (out_value) {
-        *out_value = e->u32_value;
-    }
-    return true;
-}
-
-void ui_control_ack_confirm_f32(const char *device_uid, uint8_t endpoint, const char *key, bool has_value, float value)
-{
-    ack_entry_t *e = find_or_create_entry(device_uid, endpoint, key);
-    if (!e) {
-        return;
-    }
-    e->pending = false;
-    e->error = false;
-    e->pending_since_ms = 0;
-    e->has_f32 = has_value;
-    e->f32_value = value;
-}
-
-bool ui_control_ack_get_confirmed_f32(const char *device_uid, uint8_t endpoint, const char *key, bool *out_has_value, float *out_value)
-{
-    ack_entry_t *e = find_entry(device_uid, endpoint, key);
-    if (!e) {
-        return false;
-    }
-    if (out_has_value) {
-        *out_has_value = e->has_f32;
-    }
-    if (out_value) {
-        *out_value = e->f32_value;
     }
     return true;
 }

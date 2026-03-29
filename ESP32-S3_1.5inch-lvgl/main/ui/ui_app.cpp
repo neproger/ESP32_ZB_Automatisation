@@ -13,7 +13,6 @@
 
 #include "devices_init.h"
 #include "ui_control_ack.hpp"
-#include "ui_events_bridge.hpp"
 #include "ui_screen_devices.hpp"
 #include "ui_screen_saver.hpp"
 #include "ui_style.hpp"
@@ -153,32 +152,9 @@ void ui_tick_cb(lv_timer_t *timer)
         note_user_activity();
     }
 
-    gw_event_t events[8] = {};
-    const size_t n = ui_events_bridge_drain(events, 8);
-    for (size_t i = 0; i < n; ++i)
+    if (s_ui_ready && !s_saver_active)
     {
-        const bool structural =
-            (strcmp(events[i].type, "device.join") == 0) ||
-            (strcmp(events[i].type, "device.leave") == 0) ||
-            (strcmp(events[i].type, "device.changed") == 0) ||
-            (strcmp(events[i].type, "device.update") == 0) ||
-            (strcmp(events[i].type, "group.changed") == 0);
-
-        if (strcmp(events[i].type, "net_time.tz_updated") == 0)
-        {
-            ui_screen_saver_invalidate_time();
-        }
-
-        if (structural)
-        {
-            s_render_requested = true;
-        }
-        else
-        {
-            if (s_ui_ready && !s_saver_active) {
-                ui_screen_devices_render_if_needed();
-            }
-        }
+        ui_screen_devices_render_if_needed();
     }
 
     lv_display_t *display = lv_display_get_default();
@@ -222,8 +198,6 @@ void ui_app_init(void)
     lv_timer_create(ui_tick_cb, kUiTickPeriodMs, nullptr);
 
     lvgl_port_unlock();
-
-    ESP_ERROR_CHECK(ui_events_bridge_init());
     ESP_LOGI(TAG_UI, "Group UI initialized");
 }
 

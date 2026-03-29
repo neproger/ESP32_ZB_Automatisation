@@ -11,7 +11,10 @@ void align_card_below(lv_obj_t *root, lv_obj_t *subtitle, lv_obj_t *card)
     if (!root || !subtitle || !card) {
         return;
     }
-    lv_obj_align_to(card, subtitle, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    lv_obj_update_layout(root);
+    const int32_t subtitle_bottom = lv_obj_get_y(subtitle) + lv_obj_get_height(subtitle);
+    lv_obj_set_width(card, ui_style::kListWidth);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, subtitle_bottom + 6);
     lv_obj_update_layout(root);
     const int32_t root_h = lv_obj_get_height(root);
     const int32_t card_y = lv_obj_get_y(card);
@@ -20,7 +23,7 @@ void align_card_below(lv_obj_t *root, lv_obj_t *subtitle, lv_obj_t *card)
         card_h = 40;
     }
     lv_obj_set_height(card, card_h);
-    lv_obj_set_width(card, ui_style::kListWidth);
+    lv_obj_align(card, LV_ALIGN_TOP_MID, 0, subtitle_bottom + 6);
 }
 } // namespace
 
@@ -31,6 +34,7 @@ WidgetGroupViewPage::WidgetGroupViewPage(lv_obj_t *parent)
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_opa(root_, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(root_);
 
     title_ = lv_label_create(root_);
     lv_obj_align(title_, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
@@ -62,6 +66,10 @@ void WidgetGroupViewPage::render()
     (void)widget_group_state_read(group_index_, item_index_, &state);
     update_header(state);
     update_card(state);
+    last_group_count_ = state.group_count;
+    last_item_count_ = state.item_count;
+    last_has_group_ = state.has_group;
+    last_has_active_item_ = state.has_active_item;
     last_group_version_ = state.group.version;
     last_item_version_ = state.has_active_item ? state.active_item.version : 0;
 }
@@ -74,12 +82,20 @@ void WidgetGroupViewPage::render_if_needed()
     const uint32_t group_version = state.has_group ? state.group.version : 0;
     const uint32_t item_version = state.has_active_item ? state.active_item.version : 0;
     const bool selection_changed =
+        state.group_count != last_group_count_ ||
+        state.item_count != last_item_count_ ||
+        state.has_group != last_has_group_ ||
+        state.has_active_item != last_has_active_item_ ||
         group_version != last_group_version_ ||
         item_version != last_item_version_;
 
     if (selection_changed) {
         update_header(state);
         update_card(state);
+        last_group_count_ = state.group_count;
+        last_item_count_ = state.item_count;
+        last_has_group_ = state.has_group;
+        last_has_active_item_ = state.has_active_item;
         last_group_version_ = group_version;
         last_item_version_ = item_version;
     } else if (card_) {
@@ -94,6 +110,10 @@ void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index)
     }
     group_index_ = group_index;
     item_index_ = item_index;
+    last_group_count_ = 0;
+    last_item_count_ = 0;
+    last_has_group_ = false;
+    last_has_active_item_ = false;
     last_group_version_ = 0;
     last_item_version_ = 0;
     render();

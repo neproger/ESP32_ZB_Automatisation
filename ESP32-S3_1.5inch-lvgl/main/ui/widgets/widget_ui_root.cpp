@@ -6,6 +6,7 @@ WidgetUiRoot::WidgetUiRoot(lv_obj_t *parent)
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(root_);
 
     group_page_ = new WidgetGroupViewPage(root_);
     render();

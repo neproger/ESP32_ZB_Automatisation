@@ -21,6 +21,7 @@ public:
 private:
     void rebuild_if_needed(const WidgetEndpointState &state);
     void update_texts(const WidgetEndpointState &state);
+    void refresh_children();
     void clear_children();
 
     WidgetEndpointRef ref_ = {};

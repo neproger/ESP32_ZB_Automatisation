@@ -122,7 +122,10 @@ void WidgetEndpointCard::render_if_needed()
         update_texts(state);
         last_topology_version_ = state.topology_version;
         last_state_version_ = state.state_version;
+        return;
     }
+
+    refresh_children();
 }
 
 void WidgetEndpointCard::set_ref(const WidgetEndpointRef &ref)
@@ -196,6 +199,11 @@ void WidgetEndpointCard::update_texts(const WidgetEndpointState &state)
     build_summary_text(state, summary, sizeof(summary));
     lv_label_set_text(summary_, summary);
 
+    refresh_children();
+}
+
+void WidgetEndpointCard::refresh_children()
+{
     if (onoff_) onoff_->render_if_needed();
     if (level_) level_->render_if_needed();
     if (color_) color_->render_if_needed();

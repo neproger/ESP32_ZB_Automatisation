@@ -5,9 +5,9 @@
 
 #include "widget_endpoint_card.hpp"
 #include "widget_group_state.hpp"
-#include "widget_page.hpp"
+#include "widget_base.hpp"
 
-class WidgetGroupViewPage : public WidgetPage {
+class WidgetGroupViewPage : public WidgetBase {
 public:
     explicit WidgetGroupViewPage(lv_obj_t *parent);
     ~WidgetGroupViewPage() override;
@@ -30,6 +30,10 @@ private:
     WidgetEndpointCard *card_ = nullptr;
     size_t group_index_ = 0;
     size_t item_index_ = 0;
+    size_t last_group_count_ = 0;
+    size_t last_item_count_ = 0;
+    bool last_has_group_ = false;
+    bool last_has_active_item_ = false;
     uint32_t last_group_version_ = 0;
     uint32_t last_item_version_ = 0;
 };

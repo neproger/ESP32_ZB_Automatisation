@@ -333,7 +333,3 @@ void ui_screen_saver_tick(void)
     refresh_weather_subtitle_if_needed();
 }
 
-void ui_screen_saver_invalidate_time(void)
-{
-    s_last_rendered_second = UINT64_MAX;
-}
