@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "esp_err.h"
-#include "gw_core/state_store.h"
 #include "ui_actions.hpp"
 #include "ui_style.hpp"
 
@@ -232,27 +231,25 @@ lv_obj_t *WidgetOnOffControl::root() const
 void WidgetOnOffControl::render()
 {
     last_version_ = 0;
-    render_if_needed();
 }
 
 void WidgetOnOffControl::render_if_needed()
 {
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref_.uid, ref_.endpoint, "onoff", &item) != ESP_OK ||
-        item.value_type != GW_STATE_VALUE_BOOL) {
-        apply_state(false, false, 0);
+    const ui_control_ack_status_t st = ui_control_ack_get_status(ref_.uid.uid, ref_.endpoint, "onoff");
+    if (st == UI_CONTROL_ACK_PENDING) {
+        lv_obj_add_state(switch_, LV_STATE_DISABLED);
+    } else {
+        lv_obj_remove_state(switch_, LV_STATE_DISABLED);
+    }
+}
+
+void WidgetOnOffControl::apply(const WidgetEndpointState &state)
+{
+    if (state.onoff_version == last_version_) {
+        render_if_needed();
         return;
     }
-    if (item.version == last_version_) {
-        const ui_control_ack_status_t st = ui_control_ack_get_status(ref_.uid.uid, ref_.endpoint, "onoff");
-        if (st == UI_CONTROL_ACK_PENDING) {
-            lv_obj_add_state(switch_, LV_STATE_DISABLED);
-        } else {
-            lv_obj_remove_state(switch_, LV_STATE_DISABLED);
-        }
-        return;
-    }
-    apply_state(true, item.value_bool, item.version);
+    apply_state(state.has_onoff, state.onoff, state.onoff_version);
 }
 
 void WidgetOnOffControl::on_row_clicked(lv_event_t *event)
@@ -351,25 +348,29 @@ lv_obj_t *WidgetLevelControl::root() const
 void WidgetLevelControl::render()
 {
     last_version_ = 0;
-    render_if_needed();
 }
 
 void WidgetLevelControl::render_if_needed()
 {
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref_.uid, ref_.endpoint, "level", &item) != ESP_OK ||
-        item.value_type != GW_STATE_VALUE_U32) {
+}
+
+void WidgetLevelControl::apply(const WidgetEndpointState &state)
+{
+    if (!state.has_level) {
+        if (last_version_ == 0) {
+            return;
+        }
         lv_slider_set_value(slider_, 0, LV_ANIM_OFF);
         lv_label_set_text(label_, "Level: 0");
         last_version_ = 0;
         return;
     }
-    if (item.version == last_version_) {
+    if (state.level_version == last_version_) {
         return;
     }
-    lv_slider_set_value(slider_, (int32_t)item.value_u32, LV_ANIM_OFF);
-    lv_label_set_text_fmt(label_, "Level: %u", (unsigned)item.value_u32);
-    last_version_ = item.version;
+    lv_slider_set_value(slider_, (int32_t)state.level, LV_ANIM_OFF);
+    lv_label_set_text_fmt(label_, "Level: %u", (unsigned)state.level);
+    last_version_ = state.level_version;
 }
 
 void WidgetLevelControl::on_slider_released(lv_event_t *event)
@@ -434,17 +435,18 @@ void WidgetColorControl::render()
 {
     last_version_ = 0;
     has_cached_hs_ = false;
-    render_if_needed();
 }
 
 void WidgetColorControl::render_if_needed()
 {
-    gw_state_item_t x_item = {};
-    gw_state_item_t y_item = {};
-    if (gw_state_store_get(&ref_.uid, ref_.endpoint, "color_x", &x_item) != ESP_OK ||
-        gw_state_store_get(&ref_.uid, ref_.endpoint, "color_y", &y_item) != ESP_OK ||
-        x_item.value_type != GW_STATE_VALUE_U32 ||
-        y_item.value_type != GW_STATE_VALUE_U32) {
+}
+
+void WidgetColorControl::apply(const WidgetEndpointState &state)
+{
+    if (!state.has_color_x || !state.has_color_y) {
+        if (last_version_ == 0 && !has_cached_hs_) {
+            return;
+        }
         last_version_ = 0;
         has_cached_hs_ = false;
         lv_label_set_text(label_hue_, "Hue: 0");
@@ -454,11 +456,11 @@ void WidgetColorControl::render_if_needed()
         return;
     }
 
-    const uint32_t version = (x_item.version > y_item.version) ? x_item.version : y_item.version;
+    const uint32_t version = (state.color_x_version > state.color_y_version) ? state.color_x_version : state.color_y_version;
     if (version == last_version_) {
         return;
     }
-    apply_color(x_item.value_u32, y_item.value_u32, version, true);
+    apply_color(state.color_x, state.color_y, version, true);
 }
 
 void WidgetColorControl::on_hs_released(lv_event_t *event)
@@ -529,33 +531,47 @@ lv_obj_t *WidgetValueLabel::root() const
 void WidgetValueLabel::render()
 {
     last_version_ = 0;
-    render_if_needed();
 }
 
 void WidgetValueLabel::render_if_needed()
 {
-    const char *key = nullptr;
-    if (kind_ == Kind::Temperature) key = "temperature_c";
-    else if (kind_ == Kind::Humidity) key = "humidity_pct";
-    else key = "battery_pct";
+}
 
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref_.uid, ref_.endpoint, key, &item) != ESP_OK) {
+void WidgetValueLabel::apply(const WidgetEndpointState &state)
+{
+    bool has_value = false;
+    uint32_t version = 0;
+
+    if (kind_ == Kind::Temperature) {
+        has_value = state.has_temperature_c;
+        version = state.temperature_c_version;
+    } else if (kind_ == Kind::Humidity) {
+        has_value = state.has_humidity_pct;
+        version = state.humidity_pct_version;
+    } else {
+        has_value = state.has_battery_pct;
+        version = state.battery_pct_version;
+    }
+
+    if (!has_value) {
+        if (last_version_ == 0) {
+            return;
+        }
         if (kind_ == Kind::Battery) lv_label_set_text(label_, "Battery: -");
         else lv_label_set_text(label_, "-");
         last_version_ = 0;
         return;
     }
-    if (item.version == last_version_) {
+    if (version == last_version_) {
         return;
     }
 
-    if (kind_ == Kind::Temperature && item.value_type == GW_STATE_VALUE_F32) {
-        set_value_1dp(label_, "", item.value_f32, " C");
-    } else if (kind_ == Kind::Humidity && item.value_type == GW_STATE_VALUE_F32) {
-        set_value_1dp(label_, "", item.value_f32, " %");
-    } else if (kind_ == Kind::Battery && item.value_type == GW_STATE_VALUE_U32) {
-        lv_label_set_text_fmt(label_, "Battery: %u %%", (unsigned)item.value_u32);
+    if (kind_ == Kind::Temperature) {
+        set_value_1dp(label_, "", state.temperature_c, " C");
+    } else if (kind_ == Kind::Humidity) {
+        set_value_1dp(label_, "", state.humidity_pct, " %");
+    } else {
+        lv_label_set_text_fmt(label_, "Battery: %u %%", (unsigned)state.battery_pct);
     }
-    last_version_ = item.version;
+    last_version_ = version;
 }

@@ -44,6 +44,29 @@ esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
     return ESP_OK;
 }
 
+esp_err_t gw_zb_model_remove_device(const gw_device_uid_t *uid)
+{
+    if (!s_inited || uid == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t wr = 0;
+    for (size_t i = 0; i < s_ep_count; i++) {
+        if (uid_equals(&s_eps[i].uid, uid)) {
+            continue;
+        }
+        if (wr != i) {
+            s_eps[wr] = s_eps[i];
+        }
+        wr++;
+    }
+    for (size_t i = wr; i < s_ep_count; i++) {
+        memset(&s_eps[i], 0, sizeof(s_eps[i]));
+    }
+    s_ep_count = wr;
+    return ESP_OK;
+}
+
 size_t gw_zb_model_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps)
 {
     if (!s_inited || uid == NULL || out_eps == NULL || max_eps == 0) {

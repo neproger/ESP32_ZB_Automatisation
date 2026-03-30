@@ -15,8 +15,8 @@
 #include "freertos/task.h"
 
 #include "gw_core/event_bus.h"
+#include "gw_proto/gw_proto_uart.h"
 #include "gw_core/gw_uart_proto.h"
-#include "gw_core/device_fb_store.h"
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
 #include "gw_core/runtime_sync.h"
@@ -49,9 +49,6 @@ static const char *TAG = "gw_zigbee_uart";
 #define GW_SNAPSHOT_IDLE_TIMEOUT_US  (3000000LL)
 #define GW_SNAPSHOT_RETRY_GAP_US     (1000000LL)
 #define GW_SNAPSHOT_RETRY_MAX        6
-#define GW_DEVICE_FB_IDLE_TIMEOUT_US (3000000LL)
-#define GW_DEVICE_FB_RETRY_GAP_US    (1000000LL)
-#define GW_DEVICE_FB_RETRY_MAX       6
 
 static TaskHandle_t s_rx_task;
 static SemaphoreHandle_t s_init_lock;
@@ -69,24 +66,16 @@ static bool s_snapshot_stream_active;
 static int64_t s_snapshot_last_chunk_us;
 static int64_t s_snapshot_last_retry_us;
 static uint8_t s_snapshot_retry_count;
-static uint16_t s_snapshot_expected_devices;
-static uint16_t s_snapshot_received_devices;
+static uint16_t s_snapshot_expected_records;
+static uint16_t s_snapshot_received_records;
+static uint16_t s_snapshot_received_state_items;
 static bool s_bootstrap_ready;
-static uint16_t s_device_fb_transfer_id;
-static uint32_t s_device_fb_expected_len;
-static size_t s_device_fb_received_len;
-static uint8_t *s_device_fb_buf;
-static bool s_device_fb_active;
-static int64_t s_device_fb_last_chunk_us;
-static int64_t s_device_fb_last_retry_us;
-static uint8_t s_device_fb_retry_count;
 static TaskHandle_t s_initial_state_sync_task;
 static bool s_initial_state_sync_done;
 static bool s_initial_state_sync_started;
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_cmd_wait_rsp(gw_uart_cmd_req_v1_t *req);
 static esp_err_t request_snapshot_sync(void);
-static esp_err_t request_device_fb_sync(void);
 static esp_err_t request_sync_cmd_async(gw_uart_cmd_id_t cmd_id, const char *label);
 static void start_initial_state_sync_once(void);
 
@@ -126,7 +115,7 @@ static bool uart_write_all(const uint8_t *data, size_t len)
 
 static const char *msg_type_name(uint8_t t)
 {
-    switch ((gw_uart_msg_type_t)t) {
+    switch (t) {
         case GW_UART_MSG_HELLO:
             return "HELLO";
         case GW_UART_MSG_HELLO_ACK:
@@ -141,10 +130,32 @@ static const char *msg_type_name(uint8_t t)
             return "CMD_RSP";
         case GW_UART_MSG_EVT:
             return "EVT";
-        case GW_UART_MSG_SNAPSHOT:
-            return "SNAPSHOT";
-        case GW_UART_MSG_DEVICE_FB:
-            return "DEVICE_FB";
+        case GW_PROTO_MSG_SYNC_BEGIN:
+            return "PROTO_SYNC_BEGIN";
+        case GW_PROTO_MSG_SYNC_END:
+            return "PROTO_SYNC_END";
+        case GW_PROTO_MSG_DEVICE_UPSERT:
+            return "PROTO_DEVICE_UPSERT";
+        case GW_PROTO_MSG_DEVICE_REMOVE:
+            return "PROTO_DEVICE_REMOVE";
+        case GW_PROTO_MSG_ENDPOINT_UPSERT:
+            return "PROTO_ENDPOINT_UPSERT";
+        case GW_PROTO_MSG_ENDPOINT_REMOVE:
+            return "PROTO_ENDPOINT_REMOVE";
+        case GW_PROTO_MSG_STATE_ITEM:
+            return "PROTO_STATE_ITEM";
+        case GW_PROTO_MSG_STATE_REMOVE:
+            return "PROTO_STATE_REMOVE";
+        case GW_PROTO_MSG_GROUP_UPSERT:
+            return "PROTO_GROUP_UPSERT";
+        case GW_PROTO_MSG_GROUP_REMOVE:
+            return "PROTO_GROUP_REMOVE";
+        case GW_PROTO_MSG_GROUP_ITEM_UPSERT:
+            return "PROTO_GROUP_ITEM_UPSERT";
+        case GW_PROTO_MSG_GROUP_ITEM_REMOVE:
+            return "PROTO_GROUP_ITEM_REMOVE";
+        case GW_PROTO_MSG_SETTINGS:
+            return "PROTO_SETTINGS";
         default:
             return "UNKNOWN";
     }
@@ -189,8 +200,6 @@ static const char *cmd_id_name(uint8_t cmd_id)
             return "IDENTIFY";
         case GW_UART_CMD_SYNC_SNAPSHOT:
             return "SYNC_SNAPSHOT";
-        case GW_UART_CMD_SYNC_DEVICE_FB:
-            return "SYNC_DEVICE_FB";
         case GW_UART_CMD_SET_DEVICE_NAME:
             return "SET_DEVICE_NAME";
         case GW_UART_CMD_REMOVE_DEVICE:
@@ -363,101 +372,138 @@ static void publish_evt_from_c6(const gw_uart_evt_v1_t *evt)
                             0);
 }
 
-static void apply_snapshot_from_c6(const gw_uart_snapshot_v1_t *snap)
+static void apply_proto_sync_begin_from_c6(const gw_proto_sync_begin_v1_t *msg)
 {
-    if (!snap) {
+    if (!msg) {
         return;
     }
     s_snapshot_last_chunk_us = esp_timer_get_time();
+    s_snapshot_stream_active = true;
+    s_snapshot_retry_count = 0;
+    s_snapshot_last_retry_us = 0;
+    s_snapshot_expected_records = (uint16_t)msg->total_records;
+    s_snapshot_received_records = 0;
+    s_snapshot_received_state_items = 0;
+    s_bootstrap_ready = false;
+    (void)gw_runtime_sync_snapshot_begin((uint16_t)msg->total_records);
+    ESP_LOGI(TAG, "Proto sync begin: scope=%u total=%u", (unsigned)msg->scope, (unsigned)msg->total_records);
+}
 
-    switch ((gw_uart_snapshot_kind_t)snap->kind) {
-        case GW_UART_SNAPSHOT_BEGIN:
-            s_snapshot_stream_active = true;
-            s_snapshot_retry_count = 0;
-            s_snapshot_last_retry_us = 0;
-            s_snapshot_expected_devices = snap->total_devices;
-            s_snapshot_received_devices = 0;
-            s_bootstrap_ready = false;
-            (void)gw_runtime_sync_snapshot_begin(snap->total_devices);
-            ESP_LOGI(TAG, "Snapshot begin: total_devices=%u", (unsigned)snap->total_devices);
-            break;
-        case GW_UART_SNAPSHOT_DEVICE: {
-            gw_device_t d = {0};
-            strlcpy(d.device_uid.uid, snap->device_uid, sizeof(d.device_uid.uid));
-            strlcpy(d.name, snap->name, sizeof(d.name));
-            d.short_addr = snap->short_addr;
-            d.last_seen_ms = snap->last_seen_ms;
-            d.has_onoff = (snap->has_onoff != 0);
-            d.has_button = (snap->has_button != 0);
-            (void)gw_runtime_sync_snapshot_upsert_device(&d);
-            s_snapshot_received_devices++;
-            break;
+static void apply_proto_sync_end_from_c6(const gw_proto_sync_end_v1_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    s_snapshot_last_chunk_us = esp_timer_get_time();
+    (void)gw_runtime_sync_snapshot_end();
+    ESP_LOGI(TAG, "Proto sync end: scope=%u expected=%u received=%u",
+             (unsigned)msg->scope,
+             (unsigned)s_snapshot_expected_records,
+             (unsigned)s_snapshot_received_records);
+    s_snapshot_stream_active = false;
+    s_snapshot_last_chunk_us = 0;
+    s_snapshot_last_retry_us = 0;
+    s_snapshot_retry_count = 0;
+    if (s_snapshot_expected_records > 0 && s_snapshot_received_records < s_snapshot_expected_records) {
+        ESP_LOGW(TAG, "Proto sync incomplete, requesting re-sync");
+        (void)request_snapshot_sync();
+    } else {
+        s_bootstrap_ready = true;
+        if (s_snapshot_received_state_items == 0) {
+            start_initial_state_sync_once();
+        } else {
+            s_initial_state_sync_done = true;
+            s_initial_state_sync_started = false;
+            s_initial_state_sync_task = NULL;
         }
-        case GW_UART_SNAPSHOT_ENDPOINT: {
-            gw_zb_endpoint_t ep = {0};
-            strlcpy(ep.uid.uid, snap->device_uid, sizeof(ep.uid.uid));
-            ep.short_addr = snap->short_addr;
-            ep.endpoint = snap->endpoint;
-            ep.profile_id = snap->profile_id;
-            ep.device_id = snap->device_id;
-            ep.in_cluster_count = snap->in_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : snap->in_cluster_count;
-            ep.out_cluster_count = snap->out_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : snap->out_cluster_count;
-            if (ep.in_cluster_count > 0) {
-                memcpy(ep.in_clusters, snap->in_clusters, ep.in_cluster_count * sizeof(uint16_t));
-            }
-            if (ep.out_cluster_count > 0) {
-                memcpy(ep.out_clusters, snap->out_clusters, ep.out_cluster_count * sizeof(uint16_t));
-            }
-            (void)gw_runtime_sync_snapshot_upsert_endpoint(&ep);
+        gw_event_bus_publish("device.changed", "zigbee-uart", "", 0, "proto_sync_ready");
+    }
+}
+
+static void apply_proto_device_from_c6(const gw_proto_device_v1_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    gw_device_t d = {0};
+    d.device_uid = msg->device_uid;
+    d.short_addr = msg->short_addr;
+    memcpy(d.name, msg->name, sizeof(d.name));
+    d.version = msg->version;
+    d.last_seen_ms = msg->last_seen_ms;
+    d.has_onoff = (msg->has_onoff != 0);
+    d.has_button = (msg->has_button != 0);
+    (void)gw_runtime_sync_snapshot_upsert_device(&d);
+    s_snapshot_received_records++;
+    s_snapshot_last_chunk_us = esp_timer_get_time();
+}
+
+static void apply_proto_endpoint_from_c6(const gw_proto_endpoint_v1_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    gw_zb_endpoint_t ep = {0};
+    ep.uid = msg->uid;
+    ep.short_addr = msg->short_addr;
+    ep.endpoint = msg->endpoint;
+    ep.version = msg->version;
+    ep.profile_id = msg->profile_id;
+    ep.device_id = msg->device_id;
+    ep.in_cluster_count = msg->in_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : msg->in_cluster_count;
+    ep.out_cluster_count = msg->out_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : msg->out_cluster_count;
+    if (ep.in_cluster_count > 0) {
+        memcpy(ep.in_clusters, msg->in_clusters, ep.in_cluster_count * sizeof(uint16_t));
+    }
+    if (ep.out_cluster_count > 0) {
+        memcpy(ep.out_clusters, msg->out_clusters, ep.out_cluster_count * sizeof(uint16_t));
+    }
+    (void)gw_runtime_sync_snapshot_upsert_endpoint(&ep);
+    s_snapshot_received_records++;
+    s_snapshot_last_chunk_us = esp_timer_get_time();
+}
+
+static void apply_proto_state_item_from_c6(const gw_proto_state_item_v1_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    const gw_device_uid_t *uid = &msg->uid;
+    const uint8_t endpoint = msg->endpoint;
+    const char *key = msg->key;
+    switch ((gw_state_value_type_t)msg->value_type) {
+        case GW_STATE_VALUE_BOOL:
+            (void)gw_state_store_set_bool(uid, endpoint, key, msg->value_bool != 0, msg->ts_ms);
             break;
-        }
-        case GW_UART_SNAPSHOT_STATE: {
-            gw_event_value_type_t vtype = map_value_type(snap->state_value_type);
-            gw_event_bus_publish_zb("zigbee.attr_report",
-                                    "zigbee-uart-snapshot",
-                                    snap->device_uid,
-                                    snap->short_addr,
-                                    "snapshot state",
-                                    snap->endpoint,
-                                    NULL,
-                                    snap->state_cluster_id,
-                                    snap->state_attr_id,
-                                    vtype,
-                                    snap->state_value_bool != 0,
-                                    snap->state_value_i64,
-                                    (double)snap->state_value_f32,
-                                    snap->state_value_text,
-                                    NULL,
-                                    0);
+        case GW_STATE_VALUE_F32:
+            (void)gw_state_store_set_f32(uid, endpoint, key, msg->value_f32, msg->ts_ms);
             break;
-        }
-        case GW_UART_SNAPSHOT_REMOVE: {
-            gw_device_uid_t uid = {0};
-            strlcpy(uid.uid, snap->device_uid, sizeof(uid.uid));
-            (void)gw_runtime_sync_snapshot_remove_device(&uid);
+        case GW_STATE_VALUE_U32:
+            (void)gw_state_store_set_u32(uid, endpoint, key, msg->value_u32, msg->ts_ms);
             break;
-        }
-        case GW_UART_SNAPSHOT_END:
-            (void)gw_runtime_sync_snapshot_end();
-            ESP_LOGI(TAG, "Snapshot end: expected=%u received=%u",
-                     (unsigned)s_snapshot_expected_devices, (unsigned)s_snapshot_received_devices);
-            s_snapshot_stream_active = false;
-            s_snapshot_last_chunk_us = 0;
-            s_snapshot_last_retry_us = 0;
-            s_snapshot_retry_count = 0;
-            if (s_snapshot_expected_devices > 0 && s_snapshot_received_devices < s_snapshot_expected_devices) {
-                ESP_LOGW(TAG, "Snapshot incomplete, requesting re-sync");
-                (void)request_snapshot_sync();
-            } else {
-                s_bootstrap_ready = true;
-                // After a completed snapshot, always refresh the device flatbuffer.
-                // This guarantees frontend store sync after any snapshot recovery cycle.
-                (void)request_sync_cmd_async(GW_UART_CMD_SYNC_DEVICE_FB, "device fb sync");
-            }
+        case GW_STATE_VALUE_U64:
+            (void)gw_state_store_set_u64(uid, endpoint, key, msg->value_u64, msg->ts_ms);
+            break;
+        case GW_STATE_VALUE_TEXT:
+            (void)gw_state_store_set_text(uid, endpoint, key, msg->value_text, msg->ts_ms);
             break;
         default:
             break;
     }
+    s_snapshot_received_records++;
+    s_snapshot_received_state_items++;
+    s_snapshot_last_chunk_us = esp_timer_get_time();
+}
+
+static void apply_proto_device_remove_from_c6(const gw_proto_device_remove_v1_t *msg)
+{
+    if (!msg) {
+        return;
+    }
+    (void)gw_runtime_sync_snapshot_remove_device(&msg->device_uid);
+    gw_event_bus_publish("device.changed", "zigbee-uart", msg->device_uid.uid, 0, "proto_remove");
+    s_snapshot_received_records++;
+    s_snapshot_last_chunk_us = esp_timer_get_time();
 }
 
 static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
@@ -599,82 +645,6 @@ static void start_initial_state_sync_once(void)
     }
 }
 
-static void apply_device_fb_chunk_from_c6(const gw_uart_device_fb_chunk_v1_t *ch)
-{
-    if (!ch || ch->chunk_len > sizeof(ch->data)) {
-        return;
-    }
-
-    if (ch->flags & GW_UART_DEVICE_FB_FLAG_BEGIN) {
-        free(s_device_fb_buf);
-        s_device_fb_buf = NULL;
-        s_device_fb_received_len = 0;
-        s_device_fb_expected_len = ch->total_len;
-        s_device_fb_transfer_id = ch->transfer_id;
-        s_device_fb_active = false;
-        s_device_fb_last_chunk_us = esp_timer_get_time();
-        if (s_device_fb_expected_len > 0) {
-            s_device_fb_buf = (uint8_t *)malloc(s_device_fb_expected_len);
-            if (!s_device_fb_buf) {
-                ESP_LOGW(TAG, "device fb alloc failed: %u bytes", (unsigned)s_device_fb_expected_len);
-                s_device_fb_expected_len = 0;
-            } else {
-                s_device_fb_active = true;
-                s_device_fb_retry_count = 0;
-                ESP_LOGI(TAG, "device fb begin: transfer=%u total=%u", (unsigned)ch->transfer_id, (unsigned)ch->total_len);
-            }
-        }
-    }
-
-    if (!s_device_fb_buf || s_device_fb_expected_len == 0) {
-        return;
-    }
-    if (ch->transfer_id != s_device_fb_transfer_id) {
-        return;
-    }
-    if ((size_t)ch->offset + ch->chunk_len > s_device_fb_expected_len) {
-        ESP_LOGW(TAG, "device fb chunk out of bounds");
-        return;
-    }
-
-    s_device_fb_last_chunk_us = esp_timer_get_time();
-    memcpy(&s_device_fb_buf[ch->offset], ch->data, ch->chunk_len);
-    size_t end = (size_t)ch->offset + ch->chunk_len;
-    if (end > s_device_fb_received_len) {
-        s_device_fb_received_len = end;
-    }
-    if ((ch->flags & GW_UART_DEVICE_FB_FLAG_END) == 0) {
-        ESP_LOGI(TAG, "device fb chunk: transfer=%u off=%u len=%u recv=%u/%u",
-                 (unsigned)ch->transfer_id,
-                 (unsigned)ch->offset,
-                 (unsigned)ch->chunk_len,
-                 (unsigned)s_device_fb_received_len,
-                 (unsigned)s_device_fb_expected_len);
-    }
-
-    if (ch->flags & GW_UART_DEVICE_FB_FLAG_END) {
-        if (s_device_fb_received_len == s_device_fb_expected_len) {
-            (void)gw_device_fb_store_set(s_device_fb_buf, s_device_fb_expected_len);
-            ESP_LOGI(TAG, "device fb updated: %u bytes", (unsigned)s_device_fb_expected_len);
-            start_initial_state_sync_once();
-        } else {
-            ESP_LOGW(TAG,
-                     "device fb incomplete: recv=%u expected=%u",
-                     (unsigned)s_device_fb_received_len,
-                     (unsigned)s_device_fb_expected_len);
-        }
-        free(s_device_fb_buf);
-        s_device_fb_buf = NULL;
-        s_device_fb_received_len = 0;
-        s_device_fb_expected_len = 0;
-        s_device_fb_transfer_id = 0;
-        s_device_fb_active = false;
-        s_device_fb_last_chunk_us = 0;
-        s_device_fb_last_retry_us = 0;
-        s_device_fb_retry_count = 0;
-    }
-}
-
 static esp_err_t request_snapshot_sync(void)
 {
     gw_uart_cmd_req_v1_t req = {0};
@@ -684,19 +654,6 @@ static esp_err_t request_snapshot_sync(void)
         ESP_LOGW(TAG, "snapshot sync request failed: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "snapshot sync requested");
-    }
-    return err;
-}
-
-static esp_err_t request_device_fb_sync(void)
-{
-    gw_uart_cmd_req_v1_t req = {0};
-    req.cmd_id = GW_UART_CMD_SYNC_DEVICE_FB;
-    esp_err_t err = send_cmd_wait_rsp(&req);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "device fb sync request failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "device fb sync requested");
     }
     return err;
 }
@@ -730,24 +687,21 @@ static esp_err_t request_sync_cmd_async(gw_uart_cmd_id_t cmd_id, const char *lab
 
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len)
 {
-    gw_uart_proto_frame_t frame = {
-        .ver = GW_UART_PROTO_VERSION_V1,
-        .msg_type = msg_type,
-        .flags = 0,
-        .seq = seq,
-        .payload_len = payload_len,
-    };
-    uint8_t raw[GW_UART_PROTO_MAX_FRAME_SIZE];
+    gw_proto_hdr_t hdr = {0};
+    uint8_t raw[GW_PROTO_UART_MAX_FRAME_SIZE];
     size_t raw_len = 0;
 
-    if (payload_len > GW_UART_PROTO_MAX_PAYLOAD) {
+    if (payload_len > GW_PROTO_UART_MAX_PAYLOAD) {
         return ESP_ERR_INVALID_SIZE;
     }
-    if (payload_len > 0 && payload) {
-        memcpy(frame.payload, payload, payload_len);
-    }
 
-    ESP_RETURN_ON_ERROR(gw_uart_proto_build_frame(&frame, raw, sizeof(raw), &raw_len), TAG, "build_frame failed");
+    hdr.version = GW_PROTO_VERSION_V1;
+    hdr.type = msg_type;
+    hdr.len = payload_len;
+    hdr.seq = seq;
+    hdr.reserved = 0;
+
+    ESP_RETURN_ON_ERROR(gw_proto_uart_build_frame(&hdr, payload, payload_len, raw, sizeof(raw), &raw_len), TAG, "build_frame failed");
     if (msg_type == GW_UART_MSG_EVT) {
         GW_UART_TRACE_D("UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
     } else {
@@ -763,20 +717,20 @@ static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *pay
     return ok ? ESP_OK : ESP_FAIL;
 }
 
-static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
+static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
 {
-    if (frame->msg_type == GW_UART_MSG_EVT) {
-        GW_UART_TRACE_D("UART RX %s seq=%u payload=%u", msg_type_name(frame->msg_type), (unsigned)frame->seq, (unsigned)frame->payload_len);
+    if (frame->hdr.type == GW_UART_MSG_EVT) {
+        GW_UART_TRACE_D("UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     } else {
-        GW_UART_TRACE_I("UART RX %s seq=%u payload=%u", msg_type_name(frame->msg_type), (unsigned)frame->seq, (unsigned)frame->payload_len);
+        GW_UART_TRACE_I("UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     }
 
-    if (frame->msg_type == GW_UART_MSG_EVT) {
-        if (frame->payload_len == 0) {
+    if (frame->hdr.type == GW_UART_MSG_EVT) {
+        if (frame->hdr.len == 0) {
             return;
         }
         gw_uart_evt_v1_t evt = {0};
-        size_t n = frame->payload_len < sizeof(evt) ? frame->payload_len : sizeof(evt);
+        size_t n = frame->hdr.len < sizeof(evt) ? frame->hdr.len : sizeof(evt);
         memcpy(&evt, frame->payload, n);
         evt.event_type[sizeof(evt.event_type) - 1] = '\0';
         evt.cmd[sizeof(evt.cmd) - 1] = '\0';
@@ -790,17 +744,17 @@ static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
         return;
     }
 
-    if (frame->msg_type == GW_UART_MSG_CMD_RSP) {
+    if (frame->hdr.type == GW_UART_MSG_CMD_RSP) {
         gw_uart_cmd_rsp_v1_t rsp = {0};
-        size_t n = frame->payload_len < sizeof(rsp) ? frame->payload_len : sizeof(rsp);
+        size_t n = frame->hdr.len < sizeof(rsp) ? frame->hdr.len : sizeof(rsp);
         memcpy(&rsp, frame->payload, n);
         rsp.message[sizeof(rsp.message) - 1] = '\0';
         GW_UART_TRACE_I("UART RSP seq=%u status=%u(%s) msg=%s",
-                        (unsigned)frame->seq, (unsigned)rsp.status, status_name(rsp.status), rsp.message);
+                        (unsigned)frame->hdr.seq, (unsigned)rsp.status, status_name(rsp.status), rsp.message);
 
         bool match = false;
         portENTER_CRITICAL(&s_wait_lock);
-        if (s_wait_active && frame->seq == s_wait_seq) {
+        if (s_wait_active && frame->hdr.seq == s_wait_seq) {
             s_wait_rsp = rsp;
             s_wait_active = false;
             match = true;
@@ -812,25 +766,51 @@ static void handle_rx_frame(const gw_uart_proto_frame_t *frame)
         return;
     }
 
-    if (frame->msg_type == GW_UART_MSG_SNAPSHOT) {
-        gw_uart_snapshot_v1_t snap = {0};
-        size_t n = frame->payload_len < sizeof(snap) ? frame->payload_len : sizeof(snap);
-        memcpy(&snap, frame->payload, n);
-        snap.device_uid[sizeof(snap.device_uid) - 1] = '\0';
-        snap.name[sizeof(snap.name) - 1] = '\0';
-        snap.state_value_text[sizeof(snap.state_value_text) - 1] = '\0';
-        GW_UART_TRACE_I("UART SNAP kind=%u seq=%u uid=%s ep=%u",
-                        (unsigned)snap.kind, (unsigned)snap.snapshot_seq,
-                        snap.device_uid, (unsigned)snap.endpoint);
-        apply_snapshot_from_c6(&snap);
+    if (frame->hdr.type == GW_PROTO_MSG_SYNC_BEGIN) {
+        gw_proto_sync_begin_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_sync_begin_from_c6(&msg);
         return;
     }
 
-    if (frame->msg_type == GW_UART_MSG_DEVICE_FB) {
-        gw_uart_device_fb_chunk_v1_t ch = {0};
-        size_t n = frame->payload_len < sizeof(ch) ? frame->payload_len : sizeof(ch);
-        memcpy(&ch, frame->payload, n);
-        apply_device_fb_chunk_from_c6(&ch);
+    if (frame->hdr.type == GW_PROTO_MSG_SYNC_END) {
+        gw_proto_sync_end_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_sync_end_from_c6(&msg);
+        return;
+    }
+
+    if (frame->hdr.type == GW_PROTO_MSG_DEVICE_UPSERT) {
+        gw_proto_device_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_device_from_c6(&msg);
+        return;
+    }
+
+    if (frame->hdr.type == GW_PROTO_MSG_DEVICE_REMOVE) {
+        gw_proto_device_remove_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_device_remove_from_c6(&msg);
+        return;
+    }
+
+    if (frame->hdr.type == GW_PROTO_MSG_ENDPOINT_UPSERT) {
+        gw_proto_endpoint_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_endpoint_from_c6(&msg);
+        return;
+    }
+
+    if (frame->hdr.type == GW_PROTO_MSG_STATE_ITEM) {
+        gw_proto_state_item_v1_t msg = {0};
+        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
+        memcpy(&msg, frame->payload, n);
+        apply_proto_state_item_from_c6(&msg);
         return;
     }
 }
@@ -839,8 +819,8 @@ static void rx_task(void *arg)
 {
     (void)arg;
     uint8_t rx[128];
-    gw_uart_proto_parser_t parser;
-    gw_uart_proto_parser_init(&parser);
+    gw_proto_uart_parser_t parser;
+    gw_proto_uart_parser_init(&parser);
 
     for (;;) {
         // Watch stalled streams regardless of incoming event traffic.
@@ -853,30 +833,13 @@ static void rx_task(void *arg)
                 s_snapshot_retry_count++;
                 ESP_LOGW(TAG,
                          "snapshot stalled: received=%u/%u retry=%u/%u",
-                         (unsigned)s_snapshot_received_devices,
-                         (unsigned)s_snapshot_expected_devices,
+                         (unsigned)s_snapshot_received_records,
+                         (unsigned)s_snapshot_expected_records,
                          (unsigned)s_snapshot_retry_count,
                          (unsigned)GW_SNAPSHOT_RETRY_MAX);
                 (void)request_sync_cmd_async(GW_UART_CMD_SYNC_SNAPSHOT, "snapshot sync");
             }
         }
-        if (s_device_fb_active && s_device_fb_expected_len > 0 && s_device_fb_last_chunk_us > 0) {
-            if ((now_us - s_device_fb_last_chunk_us) > GW_DEVICE_FB_IDLE_TIMEOUT_US &&
-                (now_us - s_device_fb_last_retry_us) > GW_DEVICE_FB_RETRY_GAP_US &&
-                s_device_fb_retry_count < GW_DEVICE_FB_RETRY_MAX) {
-                s_device_fb_last_retry_us = now_us;
-                s_device_fb_retry_count++;
-                ESP_LOGW(TAG,
-                         "device fb stalled: recv=%u/%u transfer=%u retry=%u/%u",
-                         (unsigned)s_device_fb_received_len,
-                         (unsigned)s_device_fb_expected_len,
-                         (unsigned)s_device_fb_transfer_id,
-                         (unsigned)s_device_fb_retry_count,
-                         (unsigned)GW_DEVICE_FB_RETRY_MAX);
-                (void)request_sync_cmd_async(GW_UART_CMD_SYNC_DEVICE_FB, "device fb sync");
-            }
-        }
-
         int n = uart_read_bytes(GW_UART_PORT, rx, sizeof(rx), pdMS_TO_TICKS(50));
         if (n <= 0) {
             continue;
@@ -884,10 +847,10 @@ static void rx_task(void *arg)
 
         size_t off = 0;
         while (off < (size_t)n) {
-            gw_uart_proto_frame_t frame;
+            gw_proto_uart_frame_t frame;
             bool ready = false;
             size_t consumed = 0;
-            esp_err_t err = gw_uart_proto_parser_feed(&parser, &rx[off], (size_t)n - off, &frame, &ready, &consumed);
+            esp_err_t err = gw_proto_uart_parser_feed(&parser, &rx[off], (size_t)n - off, &frame, &ready, &consumed);
             if (consumed == 0) {
                 break;
             }
@@ -1081,17 +1044,7 @@ esp_err_t gw_zigbee_link_start(void)
         (void)request_sync_cmd_async(GW_UART_CMD_SYNC_SNAPSHOT, "snapshot sync");
         return ESP_OK;
     }
-    (void)request_device_fb_sync();
     return ESP_OK;
-}
-
-esp_err_t gw_zigbee_sync_device_fb(void)
-{
-    esp_err_t err = ensure_started();
-    if (err != ESP_OK) {
-        return err;
-    }
-    return request_device_fb_sync();
 }
 
 bool gw_zigbee_bootstrap_ready(void)
@@ -1124,6 +1077,13 @@ esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid)
     gw_uart_cmd_req_v1_t req = {0};
     req.cmd_id = GW_UART_CMD_REMOVE_DEVICE;
     fill_uid(req.device_uid, uid);
+    return send_cmd_wait_rsp(&req);
+}
+
+esp_err_t gw_zigbee_remove_all_devices(void)
+{
+    gw_uart_cmd_req_v1_t req = {0};
+    req.cmd_id = GW_UART_CMD_REMOVE_ALL_DEVICES;
     return send_cmd_wait_rsp(&req);
 }
 

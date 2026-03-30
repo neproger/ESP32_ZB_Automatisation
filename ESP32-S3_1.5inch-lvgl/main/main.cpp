@@ -6,7 +6,6 @@
 #include "s3_weather_service.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/device_registry.h"
-#include "gw_core/device_fb_store.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/group_store.h"
 #include "gw_core/project_settings.h"
@@ -26,22 +25,18 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include <cstring>
-#include <cstdio>
-#include <cstdlib>
 
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
 static constexpr uint32_t kUiBootTaskStack = 10240;
-static constexpr uint32_t kMemDiagTaskStack = 6144;
+static constexpr uint32_t kMemDiagTaskStack = 4096;
 static bool s_http_started = false;
 static volatile bool s_ui_ready_for_http = false;
 
-static void log_heap_caps(const char *stage)
+static void log_heap_periodic(void)
 {
     ESP_LOGI(TAG_APP,
-             "Heap %s: internal=%u (largest=%u) dma=%u (largest=%u) psram=%u (largest=%u)",
-             stage ? stage : "-",
+             "Heap periodic: internal=%u (largest=%u) dma=%u (largest=%u) psram=%u (largest=%u)",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
@@ -50,45 +45,9 @@ static void log_heap_caps(const char *stage)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 }
 
-static void log_task_memory_snapshot(void)
-{
-    const UBaseType_t task_count = uxTaskGetNumberOfTasks();
-    if (task_count == 0) {
-        return;
-    }
-
-    TaskStatus_t *tasks = static_cast<TaskStatus_t *>(calloc(task_count, sizeof(TaskStatus_t)));
-    if (!tasks) {
-        ESP_LOGW(TAG_APP, "mem diag: no mem for task snapshot");
-        return;
-    }
-
-    const UBaseType_t got = uxTaskGetSystemState(tasks, task_count, NULL);
-    ESP_LOGI(TAG_APP, "Task memory snapshot: tasks=%u", (unsigned)got);
-    for (UBaseType_t i = 0; i < got; i++) {
-        ESP_LOGI(TAG_APP,
-                 "task name=%s prio=%u stack_hwm=%u",
-                 tasks[i].pcTaskName ? tasks[i].pcTaskName : "?",
-                 (unsigned)tasks[i].uxCurrentPriority,
-                 (unsigned)tasks[i].usStackHighWaterMark);
-    }
-
-    free(tasks);
-}
-
 static bool http_has_memory_headroom(void)
 {
-    const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    const size_t largest_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
-    const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
-    // Pragmatic gate for tight-memory profile:
-    // - keep a small internal margin for httpd task/handlers
-    // - DMA can be low because LVGL/display already occupies most of it
-    return (free_internal >= 8 * 1024) &&
-           (largest_internal >= 5 * 1024) &&
-           (free_dma >= 1024) &&
-           (largest_dma >= 768);
+    return true;
 }
 
 static void http_start_task(void *arg)
@@ -97,16 +56,9 @@ static void http_start_task(void *arg)
     for (;;) {
         if (kEnableHttpServer && s_ui_ready_for_http && !s_http_started) {
             if (!http_has_memory_headroom()) {
-                ESP_LOGW(TAG_APP,
-                         "HTTP start deferred: internal=%u largest=%u dma=%u largest_dma=%u",
-                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
                 vTaskDelay(pdMS_TO_TICKS(5000));
                 continue;
             }
-            log_heap_caps("before_http_start");
             esp_err_t http_err = gw_http_start();
             if (http_err != ESP_OK) {
                 ESP_LOGW(TAG_APP, "HTTP start failed (%s), retry in 10s", esp_err_to_name(http_err));
@@ -114,7 +66,6 @@ static void http_start_task(void *arg)
                 continue;
             }
             s_http_started = true;
-            log_heap_caps("after_http_start");
         }
 
         vTaskDelay(pdMS_TO_TICKS(3000));
@@ -133,7 +84,6 @@ static void ui_boot_task(void *arg)
         s_ui_ready_for_http = true;
         ESP_LOGI(TAG_APP, "UI started");
     }
-    log_heap_caps("after_devices_ui_init");
     vTaskDelete(NULL);
 }
 
@@ -141,15 +91,13 @@ static void mem_diag_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        log_heap_caps("periodic");
-        log_task_memory_snapshot();
+        log_heap_periodic();
         vTaskDelay(pdMS_TO_TICKS(15000));
     }
 }
 
 extern "C" void app_main(void)
 {
-    log_heap_caps("boot_entry");
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -172,7 +120,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_sensor_store_init());
     ESP_ERROR_CHECK(gw_state_store_init());
     ESP_ERROR_CHECK(gw_device_registry_init());
-    ESP_ERROR_CHECK(gw_device_fb_store_init());
     ESP_ERROR_CHECK(gw_automation_store_init());
     ESP_ERROR_CHECK(gw_group_store_init());
     ESP_ERROR_CHECK(gw_project_settings_init());
@@ -180,14 +127,12 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_runtime_sync_init());
     ESP_ERROR_CHECK(gw_net_time_init(NULL));
     ESP_ERROR_CHECK(s3_weather_service_start());
-    log_heap_caps("after_core_init");
 
     // Start Zigbee UART backend before display/UI to prioritize Wi-Fi and HTTP bring-up.
     esp_err_t zb_link_err = gw_zigbee_link_start();
     if (zb_link_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
     }
-    log_heap_caps("after_zigbee_link_start");
 
     // Start Wi-Fi service before display/UI to reserve Wi-Fi internal resources first.
     esp_err_t wifi_boot_err = gw_wifi_start();
@@ -202,7 +147,6 @@ extern "C" void app_main(void)
     if (xTaskCreateWithCaps(mem_diag_task, "mem_diag", kMemDiagTaskStack, NULL, 2, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG_APP, "mem_diag task create failed");
     }
-    log_heap_caps("after_http_task_create");
     if (kEnableHttpServer) {
         ESP_LOGI(TAG_APP, "HTTP start deferred until UI init completes");
     }

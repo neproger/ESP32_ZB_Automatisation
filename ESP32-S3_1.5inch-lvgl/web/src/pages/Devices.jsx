@@ -69,6 +69,18 @@ export default function Devices() {
 		[],
 	)
 
+	const removeAllDevices = useCallback(async () => {
+		if (!confirm('Удалить все Zigbee-устройства из шлюза?')) return
+
+		setStatus('Удаление всех устройств...')
+		try {
+			await postCbor('/api/devices/remove_all', {})
+			setStatus('Запрос на удаление всех устройств отправлен')
+		} catch (e) {
+			setStatus(String(e?.message ?? e))
+		}
+	}, [])
+
 	const renameDevice = useCallback(
 		async (uid, currentName) => {
 			const u = String(uid ?? '')
@@ -99,6 +111,7 @@ export default function Devices() {
 						{loading ? 'Refreshing...' : 'Refresh'}
 					</button>
 					<button onClick={permitJoin}>Scan new devices (permit join)</button>
+					<button onClick={removeAllDevices}>Удалить все</button>
 					<div className="muted">ws: {wsStatus}</div>
 				</div>
 			</div>

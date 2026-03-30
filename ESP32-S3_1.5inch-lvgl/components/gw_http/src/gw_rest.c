@@ -16,7 +16,6 @@
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/cbor.h"
-#include "gw_core/device_fb_store.h"
 #include "gw_core/device_registry.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/group_store.h"
@@ -37,9 +36,9 @@ static const char *automation_string_at(const gw_automation_entry_t *entry, uint
 static const char *automation_evt_type_to_str(uint8_t type);
 static const char *automation_op_to_str(uint8_t op);
 static esp_err_t cbor_write_automation_definition(gw_cbor_writer_t *w, const gw_automation_entry_t *entry);
-static esp_err_t api_devices_flatbuffer_get_handler(httpd_req_t *req);
 static esp_err_t api_devices_post_handler(httpd_req_t *req);
 static esp_err_t api_devices_remove_post_handler(httpd_req_t *req);
+static esp_err_t api_devices_remove_all_post_handler(httpd_req_t *req);
 static esp_err_t api_network_permit_join_post_handler(httpd_req_t *req);
 static esp_err_t api_automations_get_handler(httpd_req_t *req);
 static esp_err_t api_automation_detail_patch_handler(httpd_req_t *req);
@@ -47,12 +46,8 @@ static esp_err_t api_automation_detail_delete_handler(httpd_req_t *req);
 static esp_err_t api_automations_reset_post_handler(httpd_req_t *req);
 static esp_err_t api_automation_post_handler(httpd_req_t *req);
 static esp_err_t api_actions_post_handler(httpd_req_t *req);
-static esp_err_t api_state_get_handler(httpd_req_t *req);
-static esp_err_t api_groups_get_handler(httpd_req_t *req);
 static esp_err_t api_groups_post_handler(httpd_req_t *req);
-static esp_err_t api_group_items_get_handler(httpd_req_t *req);
 static esp_err_t api_group_items_post_handler(httpd_req_t *req);
-static esp_err_t api_settings_get_handler(httpd_req_t *req);
 static esp_err_t api_settings_post_handler(httpd_req_t *req);
 static esp_err_t gw_http_send_group_store_error(httpd_req_t *req, esp_err_t err, const char *not_found_msg, const char *no_mem_msg);
 static esp_err_t gw_http_send_cbor_ok(httpd_req_t *req);
@@ -678,34 +673,6 @@ static esp_err_t cbor_write_automation_definition(gw_cbor_writer_t *w, const gw_
     return ESP_OK;
 }
 
-static esp_err_t api_devices_flatbuffer_get_handler(httpd_req_t *req)
-{
-    static int64_t s_last_fb_sync_us = 0;
-    size_t len = 0;
-    uint8_t *buf = NULL;
-    if (gw_device_fb_store_copy(&buf, &len) != ESP_OK || !buf || len == 0) {
-        if (buf) {
-            free(buf);
-            buf = NULL;
-        }
-        int64_t now_us = esp_timer_get_time();
-        if (now_us - s_last_fb_sync_us > 1000000) {
-            s_last_fb_sync_us = now_us;
-            (void)gw_zigbee_sync_device_fb();
-        }
-        httpd_resp_set_status(req, "202 Accepted");
-        httpd_resp_set_hdr(req, "Retry-After", "1");
-        httpd_resp_sendstr(req, "device flatbuffer is syncing");
-        return ESP_OK;
-    }
-
-    httpd_resp_set_type(req, "application/octet-stream");
-    httpd_resp_set_hdr(req, "X-Device-Buffer-Format", "flatbuffer");
-    esp_err_t err = httpd_resp_send(req, (const char *)buf, (ssize_t)len);
-    free(buf);
-    return err;
-}
-
 static esp_err_t api_devices_post_handler(httpd_req_t *req)
 {
     // Body (CBOR): { device_uid: string, name: string }
@@ -808,6 +775,29 @@ static esp_err_t api_devices_remove_post_handler(httpd_req_t *req)
     if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_uid");
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, uid.uid);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "queued");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
+    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
+                                       : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
+    gw_cbor_writer_free(&w);
+    return send_err;
+}
+
+static esp_err_t api_devices_remove_all_post_handler(httpd_req_t *req)
+{
+    esp_err_t rm = gw_zigbee_remove_all_devices();
+    if (rm != ESP_OK) {
+        char err_buf[64];
+        snprintf(err_buf, sizeof(err_buf), "c6 remove all failed: %s", esp_err_to_name(rm));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err_buf);
+        return ESP_OK;
+    }
+
+    gw_cbor_writer_t w;
+    gw_cbor_writer_init(&w);
+    esp_err_t rc = gw_cbor_writer_map(&w, 2);
+    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ok");
+    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "queued");
     if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, true);
     esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
@@ -1122,132 +1112,6 @@ static esp_err_t api_actions_post_handler(httpd_req_t *req)
     return send_err;
 }
 
-static esp_err_t api_state_get_handler(httpd_req_t *req)
-{
-    static const size_t kMaxDevices = 64;
-    static const size_t kMaxStateItems = 1024;
-    static const char *kWeatherUid = "0xWEATHER000000001";
-    static const char *kWifiUid = "0xWIFI000000000001";
-
-    gw_device_t *devices = (gw_device_t *)calloc(kMaxDevices, sizeof(gw_device_t));
-    gw_state_item_t *items = (gw_state_item_t *)calloc(kMaxStateItems, sizeof(gw_state_item_t));
-    if (!devices || !items) {
-        free(devices);
-        free(items);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
-        return ESP_OK;
-    }
-
-    const size_t dev_count = gw_device_registry_list(devices, kMaxDevices);
-    bool has_weather_uid = false;
-    bool has_wifi_uid = false;
-    size_t total = 0;
-    for (size_t i = 0; i < dev_count && total < kMaxStateItems; i++) {
-        if (strncmp(devices[i].device_uid.uid, kWeatherUid, sizeof(devices[i].device_uid.uid)) == 0) {
-            has_weather_uid = true;
-        }
-        if (strncmp(devices[i].device_uid.uid, kWifiUid, sizeof(devices[i].device_uid.uid)) == 0) {
-            has_wifi_uid = true;
-        }
-        const size_t left = kMaxStateItems - total;
-        total += gw_state_store_list_uid(&devices[i].device_uid, &items[total], left);
-    }
-    if (!has_weather_uid && total < kMaxStateItems) {
-        gw_device_uid_t weather_uid = {0};
-        strlcpy(weather_uid.uid, kWeatherUid, sizeof(weather_uid.uid));
-        const size_t left = kMaxStateItems - total;
-        total += gw_state_store_list_uid(&weather_uid, &items[total], left);
-    }
-    if (!has_wifi_uid && total < kMaxStateItems) {
-        gw_device_uid_t wifi_uid = {0};
-        strlcpy(wifi_uid.uid, kWifiUid, sizeof(wifi_uid.uid));
-        const size_t left = kMaxStateItems - total;
-        total += gw_state_store_list_uid(&wifi_uid, &items[total], left);
-    }
-
-    gw_cbor_writer_t w;
-    gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "items");
-    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, total);
-    for (size_t i = 0; rc == ESP_OK && i < total; i++) {
-        rc = gw_cbor_writer_map(&w, 5);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_id");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].uid.uid);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint_id");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].endpoint);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "key");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].key);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "value");
-        if (rc == ESP_OK) {
-            switch (items[i].value_type) {
-                case GW_STATE_VALUE_BOOL:
-                    rc = gw_cbor_writer_bool(&w, items[i].value_bool);
-                    break;
-                case GW_STATE_VALUE_F32:
-                    rc = gw_cbor_writer_f64(&w, (double)items[i].value_f32);
-                    break;
-                case GW_STATE_VALUE_U32:
-                    rc = gw_cbor_writer_u64(&w, items[i].value_u32);
-                    break;
-                case GW_STATE_VALUE_U64:
-                    rc = gw_cbor_writer_u64(&w, items[i].value_u64);
-                    break;
-                case GW_STATE_VALUE_TEXT:
-                    rc = gw_cbor_writer_text(&w, items[i].value_text);
-                    break;
-                default:
-                    rc = gw_cbor_writer_null(&w);
-                    break;
-            }
-        }
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "ts_ms");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].ts_ms);
-    }
-
-    free(devices);
-    free(items);
-
-    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
-                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
-    gw_cbor_writer_free(&w);
-    return send_err;
-}
-
-static esp_err_t api_groups_get_handler(httpd_req_t *req)
-{
-    const size_t max_groups = 24;
-    gw_group_entry_t *groups = (gw_group_entry_t *)calloc(max_groups, sizeof(gw_group_entry_t));
-    if (!groups) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
-        return ESP_OK;
-    }
-    const size_t count = gw_group_store_list(groups, max_groups);
-
-    gw_cbor_writer_t w;
-    gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "groups");
-    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, count);
-    for (size_t i = 0; rc == ESP_OK && i < count; i++) {
-        rc = gw_cbor_writer_map(&w, 4);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "id");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, groups[i].id);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "name");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, groups[i].name);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "created_at_ms");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, groups[i].created_at_ms);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "updated_at_ms");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, groups[i].updated_at_ms);
-    }
-
-    free(groups);
-    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
-                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
-    gw_cbor_writer_free(&w);
-    return send_err;
-}
-
 static esp_err_t api_groups_post_handler(httpd_req_t *req)
 {
     // CBOR: { op: "create"|"rename"|"delete", id?: string, name?: string }
@@ -1304,42 +1168,6 @@ static esp_err_t api_groups_post_handler(httpd_req_t *req)
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, op);
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "id");
     if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, strcmp(op, "create") == 0 ? created.id : id);
-    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
-                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
-    gw_cbor_writer_free(&w);
-    return send_err;
-}
-
-static esp_err_t api_group_items_get_handler(httpd_req_t *req)
-{
-    const size_t max_items = 256;
-    gw_group_item_t *items = (gw_group_item_t *)calloc(max_items, sizeof(gw_group_item_t));
-    if (!items) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
-        return ESP_OK;
-    }
-    const size_t count = gw_group_store_list_items(items, max_items);
-
-    gw_cbor_writer_t w;
-    gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "items");
-    if (rc == ESP_OK) rc = gw_cbor_writer_array(&w, count);
-    for (size_t i = 0; rc == ESP_OK && i < count; i++) {
-        rc = gw_cbor_writer_map(&w, 5);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "group_id");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].group_id);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "device_uid");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].device_uid.uid);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "endpoint_id");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].endpoint);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "order");
-        if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, items[i].order);
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "label");
-        if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, items[i].label);
-    }
-    free(items);
-
     esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
                                         : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
     gw_cbor_writer_free(&w);
@@ -1431,37 +1259,6 @@ static esp_err_t api_group_items_post_handler(httpd_req_t *req)
     return gw_http_send_cbor_ok(req);
 }
 
-static esp_err_t api_settings_get_handler(httpd_req_t *req)
-{
-    gw_project_settings_t cfg = {0};
-    esp_err_t err = gw_project_settings_get(&cfg);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings unavailable");
-        return ESP_OK;
-    }
-
-    gw_cbor_writer_t w;
-    gw_cbor_writer_init(&w);
-    esp_err_t rc = gw_cbor_writer_map(&w, 1);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "settings");
-    if (rc == ESP_OK) rc = gw_cbor_writer_map(&w, 5);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "screensaver_timeout_ms");
-    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.screensaver_timeout_ms);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "weather_success_interval_ms");
-    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.weather_success_interval_ms);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "weather_retry_interval_ms");
-    if (rc == ESP_OK) rc = gw_cbor_writer_u64(&w, cfg.weather_retry_interval_ms);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "timezone_auto");
-    if (rc == ESP_OK) rc = gw_cbor_writer_bool(&w, cfg.timezone_auto);
-    if (rc == ESP_OK) rc = gw_cbor_writer_text(&w, "timezone_offset_min");
-    if (rc == ESP_OK) rc = gw_cbor_writer_i64(&w, cfg.timezone_offset_min);
-
-    esp_err_t send_err = (rc == ESP_OK) ? gw_http_send_cbor_payload(req, w.buf, w.len)
-                                        : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cbor encode failure");
-    gw_cbor_writer_free(&w);
-    return send_err;
-}
-
 static esp_err_t api_settings_post_handler(httpd_req_t *req)
 {
     uint8_t *buf = NULL;
@@ -1546,12 +1343,6 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         return ESP_ERR_INVALID_ARG;
     }
 
-    static const httpd_uri_t api_devices_flatbuffer_get_uri = {
-        .uri = "/api/devices/flatbuffer",
-        .method = HTTP_GET,
-        .handler = api_devices_flatbuffer_get_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t api_devices_post_uri = {
         .uri = "/api/devices",
         .method = HTTP_POST,
@@ -1594,16 +1385,16 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .handler = api_actions_post_handler,
         .user_ctx = NULL,
     };
-    static const httpd_uri_t api_state_get_uri = {
-        .uri = "/api/state",
-        .method = HTTP_GET,
-        .handler = api_state_get_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t api_devices_remove_post_uri = {
         .uri = "/api/devices/remove",
         .method = HTTP_POST,
         .handler = api_devices_remove_post_handler,
+        .user_ctx = NULL,
+    };
+    static const httpd_uri_t api_devices_remove_all_post_uri = {
+        .uri = "/api/devices/remove_all",
+        .method = HTTP_POST,
+        .handler = api_devices_remove_all_post_handler,
         .user_ctx = NULL,
     };
     static const httpd_uri_t api_network_permit_join_post_uri = {
@@ -1612,34 +1403,16 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .handler = api_network_permit_join_post_handler,
         .user_ctx = NULL,
     };
-    static const httpd_uri_t api_groups_get_uri = {
-        .uri = "/api/groups",
-        .method = HTTP_GET,
-        .handler = api_groups_get_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t api_groups_post_uri = {
         .uri = "/api/groups",
         .method = HTTP_POST,
         .handler = api_groups_post_handler,
         .user_ctx = NULL,
     };
-    static const httpd_uri_t api_group_items_get_uri = {
-        .uri = "/api/groups/items",
-        .method = HTTP_GET,
-        .handler = api_group_items_get_handler,
-        .user_ctx = NULL,
-    };
     static const httpd_uri_t api_group_items_post_uri = {
         .uri = "/api/groups/items",
         .method = HTTP_POST,
         .handler = api_group_items_post_handler,
-        .user_ctx = NULL,
-    };
-    static const httpd_uri_t api_settings_get_uri = {
-        .uri = "/api/settings",
-        .method = HTTP_GET,
-        .handler = api_settings_get_handler,
         .user_ctx = NULL,
     };
     static const httpd_uri_t api_settings_post_uri = {
@@ -1649,11 +1422,7 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
         .user_ctx = NULL,
     };
 
-    esp_err_t err = httpd_register_uri_handler(server, &api_devices_flatbuffer_get_uri);
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = httpd_register_uri_handler(server, &api_devices_post_uri);
+    esp_err_t err = httpd_register_uri_handler(server, &api_devices_post_uri);
     if (err != ESP_OK) {
         return err;
     }
@@ -1681,11 +1450,11 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
-    err = httpd_register_uri_handler(server, &api_state_get_uri);
+    err = httpd_register_uri_handler(server, &api_devices_remove_post_uri);
     if (err != ESP_OK) {
         return err;
     }
-    err = httpd_register_uri_handler(server, &api_devices_remove_post_uri);
+    err = httpd_register_uri_handler(server, &api_devices_remove_all_post_uri);
     if (err != ESP_OK) {
         return err;
     }
@@ -1693,23 +1462,11 @@ esp_err_t gw_http_register_rest_endpoints(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
-    err = httpd_register_uri_handler(server, &api_groups_get_uri);
-    if (err != ESP_OK) {
-        return err;
-    }
     err = httpd_register_uri_handler(server, &api_groups_post_uri);
     if (err != ESP_OK) {
         return err;
     }
-    err = httpd_register_uri_handler(server, &api_group_items_get_uri);
-    if (err != ESP_OK) {
-        return err;
-    }
     err = httpd_register_uri_handler(server, &api_group_items_post_uri);
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = httpd_register_uri_handler(server, &api_settings_get_uri);
     if (err != ESP_OK) {
         return err;
     }

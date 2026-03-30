@@ -12,7 +12,6 @@ import {
 	groupsCreate,
 	groupsDelete,
 	groupsList,
-	groupsReload,
 	groupsRename,
 	groupsSubscribe,
 } from '../groupsStore.js'
@@ -32,7 +31,7 @@ export default function Groups() {
 			setItems(groupItemsList())
 		}
 		const unsub = groupsSubscribe(refresh)
-		groupsReload().catch(() => {})
+		refresh()
 		return () => unsub()
 	}, [])
 

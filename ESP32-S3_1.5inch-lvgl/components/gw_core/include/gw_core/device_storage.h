@@ -43,6 +43,8 @@ esp_err_t gw_device_storage_get_by_short(uint16_t short_addr, gw_device_full_t *
 esp_err_t gw_device_storage_remove(const gw_device_uid_t *uid);
 esp_err_t gw_device_storage_set_name(const gw_device_uid_t *uid, const char *name);
 size_t gw_device_storage_list(gw_device_full_t *out_devices, size_t max_devices);
+size_t gw_device_storage_count(void);
+esp_err_t gw_device_storage_get_by_index(size_t index, gw_device_full_t *out_device);
 
 #ifdef __cplusplus
 }

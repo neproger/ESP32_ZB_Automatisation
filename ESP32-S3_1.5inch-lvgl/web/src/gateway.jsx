@@ -1,10 +1,17 @@
 ﻿//UTF-8
 //gateway.jsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchBinary, fetchCbor } from './api.js'
+import { fetchCbor } from './api.js'
 import { cborDecode } from './cbor.js'
-import { parseDeviceBlob } from './deviceBlob.js'
-import { groupsReload } from './groupsStore.js'
+import { groupsProtoApplyFrame } from './groupsStore.js'
+import {
+	protoApplyFrame,
+	protoCreateSnapshotAccumulator,
+	protoEncodeSnapshotRequest,
+	protoFrameToEvent,
+	protoParseSettingsFrame,
+	protoTryParseFrame,
+} from './proto.js'
 
 function wsUrl(path) {
 	const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
@@ -13,21 +20,6 @@ function wsUrl(path) {
 
 function normalizeUid(v) {
 	return String(v ?? '').trim().toLowerCase()
-}
-
-function buildStateMap(items) {
-	const out = {}
-	;(Array.isArray(items) ? items : []).forEach((it) => {
-		const uid = normalizeUid(it?.device_id)
-		const epNum = Number(it?.endpoint_id ?? 0)
-		const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : '')
-		const key = String(it?.key ?? '')
-		if (!uid || !ep || !key) return
-		if (!out[uid]) out[uid] = {}
-		if (!out[uid][ep]) out[uid][ep] = {}
-		out[uid][ep][key] = it?.value ?? null
-	})
-	return out
 }
 
 const GatewayContext = createContext(null)
@@ -42,6 +34,7 @@ export function GatewayProvider({ children }) {
 
 	const wsRef = useRef(null)
 	const reconnectTimerRef = useRef(null)
+	const protoSnapshotRef = useRef(protoCreateSnapshotAccumulator())
 
 	const applyDeviceList = useCallback((list) => {
 		const safeList = Array.isArray(list) ? list : []
@@ -50,10 +43,14 @@ export function GatewayProvider({ children }) {
 	}, [])
 
 	const loadDevices = useCallback(async () => {
-		const blob = await fetchBinary('/api/devices/flatbuffer')
-		const list = parseDeviceBlob(blob)
-		return applyDeviceList(list)
-	}, [applyDeviceList])
+		const ws = wsRef.current
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			throw new Error('ws not connected')
+		}
+		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
+		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+		return devices
+	}, [devices])
 
 	const loadAutomations = useCallback(async () => {
 		const data = await fetchCbor('/api/automations')
@@ -62,19 +59,15 @@ export function GatewayProvider({ children }) {
 		return list
 	}, [])
 
-	const loadStateSnapshot = useCallback(async () => {
-		const data = await fetchCbor('/api/state')
-		const next = buildStateMap(data?.items)
-		setDeviceStates(next)
-		return next
-	}, [])
-
 	const loadSettings = useCallback(async () => {
-		const data = await fetchCbor('/api/settings')
-		const next = data?.settings && typeof data.settings === 'object' ? data.settings : null
-		setProjectSettings(next)
-		return next
-	}, [])
+		const ws = wsRef.current
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			throw new Error('ws not connected')
+		}
+		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
+		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+		return projectSettings
+	}, [projectSettings])
 
 	useEffect(() => {
 		let cancelled = false
@@ -102,12 +95,34 @@ export function GatewayProvider({ children }) {
 				if (wsRef.current !== ws) return
 				attempts = 0
 				setWsStatus('connected')
+				protoSnapshotRef.current = protoCreateSnapshotAccumulator()
+				ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
 			}
 
 			ws.onmessage = (ev) => {
 				if (wsRef.current !== ws) return
 				try {
 					if (!(ev?.data instanceof ArrayBuffer)) return
+					const protoFrame = protoTryParseFrame(ev.data)
+					if (protoFrame) {
+						const protoSettings = protoParseSettingsFrame(protoFrame)
+						if (protoSettings) {
+							setProjectSettings(protoSettings)
+						}
+						const protoEvent = protoFrameToEvent(protoFrame)
+						groupsProtoApplyFrame(protoFrame)
+						if (protoEvent) {
+							setEvents((prev) => {
+								const next = [...prev, protoEvent]
+								return next.length > 30 ? next.slice(next.length - 30) : next
+							})
+						}
+						protoApplyFrame(protoSnapshotRef.current, protoFrame, ({ devices: nextDevices, deviceStates: nextStates }) => {
+							applyDeviceList(nextDevices)
+							setDeviceStates(nextStates)
+						})
+						return
+					}
 					const msg = cborDecode(ev.data)
 					if (!msg || typeof msg !== 'object') return
 					const type = String(msg?.type ?? '')
@@ -119,34 +134,10 @@ export function GatewayProvider({ children }) {
 						return next.length > 30 ? next.slice(next.length - 30) : next
 					})
 
-					if (type === 'device.state') {
-						const uid = normalizeUid(data?.device_id ?? '')
-						const epNum = Number(data?.endpoint_id ?? data?.endpoint ?? 0)
-						const ep = String(Number.isFinite(epNum) && epNum > 0 ? epNum : '')
-						const key = String(data?.key ?? '')
-						if (!uid || !ep || !key) return
-						setDeviceStates((prev) => ({
-							...prev,
-							[uid]: {
-								...(prev[uid] || {}),
-								[ep]: {
-									...((prev[uid] && prev[uid][ep]) || {}),
-									[key]: data?.value ?? null,
-								},
-							},
-						}))
-					}
 					if (type === 'gateway.event') {
 						const evType = String(data?.event_type ?? '')
-						if (evType === 'device.changed') {
-							loadDevices().catch(() => {})
-							loadStateSnapshot().catch(() => {})
-						} else if (evType === 'automation.changed') {
+						if (evType === 'automation.changed') {
 							loadAutomations().catch(() => {})
-						} else if (evType === 'group.changed') {
-							groupsReload().catch(() => {})
-						} else if (evType === 'settings.changed') {
-							loadSettings().catch(() => {})
 						}
 					}
 				} catch {
@@ -175,14 +166,11 @@ export function GatewayProvider({ children }) {
 			cleanup()
 			setWsStatus('disconnected')
 		}
-	}, [loadAutomations, loadDevices, loadStateSnapshot, loadSettings])
+	}, [applyDeviceList, loadAutomations])
 
 	useEffect(() => {
-		loadDevices().catch(() => {})
 		loadAutomations().catch(() => {})
-		loadStateSnapshot().catch(() => {})
-		loadSettings().catch(() => {})
-	}, [loadDevices, loadAutomations, loadStateSnapshot, loadSettings])
+	}, [loadAutomations])
 
 	const value = useMemo(
 		() => ({
@@ -194,9 +182,8 @@ export function GatewayProvider({ children }) {
 			wsStatus,
 			reloadDevices: loadDevices,
 			reloadAutomations: loadAutomations,
-			reloadSettings: loadSettings,
 		}),
-		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations, loadSettings],
+		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations],
 	)
 
 	return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>

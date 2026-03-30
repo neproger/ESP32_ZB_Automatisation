@@ -59,6 +59,9 @@ esp_err_t gw_state_store_get(const gw_device_uid_t *uid, uint8_t endpoint, const
 esp_err_t gw_state_store_get_any(const gw_device_uid_t *uid, const char *key, gw_state_item_t *out);
 size_t gw_state_store_list(const gw_device_uid_t *uid, uint8_t endpoint, gw_state_item_t *out, size_t max_out);
 size_t gw_state_store_list_uid(const gw_device_uid_t *uid, gw_state_item_t *out, size_t max_out);
+esp_err_t gw_state_store_remove_uid(const gw_device_uid_t *uid);
+size_t gw_state_store_count(void);
+esp_err_t gw_state_store_get_by_index(size_t index, gw_state_item_t *out);
 
 #ifdef __cplusplus
 }

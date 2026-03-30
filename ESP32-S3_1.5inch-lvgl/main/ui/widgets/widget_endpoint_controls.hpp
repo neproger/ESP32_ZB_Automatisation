@@ -2,6 +2,7 @@
 
 #include "ui_control_ack.hpp"
 #include "widget_endpoint_leaf.hpp"
+#include "widget_endpoint_state.hpp"
 
 class WidgetOnOffControl : public WidgetEndpointLeaf {
 public:
@@ -11,6 +12,7 @@ public:
     lv_obj_t *root() const override;
     void render() override;
     void render_if_needed() override;
+    void apply(const WidgetEndpointState &state);
 
 private:
     static void on_row_clicked(lv_event_t *event);
@@ -30,6 +32,7 @@ public:
     lv_obj_t *root() const override;
     void render() override;
     void render_if_needed() override;
+    void apply(const WidgetEndpointState &state);
 
 private:
     static void on_slider_released(lv_event_t *event);
@@ -48,6 +51,7 @@ public:
     lv_obj_t *root() const override;
     void render() override;
     void render_if_needed() override;
+    void apply(const WidgetEndpointState &state);
 
 private:
     static void on_hs_released(lv_event_t *event);
@@ -78,6 +82,7 @@ public:
     lv_obj_t *root() const override;
     void render() override;
     void render_if_needed() override;
+    void apply(const WidgetEndpointState &state);
 
 private:
     Kind kind_;

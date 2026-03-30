@@ -14,7 +14,6 @@ idf_component_register(
         "src/rules_engine.c"
         "src/action_exec.c"
         "src/cbor.c"
-        "src/gw_uart_proto.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES

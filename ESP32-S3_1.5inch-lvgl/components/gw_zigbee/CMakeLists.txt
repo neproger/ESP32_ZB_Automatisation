@@ -9,5 +9,6 @@ idf_component_register(
         esp_event
         driver
         freertos
+        gw_proto
         gw_core
 )

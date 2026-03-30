@@ -1,14 +1,22 @@
 //UTF-8
 //groupsStore.js
-import { fetchCbor, postCbor } from './api.js'
+import { postCbor } from './api.js'
 
 const CHANGED_EVENT = 'gw_groups_changed'
+const GW_PROTO_MSG_SYNC_BEGIN = 0x40
+const GW_PROTO_MSG_SYNC_END = 0x41
+const GW_PROTO_MSG_GROUP_UPSERT = 0x48
+const GW_PROTO_MSG_GROUP_REMOVE = 0x49
+const GW_PROTO_MSG_GROUP_ITEM_UPSERT = 0x4a
+const GW_PROTO_MSG_GROUP_ITEM_REMOVE = 0x4b
 
 let sGroups = []
 let sItems = []
 let sMembers = {}
 let sLabels = {}
-let sReloadPromise = null
+let sPendingGroups = null
+let sPendingItems = null
+let sInProtoSync = false
 
 function notifyChanged() {
 	window.dispatchEvent(new Event(CHANGED_EVENT))
@@ -55,6 +63,22 @@ function rebuildMaps(items) {
 	sItems = list
 }
 
+function readFixedString(view, offset, size) {
+	const bytes = []
+	for (let i = 0; i < size; i += 1) {
+		const b = view.getUint8(offset + i)
+		if (b === 0) break
+		bytes.push(b)
+	}
+	return new TextDecoder().decode(new Uint8Array(bytes))
+}
+
+function commitGroups(groups, items) {
+	sGroups = Array.isArray(groups) ? groups : []
+	rebuildMaps(items)
+	notifyChanged()
+}
+
 export function groupsSubscribe(onChange) {
 	if (typeof onChange !== 'function') return () => {}
 	const h = () => onChange()
@@ -82,29 +106,10 @@ export function endpointLabelGet(deviceUid, endpoint) {
 	return String((sLabels && sLabels[endpointKey(deviceUid, endpoint)]) ?? '')
 }
 
-export async function groupsReload() {
-	if (sReloadPromise) return sReloadPromise
-	sReloadPromise = (async () => {
-		const [groupsRes, itemsRes] = await Promise.all([
-			fetchCbor('/api/groups'),
-			fetchCbor('/api/groups/items'),
-		])
-		sGroups = Array.isArray(groupsRes?.groups) ? groupsRes.groups : []
-		rebuildMaps(itemsRes?.items)
-		notifyChanged()
-	})()
-	try {
-		await sReloadPromise
-	} finally {
-		sReloadPromise = null
-	}
-}
-
 export async function groupsCreate(name) {
 	const n = String(name ?? '').trim()
 	if (!n) return null
 	const res = await postCbor('/api/groups', { op: 'create', name: n })
-	await groupsReload()
 	return String(res?.id ?? '')
 }
 
@@ -113,7 +118,6 @@ export async function groupsRename(id, name) {
 	const n = String(name ?? '').trim()
 	if (!gid || !n) return false
 	await postCbor('/api/groups', { op: 'rename', id: gid, name: n })
-	await groupsReload()
 	return true
 }
 
@@ -121,7 +125,6 @@ export async function groupsDelete(id) {
 	const gid = String(id ?? '')
 	if (!gid) return false
 	await postCbor('/api/groups', { op: 'delete', id: gid })
-	await groupsReload()
 	return true
 }
 
@@ -135,7 +138,6 @@ export async function groupSetForEndpoint(deviceUid, endpoint, groupId) {
 	} else {
 		await postCbor('/api/groups/items', { op: 'set', group_id: gid, device_uid: uid, endpoint_id: ep })
 	}
-	await groupsReload()
 	return true
 }
 
@@ -149,7 +151,6 @@ export async function endpointLabelSet(deviceUid, endpoint, label) {
 		endpoint_id: ep,
 		label: String(label ?? ''),
 	})
-	await groupsReload()
 	return true
 }
 
@@ -170,8 +171,103 @@ export async function groupReorder(groupId, orderedItems) {
 			order: i + 1,
 		})
 	}
-	await groupsReload()
 	return true
+}
+
+export function groupsProtoApplyFrame(frame) {
+	if (!frame?.payload) return false
+	const payload = frame.payload
+	const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
+
+	if (frame.type === GW_PROTO_MSG_SYNC_BEGIN) {
+		const scope = view.getUint8(0)
+		if (scope === 3) {
+			sPendingGroups = []
+			sPendingItems = []
+			sInProtoSync = true
+			return true
+		}
+		return false
+	}
+
+	if (frame.type === GW_PROTO_MSG_SYNC_END) {
+		const scope = view.getUint8(0)
+		if (scope === 3) {
+			sInProtoSync = false
+			commitGroups(sPendingGroups || [], sPendingItems || [])
+			sPendingGroups = null
+			sPendingItems = null
+			return true
+		}
+		return false
+	}
+
+	if (frame.type === GW_PROTO_MSG_GROUP_UPSERT) {
+		const target = sInProtoSync && Array.isArray(sPendingGroups) ? sPendingGroups : [...sGroups]
+		const group = {
+			id: readFixedString(view, 0, 32),
+			name: readFixedString(view, 32, 48),
+			version: view.getUint32(80, true),
+			created_at_ms: Number(view.getUint32(84, true)),
+			updated_at_ms: Number(view.getUint32(88, true)),
+		}
+		const idx = target.findIndex((it) => String(it?.id ?? '') === group.id)
+		if (idx >= 0) target[idx] = group
+		else target.push(group)
+		if (sInProtoSync) {
+			sPendingGroups = target
+		} else {
+			commitGroups(target, sItems)
+		}
+		return true
+	}
+
+	if (frame.type === GW_PROTO_MSG_GROUP_REMOVE) {
+		const groupId = readFixedString(view, 0, 32)
+		const nextGroups = sGroups.filter((it) => String(it?.id ?? '') !== groupId)
+		const nextItems = sItems.filter((it) => String(it?.group_id ?? '') !== groupId)
+		if (sInProtoSync) {
+			sPendingGroups = (sPendingGroups || []).filter((it) => String(it?.id ?? '') !== groupId)
+			sPendingItems = (sPendingItems || []).filter((it) => String(it?.group_id ?? '') !== groupId)
+		} else {
+			commitGroups(nextGroups, nextItems)
+		}
+		return true
+	}
+
+	if (frame.type === GW_PROTO_MSG_GROUP_ITEM_UPSERT) {
+		const target = sInProtoSync && Array.isArray(sPendingItems) ? sPendingItems : [...sItems]
+		const item = {
+			group_id: readFixedString(view, 0, 32),
+			device_uid: normalizeUid(readFixedString(view, 32, 19)),
+			endpoint_id: Number(view.getUint8(51) || 0),
+			order: Number(view.getUint32(56, true)),
+			label: readFixedString(view, 60, 32),
+		}
+		const idx = target.findIndex((it) => normalizeUid(it?.device_uid) === item.device_uid && Number(it?.endpoint_id ?? 0) === item.endpoint_id)
+		if (idx >= 0) target[idx] = item
+		else target.push(item)
+		if (sInProtoSync) {
+			sPendingItems = target
+		} else {
+			commitGroups(sGroups, target)
+		}
+		return true
+	}
+
+	if (frame.type === GW_PROTO_MSG_GROUP_ITEM_REMOVE) {
+		const device_uid = normalizeUid(readFixedString(view, 0, 19))
+		const endpoint_id = Number(view.getUint8(19) || 0)
+		const match = (it) => !(normalizeUid(it?.device_uid) === device_uid && Number(it?.endpoint_id ?? 0) === endpoint_id)
+		if (sInProtoSync) {
+			sPendingItems = (sPendingItems || []).filter(match)
+		} else {
+			commitGroups(sGroups, sItems.filter(match))
+		}
+		return true
+	}
+
+	return false
 }
 
 export { endpointKey }

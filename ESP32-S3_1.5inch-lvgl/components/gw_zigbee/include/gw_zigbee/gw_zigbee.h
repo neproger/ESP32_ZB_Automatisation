@@ -36,7 +36,6 @@ typedef struct {
 // Initialize/start UART link to C6 explicitly (optional, can also start lazily on first command).
 esp_err_t gw_zigbee_link_start(void);
 // Request fresh device FlatBuffer snapshot from C6.
-esp_err_t gw_zigbee_sync_device_fb(void);
 // True after the first complete snapshot has been applied on S3.
 bool gw_zigbee_bootstrap_ready(void);
 // True when initial read_attr warmup task has queued all startup reads.
@@ -45,6 +44,7 @@ bool gw_zigbee_state_warmup_ready(void);
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name);
 // Remove device from C6 device registry by UID.
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid);
+esp_err_t gw_zigbee_remove_all_devices(void);
 // Push active S3 Wi-Fi credentials to C6 cloud client (ssid\0password).
 esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *password);
 // Ask C6 to (re)start internet-backed timers/services (time sync, weather updates).
@@ -101,5 +101,8 @@ esp_err_t gw_zigbee_binding_table_req(const gw_device_uid_t *uid, uint8_t start_
 #ifdef __cplusplus
 }
 #endif
+
+
+
 
 

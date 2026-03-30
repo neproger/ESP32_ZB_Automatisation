@@ -12,6 +12,11 @@ extern "C" {
 
 esp_err_t gw_group_store_init(void);
 
+size_t gw_group_store_count(void);
+esp_err_t gw_group_store_get_by_index(size_t index, gw_group_entry_t *out_group);
+size_t gw_group_store_get_group_item_count(const char *group_id);
+esp_err_t gw_group_store_get_group_item_by_index(const char *group_id, size_t index, gw_group_item_t *out_item);
+
 size_t gw_group_store_list(gw_group_entry_t *out, size_t max_out);
 size_t gw_group_store_list_items(gw_group_item_t *out, size_t max_out);
 

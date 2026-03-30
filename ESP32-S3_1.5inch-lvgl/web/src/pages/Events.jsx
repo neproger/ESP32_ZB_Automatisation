@@ -93,7 +93,7 @@ export default function Events() {
 			<div className="header">
 				<div>
 					<h1>Events</h1>
-					<div className="muted">WebSocket stream (/ws), CBOR envelope: ts_ms/type/data.</div>
+					<div className="muted">WebSocket stream (/ws), gw_proto binary + CBOR for legacy domains.</div>
 				</div>
 				<div className="row">
 					<button onClick={() => setPaused((p) => !p)}>{paused ? 'Resume' : 'Pause'}</button>

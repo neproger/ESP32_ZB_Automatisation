@@ -23,14 +23,6 @@ void ui_screen_devices_init(lv_obj_t *root)
     s_ui_root = new WidgetUiRoot(root);
 }
 
-void ui_screen_devices_render(void)
-{
-    if (!s_ui_root) {
-        return;
-    }
-    s_ui_root->render();
-}
-
 void ui_screen_devices_render_if_needed(void)
 {
     if (!s_ui_root) {

@@ -321,21 +321,29 @@ esp_err_t gw_device_storage_remove(const gw_device_uid_t *uid)
         return ESP_ERR_INVALID_ARG;
     }
 
+    bool removed = false;
+
     portENTER_CRITICAL(&s_device_storage.lock);
-    size_t idx = find_device_index_by_uid(uid);
-    if (idx == (size_t)-1) {
+    gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
+    size_t wr = 0;
+    for (size_t i = 0; i < s_device_storage.count; i++) {
+        if (uid_equals(uid->uid, devices[i].device_uid.uid)) {
+            removed = true;
+            continue;
+        }
+        if (wr != i) {
+            devices[wr] = devices[i];
+        }
+        wr++;
+    }
+    if (!removed) {
         portEXIT_CRITICAL(&s_device_storage.lock);
         return ESP_ERR_NOT_FOUND;
     }
-    
-    // Shift remaining devices down
-    gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
-    for (size_t i = idx + 1; i < s_device_storage.count; i++) {
-        devices[i - 1] = devices[i];
+    for (size_t i = wr; i < s_device_storage.count; i++) {
+        memset(&devices[i], 0, sizeof(gw_device_full_t));
     }
-    s_device_storage.count--;
-    memset(&devices[s_device_storage.count], 0, sizeof(gw_device_full_t));
-    
+    s_device_storage.count = wr;
     portEXIT_CRITICAL(&s_device_storage.lock);
     return gw_storage_save(&s_device_storage);
 }
@@ -358,6 +366,36 @@ esp_err_t gw_device_storage_set_name(const gw_device_uid_t *uid, const char *nam
     
     portEXIT_CRITICAL(&s_device_storage.lock);
     return gw_storage_save(&s_device_storage);
+}
+
+size_t gw_device_storage_count(void)
+{
+    if (!s_initialized) {
+        return 0;
+    }
+
+    portENTER_CRITICAL(&s_device_storage.lock);
+    const size_t count = s_device_storage.count;
+    portEXIT_CRITICAL(&s_device_storage.lock);
+    return count;
+}
+
+esp_err_t gw_device_storage_get_by_index(size_t index, gw_device_full_t *out_device)
+{
+    if (!s_initialized || !out_device) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_device_storage.lock);
+    if (index >= s_device_storage.count) {
+        portEXIT_CRITICAL(&s_device_storage.lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
+    *out_device = devices[index];
+    portEXIT_CRITICAL(&s_device_storage.lock);
+    return ESP_OK;
 }
 
 size_t gw_device_storage_list(gw_device_full_t *out_devices, size_t max_devices)

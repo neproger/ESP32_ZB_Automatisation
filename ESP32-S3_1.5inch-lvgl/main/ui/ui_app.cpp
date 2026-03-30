@@ -4,7 +4,6 @@
 #include <cstring>
 
 #include "esp_err.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
@@ -22,14 +21,11 @@ namespace
 {
 static const char *TAG_UI = "ui_app";
 
-static bool s_render_requested = false;
-static uint64_t s_last_render_ms = 0;
 static bool s_display_enabled = true;
 static bool s_ui_ready = false;
 static bool s_saver_active = false;
 static lv_obj_t *s_splash = nullptr;
 static constexpr uint8_t kDisplayBrightness80Pct = 204;
-static constexpr uint32_t kMinRenderIntervalMs = 50;
 static constexpr uint32_t kUiTickPeriodMs = 33;
 static constexpr uint32_t kControlAckTimeoutMs = 1800;
 
@@ -40,11 +36,6 @@ uint32_t screensaver_timeout_ms()
         return cfg.screensaver_timeout_ms;
     }
     return 4000;
-}
-
-void request_render()
-{
-    s_render_requested = true;
 }
 
 void splash_show(bool show)
@@ -96,7 +87,6 @@ void wake_from_screensaver()
     }
     s_saver_active = false;
     ui_screen_saver_show(false);
-    request_render();
 }
 
 void note_user_activity()
@@ -125,15 +115,10 @@ void ui_gesture_cb(lv_event_t *event)
     }
 
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    bool changed = false;
     if (dir == LV_DIR_BOTTOM) {
-        changed = ui_screen_devices_prev_item();
+        (void)ui_screen_devices_prev_item();
     } else if (dir == LV_DIR_TOP) {
-        changed = ui_screen_devices_next_item();
-    }
-
-    if (changed) {
-        request_render();
+        (void)ui_screen_devices_next_item();
     }
 }
 
@@ -147,8 +132,6 @@ void ui_tick_cb(lv_timer_t *timer)
         s_ui_ready = true;
         splash_show(false);
         s_saver_active = false;
-        s_last_render_ms = 0;
-        request_render();
         note_user_activity();
     }
 
@@ -166,20 +149,6 @@ void ui_tick_cb(lv_timer_t *timer)
     }
     ui_screen_saver_tick();
 
-    if (s_render_requested)
-    {
-        if (!s_ui_ready || s_saver_active) {
-            return;
-        }
-        const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        if (s_last_render_ms != 0 && (now_ms - s_last_render_ms) < kMinRenderIntervalMs)
-        {
-            return;
-        }
-        ui_screen_devices_render();
-        s_last_render_ms = now_ms;
-        s_render_requested = false;
-    }
 }
 } // namespace
 
@@ -194,7 +163,6 @@ void ui_app_init(void)
     splash_init(scr);
     splash_show(true);
     s_ui_ready = false;
-    s_last_render_ms = 0;
     lv_timer_create(ui_tick_cb, kUiTickPeriodMs, nullptr);
 
     lvgl_port_unlock();
@@ -214,17 +182,11 @@ extern "C" void LVGL_knob_event(void *event)
     const int ev = (int)(intptr_t)event;
     if (ev == KNOB_RIGHT)
     {
-        if (ui_screen_devices_next_group())
-        {
-            request_render();
-        }
+        (void)ui_screen_devices_next_group();
     }
     else if (ev == KNOB_LEFT)
     {
-        if (ui_screen_devices_prev_group())
-        {
-            request_render();
-        }
+        (void)ui_screen_devices_prev_group();
     }
 }
 

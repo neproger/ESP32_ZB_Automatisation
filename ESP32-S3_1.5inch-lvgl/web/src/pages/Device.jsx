@@ -11,7 +11,6 @@ import {
 	groupGetForEndpoint,
 	groupSetForEndpoint,
 	groupsList,
-	groupsReload,
 	groupsSubscribe,
 } from '../groupsStore.js'
 
@@ -114,7 +113,7 @@ export default function Device() {
 	useEffect(() => {
 		const refresh = () => setGroups(groupsList())
 		const unsub = groupsSubscribe(refresh)
-		groupsReload().catch(() => {})
+		refresh()
 		return () => unsub()
 	}, [])
 

@@ -169,6 +169,59 @@ esp_err_t gw_state_store_get(const gw_device_uid_t *uid, const char *key, gw_sta
     return ESP_OK;
 }
 
+size_t gw_state_store_count(void)
+{
+    if (!s_inited) {
+        return 0;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    const size_t count = s_item_count;
+    portEXIT_CRITICAL(&s_lock);
+    return count;
+}
+
+esp_err_t gw_state_store_get_by_index(size_t index, gw_state_item_t *out)
+{
+    if (!s_inited || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    if (index >= s_item_count) {
+        portEXIT_CRITICAL(&s_lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+    *out = s_items[index];
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
+esp_err_t gw_state_store_remove_uid(const gw_device_uid_t *uid)
+{
+    if (!s_inited || !uid) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    size_t wr = 0;
+    for (size_t i = 0; i < s_item_count; i++) {
+        if (uid_equals(&s_items[i].uid, uid)) {
+            continue;
+        }
+        if (wr != i) {
+            s_items[wr] = s_items[i];
+        }
+        wr++;
+    }
+    for (size_t i = wr; i < s_item_count; i++) {
+        memset(&s_items[i], 0, sizeof(s_items[i]));
+    }
+    s_item_count = wr;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
+}
+
 size_t gw_state_store_list(const gw_device_uid_t *uid, gw_state_item_t *out, size_t max_out)
 {
     if (!s_inited || uid == NULL || out == NULL || max_out == 0) {

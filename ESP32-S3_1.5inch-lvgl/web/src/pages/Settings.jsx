@@ -9,7 +9,7 @@ function toInt(v, fallback = 0) {
 }
 
 export default function Settings() {
-  const { projectSettings, reloadSettings } = useGateway()
+  const { projectSettings } = useGateway()
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -55,7 +55,6 @@ export default function Settings() {
         timezone_auto: tzAuto,
         timezone_offset_min: tzAuto ? 0 : tzHour * 60,
       })
-      await reloadSettings()
       setStatus('Settings saved')
     } catch (e) {
       setStatus(String(e?.message ?? e))

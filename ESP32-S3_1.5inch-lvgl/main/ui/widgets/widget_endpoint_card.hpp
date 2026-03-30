@@ -19,9 +19,11 @@ public:
     const WidgetEndpointRef &ref() const;
 
 private:
+    void update_title(const WidgetEndpointState &state);
+    void update_subtitle(const WidgetEndpointState &state);
+    void update_summary(const WidgetEndpointState &state);
     void rebuild_if_needed(const WidgetEndpointState &state);
-    void update_texts(const WidgetEndpointState &state);
-    void refresh_children();
+    void refresh_children(const WidgetEndpointState &state);
     void clear_children();
 
     WidgetEndpointRef ref_ = {};
@@ -37,4 +39,5 @@ private:
     WidgetValueLabel *battery_ = nullptr;
     uint32_t last_topology_version_ = 0;
     uint32_t last_state_version_ = 0;
+    uint32_t last_summary_version_ = 0;
 };

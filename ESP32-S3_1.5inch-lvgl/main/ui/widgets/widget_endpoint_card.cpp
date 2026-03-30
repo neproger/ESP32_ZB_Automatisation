@@ -7,6 +7,30 @@
 
 namespace
 {
+uint32_t summary_version(const WidgetEndpointState &state)
+{
+    if (!state.has_endpoint) {
+        return state.topology_version;
+    }
+
+    if (state.caps.temperature && state.has_temperature_c) {
+        return state.temperature_c_version;
+    }
+    if (state.caps.humidity && state.has_humidity_pct) {
+        return state.humidity_pct_version;
+    }
+    if (state.caps.onoff && state.has_onoff) {
+        return state.onoff_version;
+    }
+    if (state.caps.level && state.has_level) {
+        return state.level_version;
+    }
+    if (state.caps.battery && state.has_battery_pct) {
+        return state.battery_pct_version;
+    }
+    return state.state_version;
+}
+
 const char *fallback_title(const WidgetEndpointState &state)
 {
     if (state.has_device && state.device.name[0] != '\0') {
@@ -104,7 +128,10 @@ void WidgetEndpointCard::render()
     WidgetEndpointState state = {};
     (void)widget_endpoint_state_read(ref_, &state);
     rebuild_if_needed(state);
-    update_texts(state);
+    update_title(state);
+    update_subtitle(state);
+    update_summary(state);
+    refresh_children(state);
     last_topology_version_ = state.topology_version;
     last_state_version_ = state.state_version;
 }
@@ -119,13 +146,16 @@ void WidgetEndpointCard::render_if_needed()
     }
     if (state.topology_version != last_topology_version_ ||
         state.state_version != last_state_version_) {
-        update_texts(state);
+        update_title(state);
+        update_subtitle(state);
+        update_summary(state);
+        refresh_children(state);
         last_topology_version_ = state.topology_version;
         last_state_version_ = state.state_version;
         return;
     }
 
-    refresh_children();
+    refresh_children(state);
 }
 
 void WidgetEndpointCard::set_ref(const WidgetEndpointRef &ref)
@@ -136,6 +166,7 @@ void WidgetEndpointCard::set_ref(const WidgetEndpointRef &ref)
     ref_ = ref;
     last_topology_version_ = 0;
     last_state_version_ = 0;
+    last_summary_version_ = 0;
     render();
 }
 
@@ -151,6 +182,7 @@ void WidgetEndpointCard::rebuild_if_needed(const WidgetEndpointState &state)
     }
 
     clear_children();
+    last_summary_version_ = 0;
 
     if (!state.has_endpoint) {
         lv_label_set_text(subtitle_, "Endpoint");
@@ -183,33 +215,50 @@ void WidgetEndpointCard::rebuild_if_needed(const WidgetEndpointState &state)
     }
 }
 
-void WidgetEndpointCard::update_texts(const WidgetEndpointState &state)
+void WidgetEndpointCard::update_title(const WidgetEndpointState &state)
 {
-    if (!title_ || !subtitle_ || !summary_) {
+    if (!title_) {
         return;
     }
 
     lv_label_set_text(title_, fallback_title(state));
+}
 
+void WidgetEndpointCard::update_subtitle(const WidgetEndpointState &state)
+{
+    if (!subtitle_) {
+        return;
+    }
     if (!state.has_endpoint) {
         lv_label_set_text(subtitle_, "Endpoint");
+        return;
+    }
+}
+
+void WidgetEndpointCard::update_summary(const WidgetEndpointState &state)
+{
+    if (!summary_) {
+        return;
     }
 
+    const uint32_t version = summary_version(state);
+    if (version == last_summary_version_) {
+        return;
+    }
     char summary[96] = {0};
     build_summary_text(state, summary, sizeof(summary));
     lv_label_set_text(summary_, summary);
-
-    refresh_children();
+    last_summary_version_ = version;
 }
 
-void WidgetEndpointCard::refresh_children()
+void WidgetEndpointCard::refresh_children(const WidgetEndpointState &state)
 {
-    if (onoff_) onoff_->render_if_needed();
-    if (level_) level_->render_if_needed();
-    if (color_) color_->render_if_needed();
-    if (temperature_) temperature_->render_if_needed();
-    if (humidity_) humidity_->render_if_needed();
-    if (battery_) battery_->render_if_needed();
+    if (onoff_) onoff_->apply(state);
+    if (level_) level_->apply(state);
+    if (color_) color_->apply(state);
+    if (temperature_) temperature_->apply(state);
+    if (humidity_) humidity_->apply(state);
+    if (battery_) battery_->apply(state);
 }
 
 void WidgetEndpointCard::clear_children()

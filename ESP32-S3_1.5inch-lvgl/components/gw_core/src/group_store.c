@@ -47,6 +47,24 @@ static bool ready(void)
     return s_initialized && s_groups_storage.data && s_items_storage.data;
 }
 
+static int compare_group_items(const gw_group_item_t *lhs, const gw_group_item_t *rhs)
+{
+    if (!lhs || !rhs) return 0;
+
+    const int group_cmp = strncmp(lhs->group_id, rhs->group_id, sizeof(lhs->group_id));
+    if (group_cmp != 0) return group_cmp;
+
+    if (lhs->order < rhs->order) return -1;
+    if (lhs->order > rhs->order) return 1;
+
+    const int uid_cmp = strcasecmp(lhs->device_uid.uid, rhs->device_uid.uid);
+    if (uid_cmp != 0) return uid_cmp;
+
+    if (lhs->endpoint < rhs->endpoint) return -1;
+    if (lhs->endpoint > rhs->endpoint) return 1;
+    return 0;
+}
+
 static uint32_t now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -122,6 +140,78 @@ esp_err_t gw_group_store_init(void)
              (unsigned)s_groups_storage.count,
              (unsigned)s_items_storage.count);
     return ESP_OK;
+}
+
+size_t gw_group_store_count(void)
+{
+    if (!ready()) return 0;
+    portENTER_CRITICAL(&s_groups_storage.lock);
+    const size_t count = s_groups_storage.count;
+    portEXIT_CRITICAL(&s_groups_storage.lock);
+    return count;
+}
+
+esp_err_t gw_group_store_get_by_index(size_t index, gw_group_entry_t *out_group)
+{
+    if (!ready() || !out_group) return ESP_ERR_INVALID_ARG;
+
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    portENTER_CRITICAL(&s_groups_storage.lock);
+    if (index < s_groups_storage.count) {
+        gw_group_entry_t *groups = (gw_group_entry_t *)s_groups_storage.data;
+        *out_group = groups[index];
+        err = ESP_OK;
+    }
+    portEXIT_CRITICAL(&s_groups_storage.lock);
+    return err;
+}
+
+size_t gw_group_store_get_group_item_count(const char *group_id)
+{
+    if (!ready() || !group_id) return 0;
+
+    size_t count = 0;
+    portENTER_CRITICAL(&s_items_storage.lock);
+    gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
+    for (size_t i = 0; i < s_items_storage.count; i++) {
+        if (strncmp(items[i].group_id, group_id, sizeof(items[i].group_id)) == 0) {
+            count++;
+        }
+    }
+    portEXIT_CRITICAL(&s_items_storage.lock);
+    return count;
+}
+
+esp_err_t gw_group_store_get_group_item_by_index(const char *group_id, size_t index, gw_group_item_t *out_item)
+{
+    if (!ready() || !group_id || !out_item) return ESP_ERR_INVALID_ARG;
+
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    portENTER_CRITICAL(&s_items_storage.lock);
+    gw_group_item_t *items = (gw_group_item_t *)s_items_storage.data;
+    for (size_t i = 0; i < s_items_storage.count; i++) {
+        if (strncmp(items[i].group_id, group_id, sizeof(items[i].group_id)) != 0) {
+            continue;
+        }
+
+        size_t rank = 0;
+        for (size_t j = 0; j < s_items_storage.count; j++) {
+            if (strncmp(items[j].group_id, group_id, sizeof(items[j].group_id)) != 0) {
+                continue;
+            }
+            if (compare_group_items(&items[j], &items[i]) < 0) {
+                rank++;
+            }
+        }
+
+        if (rank == index) {
+            *out_item = items[i];
+            err = ESP_OK;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_items_storage.lock);
+    return err;
 }
 
 size_t gw_group_store_list(gw_group_entry_t *out, size_t max_out)

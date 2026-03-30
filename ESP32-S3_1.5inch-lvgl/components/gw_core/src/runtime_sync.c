@@ -437,6 +437,7 @@ esp_err_t gw_runtime_sync_snapshot_remove_device(const gw_device_uid_t *uid)
     }
     snapshot_stale_remove_uid(uid);
     (void)gw_zb_model_remove_device(uid);
+    (void)gw_state_store_remove_uid(uid);
     return gw_device_registry_remove(uid);
 }
 
@@ -447,6 +448,7 @@ esp_err_t gw_runtime_sync_snapshot_end(void)
     }
     for (size_t i = 0; i < s_snapshot_stale_count; i++) {
         (void)gw_zb_model_remove_device(&s_snapshot_stale[i]);
+        (void)gw_state_store_remove_uid(&s_snapshot_stale[i]);
         (void)gw_device_registry_remove(&s_snapshot_stale[i]);
     }
     ESP_LOGI(TAG, "snapshot sweep removed=%u", (unsigned)s_snapshot_stale_count);

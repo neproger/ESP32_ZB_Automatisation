@@ -12,6 +12,7 @@ idf_component_register(
         log
         spiffs
         gw_core
+        gw_proto
         gw_zigbee
 )
 

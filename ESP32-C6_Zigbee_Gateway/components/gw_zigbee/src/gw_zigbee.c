@@ -695,6 +695,11 @@ static void leave_resp_cb(esp_zb_zdp_status_t zdo_status, void *user_ctx)
                          ctx->uid.uid,
                          ctx->short_addr,
                          msg);
+    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
+        (void)gw_zb_model_remove_device(&ctx->uid);
+        (void)gw_state_store_remove_uid(&ctx->uid);
+        (void)gw_device_registry_remove(&ctx->uid);
+    }
     {
         char status_buf[8];
         (void)snprintf(status_buf, sizeof(status_buf), "0x%02x", (unsigned)zdo_status);

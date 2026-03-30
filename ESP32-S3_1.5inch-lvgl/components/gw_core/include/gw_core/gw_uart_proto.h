@@ -47,7 +47,6 @@ typedef enum {
 
     GW_UART_MSG_EVT      = 0x20, /* асинхронное событие C6 -> S3 */
     GW_UART_MSG_SNAPSHOT = 0x21, /* пакет состояния при синхронизации */
-    GW_UART_MSG_DEVICE_FB = 0x22, /* сырой device FlatBuffer chunk C6 -> S3 */
 } gw_uart_msg_type_t;
 
 typedef enum {
@@ -60,11 +59,11 @@ typedef enum {
     GW_UART_CMD_WRITE_ATTR = 7, /* cluster_id + attr_id + value_* */
     GW_UART_CMD_IDENTIFY   = 8, /* param0: seconds */
     GW_UART_CMD_SYNC_SNAPSHOT = 9, /* запрос полного списка устройств/endpoint от C6 */
-    GW_UART_CMD_SYNC_DEVICE_FB = 10, /* запрос сырого device FlatBuffer снимка */
     GW_UART_CMD_SET_DEVICE_NAME = 11, /* device_uid + value_text */
     GW_UART_CMD_REMOVE_DEVICE = 12, /* device_uid */
     GW_UART_CMD_WIFI_CONFIG_SET = 13, /* value_blob: ssid\0password\0 */
-    GW_UART_CMD_NET_SERVICES_START = 14, /* старт интернет-сервисов C6 (SNTP/погода) */
+    GW_UART_CMD_NET_SERVICES_START = 14, /* start C6 net services */
+    GW_UART_CMD_REMOVE_ALL_DEVICES = 15, /* brute-force local purge of all Zigbee devices on C6 */
 } gw_uart_cmd_id_t;
 
 typedef enum {
@@ -207,19 +206,6 @@ _Static_assert(sizeof(gw_uart_snapshot_v1_t) <= GW_UART_PROTO_MAX_PAYLOAD,
                "gw_uart_snapshot_v1_t exceeds GW_UART_PROTO_MAX_PAYLOAD");
 #endif
 
-/* Chunk сырого device buffer (FlatBuffer) C6 -> S3. */
-#define GW_UART_DEVICE_FB_FLAG_BEGIN 0x01u
-#define GW_UART_DEVICE_FB_FLAG_END   0x02u
-
-typedef struct {
-    uint16_t transfer_id;
-    uint32_t total_len;
-    uint32_t offset;
-    uint8_t chunk_len;
-    uint8_t flags;               /* GW_UART_DEVICE_FB_FLAG_* */
-    uint8_t data[180];
-} GW_UART_PROTO_PACKED gw_uart_device_fb_chunk_v1_t;
-
 /*
  * Парсер потокового UART.
  * Идея: хранит внутренний буфер и умеет "доклеивать" куски байт, пока
@@ -253,3 +239,5 @@ esp_err_t gw_uart_proto_parser_feed(gw_uart_proto_parser_t *parser,
 #ifdef __cplusplus
 }
 #endif
+
+
