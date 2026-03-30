@@ -20,6 +20,7 @@ void gw_proto_fill_group_remove(gw_proto_group_remove_v1_t *out, const char *gro
 void gw_proto_fill_group_item(gw_proto_group_item_v1_t *out, const gw_group_item_t *src);
 void gw_proto_fill_group_item_remove(gw_proto_group_item_remove_v1_t *out, const gw_device_uid_t *uid, uint8_t endpoint);
 void gw_proto_fill_settings(gw_proto_settings_v1_t *out, const gw_project_settings_t *src);
+void gw_proto_fill_automation_remove(gw_proto_automation_remove_v1_t *out, const char *automation_id);
 
 #ifdef __cplusplus
 }

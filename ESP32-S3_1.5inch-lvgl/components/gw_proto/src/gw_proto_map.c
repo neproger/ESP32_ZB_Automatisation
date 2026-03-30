@@ -159,3 +159,14 @@ void gw_proto_fill_settings(gw_proto_settings_v1_t *out, const gw_project_settin
     out->timezone_auto = src->timezone_auto ? 1u : 0u;
     out->timezone_offset_min = src->timezone_offset_min;
 }
+
+void gw_proto_fill_automation_remove(gw_proto_automation_remove_v1_t *out, const char *automation_id)
+{
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (automation_id) {
+        strlcpy(out->id, automation_id, sizeof(out->id));
+    }
+}

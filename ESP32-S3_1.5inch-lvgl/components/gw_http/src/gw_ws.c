@@ -15,12 +15,14 @@
 #include "freertos/task.h"
 
 #include "gw_core/device_storage.h"
+#include "gw_core/automation_store.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/group_store.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/state_store.h"
 #include "gw_proto/gw_proto_frame.h"
 #include "gw_proto/gw_proto_map.h"
+#include "gw_proto/gw_proto_snapshot.h"
 
 static const char *TAG = "gw_ws";
 static const bool kWsUsePsram = true;
@@ -276,14 +278,129 @@ static esp_err_t ws_send_proto_frame_async(int fd, uint8_t type, uint16_t seq, c
     return ws_send_binary_async(fd, frame_buf, frame_len);
 }
 
-static esp_err_t ws_send_proto_snapshot_async(int fd)
+static esp_err_t ws_send_proto_frame_sync(httpd_req_t *req, uint8_t type, uint16_t seq, const void *payload, uint16_t payload_len)
 {
-    const uint16_t seq = s_ws_seq++;
-    const size_t dev_count = gw_device_storage_count();
+    if (!req) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint8_t frame_buf[GW_PROTO_FRAME_MAX_SIZE];
+    size_t frame_len = 0;
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_hdr(&hdr, type, payload_len, seq);
+    esp_err_t err = gw_proto_frame_build(&hdr, payload, payload_len, frame_buf, sizeof(frame_buf), &frame_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_BINARY,
+        .payload = frame_buf,
+        .len = frame_len,
+    };
+    return httpd_ws_send_frame(req, &frame);
+}
+
+typedef struct {
+    const int *fds;
+    size_t fd_count;
+} ws_proto_emit_many_ctx_t;
+
+typedef struct {
+    size_t group_count;
+    size_t group_index;
+    size_t item_index;
+    bool emit_group;
+    gw_group_entry_t group;
+    gw_group_item_t item;
+    gw_proto_group_v1_t group_msg;
+    gw_proto_group_item_v1_t item_msg;
+} ws_group_snapshot_iter_t;
+
+typedef struct {
+    size_t count;
+    size_t index;
+    gw_automation_entry_t entry;
+} ws_automation_snapshot_iter_t;
+
+typedef enum {
+    WS_DEVICE_SNAPSHOT_STAGE_DEVICE = 0,
+    WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS = 1,
+    WS_DEVICE_SNAPSHOT_STAGE_STATE = 2,
+    WS_DEVICE_SNAPSHOT_STAGE_DONE = 3,
+} ws_device_snapshot_stage_t;
+
+typedef struct {
+    size_t device_count;
+    size_t state_count;
+    uint32_t total_records;
+    size_t device_index;
+    size_t endpoint_index;
+    size_t state_index;
+    ws_device_snapshot_stage_t stage;
+    gw_device_full_t device;
+    gw_state_item_t state_item;
+    gw_device_t device_view;
+    gw_zb_endpoint_t endpoint_view;
+    gw_proto_device_v1_t device_msg;
+    gw_proto_endpoint_v1_t endpoint_msg;
+    gw_proto_state_item_v1_t state_msg;
+} ws_device_snapshot_iter_t;
+
+static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
+                                           uint8_t msg_type,
+                                           uint16_t seq,
+                                           const void *payload,
+                                           uint16_t payload_len)
+{
+    httpd_req_t *req = (httpd_req_t *)emit_ctx;
+    return ws_send_proto_frame_sync(req, msg_type, seq, payload, payload_len);
+}
+
+static esp_err_t ws_snapshot_emit_many(void *emit_ctx,
+                                       uint8_t msg_type,
+                                       uint16_t seq,
+                                       const void *payload,
+                                       uint16_t payload_len)
+{
+    const ws_proto_emit_many_ctx_t *ctx = (const ws_proto_emit_many_ctx_t *)emit_ctx;
+    if (!ctx || !ctx->fds || ctx->fd_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < ctx->fd_count; i++) {
+        esp_err_t err = ws_send_proto_frame_async(ctx->fds[i], msg_type, seq, payload, payload_len);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
+static uint32_t ws_group_snapshot_total_records(void)
+{
+    const size_t group_count = gw_group_store_count();
+    size_t group_item_count = 0;
+    for (size_t i = 0; i < group_count; i++) {
+        gw_group_entry_t group = {0};
+        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
+            continue;
+        }
+        group_item_count += gw_group_store_get_group_item_count(group.id);
+    }
+    return (uint32_t)(group_count + group_item_count);
+}
+
+static uint32_t ws_automation_snapshot_total_records(void)
+{
+    return (uint32_t)gw_automation_store_count();
+}
+
+static uint32_t ws_device_snapshot_total_records(void)
+{
+    const size_t device_count = gw_device_storage_count();
     const size_t state_count = gw_state_store_count();
     size_t endpoint_count = 0;
 
-    for (size_t i = 0; i < dev_count; i++) {
+    for (size_t i = 0; i < device_count; i++) {
         gw_device_full_t dev = {0};
         if (gw_device_storage_get_by_index(i, &dev) != ESP_OK) {
             continue;
@@ -297,146 +414,276 @@ static esp_err_t ws_send_proto_snapshot_async(int fd)
         }
     }
 
-    gw_proto_sync_begin_v1_t begin = {
-        .scope = GW_PROTO_SYNC_SCOPE_DEVICES,
-        .reserved0 = 0,
-        .reserved1 = 0,
-        .total_records = (uint32_t)(dev_count + endpoint_count + state_count),
+    return (uint32_t)(device_count + endpoint_count + state_count);
+}
+
+static esp_err_t ws_group_snapshot_rewind(void *source_ctx)
+{
+    ws_group_snapshot_iter_t *it = (ws_group_snapshot_iter_t *)source_ctx;
+    if (!it) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(it, 0, sizeof(*it));
+    it->group_count = gw_group_store_count();
+    it->emit_group = true;
+    return ESP_OK;
+}
+
+static esp_err_t ws_automation_snapshot_rewind(void *source_ctx)
+{
+    ws_automation_snapshot_iter_t *it = (ws_automation_snapshot_iter_t *)source_ctx;
+    if (!it) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(it, 0, sizeof(*it));
+    it->count = gw_automation_store_count();
+    return ESP_OK;
+}
+
+static esp_err_t ws_device_snapshot_rewind(void *source_ctx)
+{
+    ws_device_snapshot_iter_t *it = (ws_device_snapshot_iter_t *)source_ctx;
+    if (!it) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(it, 0, sizeof(*it));
+    it->device_count = gw_device_storage_count();
+    it->state_count = gw_state_store_count();
+    it->total_records = ws_device_snapshot_total_records();
+    it->stage = WS_DEVICE_SNAPSHOT_STAGE_DEVICE;
+    return ESP_OK;
+}
+
+static esp_err_t ws_group_snapshot_next(void *source_ctx,
+                                        uint8_t *out_msg_type,
+                                        const void **out_payload,
+                                        uint16_t *out_payload_len)
+{
+    ws_group_snapshot_iter_t *it = (ws_group_snapshot_iter_t *)source_ctx;
+    if (!it || !out_msg_type || !out_payload || !out_payload_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    while (it->group_index < it->group_count) {
+        if (it->emit_group) {
+            if (gw_group_store_get_by_index(it->group_index, &it->group) != ESP_OK) {
+                it->group_index++;
+                it->item_index = 0;
+                it->emit_group = true;
+                continue;
+            }
+            gw_proto_fill_group(&it->group_msg, &it->group);
+            it->emit_group = false;
+            *out_msg_type = GW_PROTO_MSG_GROUP_UPSERT;
+            *out_payload = &it->group_msg;
+            *out_payload_len = (uint16_t)sizeof(it->group_msg);
+            return ESP_OK;
+        }
+
+        const size_t item_count = gw_group_store_get_group_item_count(it->group.id);
+        while (it->item_index < item_count) {
+            if (gw_group_store_get_group_item_by_index(it->group.id, it->item_index, &it->item) != ESP_OK) {
+                it->item_index++;
+                continue;
+            }
+            it->item_index++;
+            gw_proto_fill_group_item(&it->item_msg, &it->item);
+            *out_msg_type = GW_PROTO_MSG_GROUP_ITEM_UPSERT;
+            *out_payload = &it->item_msg;
+            *out_payload_len = (uint16_t)sizeof(it->item_msg);
+            return ESP_OK;
+        }
+
+        it->group_index++;
+        it->item_index = 0;
+        it->emit_group = true;
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t ws_automation_snapshot_next(void *source_ctx,
+                                             uint8_t *out_msg_type,
+                                             const void **out_payload,
+                                             uint16_t *out_payload_len)
+{
+    ws_automation_snapshot_iter_t *it = (ws_automation_snapshot_iter_t *)source_ctx;
+    if (!it || !out_msg_type || !out_payload || !out_payload_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    while (it->index < it->count) {
+        if (gw_automation_store_get_by_index(it->index++, &it->entry) != ESP_OK) {
+            continue;
+        }
+        *out_msg_type = GW_PROTO_MSG_AUTOMATION_UPSERT;
+        *out_payload = &it->entry;
+        *out_payload_len = (uint16_t)sizeof(it->entry);
+        return ESP_OK;
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t ws_device_snapshot_next(void *source_ctx,
+                                         uint8_t *out_msg_type,
+                                         const void **out_payload,
+                                         uint16_t *out_payload_len)
+{
+    ws_device_snapshot_iter_t *it = (ws_device_snapshot_iter_t *)source_ctx;
+    if (!it || !out_msg_type || !out_payload || !out_payload_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    while (it->stage != WS_DEVICE_SNAPSHOT_STAGE_DONE) {
+        if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_DEVICE) {
+            while (it->device_index < it->device_count) {
+                if (gw_device_storage_get_by_index(it->device_index, &it->device) != ESP_OK) {
+                    it->device_index++;
+                    continue;
+                }
+
+                memset(&it->device_view, 0, sizeof(it->device_view));
+                it->device_view.device_uid = it->device.device_uid;
+                it->device_view.short_addr = it->device.short_addr;
+                it->device_view.version = it->device.version;
+                it->device_view.last_seen_ms = it->device.last_seen_ms;
+                it->device_view.has_onoff = it->device.has_onoff;
+                it->device_view.has_button = it->device.has_button;
+                strlcpy(it->device_view.name, it->device.name, sizeof(it->device_view.name));
+
+                gw_proto_fill_device(&it->device_msg, &it->device_view);
+                it->endpoint_index = 0;
+                it->stage = WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS;
+                it->device_index++;
+                *out_msg_type = GW_PROTO_MSG_DEVICE_UPSERT;
+                *out_payload = &it->device_msg;
+                *out_payload_len = (uint16_t)sizeof(it->device_msg);
+                return ESP_OK;
+            }
+            it->stage = WS_DEVICE_SNAPSHOT_STAGE_STATE;
+            continue;
+        }
+
+        if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS) {
+            while (it->endpoint_index < it->device.endpoint_count && it->endpoint_index < GW_DEVICE_MAX_ENDPOINTS) {
+                const gw_device_endpoint_t *stored = &it->device.endpoints[it->endpoint_index++];
+                if (stored->profile_id == 0 && stored->device_id == 0 &&
+                    stored->in_cluster_count == 0 && stored->out_cluster_count == 0) {
+                    continue;
+                }
+
+                memset(&it->endpoint_view, 0, sizeof(it->endpoint_view));
+                it->endpoint_view.uid = it->device.device_uid;
+                it->endpoint_view.short_addr = it->device.short_addr;
+                it->endpoint_view.endpoint = (uint8_t)it->endpoint_index;
+                it->endpoint_view.version = it->device.version;
+                it->endpoint_view.profile_id = stored->profile_id;
+                it->endpoint_view.device_id = stored->device_id;
+                it->endpoint_view.in_cluster_count = stored->in_cluster_count;
+                it->endpoint_view.out_cluster_count = stored->out_cluster_count;
+                memcpy(it->endpoint_view.in_clusters, stored->in_clusters, sizeof(it->endpoint_view.in_clusters));
+                memcpy(it->endpoint_view.out_clusters, stored->out_clusters, sizeof(it->endpoint_view.out_clusters));
+
+                gw_proto_fill_endpoint(&it->endpoint_msg, &it->endpoint_view);
+                *out_msg_type = GW_PROTO_MSG_ENDPOINT_UPSERT;
+                *out_payload = &it->endpoint_msg;
+                *out_payload_len = (uint16_t)sizeof(it->endpoint_msg);
+                return ESP_OK;
+            }
+            it->stage = WS_DEVICE_SNAPSHOT_STAGE_DEVICE;
+            continue;
+        }
+
+        if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_STATE) {
+            while (it->state_index < it->state_count) {
+                if (gw_state_store_get_by_index(it->state_index++, &it->state_item) != ESP_OK) {
+                    continue;
+                }
+                gw_proto_fill_state_item(&it->state_msg, &it->state_item);
+                *out_msg_type = GW_PROTO_MSG_STATE_ITEM;
+                *out_payload = &it->state_msg;
+                *out_payload_len = (uint16_t)sizeof(it->state_msg);
+                return ESP_OK;
+            }
+            it->stage = WS_DEVICE_SNAPSHOT_STAGE_DONE;
+            continue;
+        }
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t ws_send_proto_groups_snapshot_sync(httpd_req_t *req, uint16_t seq)
+{
+    ws_group_snapshot_iter_t iter = {0};
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = ws_group_snapshot_total_records(),
+        .rewind = ws_group_snapshot_rewind,
+        .next = ws_group_snapshot_next,
     };
-    esp_err_t err = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_BEGIN, seq, &begin, sizeof(begin));
+    return gw_proto_send_snapshot(ws_snapshot_emit_sync_req,
+                                  (void *)req,
+                                  GW_PROTO_SYNC_SCOPE_GROUPS,
+                                  seq,
+                                  &source);
+}
+
+static esp_err_t ws_send_proto_automations_snapshot_sync(httpd_req_t *req, uint16_t seq)
+{
+    ws_automation_snapshot_iter_t iter = {0};
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = ws_automation_snapshot_total_records(),
+        .rewind = ws_automation_snapshot_rewind,
+        .next = ws_automation_snapshot_next,
+    };
+    return gw_proto_send_snapshot(ws_snapshot_emit_sync_req,
+                                  (void *)req,
+                                  GW_PROTO_SYNC_SCOPE_AUTOMATIONS,
+                                  seq,
+                                  &source);
+}
+
+static esp_err_t ws_send_proto_devices_snapshot_sync(httpd_req_t *req, uint16_t seq)
+{
+    ws_device_snapshot_iter_t iter = {0};
+    esp_err_t err = ws_device_snapshot_rewind(&iter);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = iter.total_records,
+        .rewind = NULL,
+        .next = ws_device_snapshot_next,
+    };
+    err = gw_proto_send_snapshot(ws_snapshot_emit_sync_req,
+                                 (void *)req,
+                                 GW_PROTO_SYNC_SCOPE_DEVICES,
+                                 seq,
+                                 &source);
+    return err;
+}
+
+static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
+{
+    const uint16_t seq = s_ws_seq++;
+
+    esp_err_t err = ws_send_proto_devices_snapshot_sync(req, seq);
     if (err != ESP_OK) {
         return err;
     }
 
-    for (size_t i = 0; i < dev_count; i++) {
-        gw_device_full_t dev = {0};
-        if (gw_device_storage_get_by_index(i, &dev) != ESP_OK) {
-            continue;
-        }
-        gw_device_t item = {
-            .device_uid = dev.device_uid,
-            .short_addr = dev.short_addr,
-            .version = dev.version,
-            .last_seen_ms = dev.last_seen_ms,
-            .has_onoff = dev.has_onoff,
-            .has_button = dev.has_button,
-        };
-        strlcpy(item.name, dev.name, sizeof(item.name));
-
-        gw_proto_device_v1_t msg = {0};
-        gw_proto_fill_device(&msg, &item);
-        err = ws_send_proto_frame_async(fd, GW_PROTO_MSG_DEVICE_UPSERT, seq, &msg, sizeof(msg));
-        if (err != ESP_OK) {
-            return err;
-        }
-
-        for (uint8_t ep_idx = 0; ep_idx < dev.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ep_idx++) {
-            const gw_device_endpoint_t *stored = &dev.endpoints[ep_idx];
-            if (stored->profile_id == 0 && stored->device_id == 0 && stored->in_cluster_count == 0 && stored->out_cluster_count == 0) {
-                continue;
-            }
-            gw_zb_endpoint_t ep = {0};
-            ep.uid = dev.device_uid;
-            ep.short_addr = dev.short_addr;
-            ep.endpoint = (uint8_t)(ep_idx + 1u);
-            ep.version = dev.version;
-            ep.profile_id = stored->profile_id;
-            ep.device_id = stored->device_id;
-            ep.in_cluster_count = stored->in_cluster_count;
-            ep.out_cluster_count = stored->out_cluster_count;
-            memcpy(ep.in_clusters, stored->in_clusters, sizeof(ep.in_clusters));
-            memcpy(ep.out_clusters, stored->out_clusters, sizeof(ep.out_clusters));
-
-            gw_proto_endpoint_v1_t ep_msg = {0};
-            gw_proto_fill_endpoint(&ep_msg, &ep);
-            err = ws_send_proto_frame_async(fd, GW_PROTO_MSG_ENDPOINT_UPSERT, seq, &ep_msg, sizeof(ep_msg));
-            if (err != ESP_OK) {
-                return err;
-            }
-        }
+    err = ws_send_proto_groups_snapshot_sync(req, seq);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    for (size_t i = 0; i < state_count; i++) {
-        gw_state_item_t item = {0};
-        if (gw_state_store_get_by_index(i, &item) != ESP_OK) {
-            continue;
-        }
-        gw_proto_state_item_v1_t msg = {0};
-        gw_proto_fill_state_item(&msg, &item);
-        err = ws_send_proto_frame_async(fd, GW_PROTO_MSG_STATE_ITEM, seq, &msg, sizeof(msg));
-        if (err != ESP_OK) {
-            return err;
-        }
-    }
-
-    gw_proto_sync_end_v1_t end = {
-        .scope = GW_PROTO_SYNC_SCOPE_DEVICES,
-        .status = 0,
-        .reserved0 = 0,
-        .total_records = (uint32_t)(dev_count + endpoint_count + state_count),
-    };
-    esp_err_t err2 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_END, seq, &end, sizeof(end));
-    if (err2 != ESP_OK) {
-        return err2;
-    }
-
-    const size_t group_count = gw_group_store_count();
-    size_t group_item_count = 0;
-    for (size_t i = 0; i < group_count; i++) {
-        gw_group_entry_t group = {0};
-        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
-            continue;
-        }
-        group_item_count += gw_group_store_get_group_item_count(group.id);
-    }
-
-    gw_proto_sync_begin_v1_t groups_begin = {
-        .scope = GW_PROTO_SYNC_SCOPE_GROUPS,
-        .reserved0 = 0,
-        .reserved1 = 0,
-        .total_records = (uint32_t)(group_count + group_item_count),
-    };
-    err2 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_BEGIN, seq, &groups_begin, sizeof(groups_begin));
-    if (err2 != ESP_OK) {
-        return err2;
-    }
-
-    for (size_t i = 0; i < group_count; i++) {
-        gw_group_entry_t group = {0};
-        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
-            continue;
-        }
-        gw_proto_group_v1_t group_msg = {0};
-        gw_proto_fill_group(&group_msg, &group);
-        err2 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_GROUP_UPSERT, seq, &group_msg, sizeof(group_msg));
-        if (err2 != ESP_OK) {
-            return err2;
-        }
-
-        const size_t item_count = gw_group_store_get_group_item_count(group.id);
-        for (size_t item_idx = 0; item_idx < item_count; item_idx++) {
-            gw_group_item_t item = {0};
-            if (gw_group_store_get_group_item_by_index(group.id, item_idx, &item) != ESP_OK) {
-                continue;
-            }
-            gw_proto_group_item_v1_t item_msg = {0};
-            gw_proto_fill_group_item(&item_msg, &item);
-            err2 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_GROUP_ITEM_UPSERT, seq, &item_msg, sizeof(item_msg));
-            if (err2 != ESP_OK) {
-                return err2;
-            }
-        }
-    }
-
-    gw_proto_sync_end_v1_t groups_end = {
-        .scope = GW_PROTO_SYNC_SCOPE_GROUPS,
-        .status = 0,
-        .reserved0 = 0,
-        .total_records = (uint32_t)(group_count + group_item_count),
-    };
-    esp_err_t err3 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_END, seq, &groups_end, sizeof(groups_end));
-    if (err3 != ESP_OK) {
-        return err3;
+    err = ws_send_proto_automations_snapshot_sync(req, seq);
+    if (err != ESP_OK) {
+        return err;
     }
 
     gw_project_settings_t settings = {0};
@@ -450,16 +697,16 @@ static esp_err_t ws_send_proto_snapshot_async(int fd)
         .reserved1 = 0,
         .total_records = 1,
     };
-    err3 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_BEGIN, seq, &settings_begin, sizeof(settings_begin));
-    if (err3 != ESP_OK) {
-        return err3;
+    err = ws_send_proto_frame_sync(req, GW_PROTO_MSG_SYNC_BEGIN, seq, &settings_begin, sizeof(settings_begin));
+    if (err != ESP_OK) {
+        return err;
     }
 
     gw_proto_settings_v1_t settings_msg = {0};
     gw_proto_fill_settings(&settings_msg, &settings);
-    err3 = ws_send_proto_frame_async(fd, GW_PROTO_MSG_SETTINGS, seq, &settings_msg, sizeof(settings_msg));
-    if (err3 != ESP_OK) {
-        return err3;
+    err = ws_send_proto_frame_sync(req, GW_PROTO_MSG_SETTINGS, seq, &settings_msg, sizeof(settings_msg));
+    if (err != ESP_OK) {
+        return err;
     }
 
     gw_proto_sync_end_v1_t settings_end = {
@@ -468,7 +715,7 @@ static esp_err_t ws_send_proto_snapshot_async(int fd)
         .reserved0 = 0,
         .total_records = 1,
     };
-    return ws_send_proto_frame_async(fd, GW_PROTO_MSG_SYNC_END, seq, &settings_end, sizeof(settings_end));
+    return ws_send_proto_frame_sync(req, GW_PROTO_MSG_SYNC_END, seq, &settings_end, sizeof(settings_end));
 }
 
 static void ws_send_proto_groups_snapshot_to_fds(const int *fds, size_t fd_count)
@@ -478,60 +725,47 @@ static void ws_send_proto_groups_snapshot_to_fds(const int *fds, size_t fd_count
     }
 
     const uint16_t seq = s_ws_seq++;
-    const size_t group_count = gw_group_store_count();
-    size_t group_item_count = 0;
-    for (size_t i = 0; i < group_count; i++) {
-        gw_group_entry_t group = {0};
-        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
-            continue;
-        }
-        group_item_count += gw_group_store_get_group_item_count(group.id);
-    }
-
-    gw_proto_sync_begin_v1_t begin = {
-        .scope = GW_PROTO_SYNC_SCOPE_GROUPS,
-        .reserved0 = 0,
-        .reserved1 = 0,
-        .total_records = (uint32_t)(group_count + group_item_count),
+    ws_group_snapshot_iter_t iter = {0};
+    const ws_proto_emit_many_ctx_t emit_ctx = {
+        .fds = fds,
+        .fd_count = fd_count,
     };
-    for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_SYNC_BEGIN, seq, &begin, sizeof(begin));
-    }
-
-    for (size_t i = 0; i < group_count; i++) {
-        gw_group_entry_t group = {0};
-        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
-            continue;
-        }
-        gw_proto_group_v1_t group_msg = {0};
-        gw_proto_fill_group(&group_msg, &group);
-        for (size_t fd_idx = 0; fd_idx < fd_count; fd_idx++) {
-            (void)ws_send_proto_frame_async(fds[fd_idx], GW_PROTO_MSG_GROUP_UPSERT, seq, &group_msg, sizeof(group_msg));
-        }
-
-        const size_t item_count = gw_group_store_get_group_item_count(group.id);
-        for (size_t item_idx = 0; item_idx < item_count; item_idx++) {
-            gw_group_item_t item = {0};
-            if (gw_group_store_get_group_item_by_index(group.id, item_idx, &item) != ESP_OK) {
-                continue;
-            }
-            gw_proto_group_item_v1_t item_msg = {0};
-            gw_proto_fill_group_item(&item_msg, &item);
-            for (size_t fd_idx = 0; fd_idx < fd_count; fd_idx++) {
-                (void)ws_send_proto_frame_async(fds[fd_idx], GW_PROTO_MSG_GROUP_ITEM_UPSERT, seq, &item_msg, sizeof(item_msg));
-            }
-        }
-    }
-
-    gw_proto_sync_end_v1_t end = {
-        .scope = GW_PROTO_SYNC_SCOPE_GROUPS,
-        .status = 0,
-        .reserved0 = 0,
-        .total_records = (uint32_t)(group_count + group_item_count),
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = ws_group_snapshot_total_records(),
+        .rewind = ws_group_snapshot_rewind,
+        .next = ws_group_snapshot_next,
     };
-    for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_SYNC_END, seq, &end, sizeof(end));
+    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
+                                 (void *)&emit_ctx,
+                                 GW_PROTO_SYNC_SCOPE_GROUPS,
+                                 seq,
+                                 &source);
+}
+
+static void ws_send_proto_automations_snapshot_to_fds(const int *fds, size_t fd_count)
+{
+    if (!fds || fd_count == 0) {
+        return;
     }
+
+    const uint16_t seq = s_ws_seq++;
+    ws_automation_snapshot_iter_t iter = {0};
+    const ws_proto_emit_many_ctx_t emit_ctx = {
+        .fds = fds,
+        .fd_count = fd_count,
+    };
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = ws_automation_snapshot_total_records(),
+        .rewind = ws_automation_snapshot_rewind,
+        .next = ws_automation_snapshot_next,
+    };
+    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
+                                 (void *)&emit_ctx,
+                                 GW_PROTO_SYNC_SCOPE_AUTOMATIONS,
+                                 seq,
+                                 &source);
 }
 
 static void ws_send_proto_settings_to_fds(const int *fds, size_t fd_count)
@@ -888,6 +1122,9 @@ static void ws_event_task_fn(void *arg)
         } else if (strcmp(e.type, "group.changed") == 0) {
             ws_send_proto_groups_snapshot_to_fds(fds, fd_count);
             emit_legacy_cbor = false;
+        } else if (strcmp(e.type, "automation.changed") == 0) {
+            ws_send_proto_automations_snapshot_to_fds(fds, fd_count);
+            emit_legacy_cbor = false;
         } else if (strcmp(e.type, "settings.changed") == 0) {
             ws_send_proto_settings_to_fds(fds, fd_count);
             emit_legacy_cbor = false;
@@ -957,7 +1194,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
             const uint8_t *payload = NULL;
             err = gw_proto_frame_parse(buf, frame.len, &hdr, &payload);
             if (err == ESP_OK && hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
-                err = ws_send_proto_snapshot_async(fd);
+                err = ws_send_proto_snapshot_sync(req, fd);
             }
         }
         free(buf);
@@ -974,17 +1211,9 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     s_server = server;
     memset(s_clients, 0, sizeof(s_clients));
     s_event_q_caps_alloc = false;
-    if (kWsUsePsram) {
-        s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_event_q) {
-            s_event_q_caps_alloc = true;
-        }
-    }
-    if (!s_event_q) {
-        s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (s_event_q) {
-            s_event_q_caps_alloc = true;
-        }
+    s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_event_q) {
+        s_event_q_caps_alloc = true;
     }
     if (!s_event_q) {
         s_event_q = xQueueCreate(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t));
@@ -994,13 +1223,7 @@ esp_err_t gw_ws_register(httpd_handle_t server)
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
-    UBaseType_t task_ok = pdFAIL;
-    if (kWsUsePsram) {
-        task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    if (task_ok != pdPASS) {
-        task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
+    UBaseType_t task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (task_ok != pdPASS) {
         if (s_event_q_caps_alloc) {
             vQueueDeleteWithCaps(s_event_q);

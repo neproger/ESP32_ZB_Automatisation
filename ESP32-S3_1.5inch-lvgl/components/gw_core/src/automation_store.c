@@ -74,6 +74,18 @@ esp_err_t gw_automation_store_init(void)
     return ESP_OK;
 }
 
+size_t gw_automation_store_count(void)
+{
+    if (!s_initialized) {
+        return 0;
+    }
+
+    portENTER_CRITICAL(&s_automation_storage.lock);
+    const size_t count = s_automation_storage.count;
+    portEXIT_CRITICAL(&s_automation_storage.lock);
+    return count;
+}
+
 static size_t find_automation_index_by_id(const char *id)
 {
     if (!id || !s_initialized) {
@@ -240,6 +252,24 @@ esp_err_t gw_automation_store_get(const char *id, gw_automation_entry_t *out)
     *out = automations[idx];
     portEXIT_CRITICAL(&s_automation_storage.lock);
     
+    return ESP_OK;
+}
+
+esp_err_t gw_automation_store_get_by_index(size_t index, gw_automation_entry_t *out)
+{
+    if (!s_initialized || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    portENTER_CRITICAL(&s_automation_storage.lock);
+    if (index >= s_automation_storage.count) {
+        portEXIT_CRITICAL(&s_automation_storage.lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
+    *out = automations[index];
+    portEXIT_CRITICAL(&s_automation_storage.lock);
     return ESP_OK;
 }
 

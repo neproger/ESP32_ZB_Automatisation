@@ -1,7 +1,6 @@
 ﻿//UTF-8
 //gateway.jsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchCbor } from './api.js'
 import { cborDecode } from './cbor.js'
 import { groupsProtoApplyFrame } from './groupsStore.js'
 import {
@@ -16,10 +15,6 @@ import {
 function wsUrl(path) {
 	const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
 	return `${proto}://${window.location.host}${path}`
-}
-
-function normalizeUid(v) {
-	return String(v ?? '').trim().toLowerCase()
 }
 
 const GatewayContext = createContext(null)
@@ -51,23 +46,6 @@ export function GatewayProvider({ children }) {
 		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
 		return devices
 	}, [devices])
-
-	const loadAutomations = useCallback(async () => {
-		const data = await fetchCbor('/api/automations')
-		const list = Array.isArray(data?.automations) ? data.automations : []
-		setAutomations(list)
-		return list
-	}, [])
-
-	const loadSettings = useCallback(async () => {
-		const ws = wsRef.current
-		if (!ws || ws.readyState !== WebSocket.OPEN) {
-			throw new Error('ws not connected')
-		}
-		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
-		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
-		return projectSettings
-	}, [projectSettings])
 
 	useEffect(() => {
 		let cancelled = false
@@ -117,16 +95,26 @@ export function GatewayProvider({ children }) {
 								return next.length > 30 ? next.slice(next.length - 30) : next
 							})
 						}
-						protoApplyFrame(protoSnapshotRef.current, protoFrame, ({ devices: nextDevices, deviceStates: nextStates }) => {
-							applyDeviceList(nextDevices)
-							setDeviceStates(nextStates)
+						protoApplyFrame(protoSnapshotRef.current, protoFrame, ({
+							devices: nextDevices,
+							deviceStates: nextStates,
+							automations: nextAutomations,
+						}) => {
+							if (Array.isArray(nextDevices)) {
+								applyDeviceList(nextDevices)
+							}
+							if (nextStates && typeof nextStates === 'object') {
+								setDeviceStates(nextStates)
+							}
+							if (Array.isArray(nextAutomations)) {
+								setAutomations(nextAutomations)
+							}
 						})
 						return
 					}
 					const msg = cborDecode(ev.data)
 					if (!msg || typeof msg !== 'object') return
 					const type = String(msg?.type ?? '')
-					const data = msg?.data && typeof msg.data === 'object' ? msg.data : {}
 					if (!type) return
 
 					setEvents((prev) => {
@@ -134,12 +122,6 @@ export function GatewayProvider({ children }) {
 						return next.length > 30 ? next.slice(next.length - 30) : next
 					})
 
-					if (type === 'gateway.event') {
-						const evType = String(data?.event_type ?? '')
-						if (evType === 'automation.changed') {
-							loadAutomations().catch(() => {})
-						}
-					}
 				} catch {
 					// ignore parse errors
 				}
@@ -166,11 +148,17 @@ export function GatewayProvider({ children }) {
 			cleanup()
 			setWsStatus('disconnected')
 		}
-	}, [applyDeviceList, loadAutomations])
+	}, [applyDeviceList])
 
-	useEffect(() => {
-		loadAutomations().catch(() => {})
-	}, [loadAutomations])
+	const loadAutomations = useCallback(async () => {
+		const ws = wsRef.current
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			throw new Error('ws not connected')
+		}
+		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
+		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+		return automations
+	}, [automations])
 
 	const value = useMemo(
 		() => ({

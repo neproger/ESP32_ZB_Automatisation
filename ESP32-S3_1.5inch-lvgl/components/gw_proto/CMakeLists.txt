@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "src/gw_proto_frame.c"
         "src/gw_proto_map.c"
+        "src/gw_proto_snapshot.c"
         "src/gw_proto_uart.c"
     INCLUDE_DIRS
         "include"

@@ -6,7 +6,6 @@
 #include "esp_err.h"
 
 #include "gw_core/automation_compiled.h"
-#include "gw_core/types.h"
 
 #ifdef __cplusplus
 extern "C" {

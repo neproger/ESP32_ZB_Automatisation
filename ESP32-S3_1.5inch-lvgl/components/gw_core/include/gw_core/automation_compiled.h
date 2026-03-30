@@ -6,7 +6,7 @@
 
 #include "esp_err.h"
 
-#include "gw_core/types.h"
+#include "gw_core/gw_proto.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,7 +18,7 @@ Binary format for compiled automations (V2)
 This file defines the in-memory representation of a compiled automation,
 and the functions to compile/serialize/deserialize them.
 
-The fundamental binary structs (trigger, condition, action) are defined in types.h.
+The fundamental binary structs (trigger, condition, action) are defined in gw_proto.h.
 */
 
 typedef struct {

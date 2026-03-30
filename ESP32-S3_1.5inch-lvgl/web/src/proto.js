@@ -10,8 +10,59 @@ export const GW_PROTO_MSG_STATE_ITEM = 0x46
 export const GW_PROTO_MSG_STATE_REMOVE = 0x47
 export const GW_PROTO_MSG_SETTINGS = 0x4c
 export const GW_PROTO_MSG_SNAPSHOT_REQUEST = 0x4d
+export const GW_PROTO_MSG_AUTOMATION_UPSERT = 0x4e
+export const GW_PROTO_MSG_AUTOMATION_REMOVE = 0x4f
+
+export const GW_PROTO_SYNC_SCOPE_FULL = 1
+export const GW_PROTO_SYNC_SCOPE_DEVICES = 2
+export const GW_PROTO_SYNC_SCOPE_GROUPS = 3
+export const GW_PROTO_SYNC_SCOPE_SETTINGS = 4
+export const GW_PROTO_SYNC_SCOPE_AUTOMATIONS = 5
 
 const HDR_SIZE = 8
+const DEVICE_UID_SIZE = 19
+const DEVICE_NAME_SIZE = 32
+const STATE_KEY_SIZE = 24
+const STATE_TEXT_SIZE = 64
+const STATE_REMOVE_KEY_OFF = DEVICE_UID_SIZE + 1
+const DEVICE_SHORT_ADDR_OFF = DEVICE_UID_SIZE
+const DEVICE_NAME_OFF = DEVICE_SHORT_ADDR_OFF + 2
+const DEVICE_VERSION_OFF = DEVICE_NAME_OFF + DEVICE_NAME_SIZE
+const DEVICE_LAST_SEEN_OFF = DEVICE_VERSION_OFF + 4
+const DEVICE_HAS_ONOFF_OFF = DEVICE_LAST_SEEN_OFF + 8
+const DEVICE_HAS_BUTTON_OFF = DEVICE_HAS_ONOFF_OFF + 1
+const ENDPOINT_SHORT_ADDR_OFF = DEVICE_UID_SIZE
+const ENDPOINT_ID_OFF = ENDPOINT_SHORT_ADDR_OFF + 2
+const ENDPOINT_VERSION_OFF = ENDPOINT_ID_OFF + 2
+const ENDPOINT_PROFILE_ID_OFF = ENDPOINT_VERSION_OFF + 4
+const ENDPOINT_DEVICE_ID_OFF = ENDPOINT_PROFILE_ID_OFF + 2
+const ENDPOINT_IN_CLUSTER_COUNT_OFF = ENDPOINT_DEVICE_ID_OFF + 2
+const ENDPOINT_OUT_CLUSTER_COUNT_OFF = ENDPOINT_IN_CLUSTER_COUNT_OFF + 1
+const ENDPOINT_IN_CLUSTERS_OFF = ENDPOINT_OUT_CLUSTER_COUNT_OFF + 1
+const ENDPOINT_OUT_CLUSTERS_OFF = ENDPOINT_IN_CLUSTERS_OFF + 32
+const STATE_ENDPOINT_OFF = DEVICE_UID_SIZE
+const STATE_VALUE_TYPE_OFF = STATE_ENDPOINT_OFF + 1
+const STATE_KEY_OFF = STATE_VALUE_TYPE_OFF + 3
+const STATE_VERSION_OFF = STATE_KEY_OFF + STATE_KEY_SIZE
+const STATE_VALUE_BOOL_OFF = STATE_VERSION_OFF + 4
+const STATE_VALUE_F32_OFF = STATE_VALUE_BOOL_OFF + 4
+const STATE_VALUE_U32_OFF = STATE_VALUE_F32_OFF + 4
+const STATE_VALUE_U64_OFF = STATE_VALUE_U32_OFF + 4
+const STATE_VALUE_TEXT_OFF = STATE_VALUE_U64_OFF + 8
+const AUTO_ID_SIZE = 32
+const AUTO_NAME_SIZE = 48
+const AUTO_MAX_TRIGGERS = 8
+const AUTO_MAX_CONDITIONS = 16
+const AUTO_MAX_ACTIONS = 16
+const AUTO_MAX_STRING_TABLE_BYTES = 512
+const AUTO_TRIGGER_SIZE = 16
+const AUTO_CONDITION_SIZE = 22
+const AUTO_ACTION_SIZE = 32
+const AUTO_TRIGGERS_OFF = 86
+const AUTO_CONDITIONS_OFF = AUTO_TRIGGERS_OFF + AUTO_MAX_TRIGGERS * AUTO_TRIGGER_SIZE
+const AUTO_ACTIONS_OFF = AUTO_CONDITIONS_OFF + AUTO_MAX_CONDITIONS * AUTO_CONDITION_SIZE
+const AUTO_STRING_TABLE_SIZE_OFF = AUTO_ACTIONS_OFF + AUTO_MAX_ACTIONS * AUTO_ACTION_SIZE
+const AUTO_STRING_TABLE_OFF = AUTO_STRING_TABLE_SIZE_OFF + 2
 
 function readFixedString(view, offset, size) {
   const bytes = []
@@ -149,18 +200,18 @@ function sortSnapshotDevices(snapshot) {
 
 function parseValue(payload) {
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
-  const valueType = view.getUint8(19)
+  const valueType = view.getUint8(STATE_VALUE_TYPE_OFF)
   switch (valueType) {
     case 1:
-      return view.getUint8(52) !== 0
+      return view.getUint8(STATE_VALUE_BOOL_OFF) !== 0
     case 2:
-      return view.getFloat32(56, true)
+      return view.getFloat32(STATE_VALUE_F32_OFF, true)
     case 3:
-      return view.getUint32(60, true)
+      return view.getUint32(STATE_VALUE_U32_OFF, true)
     case 4:
-      return Number(view.getBigUint64(64, true))
+      return Number(view.getBigUint64(STATE_VALUE_U64_OFF, true))
     case 5:
-      return readFixedString(view, 72, 64)
+      return readFixedString(view, STATE_VALUE_TEXT_OFF, STATE_TEXT_SIZE)
     default:
       return null
   }
@@ -195,9 +246,198 @@ export function protoCreateSnapshotAccumulator() {
   return {
     devicesByUid: {},
     deviceStates: {},
+    automationsById: {},
     inSync: false,
+    currentScope: 0,
     seq: 0,
   }
+}
+
+function automationEventTypeToString(type) {
+  switch (Number(type || 0)) {
+    case 1: return 'zigbee.command'
+    case 2: return 'zigbee.attr_report'
+    case 3: return 'device.join'
+    case 4: return 'device.leave'
+    default: return 'zigbee.command'
+  }
+}
+
+function automationOpToString(op) {
+  switch (Number(op || 0)) {
+    case 1: return '=='
+    case 2: return '!='
+    case 3: return '>'
+    case 4: return '<'
+    case 5: return '>='
+    case 6: return '<='
+    default: return '=='
+  }
+}
+
+function automationReadStringTable(view, offset, size, tableStart, tableSize) {
+  const off = Number(offset || 0)
+  if (!off || off >= tableSize) return ''
+  return readFixedString(view, tableStart + off, Math.max(0, tableSize - off))
+}
+
+function automationHex16(value) {
+  const v = Number(value || 0) & 0xffff
+  return `0x${v.toString(16).padStart(4, '0')}`
+}
+
+function automationDecodeTrigger(view, base, entry) {
+  const eventType = view.getUint8(base)
+  const endpoint = view.getUint8(base + 1)
+  const deviceUidOff = view.getUint32(base + 4, true)
+  const cmdOff = view.getUint32(base + 8, true)
+  const clusterId = view.getUint16(base + 12, true)
+  const attrId = view.getUint16(base + 14, true)
+
+  const match = {}
+  const deviceUid = automationReadStringTable(view, deviceUidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const cmd = automationReadStringTable(view, cmdOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  if (deviceUid) match.device_uid = deviceUid
+  if (endpoint) match['payload.endpoint'] = endpoint
+  if (eventType === 1) {
+    if (cmd) match['payload.cmd'] = cmd
+    if (clusterId) match['payload.cluster'] = automationHex16(clusterId)
+  } else if (eventType === 2) {
+    if (clusterId) match['payload.cluster'] = automationHex16(clusterId)
+    if (attrId) match['payload.attr'] = automationHex16(attrId)
+  }
+
+  return {
+    type: 'event',
+    event_type: automationEventTypeToString(eventType),
+    match,
+  }
+}
+
+function automationDecodeCondition(view, base, entry) {
+  const op = view.getUint8(base)
+  const valType = view.getUint8(base + 1)
+  const endpoint = view.getUint8(base + 2)
+  const deviceUidOff = view.getUint32(base + 6, true)
+  const keyOff = view.getUint32(base + 10, true)
+  const deviceUid = automationReadStringTable(view, deviceUidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const key = automationReadStringTable(view, keyOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const value = valType === 2 ? (view.getUint8(base + 14) !== 0) : view.getFloat64(base + 14, true)
+
+  const ref = { device_uid: deviceUid, key }
+  if (endpoint) ref.endpoint = endpoint
+
+  return {
+    type: 'state',
+    op: automationOpToString(op),
+    ref,
+    value,
+  }
+}
+
+function automationDecodeAction(view, base, entry) {
+  const kind = view.getUint8(base)
+  const endpoint = view.getUint8(base + 1)
+  const auxEndpoint = view.getUint8(base + 2)
+  const u16_0 = view.getUint16(base + 4, true)
+  const u16_1 = view.getUint16(base + 6, true)
+  const cmdOff = view.getUint32(base + 8, true)
+  const uidOff = view.getUint32(base + 12, true)
+  const uid2Off = view.getUint32(base + 16, true)
+  const arg0 = view.getUint32(base + 20, true)
+  const arg1 = view.getUint32(base + 24, true)
+  const arg2 = view.getUint32(base + 28, true)
+
+  const cmd = automationReadStringTable(view, cmdOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const uid = automationReadStringTable(view, uidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const uid2 = automationReadStringTable(view, uid2Off, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+
+  const out = { type: 'zigbee', cmd }
+  if (kind === 4) {
+    out.src_device_uid = uid
+    out.src_endpoint = endpoint
+    out.cluster_id = automationHex16(u16_0)
+    out.dst_device_uid = uid2
+    out.dst_endpoint = auxEndpoint
+    return out
+  }
+  if (kind === 3) {
+    out.group_id = automationHex16(u16_0)
+    out.scene_id = u16_1
+    return out
+  }
+  if (kind === 2) {
+    out.group_id = automationHex16(u16_0)
+  } else if (kind === 1) {
+    out.device_uid = uid
+    out.endpoint = endpoint
+  }
+
+  if (cmd === 'level.move_to_level') {
+    out.level = arg0
+    out.transition_ms = arg1
+  } else if (cmd === 'color.move_to_color_xy') {
+    out.x = arg0
+    out.y = arg1
+    out.transition_ms = arg2
+  } else if (cmd === 'color.move_to_color_temperature') {
+    out.mireds = arg0
+    out.transition_ms = arg1
+  }
+  return out
+}
+
+function decodeAutomationEntry(payload) {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
+  const id = readFixedString(view, 0, AUTO_ID_SIZE)
+  const name = readFixedString(view, AUTO_ID_SIZE, AUTO_NAME_SIZE)
+  const enabled = view.getUint8(80) !== 0
+  const triggersCount = Math.min(view.getUint8(82), AUTO_MAX_TRIGGERS)
+  const conditionsCount = Math.min(view.getUint8(83), AUTO_MAX_CONDITIONS)
+  const actionsCount = Math.min(view.getUint8(84), AUTO_MAX_ACTIONS)
+  const tableSize = Math.min(view.getUint16(AUTO_STRING_TABLE_SIZE_OFF, true), AUTO_MAX_STRING_TABLE_BYTES)
+  const entry = {
+    tableStart: AUTO_STRING_TABLE_OFF,
+    tableSize,
+  }
+
+  const triggers = []
+  const conditions = []
+  const actions = []
+
+  for (let i = 0; i < triggersCount; i += 1) {
+    triggers.push(automationDecodeTrigger(view, AUTO_TRIGGERS_OFF + i * AUTO_TRIGGER_SIZE, entry))
+  }
+  for (let i = 0; i < conditionsCount; i += 1) {
+    conditions.push(automationDecodeCondition(view, AUTO_CONDITIONS_OFF + i * AUTO_CONDITION_SIZE, entry))
+  }
+  for (let i = 0; i < actionsCount; i += 1) {
+    actions.push(automationDecodeAction(view, AUTO_ACTIONS_OFF + i * AUTO_ACTION_SIZE, entry))
+  }
+
+  const automation = {
+    v: 1,
+    id,
+    name,
+    enabled,
+    mode: 'single',
+    triggers,
+    conditions,
+    actions,
+  }
+
+  return {
+    id,
+    name,
+    enabled,
+    automation,
+  }
+}
+
+function sortSnapshotAutomations(acc) {
+	const items = Object.values(acc.automationsById)
+	items.sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
+	return items
 }
 
 export function protoFrameToEvent(frame) {
@@ -231,7 +471,7 @@ export function protoFrameToEvent(frame) {
   }
 
   if (frame.type === GW_PROTO_MSG_DEVICE_UPSERT) {
-    const uid = readFixedString(view, 0, 19)
+    const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
     return {
       ts_ms,
       type: 'device.event',
@@ -244,7 +484,7 @@ export function protoFrameToEvent(frame) {
   }
 
   if (frame.type === GW_PROTO_MSG_DEVICE_REMOVE) {
-    const uid = readFixedString(view, 0, 19)
+    const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
     return {
       ts_ms,
       type: 'device.event',
@@ -257,9 +497,9 @@ export function protoFrameToEvent(frame) {
   }
 
   if (frame.type === GW_PROTO_MSG_STATE_ITEM) {
-    const uid = readFixedString(view, 0, 19)
-    const endpointId = Number(view.getUint8(19) || 0)
-    const key = readFixedString(view, 22, 24)
+    const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
+    const endpointId = Number(view.getUint8(STATE_ENDPOINT_OFF) || 0)
+    const key = readFixedString(view, STATE_KEY_OFF, STATE_KEY_SIZE)
     return {
       ts_ms,
       type: 'device.state',
@@ -284,6 +524,32 @@ export function protoFrameToEvent(frame) {
     }
   }
 
+  if (frame.type === GW_PROTO_MSG_AUTOMATION_UPSERT) {
+    const item = decodeAutomationEntry(payload)
+    return {
+      ts_ms,
+      type: 'gateway.event',
+      data: {
+        event_type: 'automation.changed',
+        source: 'gw_proto',
+        msg: `automation ${item.id} updated`,
+      },
+    }
+  }
+
+  if (frame.type === GW_PROTO_MSG_AUTOMATION_REMOVE) {
+    const id = readFixedString(view, 0, AUTO_ID_SIZE)
+    return {
+      ts_ms,
+      type: 'gateway.event',
+      data: {
+        event_type: 'automation.changed',
+        source: 'gw_proto',
+        msg: `automation ${id} removed`,
+      },
+    }
+  }
+
   return null
 }
 
@@ -301,40 +567,51 @@ export function protoParseSettingsFrame(frame) {
 }
 
 export function protoApplyFrame(acc, frame, onCommit) {
-  if (!acc || !frame) return
-  const payload = frame.payload
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
+	if (!acc || !frame) return
+	const payload = frame.payload
+	const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
 
-  if (frame.type === GW_PROTO_MSG_SYNC_BEGIN) {
-    acc.devicesByUid = {}
-    acc.deviceStates = {}
-    acc.inSync = true
-    acc.seq = frame.seq
+	if (frame.type === GW_PROTO_MSG_SYNC_BEGIN) {
+		acc.currentScope = view.getUint8(0)
+		acc.inSync = true
+		acc.seq = frame.seq
+    if (acc.currentScope === GW_PROTO_SYNC_SCOPE_DEVICES) {
+      acc.devicesByUid = {}
+      acc.deviceStates = {}
+    } else if (acc.currentScope === GW_PROTO_SYNC_SCOPE_AUTOMATIONS) {
+      acc.automationsById = {}
+    }
     return
   }
 
   if (frame.type === GW_PROTO_MSG_SYNC_END) {
+    const scope = view.getUint8(0)
     acc.inSync = false
-    if (typeof onCommit === 'function') {
+    acc.currentScope = 0
+    if (scope === GW_PROTO_SYNC_SCOPE_DEVICES && typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
+      })
+    } else if (scope === GW_PROTO_SYNC_SCOPE_AUTOMATIONS && typeof onCommit === 'function') {
+      onCommit({
+        automations: sortSnapshotAutomations(acc),
       })
     }
     return
   }
 
-  if (frame.type === GW_PROTO_MSG_DEVICE_UPSERT) {
-    const uid = readFixedString(view, 0, 19)
-    const device = ensureDevice(acc, uid)
-    if (!device) return
+	if (frame.type === GW_PROTO_MSG_DEVICE_UPSERT) {
+		const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
+		const device = ensureDevice(acc, uid)
+		if (!device) return
     device.device_uid = uid
-    device.short_addr = view.getUint16(20, true)
-    device.name = readFixedString(view, 22, 32)
-    device.last_seen_ms = Number(view.getBigUint64(56, true))
-    device.has_onoff = view.getUint8(64) !== 0
-    device.has_button = view.getUint8(65) !== 0
-    if (!acc.inSync && typeof onCommit === 'function') {
+    device.short_addr = view.getUint16(DEVICE_SHORT_ADDR_OFF, true)
+		device.name = readFixedString(view, DEVICE_NAME_OFF, DEVICE_NAME_SIZE)
+		device.last_seen_ms = Number(view.getBigUint64(DEVICE_LAST_SEEN_OFF, true))
+		device.has_onoff = view.getUint8(DEVICE_HAS_ONOFF_OFF) !== 0
+		device.has_button = view.getUint8(DEVICE_HAS_BUTTON_OFF) !== 0
+		if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -344,11 +621,11 @@ export function protoApplyFrame(acc, frame, onCommit) {
   }
 
   if (frame.type === GW_PROTO_MSG_DEVICE_REMOVE) {
-    const uid = normalizeUid(readFixedString(view, 0, 19))
+    const uid = normalizeUid(readFixedString(view, 0, DEVICE_UID_SIZE))
     if (!uid) return
     delete acc.devicesByUid[uid]
     delete acc.deviceStates[uid]
-    if (!acc.inSync && typeof onCommit === 'function') {
+    if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -357,24 +634,24 @@ export function protoApplyFrame(acc, frame, onCommit) {
     return
   }
 
-  if (frame.type === GW_PROTO_MSG_ENDPOINT_UPSERT) {
-    const uid = readFixedString(view, 0, 19)
+	if (frame.type === GW_PROTO_MSG_ENDPOINT_UPSERT) {
+		const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
     const device = ensureDevice(acc, uid)
     if (!device) return
-    device.short_addr = view.getUint16(20, true)
-    const endpointId = view.getUint8(22)
+    device.short_addr = view.getUint16(ENDPOINT_SHORT_ADDR_OFF, true)
+    const endpointId = view.getUint8(ENDPOINT_ID_OFF)
     const ep = ensureEndpoint(device, endpointId)
     if (!ep) return
-    ep.profile_id = view.getUint16(28, true)
-    ep.device_id = view.getUint16(30, true)
-    ep.in_clusters = clusterList(view, 34, view.getUint8(32), 16)
-    ep.out_clusters = clusterList(view, 66, view.getUint8(33), 16)
-    const meta = deriveEndpointMeta(ep)
-    ep.kind = meta.kind
-    ep.accepts = meta.accepts
-    ep.emits = meta.emits
-    ep.reports = meta.reports
-    if (!acc.inSync && typeof onCommit === 'function') {
+    ep.profile_id = view.getUint16(ENDPOINT_PROFILE_ID_OFF, true)
+    ep.device_id = view.getUint16(ENDPOINT_DEVICE_ID_OFF, true)
+		ep.in_clusters = clusterList(view, ENDPOINT_IN_CLUSTERS_OFF, view.getUint8(ENDPOINT_IN_CLUSTER_COUNT_OFF), 16)
+		ep.out_clusters = clusterList(view, ENDPOINT_OUT_CLUSTERS_OFF, view.getUint8(ENDPOINT_OUT_CLUSTER_COUNT_OFF), 16)
+		const meta = deriveEndpointMeta(ep)
+		ep.kind = meta.kind
+		ep.accepts = meta.accepts
+		ep.emits = meta.emits
+		ep.reports = meta.reports
+		if (!acc.inSync && typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -384,15 +661,15 @@ export function protoApplyFrame(acc, frame, onCommit) {
   }
 
   if (frame.type === GW_PROTO_MSG_ENDPOINT_REMOVE) {
-    const uid = normalizeUid(readFixedString(view, 0, 19))
-    const endpointId = Number(view.getUint8(19) || 0)
+    const uid = normalizeUid(readFixedString(view, 0, DEVICE_UID_SIZE))
+    const endpointId = Number(view.getUint8(ENDPOINT_ID_OFF) || 0)
     const device = acc.devicesByUid[uid]
     if (device && endpointId > 0) {
       device.endpoints = (Array.isArray(device.endpoints) ? device.endpoints : []).filter((ep) => Number(ep?.endpoint ?? 0) !== endpointId)
       if (acc.deviceStates[uid]) {
         delete acc.deviceStates[uid][String(endpointId)]
       }
-      if (!acc.inSync && typeof onCommit === 'function') {
+      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
         onCommit({
           devices: sortSnapshotDevices(acc),
           deviceStates: { ...acc.deviceStates },
@@ -402,23 +679,23 @@ export function protoApplyFrame(acc, frame, onCommit) {
     return
   }
 
-  if (frame.type === GW_PROTO_MSG_STATE_ITEM) {
-    const uid = normalizeUid(readFixedString(view, 0, 19))
+	if (frame.type === GW_PROTO_MSG_STATE_ITEM) {
+		const uid = normalizeUid(readFixedString(view, 0, DEVICE_UID_SIZE))
     if (!uid) return
-    const endpointId = String(view.getUint8(19))
-    const key = readFixedString(view, 22, 24)
+    const endpointId = String(view.getUint8(STATE_ENDPOINT_OFF))
+    const key = readFixedString(view, STATE_KEY_OFF, STATE_KEY_SIZE)
     if (!endpointId || !key) return
     if (!acc.deviceStates[uid]) acc.deviceStates[uid] = {}
     if (!acc.deviceStates[uid][endpointId]) acc.deviceStates[uid][endpointId] = {}
-    acc.deviceStates[uid][endpointId][key] = parseValue(payload)
+		acc.deviceStates[uid][endpointId][key] = parseValue(payload)
 
-    const device = ensureDevice(acc, uid)
+		const device = ensureDevice(acc, uid)
     const ep = ensureEndpoint(device, Number(endpointId))
     if (ep) {
       ep.live_state = acc.deviceStates[uid][endpointId]
     }
 
-    if (!acc.inSync && typeof onCommit === 'function') {
+    if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -428,15 +705,41 @@ export function protoApplyFrame(acc, frame, onCommit) {
   }
 
   if (frame.type === GW_PROTO_MSG_STATE_REMOVE) {
-    const uid = normalizeUid(readFixedString(view, 0, 19))
-    const endpointId = String(view.getUint8(19))
-    const key = readFixedString(view, 20, 24)
+    const uid = normalizeUid(readFixedString(view, 0, DEVICE_UID_SIZE))
+    const endpointId = String(view.getUint8(STATE_ENDPOINT_OFF))
+    const key = readFixedString(view, STATE_REMOVE_KEY_OFF, STATE_KEY_SIZE)
     if (uid && endpointId && key && acc.deviceStates[uid]?.[endpointId]) {
       delete acc.deviceStates[uid][endpointId][key]
-      if (!acc.inSync && typeof onCommit === 'function') {
+      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
         onCommit({
           devices: sortSnapshotDevices(acc),
           deviceStates: { ...acc.deviceStates },
+        })
+      }
+    }
+    return
+  }
+
+  if (frame.type === GW_PROTO_MSG_AUTOMATION_UPSERT) {
+    const item = decodeAutomationEntry(payload)
+    if (item?.id) {
+      acc.automationsById[item.id] = item
+      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_AUTOMATIONS) && typeof onCommit === 'function') {
+        onCommit({
+          automations: sortSnapshotAutomations(acc),
+        })
+      }
+    }
+    return
+  }
+
+  if (frame.type === GW_PROTO_MSG_AUTOMATION_REMOVE) {
+    const id = readFixedString(view, 0, AUTO_ID_SIZE)
+    if (id && acc.automationsById[id]) {
+      delete acc.automationsById[id]
+      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_AUTOMATIONS) && typeof onCommit === 'function') {
+        onCommit({
+          automations: sortSnapshotAutomations(acc),
         })
       }
     }
