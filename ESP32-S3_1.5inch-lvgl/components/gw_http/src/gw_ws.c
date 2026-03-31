@@ -48,7 +48,7 @@ static uint16_t s_ws_seq = 1;
 #define GW_WS_MAX_CLIENTS 2
 #define GW_WS_TX_Q_CAP 32
 #define GW_WS_TX_TASK_PRIO 2
-#define GW_WS_TX_TASK_STACK 4096
+#define GW_WS_TX_TASK_STACK 3072
 static gw_ws_client_t s_clients[GW_WS_MAX_CLIENTS];
 static QueueHandle_t s_tx_q;
 static TaskHandle_t s_tx_task;

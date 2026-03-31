@@ -577,15 +577,15 @@ static void rules_task(void *arg)
     }
 }
 
+static void rules_automation_listener(void *user_ctx)
+{
+    (void)user_ctx;
+    reload_automation_cache();
+}
+
 static void rules_event_listener(const gw_event_t *event, void *user_ctx)
 {
     (void)user_ctx;
-    if (event && (strcmp(event->type, "automation_saved") == 0 ||
-                  strcmp(event->type, "automation_removed") == 0 ||
-                  strcmp(event->type, "automation_enabled") == 0)) {
-        reload_automation_cache();
-    }
-
     if (s_inited && s_q && event) {
         if (xQueueSend(s_q, event, 0) != pdTRUE) {
             ESP_LOGW(TAG, "rules event queue overflow");
@@ -646,6 +646,7 @@ esp_err_t gw_rules_init(void)
     }
 
     gw_event_bus_add_listener(rules_event_listener, NULL);
+    (void)gw_automation_store_add_listener(rules_automation_listener, NULL);
     reload_automation_cache();
 
     s_inited = true;

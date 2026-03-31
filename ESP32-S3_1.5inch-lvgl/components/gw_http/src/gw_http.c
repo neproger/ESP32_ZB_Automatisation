@@ -16,7 +16,7 @@
 #include "gw_http/gw_ws.h"
 
 static const char *TAG = "gw_http";
-static const uint16_t GW_HTTP_SERVER_STACK = 10240;
+static const uint16_t GW_HTTP_SERVER_STACK = 8192;
 
 static httpd_handle_t s_server;
 static uint16_t s_server_port;

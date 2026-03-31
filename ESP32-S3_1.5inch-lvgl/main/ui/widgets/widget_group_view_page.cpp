@@ -6,6 +6,25 @@
 
 namespace
 {
+constexpr int32_t kSlideOffsetX = 28;
+constexpr int32_t kSlideOffsetY = 22;
+constexpr uint32_t kTransitionDurationMs = 180;
+
+void anim_translate_x(void *var, int32_t value)
+{
+    lv_obj_set_style_translate_x((lv_obj_t *)var, value, 0);
+}
+
+void anim_translate_y(void *var, int32_t value)
+{
+    lv_obj_set_style_translate_y((lv_obj_t *)var, value, 0);
+}
+
+void anim_opa(void *var, int32_t value)
+{
+    lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)value, 0);
+}
+
 void align_card_below(lv_obj_t *root, lv_obj_t *subtitle, lv_obj_t *card)
 {
     if (!root || !subtitle || !card) {
@@ -103,7 +122,7 @@ void WidgetGroupViewPage::render_if_needed()
     }
 }
 
-void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index)
+void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index, Transition transition)
 {
     if (group_index_ == group_index && item_index_ == item_index) {
         return;
@@ -117,6 +136,7 @@ void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index)
     last_group_version_ = 0;
     last_item_version_ = 0;
     render();
+    play_transition(transition);
 }
 
 size_t WidgetGroupViewPage::group_index() const
@@ -127,6 +147,65 @@ size_t WidgetGroupViewPage::group_index() const
 size_t WidgetGroupViewPage::item_index() const
 {
     return item_index_;
+}
+
+void WidgetGroupViewPage::play_transition(Transition transition)
+{
+    if (!root_ || transition == Transition::None) {
+        return;
+    }
+
+    int32_t offset_x = 0;
+    int32_t offset_y = 0;
+    switch (transition) {
+    case Transition::SlideLeft:
+        offset_x = kSlideOffsetX;
+        break;
+    case Transition::SlideRight:
+        offset_x = -kSlideOffsetX;
+        break;
+    case Transition::SlideUp:
+        offset_y = kSlideOffsetY;
+        break;
+    case Transition::SlideDown:
+        offset_y = -kSlideOffsetY;
+        break;
+    case Transition::None:
+    default:
+        return;
+    }
+
+    lv_obj_set_style_translate_x(root_, offset_x, 0);
+    lv_obj_set_style_translate_y(root_, offset_y, 0);
+    lv_obj_set_style_opa(root_, LV_OPA_70, 0);
+
+    lv_anim_t anim;
+    if (offset_x != 0) {
+        lv_anim_init(&anim);
+        lv_anim_set_var(&anim, root_);
+        lv_anim_set_values(&anim, offset_x, 0);
+        lv_anim_set_duration(&anim, kTransitionDurationMs);
+        lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&anim, anim_translate_x);
+        lv_anim_start(&anim);
+    }
+    if (offset_y != 0) {
+        lv_anim_init(&anim);
+        lv_anim_set_var(&anim, root_);
+        lv_anim_set_values(&anim, offset_y, 0);
+        lv_anim_set_duration(&anim, kTransitionDurationMs);
+        lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&anim, anim_translate_y);
+        lv_anim_start(&anim);
+    }
+
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, root_);
+    lv_anim_set_values(&anim, LV_OPA_70, LV_OPA_COVER);
+    lv_anim_set_duration(&anim, kTransitionDurationMs - 20);
+    lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&anim, anim_opa);
+    lv_anim_start(&anim);
 }
 
 void WidgetGroupViewPage::update_header(const WidgetGroupState &state)

@@ -9,6 +9,14 @@
 
 class WidgetGroupViewPage : public WidgetBase {
 public:
+    enum class Transition {
+        None,
+        SlideLeft,
+        SlideRight,
+        SlideUp,
+        SlideDown,
+    };
+
     explicit WidgetGroupViewPage(lv_obj_t *parent);
     ~WidgetGroupViewPage() override;
 
@@ -16,11 +24,12 @@ public:
     void render() override;
     void render_if_needed() override;
 
-    void set_selection(size_t group_index, size_t item_index);
+    void set_selection(size_t group_index, size_t item_index, Transition transition = Transition::None);
     size_t group_index() const;
     size_t item_index() const;
 
 private:
+    void play_transition(Transition transition);
     void update_header(const WidgetGroupState &state);
     void update_card(const WidgetGroupState &state);
 

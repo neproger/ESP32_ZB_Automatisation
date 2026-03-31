@@ -15,7 +15,9 @@
 #include "gw_core/runtime_sync.h"
 #include "gw_core/net_time.h"
 #include "gw_core/zb_model.h"
+#include "gw_core/gw_proto.h"
 #include "gw_zigbee/gw_zigbee.h"
+#include "gw_proto/gw_proto_frame.h"
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -28,21 +30,67 @@
 
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
-static constexpr uint32_t kUiBootTaskStack = 10240;
-static constexpr uint32_t kMemDiagTaskStack = 4096;
+static constexpr uint32_t kUiBootTaskStack = 8192;
+static constexpr uint32_t kMemDiagTaskStack = 3072;
+static constexpr uint32_t kTaskSnapshotPeriod = 4;
 static bool s_http_started = false;
 static volatile bool s_ui_ready_for_http = false;
+
+static void log_struct_sizes_once(void)
+{
+    ESP_LOGI(TAG_APP,
+             "Struct sizes: automation=%u device=%u endpoint=%u state=%u group=%u group_item=%u settings=%u proto_frame_max=%u",
+             (unsigned)sizeof(gw_automation_entry_t),
+             (unsigned)sizeof(gw_proto_device_v1_t),
+             (unsigned)sizeof(gw_proto_endpoint_v1_t),
+             (unsigned)sizeof(gw_proto_state_item_v1_t),
+             (unsigned)sizeof(gw_proto_group_v1_t),
+             (unsigned)sizeof(gw_proto_group_item_v1_t),
+             (unsigned)sizeof(gw_proto_settings_v1_t),
+             (unsigned)GW_PROTO_FRAME_MAX_SIZE);
+}
 
 static void log_heap_periodic(void)
 {
     ESP_LOGI(TAG_APP,
-             "Heap periodic: internal=%u (largest=%u) dma=%u (largest=%u) psram=%u (largest=%u)",
+             "Heap periodic: internal=%u min=%u (largest=%u) dma=%u min=%u (largest=%u) psram=%u min=%u (largest=%u)",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
+
+static void log_task_memory_snapshot(void)
+{
+    const UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    if (task_count == 0) {
+        return;
+    }
+
+    TaskStatus_t *tasks = (TaskStatus_t *)heap_caps_malloc(sizeof(TaskStatus_t) * task_count, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!tasks) {
+        ESP_LOGW(TAG_APP, "Task memory snapshot skipped: OOM for %u tasks", (unsigned)task_count);
+        return;
+    }
+
+    const UBaseType_t got = uxTaskGetSystemState(tasks, task_count, nullptr);
+    ESP_LOGI(TAG_APP, "Task memory snapshot: tasks=%u", (unsigned)got);
+    for (UBaseType_t i = 0; i < got; i++) {
+        const TaskStatus_t *t = &tasks[i];
+        ESP_LOGI(TAG_APP,
+                 "task name=%s prio=%u stack_hwm=%u task_num=%u state=%u",
+                 t->pcTaskName ? t->pcTaskName : "?",
+                 (unsigned)t->uxCurrentPriority,
+                 (unsigned)t->usStackHighWaterMark,
+                 (unsigned)t->xTaskNumber,
+                 (unsigned)t->eCurrentState);
+    }
+    free(tasks);
 }
 
 static bool http_has_memory_headroom(void)
@@ -90,8 +138,12 @@ static void ui_boot_task(void *arg)
 static void mem_diag_task(void *arg)
 {
     (void)arg;
+    uint32_t tick = 0;
     for (;;) {
         log_heap_periodic();
+        if ((tick++ % kTaskSnapshotPeriod) == 0) {
+            log_task_memory_snapshot();
+        }
         vTaskDelay(pdMS_TO_TICKS(15000));
     }
 }
@@ -107,6 +159,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_event_bus_init());
+    log_struct_sizes_once();
     // Keep noisy subsystems quiet while we debug task stacks and heap pressure.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_WARN);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
@@ -141,7 +194,7 @@ extern "C" void app_main(void)
     }
 
     // HTTP start may mount SPIFFS (flash operations). Stack must be internal RAM.
-    if (xTaskCreateWithCaps(http_start_task, "http_start", 6144, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+    if (xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG_APP, "http_start task create failed");
     }
     if (xTaskCreateWithCaps(mem_diag_task, "mem_diag", kMemDiagTaskStack, NULL, 2, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {

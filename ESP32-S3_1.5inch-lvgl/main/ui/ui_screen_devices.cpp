@@ -43,7 +43,7 @@ bool ui_screen_devices_next_group(void)
     }
 
     const size_t next_group = (s_ui_root->group_index() + 1) % state.group_count;
-    s_ui_root->set_selection(next_group, 0);
+    s_ui_root->transition_to_selection(next_group, 0, WidgetGroupViewPage::Transition::SlideLeft);
     return true;
 }
 
@@ -60,7 +60,7 @@ bool ui_screen_devices_prev_group(void)
 
     const size_t current = s_ui_root->group_index();
     const size_t prev_group = (current == 0) ? (state.group_count - 1) : (current - 1);
-    s_ui_root->set_selection(prev_group, 0);
+    s_ui_root->transition_to_selection(prev_group, 0, WidgetGroupViewPage::Transition::SlideRight);
     return true;
 }
 
@@ -76,7 +76,7 @@ bool ui_screen_devices_next_item(void)
     }
 
     const size_t next_item = (s_ui_root->item_index() + 1) % state.item_count;
-    s_ui_root->set_item_index(next_item);
+    s_ui_root->transition_to_selection(s_ui_root->group_index(), next_item, WidgetGroupViewPage::Transition::SlideUp);
     return true;
 }
 
@@ -93,6 +93,6 @@ bool ui_screen_devices_prev_item(void)
 
     const size_t current = s_ui_root->item_index();
     const size_t prev_item = (current == 0) ? (state.item_count - 1) : (current - 1);
-    s_ui_root->set_item_index(prev_item);
+    s_ui_root->transition_to_selection(s_ui_root->group_index(), prev_item, WidgetGroupViewPage::Transition::SlideDown);
     return true;
 }

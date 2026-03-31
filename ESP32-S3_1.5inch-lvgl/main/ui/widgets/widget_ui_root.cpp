@@ -70,6 +70,20 @@ void WidgetUiRoot::set_selection(size_t group_index, size_t item_index)
     render();
 }
 
+void WidgetUiRoot::transition_to_selection(size_t group_index,
+                                           size_t item_index,
+                                           WidgetGroupViewPage::Transition transition)
+{
+    if (group_index_ == group_index && item_index_ == item_index) {
+        return;
+    }
+    group_index_ = group_index;
+    item_index_ = item_index;
+    if (group_page_) {
+        group_page_->set_selection(group_index_, item_index_, transition);
+    }
+}
+
 size_t WidgetUiRoot::group_index() const
 {
     return group_index_;

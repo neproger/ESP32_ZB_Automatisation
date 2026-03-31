@@ -17,6 +17,9 @@ public:
     void set_group_index(size_t group_index);
     void set_item_index(size_t item_index);
     void set_selection(size_t group_index, size_t item_index);
+    void transition_to_selection(size_t group_index,
+                                 size_t item_index,
+                                 WidgetGroupViewPage::Transition transition);
 
     size_t group_index() const;
     size_t item_index() const;
