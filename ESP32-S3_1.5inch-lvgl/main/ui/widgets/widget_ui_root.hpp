@@ -14,9 +14,6 @@ public:
     void render() override;
     void render_if_needed() override;
 
-    void set_group_index(size_t group_index);
-    void set_item_index(size_t item_index);
-    void set_selection(size_t group_index, size_t item_index);
     void transition_to_selection(size_t group_index,
                                  size_t item_index,
                                  WidgetGroupViewPage::Transition transition);
@@ -25,7 +22,9 @@ public:
     size_t item_index() const;
 
 private:
-    lv_obj_t *root_ = nullptr;
+    static lv_screen_load_anim_t map_transition(WidgetGroupViewPage::Transition transition);
+    WidgetGroupViewPage *build_page(size_t group_index, size_t item_index);
+
     WidgetGroupViewPage *group_page_ = nullptr;
     size_t group_index_ = 0;
     size_t item_index_ = 0;

@@ -218,9 +218,12 @@ WidgetOnOffControl::WidgetOnOffControl(lv_obj_t *parent, const WidgetEndpointRef
 
 WidgetOnOffControl::~WidgetOnOffControl()
 {
-    if (root_) {
+    if (root_ && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
     }
+    root_ = nullptr;
+    label_ = nullptr;
+    switch_ = nullptr;
 }
 
 lv_obj_t *WidgetOnOffControl::root() const
@@ -335,9 +338,12 @@ WidgetLevelControl::WidgetLevelControl(lv_obj_t *parent, const WidgetEndpointRef
 
 WidgetLevelControl::~WidgetLevelControl()
 {
-    if (root_) {
+    if (root_ && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
     }
+    root_ = nullptr;
+    label_ = nullptr;
+    slider_ = nullptr;
 }
 
 lv_obj_t *WidgetLevelControl::root() const
@@ -421,9 +427,14 @@ WidgetColorControl::WidgetColorControl(lv_obj_t *parent, const WidgetEndpointRef
 
 WidgetColorControl::~WidgetColorControl()
 {
-    if (root_) {
+    if (root_ && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
     }
+    root_ = nullptr;
+    label_hue_ = nullptr;
+    slider_hue_ = nullptr;
+    label_sat_ = nullptr;
+    slider_sat_ = nullptr;
 }
 
 lv_obj_t *WidgetColorControl::root() const
@@ -518,9 +529,10 @@ WidgetValueLabel::WidgetValueLabel(lv_obj_t *parent, const WidgetEndpointRef &re
 
 WidgetValueLabel::~WidgetValueLabel()
 {
-    if (label_) {
+    if (label_ && lv_obj_is_valid(label_)) {
         lv_obj_delete(label_);
     }
+    label_ = nullptr;
 }
 
 lv_obj_t *WidgetValueLabel::root() const

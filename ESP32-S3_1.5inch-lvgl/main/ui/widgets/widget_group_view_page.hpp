@@ -24,12 +24,12 @@ public:
     void render() override;
     void render_if_needed() override;
 
-    void set_selection(size_t group_index, size_t item_index, Transition transition = Transition::None);
+    void set_selection(size_t group_index, size_t item_index);
     size_t group_index() const;
     size_t item_index() const;
 
 private:
-    void play_transition(Transition transition);
+    static void on_root_deleted(lv_event_t *event);
     void update_header(const WidgetGroupState &state);
     void update_card(const WidgetGroupState &state);
 

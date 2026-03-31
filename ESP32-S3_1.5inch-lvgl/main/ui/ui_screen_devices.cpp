@@ -1,19 +1,81 @@
 #include "ui_screen_devices.hpp"
 
+#include <atomic>
+
 #include "widgets/widget_group_state.hpp"
 #include "widgets/widget_ui_root.hpp"
 
 namespace
 {
 WidgetUiRoot *s_ui_root = nullptr;
+std::atomic<int> s_pending_group_delta{0};
+std::atomic<int> s_pending_item_delta{0};
+size_t s_target_group_index = 0;
+size_t s_target_item_index = 0;
 
-WidgetGroupState read_current_state()
+size_t wrap_index(size_t base, int delta, size_t count)
+{
+    if (count == 0) {
+        return 0;
+    }
+    const int64_t count64 = (int64_t)count;
+    int64_t next = ((int64_t)base + (int64_t)delta) % count64;
+    if (next < 0) {
+        next += count64;
+    }
+    return (size_t)next;
+}
+
+WidgetGroupState read_state(size_t group_index, size_t item_index)
 {
     WidgetGroupState state = {};
-    if (s_ui_root) {
-        (void)widget_group_state_read(s_ui_root->group_index(), s_ui_root->item_index(), &state);
-    }
+    (void)widget_group_state_read(group_index, item_index, &state);
     return state;
+}
+
+void sync_current_to_target(WidgetGroupViewPage::Transition transition)
+{
+    if (!s_ui_root) {
+        return;
+    }
+    if (s_ui_root->group_index() == s_target_group_index &&
+        s_ui_root->item_index() == s_target_item_index) {
+        return;
+    }
+    s_ui_root->transition_to_selection(s_target_group_index, s_target_item_index, transition);
+}
+
+void apply_pending_targets(void)
+{
+    if (!s_ui_root) {
+        return;
+    }
+
+    WidgetGroupViewPage::Transition transition = WidgetGroupViewPage::Transition::None;
+    const int group_delta = s_pending_group_delta.exchange(0, std::memory_order_acq_rel);
+    if (group_delta != 0) {
+        WidgetGroupState state = read_state(s_target_group_index, s_target_item_index);
+        if (state.group_count > 0) {
+            s_target_group_index = wrap_index(s_target_group_index, group_delta, state.group_count);
+            s_target_item_index = 0;
+            transition = (group_delta > 0)
+                ? WidgetGroupViewPage::Transition::SlideLeft
+                : WidgetGroupViewPage::Transition::SlideRight;
+        }
+    } else {
+        const int item_delta = s_pending_item_delta.exchange(0, std::memory_order_acq_rel);
+        if (item_delta != 0) {
+            WidgetGroupState state = read_state(s_target_group_index, s_target_item_index);
+            if (state.item_count > 0) {
+                s_target_item_index = wrap_index(s_target_item_index, item_delta, state.item_count);
+                transition = (item_delta > 0)
+                    ? WidgetGroupViewPage::Transition::SlideUp
+                    : WidgetGroupViewPage::Transition::SlideDown;
+            }
+        }
+    }
+
+    sync_current_to_target(transition);
 }
 } // namespace
 
@@ -21,6 +83,10 @@ void ui_screen_devices_init(lv_obj_t *root)
 {
     delete s_ui_root;
     s_ui_root = new WidgetUiRoot(root);
+    s_target_group_index = 0;
+    s_target_item_index = 0;
+    s_pending_group_delta.store(0, std::memory_order_release);
+    s_pending_item_delta.store(0, std::memory_order_release);
 }
 
 void ui_screen_devices_render_if_needed(void)
@@ -28,71 +94,22 @@ void ui_screen_devices_render_if_needed(void)
     if (!s_ui_root) {
         return;
     }
+    apply_pending_targets();
     s_ui_root->render_if_needed();
 }
 
-bool ui_screen_devices_next_group(void)
+void ui_screen_devices_step_group(int delta)
 {
-    if (!s_ui_root) {
-        return false;
+    if (delta == 0) {
+        return;
     }
-
-    WidgetGroupState state = read_current_state();
-    if (state.group_count <= 1) {
-        return false;
-    }
-
-    const size_t next_group = (s_ui_root->group_index() + 1) % state.group_count;
-    s_ui_root->transition_to_selection(next_group, 0, WidgetGroupViewPage::Transition::SlideLeft);
-    return true;
+    s_pending_group_delta.fetch_add(delta, std::memory_order_acq_rel);
 }
 
-bool ui_screen_devices_prev_group(void)
+void ui_screen_devices_step_item(int delta)
 {
-    if (!s_ui_root) {
-        return false;
+    if (delta == 0) {
+        return;
     }
-
-    WidgetGroupState state = read_current_state();
-    if (state.group_count <= 1) {
-        return false;
-    }
-
-    const size_t current = s_ui_root->group_index();
-    const size_t prev_group = (current == 0) ? (state.group_count - 1) : (current - 1);
-    s_ui_root->transition_to_selection(prev_group, 0, WidgetGroupViewPage::Transition::SlideRight);
-    return true;
-}
-
-bool ui_screen_devices_next_item(void)
-{
-    if (!s_ui_root) {
-        return false;
-    }
-
-    WidgetGroupState state = read_current_state();
-    if (state.item_count <= 1) {
-        return false;
-    }
-
-    const size_t next_item = (s_ui_root->item_index() + 1) % state.item_count;
-    s_ui_root->transition_to_selection(s_ui_root->group_index(), next_item, WidgetGroupViewPage::Transition::SlideUp);
-    return true;
-}
-
-bool ui_screen_devices_prev_item(void)
-{
-    if (!s_ui_root) {
-        return false;
-    }
-
-    WidgetGroupState state = read_current_state();
-    if (state.item_count <= 1) {
-        return false;
-    }
-
-    const size_t current = s_ui_root->item_index();
-    const size_t prev_item = (current == 0) ? (state.item_count - 1) : (current - 1);
-    s_ui_root->transition_to_selection(s_ui_root->group_index(), prev_item, WidgetGroupViewPage::Transition::SlideDown);
-    return true;
+    s_pending_item_delta.fetch_add(delta, std::memory_order_acq_rel);
 }

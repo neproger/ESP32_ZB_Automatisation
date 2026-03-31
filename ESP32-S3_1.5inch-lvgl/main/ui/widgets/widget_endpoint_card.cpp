@@ -109,13 +109,13 @@ WidgetEndpointCard::WidgetEndpointCard(lv_obj_t *parent, const WidgetEndpointRef
 WidgetEndpointCard::~WidgetEndpointCard()
 {
     clear_children();
-    if (root_) {
+    if (root_ && lv_obj_is_valid(root_)) {
         lv_obj_delete(root_);
-        root_ = nullptr;
-        title_ = nullptr;
-        subtitle_ = nullptr;
-        summary_ = nullptr;
     }
+    root_ = nullptr;
+    title_ = nullptr;
+    subtitle_ = nullptr;
+    summary_ = nullptr;
 }
 
 lv_obj_t *WidgetEndpointCard::root() const

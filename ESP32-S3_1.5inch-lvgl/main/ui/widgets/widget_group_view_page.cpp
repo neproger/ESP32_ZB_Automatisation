@@ -6,25 +6,6 @@
 
 namespace
 {
-constexpr int32_t kSlideOffsetX = 28;
-constexpr int32_t kSlideOffsetY = 22;
-constexpr uint32_t kTransitionDurationMs = 180;
-
-void anim_translate_x(void *var, int32_t value)
-{
-    lv_obj_set_style_translate_x((lv_obj_t *)var, value, 0);
-}
-
-void anim_translate_y(void *var, int32_t value)
-{
-    lv_obj_set_style_translate_y((lv_obj_t *)var, value, 0);
-}
-
-void anim_opa(void *var, int32_t value)
-{
-    lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)value, 0);
-}
-
 void align_card_below(lv_obj_t *root, lv_obj_t *subtitle, lv_obj_t *card)
 {
     if (!root || !subtitle || !card) {
@@ -48,12 +29,13 @@ void align_card_below(lv_obj_t *root, lv_obj_t *subtitle, lv_obj_t *card)
 
 WidgetGroupViewPage::WidgetGroupViewPage(lv_obj_t *parent)
 {
-    root_ = lv_obj_create(parent);
+    root_ = parent ? lv_obj_create(parent) : lv_obj_create(NULL);
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_opa(root_, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(root_);
+    lv_obj_add_event_cb(root_, on_root_deleted, LV_EVENT_DELETE, this);
 
     title_ = lv_label_create(root_);
     lv_obj_align(title_, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
@@ -72,6 +54,9 @@ WidgetGroupViewPage::~WidgetGroupViewPage()
 {
     delete card_;
     card_ = nullptr;
+    root_ = nullptr;
+    title_ = nullptr;
+    subtitle_ = nullptr;
 }
 
 lv_obj_t *WidgetGroupViewPage::root() const
@@ -122,7 +107,7 @@ void WidgetGroupViewPage::render_if_needed()
     }
 }
 
-void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index, Transition transition)
+void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index)
 {
     if (group_index_ == group_index && item_index_ == item_index) {
         return;
@@ -136,7 +121,6 @@ void WidgetGroupViewPage::set_selection(size_t group_index, size_t item_index, T
     last_group_version_ = 0;
     last_item_version_ = 0;
     render();
-    play_transition(transition);
 }
 
 size_t WidgetGroupViewPage::group_index() const
@@ -149,63 +133,16 @@ size_t WidgetGroupViewPage::item_index() const
     return item_index_;
 }
 
-void WidgetGroupViewPage::play_transition(Transition transition)
+void WidgetGroupViewPage::on_root_deleted(lv_event_t *event)
 {
-    if (!root_ || transition == Transition::None) {
+    WidgetGroupViewPage *self = static_cast<WidgetGroupViewPage *>(lv_event_get_user_data(event));
+    if (!self) {
         return;
     }
-
-    int32_t offset_x = 0;
-    int32_t offset_y = 0;
-    switch (transition) {
-    case Transition::SlideLeft:
-        offset_x = kSlideOffsetX;
-        break;
-    case Transition::SlideRight:
-        offset_x = -kSlideOffsetX;
-        break;
-    case Transition::SlideUp:
-        offset_y = kSlideOffsetY;
-        break;
-    case Transition::SlideDown:
-        offset_y = -kSlideOffsetY;
-        break;
-    case Transition::None:
-    default:
-        return;
-    }
-
-    lv_obj_set_style_translate_x(root_, offset_x, 0);
-    lv_obj_set_style_translate_y(root_, offset_y, 0);
-    lv_obj_set_style_opa(root_, LV_OPA_70, 0);
-
-    lv_anim_t anim;
-    if (offset_x != 0) {
-        lv_anim_init(&anim);
-        lv_anim_set_var(&anim, root_);
-        lv_anim_set_values(&anim, offset_x, 0);
-        lv_anim_set_duration(&anim, kTransitionDurationMs);
-        lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
-        lv_anim_set_exec_cb(&anim, anim_translate_x);
-        lv_anim_start(&anim);
-    }
-    if (offset_y != 0) {
-        lv_anim_init(&anim);
-        lv_anim_set_var(&anim, root_);
-        lv_anim_set_values(&anim, offset_y, 0);
-        lv_anim_set_duration(&anim, kTransitionDurationMs);
-        lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
-        lv_anim_set_exec_cb(&anim, anim_translate_y);
-        lv_anim_start(&anim);
-    }
-
-    lv_anim_init(&anim);
-    lv_anim_set_var(&anim, root_);
-    lv_anim_set_values(&anim, LV_OPA_70, LV_OPA_COVER);
-    lv_anim_set_duration(&anim, kTransitionDurationMs - 20);
-    lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&anim, anim_opa);
-    lv_anim_start(&anim);
+    self->root_ = nullptr;
+    self->title_ = nullptr;
+    self->subtitle_ = nullptr;
+    delete self;
 }
 
 void WidgetGroupViewPage::update_header(const WidgetGroupState &state)

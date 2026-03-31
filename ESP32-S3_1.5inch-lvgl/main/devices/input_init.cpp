@@ -8,7 +8,6 @@
 #include "iot_knob.h"
 #include "iot_button.h"
 
-#include "esp_lvgl_port.h"
 #include "ui/ui_app.hpp"
 #include "devices_init.h"
 
@@ -25,14 +24,7 @@ static bool s_input_active = false;
 static void knob_event_cb(void *arg, void *data)
 {
     (void)arg;
-    /* iot_knob callbacks run in esp_timer task context.
-     * Protect LVGL with lvgl_port_lock to avoid races/WDT. */
-    if (!lvgl_port_lock(10))
-    {
-        return;
-    }
-    LVGL_knob_event(data);
-    lvgl_port_unlock();
+    ui_post_knob_event(data);
 }
 
 static void knob_init(uint32_t encoder_a, uint32_t encoder_b)
@@ -55,13 +47,7 @@ static void knob_init(uint32_t encoder_a, uint32_t encoder_b)
 static void button_event_cb(void *arg, void *data)
 {
     (void)arg;
-    /* Button callbacks also run outside the LVGL task; protect LVGL. */
-    if (!lvgl_port_lock(10))
-    {
-        return;
-    }
-    LVGL_button_event(data);
-    lvgl_port_unlock();
+    ui_post_button_event(data);
 }
 
 static void button_init(uint32_t button_num)

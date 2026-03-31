@@ -23,6 +23,11 @@
 
 static const char *TAG = "devices";
 
+static void log_stack_hwm(const char *stage)
+{
+    ESP_LOGI(TAG, "ui_boot stack_hwm after %s: %u", stage ? stage : "?", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
 /* LVGL display and touch */
 static esp_lcd_touch_handle_t touch_handle = NULL;
 
@@ -40,6 +45,7 @@ static esp_err_t app_touch_init(void)
 esp_err_t devices_init(void)
 {
     esp_err_t err = ESP_OK;
+    log_stack_hwm("devices_init.begin");
 
     err = devices_display_init();
     if (err != ESP_OK)
@@ -47,6 +53,7 @@ esp_err_t devices_init(void)
         ESP_LOGE(TAG, "Display init failed: %s", esp_err_to_name(err));
         return err;
     }
+    log_stack_hwm("display_init");
 
     err = app_touch_init();
     if (err != ESP_OK)
@@ -58,6 +65,7 @@ esp_err_t devices_init(void)
     {
         esp_log_level_set("CST816S", ESP_LOG_NONE);
     }
+    log_stack_hwm("touch_init");
 
     err = devices_lvgl_init(touch_handle);
     if (err != ESP_OK)
@@ -65,8 +73,10 @@ esp_err_t devices_init(void)
         ESP_LOGE(TAG, "LVGL init failed: %s", esp_err_to_name(err));
         return err;
     }
+    log_stack_hwm("lvgl_init");
 
     devices_input_init();
+    log_stack_hwm("input_init");
 
     return ESP_OK;
 }

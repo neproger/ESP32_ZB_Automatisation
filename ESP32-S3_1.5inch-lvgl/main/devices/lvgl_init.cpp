@@ -75,8 +75,8 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     lvgl_cfg.task_stack = 12288;
     lvgl_cfg.task_affinity = 1;
     lvgl_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    lvgl_cfg.task_max_sleep_ms = 10;
-    lvgl_cfg.timer_period_ms = 10;
+    lvgl_cfg.task_max_sleep_ms = 5;
+    lvgl_cfg.timer_period_ms = 5;
     esp_err_t err = lvgl_port_init(&lvgl_cfg);
     if (err != ESP_OK)
     {
@@ -90,61 +90,27 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
-    const lvgl_disp_profile_t profiles[] = {
-        {
-            .draw_lines = 12,
-            .double_buffer = false,
-            .buff_dma = true,
-            .buff_spiram = false,
-            .trans_size = 0,
-            .name = "dma_internal_12lines",
-        },
-        {
-            .draw_lines = 8,
-            .double_buffer = false,
-            .buff_dma = true,
-            .buff_spiram = false,
-            .trans_size = 0,
-            .name = "dma_internal_8lines",
-        },
-        {
-            .draw_lines = 12,
-            .double_buffer = false,
-            .buff_dma = false,
-            .buff_spiram = true,
-            .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
-            .name = "psram_draw_12lines",
-        },
-        {
-            .draw_lines = 4,
-            .double_buffer = false,
-            .buff_dma = false,
-            .buff_spiram = true,
-            .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
-            .name = "psram_draw_4lines",
-        },
-        {
-            .draw_lines = 4,
-            .double_buffer = false,
-            .buff_dma = true,
-            .buff_spiram = false,
-            .trans_size = 0,
-            .name = "dma_internal_4lines",
-        },
+    const lvgl_disp_profile_t profile = {
+        .draw_lines = 32,
+        .double_buffer = true,
+        .buff_dma = false,
+        .buff_spiram = true,
+        .trans_size = LCD_H_RES, // 1 RGB565 line per DMA transfer (in pixels)
+        .name = "psram_double_32lines",
     };
 
-    for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); ++i)
+    ESP_LOGW(TAG_LVGL,
+             "Trying LVGL display profile: %s (lines=%u, dbl=%d, dma=%d, psram=%d, trans=%u)",
+             profile.name,
+             profile.draw_lines,
+             profile.double_buffer,
+             profile.buff_dma,
+             profile.buff_spiram,
+             (unsigned)profile.trans_size);
+    s_lvgl_disp = try_add_display_with_profile(&profile);
+    if (s_lvgl_disp != nullptr)
     {
-        const lvgl_disp_profile_t *p = &profiles[i];
-        ESP_LOGW(TAG_LVGL,
-                 "Trying LVGL display profile: %s (lines=%u, dbl=%d, dma=%d, psram=%d, trans=%u)",
-                 p->name, p->draw_lines, p->double_buffer, p->buff_dma, p->buff_spiram, (unsigned)p->trans_size);
-        s_lvgl_disp = try_add_display_with_profile(p);
-        if (s_lvgl_disp != nullptr)
-        {
-            ESP_LOGI(TAG_LVGL, "LVGL display profile selected: %s", p->name);
-            break;
-        }
+        ESP_LOGI(TAG_LVGL, "LVGL display profile selected: %s", profile.name);
     }
 
     if (s_lvgl_disp == nullptr)

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -9,6 +10,7 @@
 #include "esp_timer.h"
 #include "iot_button.h"
 #include "iot_knob.h"
+#include "freertos/task.h"
 
 #include "devices_init.h"
 #include "ui_control_ack.hpp"
@@ -25,9 +27,15 @@ static bool s_display_enabled = true;
 static bool s_ui_ready = false;
 static bool s_saver_active = false;
 static lv_obj_t *s_splash = nullptr;
+static std::atomic<bool> s_pending_button_click{false};
 static constexpr uint8_t kDisplayBrightness80Pct = 204;
 static constexpr uint32_t kUiTickPeriodMs = 33;
 static constexpr uint32_t kControlAckTimeoutMs = 1800;
+
+void log_ui_boot_stack_hwm(const char *stage)
+{
+    ESP_LOGI(TAG_UI, "ui_boot stack_hwm after %s: %u", stage ? stage : "?", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
 
 uint32_t screensaver_timeout_ms()
 {
@@ -116,15 +124,35 @@ void ui_gesture_cb(lv_event_t *event)
 
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir == LV_DIR_BOTTOM) {
-        (void)ui_screen_devices_prev_item();
+        ui_screen_devices_step_item(-1);
     } else if (dir == LV_DIR_TOP) {
-        (void)ui_screen_devices_next_item();
+        ui_screen_devices_step_item(1);
     }
 }
 
 void ui_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
+    const bool button_click = s_pending_button_click.exchange(false, std::memory_order_acq_rel);
+
+    if (button_click) {
+        note_user_activity();
+        if (s_ui_ready && !s_saver_active) {
+            s_display_enabled = !s_display_enabled;
+            if (s_display_enabled)
+            {
+                (void)devices_display_set_enabled(true);
+                (void)devices_display_set_brightness(kDisplayBrightness80Pct);
+            }
+            else
+            {
+                (void)devices_display_set_enabled(false);
+            }
+        } else if (s_saver_active) {
+            wake_from_screensaver();
+        }
+    }
+
     const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
     ui_control_ack_poll_timeouts(now_ms, kControlAckTimeoutMs);
 
@@ -154,67 +182,43 @@ void ui_tick_cb(lv_timer_t *timer)
 
 void ui_app_init(void)
 {
+    log_ui_boot_stack_hwm("ui_app.begin");
     lvgl_port_lock(-1);
 
-    lv_obj_t *scr = lv_screen_active();
-    ui_screen_devices_init(scr);
-    lv_obj_add_event_cb(scr, ui_gesture_cb, LV_EVENT_GESTURE, nullptr);
-    ui_screen_saver_init(scr, wake_from_screensaver);
-    splash_init(scr);
+    ui_screen_devices_init(lv_screen_active());
+    ui_screen_saver_init(lv_layer_top(), wake_from_screensaver);
+    splash_init(lv_layer_top());
     splash_show(true);
     s_ui_ready = false;
     lv_timer_create(ui_tick_cb, kUiTickPeriodMs, nullptr);
 
     lvgl_port_unlock();
+    log_ui_boot_stack_hwm("ui_app.ready");
     ESP_LOGI(TAG_UI, "Group UI initialized");
 }
 
-extern "C" void LVGL_knob_event(void *event)
+void ui_app_attach_screen_input(lv_obj_t *screen)
 {
-    note_user_activity();
-    if (!s_ui_ready) {
+    if (!screen) {
         return;
     }
-    if (s_saver_active) {
-        wake_from_screensaver();
-        return;
-    }
+    lv_obj_add_event_cb(screen, ui_gesture_cb, LV_EVENT_GESTURE, nullptr);
+}
+
+extern "C" void ui_post_knob_event(void *event)
+{
     const int ev = (int)(intptr_t)event;
-    if (ev == KNOB_RIGHT)
-    {
-        (void)ui_screen_devices_next_group();
-    }
-    else if (ev == KNOB_LEFT)
-    {
-        (void)ui_screen_devices_prev_group();
+    if (ev == KNOB_RIGHT) {
+        ui_screen_devices_step_group(1);
+    } else if (ev == KNOB_LEFT) {
+        ui_screen_devices_step_group(-1);
     }
 }
 
-extern "C" void LVGL_button_event(void *event)
+extern "C" void ui_post_button_event(void *event)
 {
     const int ev = (int)(intptr_t)event;
-    if (ev != BUTTON_SINGLE_CLICK)
-    {
-        return;
-    }
-
-    note_user_activity();
-    if (!s_ui_ready) {
-        return;
-    }
-    if (s_saver_active) {
-        wake_from_screensaver();
-        return;
-    }
-
-    s_display_enabled = !s_display_enabled;
-    if (s_display_enabled)
-    {
-        (void)devices_display_set_enabled(true);
-        (void)devices_display_set_brightness(kDisplayBrightness80Pct);
-    }
-    else
-    {
-        (void)devices_display_set_enabled(false);
+    if (ev == BUTTON_SINGLE_CLICK) {
+        s_pending_button_click.store(true, std::memory_order_release);
     }
 }

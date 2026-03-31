@@ -30,7 +30,7 @@
 
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
-static constexpr uint32_t kUiBootTaskStack = 8192;
+static constexpr uint32_t kUiBootTaskStack = 12288;
 static constexpr uint32_t kMemDiagTaskStack = 3072;
 static constexpr uint32_t kTaskSnapshotPeriod = 4;
 static bool s_http_started = false;
