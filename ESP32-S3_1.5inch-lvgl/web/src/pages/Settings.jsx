@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { postCbor } from '../api.js'
+import { sendWsCommand } from '../wsCommandBus.js'
+import { protoEncodeSettingsSet } from '../proto.js'
 import { useGateway } from '../gateway.jsx'
 
 function toInt(v, fallback = 0) {
@@ -48,13 +49,13 @@ export default function Settings() {
     const tzAuto = form.timezone === 'auto'
     const tzHour = toInt(form.timezone, 0)
     try {
-      await postCbor('/api/settings', {
+      sendWsCommand(protoEncodeSettingsSet({
         screensaver_timeout_ms: toInt(form.screensaver_timeout_sec, 4) * 1000,
         weather_success_interval_ms: toInt(form.weather_success_interval_min, 60) * 60 * 1000,
         weather_retry_interval_ms: toInt(form.weather_retry_interval_sec, 10) * 1000,
         timezone_auto: tzAuto,
         timezone_offset_min: tzAuto ? 0 : tzHour * 60,
-      })
+      }, Date.now() & 0xffff))
       setStatus('Settings saved')
     } catch (e) {
       setStatus(String(e?.message ?? e))

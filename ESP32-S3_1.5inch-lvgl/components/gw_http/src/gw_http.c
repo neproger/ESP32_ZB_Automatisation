@@ -192,7 +192,7 @@ esp_err_t gw_http_start(void)
     config.lru_purge_enable = true;
     // REST + WS + SPA wildcard handlers.
     config.max_uri_handlers = 20;
-    // REST handlers build CBOR snapshots and static file serving touches SPIFFS/flash paths.
+    // REST command handlers and static file serving touch SPIFFS/flash paths.
     // Keep a generous internal-RAM stack here; browser refresh/remove hits this task directly.
     config.stack_size = GW_HTTP_SERVER_STACK;
     config.recv_wait_timeout = 4;

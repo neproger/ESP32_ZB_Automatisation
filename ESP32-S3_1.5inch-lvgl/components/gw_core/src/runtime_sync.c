@@ -11,6 +11,7 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
 #include "gw_core/event_bus.h"
+#include "gw_core/event_names.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
 #include "gw_core/zb_model.h"
@@ -45,12 +46,12 @@ static void snapshot_stale_remove_uid(const gw_device_uid_t *uid)
     }
 }
 
-static bool is_event_type(const char *type, const char *lhs, const char *rhs)
+static bool is_event_type(const char *type, const char *expected)
 {
     if (!type) {
         return false;
     }
-    return (strcmp(type, lhs) == 0) || (strcmp(type, rhs) == 0);
+    return strcmp(type, expected) == 0;
 }
 
 static bool resolve_uid(const gw_event_t *e, gw_device_uid_t *out_uid)
@@ -343,26 +344,26 @@ static void runtime_event_listener(const gw_event_t *event, void *user_ctx)
     gw_device_uid_t uid = {0};
     bool have_uid = resolve_uid(event, &uid);
 
-    if (is_event_type(event->type, "device.join", "zigbee.device_join")) {
+    if (is_event_type(event->type, GW_EVT_ZIGBEE_DEVICE_JOIN)) {
         (void)have_uid;
         return;
     }
 
-    if (is_event_type(event->type, "device.leave", "zigbee.device_leave")) {
+    if (is_event_type(event->type, GW_EVT_ZIGBEE_DEVICE_LEAVE)) {
         (void)have_uid;
         return;
     }
 
-    if (is_event_type(event->type, "zigbee.command", "zigbee.cmd")) {
+    if (is_event_type(event->type, GW_EVT_ZIGBEE_COMMAND)) {
         (void)have_uid;
         return;
     }
 
     const bool is_state_event =
-        (strcmp(event->type, "zigbee.attr_report") == 0) ||
-        (strcmp(event->type, "zigbee.attr_read") == 0) ||
-        (strcmp(event->type, "zigbee.read_attr") == 0) ||
-        (strcmp(event->type, "zigbee.read_attr_resp") == 0 &&
+        (strcmp(event->type, GW_EVT_ZIGBEE_ATTR_REPORT) == 0) ||
+        (strcmp(event->type, GW_EVT_ZIGBEE_ATTR_READ) == 0) ||
+        (strcmp(event->type, GW_EVT_ZIGBEE_READ_ATTR) == 0) ||
+        (strcmp(event->type, GW_EVT_ZIGBEE_READ_ATTR_RSP) == 0 &&
          (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
          (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
          (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
@@ -447,6 +448,7 @@ esp_err_t gw_runtime_sync_snapshot_end(void)
         return ESP_OK;
     }
     for (size_t i = 0; i < s_snapshot_stale_count; i++) {
+        ESP_LOGI(TAG, "snapshot stale remove uid=%s", s_snapshot_stale[i].uid);
         (void)gw_zb_model_remove_device(&s_snapshot_stale[i]);
         (void)gw_state_store_remove_uid(&s_snapshot_stale[i]);
         (void)gw_device_registry_remove(&s_snapshot_stale[i]);

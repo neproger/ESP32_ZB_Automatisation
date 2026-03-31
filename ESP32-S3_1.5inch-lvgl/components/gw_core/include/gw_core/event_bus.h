@@ -60,9 +60,11 @@ esp_err_t gw_event_bus_init(void);
 
 // Lightweight, in-memory event log for UI/debugging.
 uint32_t gw_event_bus_last_id(void);
+// Event naming contract:
+// - raw/runtime ingress and trace: zigbee.* / rules.* / service-specific debug events
+// - canonical model updates: device.* / group.* / settings.* / automation.*
+// Service status that should survive and sync belongs in canonical state, not in ad-hoc event names.
 void gw_event_bus_publish(const char *type, const char *source, const char *device_uid, uint16_t short_addr, const char *msg);
-// Helper: publish a structured CBOR payload without forcing callers to build a human msg.
-void gw_event_bus_publish_cbor(const char *type, const char *source, const char *device_uid, uint16_t short_addr, const uint8_t *payload_cbor, size_t payload_len);
 // Publish Zigbee events with parsed payload fields (for fast rules evaluation).
 void gw_event_bus_publish_zb(const char *type,
                              const char *source,
@@ -78,7 +80,7 @@ void gw_event_bus_publish_zb(const char *type,
                              int64_t value_i64,
                              double value_f64,
                              const char *value_text,
-                             const uint8_t *payload_cbor,
+                             const uint8_t *payload_bytes,
                              size_t payload_len);
 
 // Optional listeners called for each gw_event_bus_publish(). Keep callbacks fast and non-blocking.
@@ -86,7 +88,6 @@ esp_err_t gw_event_bus_add_listener(gw_event_bus_listener_t cb, void *user_ctx);
 esp_err_t gw_event_bus_remove_listener(gw_event_bus_listener_t cb, void *user_ctx);
 
 // Optional async sink for logging + ring updates (owned by another module).
-void gw_event_bus_set_out_queue(QueueHandle_t q);
 void gw_event_bus_record_event(const gw_event_t *e);
 
 #ifdef __cplusplus

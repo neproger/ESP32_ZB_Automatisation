@@ -1,3 +1,5 @@
+import { EVT_ZIGBEE_COMMAND } from '../../eventNames.js'
+
 export function defaultAutomationDef({ id, name, enabled }) {
 	return {
 		v: 1,
@@ -7,7 +9,7 @@ export function defaultAutomationDef({ id, name, enabled }) {
 		triggers: [
 			{
 				type: 'event',
-				event_type: 'zigbee.command',
+				event_type: EVT_ZIGBEE_COMMAND,
 				match: { 'payload.cmd': 'toggle' },
 			},
 		],

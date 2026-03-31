@@ -2,7 +2,6 @@
 //Devices.jsx
 import { Link } from 'react-router-dom'
 import { useCallback, useMemo, useState } from 'react'
-import { postCbor } from '../api.js'
 import { useGateway } from '../gateway.jsx'
 
 function capsToText(device) {
@@ -19,7 +18,7 @@ function shortToHex(shortAddr) {
 }
 
 export default function Devices() {
-	const { devices, reloadDevices, wsStatus } = useGateway()
+	const { devices, reloadDevices, wsStatus, permitJoin, renameDevice, removeDevice, removeAllDevices } = useGateway()
 	const [loading, setLoading] = useState(false)
 	const [status, setStatus] = useState('')
 
@@ -41,18 +40,17 @@ export default function Devices() {
 		}
 	}, [reloadDevices])
 
-	const permitJoin = useCallback(async () => {
+	const permitJoinRequest = useCallback(async () => {
 		setStatus('Permit join: requesting...')
 		try {
-			const data = await postCbor('/api/network/permit_join', { seconds: 180 })
-			const seconds = Number(data?.seconds ?? 180)
-			setStatus(`Permit join enabled for ${Number.isFinite(seconds) ? seconds : 180}s`)
+			await permitJoin(180)
+			setStatus('Permit join command sent')
 		} catch (e) {
 			setStatus(String(e?.message ?? e))
 		}
-	}, [])
+	}, [permitJoin])
 
-	const removeDevice = useCallback(
+	const removeDeviceRequest = useCallback(
 		async (uid) => {
 			const u = String(uid ?? '')
 			if (!u) return
@@ -60,28 +58,28 @@ export default function Devices() {
 
 			setStatus('Удаление...')
 			try {
-				await postCbor('/api/devices/remove', { device_uid: u })
+				await removeDevice(u)
 				setStatus('Запрос на удаление отправлен (ждем событие обновления)')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
 		},
-		[],
+		[removeDevice],
 	)
 
-	const removeAllDevices = useCallback(async () => {
+	const removeAllDevicesRequest = useCallback(async () => {
 		if (!confirm('Удалить все Zigbee-устройства из шлюза?')) return
 
 		setStatus('Удаление всех устройств...')
 		try {
-			await postCbor('/api/devices/remove_all', {})
+			await removeAllDevices()
 			setStatus('Запрос на удаление всех устройств отправлен')
 		} catch (e) {
 			setStatus(String(e?.message ?? e))
 		}
-	}, [])
+	}, [removeAllDevices])
 
-	const renameDevice = useCallback(
+	const renameDeviceRequest = useCallback(
 		async (uid, currentName) => {
 			const u = String(uid ?? '')
 			if (!u) return
@@ -90,13 +88,13 @@ export default function Devices() {
 
 			setStatus('Renaming...')
 			try {
-				await postCbor('/api/devices', { device_uid: u, name: String(next) })
+				await renameDevice(u, String(next))
 				setStatus('Renamed (waiting WS sync)')
 			} catch (e) {
 				setStatus(String(e?.message ?? e))
 			}
 		},
-		[],
+		[renameDevice],
 	)
 
 	return (
@@ -110,8 +108,8 @@ export default function Devices() {
 					<button onClick={loadDevices} disabled={loading}>
 						{loading ? 'Refreshing...' : 'Refresh'}
 					</button>
-					<button onClick={permitJoin}>Scan new devices (permit join)</button>
-					<button onClick={removeAllDevices}>Удалить все</button>
+					<button onClick={permitJoinRequest}>Scan new devices (permit join)</button>
+					<button onClick={removeAllDevicesRequest}>Удалить все</button>
 					<div className="muted">ws: {wsStatus}</div>
 				</div>
 			</div>
@@ -152,8 +150,8 @@ export default function Devices() {
 										<td>{capsToText(d)}</td>
 										<td>
 											<div className="row">
-												<button onClick={() => renameDevice(d?.device_uid, d?.name)}>Rename</button>
-												<button onClick={() => removeDevice(d?.device_uid)}>Удалить</button>
+												<button onClick={() => renameDeviceRequest(d?.device_uid, d?.name)}>Rename</button>
+												<button onClick={() => removeDeviceRequest(d?.device_uid)}>Удалить</button>
 											</div>
 										</td>
 									</tr>

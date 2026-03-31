@@ -1,9 +1,34 @@
 #include "gw_core/device_registry.h"
-#include "gw_core/device_storage_bridge.h"
+#include "gw_core/device_storage.h"
 #include "gw_core/zb_classify.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+
+#define GW_DEVICE_LISTENER_CAP 4
+typedef struct {
+    gw_device_registry_listener_t cb;
+    void *user_ctx;
+} gw_device_listener_slot_t;
+static gw_device_listener_slot_t s_listeners[GW_DEVICE_LISTENER_CAP];
+static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void notify_device_listeners(const gw_device_t *device, bool removed)
+{
+    gw_device_listener_slot_t listeners[GW_DEVICE_LISTENER_CAP];
+    size_t listener_count = 0;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb) {
+            listeners[listener_count++] = s_listeners[i];
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < listener_count; i++) {
+        listeners[i].cb(device, removed, listeners[i].user_ctx);
+    }
+}
 
 static void derive_caps_from_topology(gw_device_t *device)
 {
@@ -47,7 +72,49 @@ static void derive_caps_from_topology(gw_device_t *device)
 
 esp_err_t gw_device_registry_init(void)
 {
-    return gw_device_storage_bridge_init();
+    return gw_device_storage_init();
+}
+
+esp_err_t gw_device_registry_add_listener(gw_device_registry_listener_t cb, void *user_ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
+        if (!s_listeners[i].cb) {
+            s_listeners[i].cb = cb;
+            s_listeners[i].user_ctx = user_ctx;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t gw_device_registry_remove_listener(gw_device_registry_listener_t cb, void *user_ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            s_listeners[i].cb = NULL;
+            s_listeners[i].user_ctx = NULL;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t gw_device_registry_upsert(const gw_device_t *device)
@@ -65,7 +132,11 @@ esp_err_t gw_device_registry_upsert(const gw_device_t *device)
     full_device.has_onoff = device->has_onoff;
     full_device.has_button = device->has_button;
 
-    return gw_device_storage_upsert(&full_device);
+    esp_err_t err = gw_device_storage_upsert(&full_device);
+    if (err == ESP_OK) {
+        notify_device_listeners(device, false);
+    }
+    return err;
 }
 
 esp_err_t gw_device_registry_get(const gw_device_uid_t *uid, gw_device_t *out_device)
@@ -97,7 +168,16 @@ esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *na
 
 esp_err_t gw_device_registry_remove(const gw_device_uid_t *uid)
 {
-    return gw_device_storage_remove(uid);
+    if (!uid) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_device_t removed = {0};
+    bool have_removed = (gw_device_registry_get(uid, &removed) == ESP_OK);
+    esp_err_t err = gw_device_storage_remove(uid);
+    if (err == ESP_OK && have_removed) {
+        notify_device_listeners(&removed, true);
+    }
+    return err;
 }
 
 size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
@@ -131,10 +211,11 @@ size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices)
 
 esp_err_t gw_device_registry_sync_endpoints(const gw_device_uid_t *uid)
 {
-    return gw_device_storage_sync_endpoints(uid);
+    (void)uid;
+    return ESP_OK;
 }
 
 size_t gw_device_registry_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps)
 {
-    return gw_device_storage_get_zb_endpoints(uid, out_eps, max_eps);
+    return gw_zb_model_list_endpoints(uid, out_eps, max_eps);
 }

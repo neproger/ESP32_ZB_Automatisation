@@ -1,13 +1,13 @@
 // automation_store.c - Now using universal storage backend
 #include "gw_core/automation_store.h"
 #include "gw_core/storage.h"
-#include "gw_core/automation_compiled.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "gw_autos";
 
@@ -18,6 +18,29 @@ static const size_t AUTOMATION_STORAGE_MAX_ITEMS = 32;
 
 static gw_storage_t s_automation_storage;
 static bool s_initialized = false;
+#define GW_AUTOMATION_LISTENER_CAP 4
+typedef struct {
+    gw_automation_store_listener_t cb;
+    void *user_ctx;
+} gw_automation_listener_slot_t;
+static gw_automation_listener_slot_t s_listeners[GW_AUTOMATION_LISTENER_CAP];
+static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void notify_automation_listeners(void)
+{
+    gw_automation_listener_slot_t listeners[GW_AUTOMATION_LISTENER_CAP];
+    size_t listener_count = 0;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_AUTOMATION_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb) {
+            listeners[listener_count++] = s_listeners[i];
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < listener_count; i++) {
+        listeners[i].cb(listeners[i].user_ctx);
+    }
+}
 
 static bool automation_storage_ready(void)
 {
@@ -54,7 +77,7 @@ static const gw_storage_desc_t s_automation_storage_desc = {
 
 // Internal helper functions
 static size_t find_automation_index_by_id(const char *id);
-static esp_err_t compile_automation_cbor(const uint8_t *buf, size_t len, gw_automation_entry_t *out_entry);
+static esp_err_t validate_automation_entry(const gw_automation_entry_t *entry);
 
 esp_err_t gw_automation_store_init(void)
 {
@@ -99,106 +122,6 @@ static size_t find_automation_index_by_id(const char *id)
         }
     }
     return (size_t)-1;
-}
-
-static esp_err_t compile_automation_cbor(const uint8_t *buf, size_t len, gw_automation_entry_t *out_entry)
-{
-    if (!buf || len == 0 || !out_entry) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    gw_auto_compiled_t compiled = {0};
-    char err_buf[256] = {0};
-
-    esp_err_t err = gw_auto_compile_cbor(buf, len, &compiled, err_buf, sizeof(err_buf));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to compile automation: %s", err_buf);
-        return err;
-    }
-
-    // Convert to storage format
-    memset(out_entry, 0, sizeof(*out_entry));
-
-    if (compiled.hdr.automation_count > 0) {
-        const gw_auto_bin_automation_v2_t *src_auto = &compiled.autos[0];
-        const char *id = compiled.strings + src_auto->id_off;
-        const char *name = compiled.strings + src_auto->name_off;
-
-        // Reject oversize automations explicitly instead of silently truncating.
-        if (src_auto->triggers_count > GW_AUTO_MAX_TRIGGERS) {
-            ESP_LOGE(TAG,
-                     "Automation '%s' has %u triggers, max is %u",
-                     id ? id : "",
-                     (unsigned)src_auto->triggers_count,
-                     (unsigned)GW_AUTO_MAX_TRIGGERS);
-            gw_auto_compiled_free(&compiled);
-            return ESP_ERR_INVALID_SIZE;
-        }
-        if (src_auto->conditions_count > GW_AUTO_MAX_CONDITIONS) {
-            ESP_LOGE(TAG,
-                     "Automation '%s' has %u conditions, max is %u",
-                     id ? id : "",
-                     (unsigned)src_auto->conditions_count,
-                     (unsigned)GW_AUTO_MAX_CONDITIONS);
-            gw_auto_compiled_free(&compiled);
-            return ESP_ERR_INVALID_SIZE;
-        }
-        if (src_auto->actions_count > GW_AUTO_MAX_ACTIONS) {
-            ESP_LOGE(TAG,
-                     "Automation '%s' has %u actions, max is %u",
-                     id ? id : "",
-                     (unsigned)src_auto->actions_count,
-                     (unsigned)GW_AUTO_MAX_ACTIONS);
-            gw_auto_compiled_free(&compiled);
-            return ESP_ERR_INVALID_SIZE;
-        }
-        if (compiled.hdr.strings_size > GW_AUTO_MAX_STRING_TABLE_BYTES) {
-            ESP_LOGE(TAG,
-                     "Automation '%s' string table size %u exceeds max %u",
-                     id ? id : "",
-                     (unsigned)compiled.hdr.strings_size,
-                     (unsigned)GW_AUTO_MAX_STRING_TABLE_BYTES);
-            gw_auto_compiled_free(&compiled);
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        // Defensive bounds checks for compiled section indexes.
-        if ((src_auto->triggers_index + src_auto->triggers_count) > compiled.hdr.trigger_count_total ||
-            (src_auto->conditions_index + src_auto->conditions_count) > compiled.hdr.condition_count_total ||
-            (src_auto->actions_index + src_auto->actions_count) > compiled.hdr.action_count_total) {
-            ESP_LOGE(TAG, "Compiled automation '%s' has invalid section indexes", id ? id : "");
-            gw_auto_compiled_free(&compiled);
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        // Copy metadata
-        strlcpy(out_entry->id, id ? id : "", sizeof(out_entry->id));
-        strlcpy(out_entry->name, name ? name : "", sizeof(out_entry->name));
-        out_entry->enabled = src_auto->enabled ? true : false;
-
-        // Copy arrays (already validated against storage limits above).
-        out_entry->triggers_count = (uint8_t)src_auto->triggers_count;
-        for (uint8_t i = 0; i < out_entry->triggers_count; i++) {
-            out_entry->triggers[i] = compiled.triggers[src_auto->triggers_index + i];
-        }
-
-        out_entry->conditions_count = (uint8_t)src_auto->conditions_count;
-        for (uint8_t i = 0; i < out_entry->conditions_count; i++) {
-            out_entry->conditions[i] = compiled.conditions[src_auto->conditions_index + i];
-        }
-
-        out_entry->actions_count = (uint8_t)src_auto->actions_count;
-        for (uint8_t i = 0; i < out_entry->actions_count; i++) {
-            out_entry->actions[i] = compiled.actions[src_auto->actions_index + i];
-        }
-
-        // Copy string table (already validated against storage limits above).
-        out_entry->string_table_size = (uint16_t)compiled.hdr.strings_size;
-        memcpy(out_entry->string_table, compiled.strings, compiled.hdr.strings_size);
-    }
-
-    gw_auto_compiled_free(&compiled);
-    return ESP_OK;
 }
 
 size_t gw_automation_store_list(gw_automation_entry_t *out, size_t max_out)
@@ -273,54 +196,94 @@ esp_err_t gw_automation_store_get_by_index(size_t index, gw_automation_entry_t *
     return ESP_OK;
 }
 
-esp_err_t gw_automation_store_put_cbor(const uint8_t *buf, size_t len)
+static esp_err_t validate_automation_entry(const gw_automation_entry_t *entry)
 {
-    if (!s_initialized || !buf || len == 0) {
+    if (!entry) {
         return ESP_ERR_INVALID_ARG;
     }
-    gw_automation_entry_t *compiled_entry = (gw_automation_entry_t *)calloc(1, sizeof(gw_automation_entry_t));
-    if (!compiled_entry) {
-        return ESP_ERR_NO_MEM;
+    if (entry->id[0] == '\0' || entry->name[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(entry->id) >= GW_AUTOMATION_ID_MAX || strlen(entry->name) >= GW_AUTOMATION_NAME_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (entry->triggers_count > GW_AUTO_MAX_TRIGGERS ||
+        entry->conditions_count > GW_AUTO_MAX_CONDITIONS ||
+        entry->actions_count > GW_AUTO_MAX_ACTIONS ||
+        entry->string_table_size > GW_AUTO_MAX_STRING_TABLE_BYTES) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return ESP_OK;
+}
+
+esp_err_t gw_automation_store_add_listener(gw_automation_store_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_AUTOMATION_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    for (size_t i = 0; i < GW_AUTOMATION_LISTENER_CAP; i++) {
+        if (!s_listeners[i].cb) {
+            s_listeners[i].cb = cb;
+            s_listeners[i].user_ctx = user_ctx;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t gw_automation_store_remove_listener(gw_automation_store_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_AUTOMATION_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            s_listeners[i].cb = NULL;
+            s_listeners[i].user_ctx = NULL;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t gw_automation_store_put_entry(const gw_automation_entry_t *entry)
+{
+    if (!s_initialized || !entry) {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t err = compile_automation_cbor(buf, len, compiled_entry);
+    esp_err_t err = validate_automation_entry(entry);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to compile automation: %s", esp_err_to_name(err));
-        free(compiled_entry);
         return err;
     }
 
-    if (compiled_entry->id[0] == '\0' || compiled_entry->name[0] == '\0') {
-        free(compiled_entry);
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (strlen(compiled_entry->id) >= GW_AUTOMATION_ID_MAX || strlen(compiled_entry->name) >= GW_AUTOMATION_NAME_MAX) {
-        free(compiled_entry);
-        return ESP_ERR_INVALID_ARG;
-    }
-
     portENTER_CRITICAL(&s_automation_storage.lock);
-    
-    size_t idx = find_automation_index_by_id(compiled_entry->id);
+
+    size_t idx = find_automation_index_by_id(entry->id);
     gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
-    
+
     if (idx != (size_t)-1) {
-        // Update existing automation
-        automations[idx] = *compiled_entry;
+        automations[idx] = *entry;
     } else {
-        // Add new automation
         if (s_automation_storage.count >= AUTOMATION_STORAGE_MAX_ITEMS) {
             portEXIT_CRITICAL(&s_automation_storage.lock);
-            free(compiled_entry);
             return ESP_ERR_NO_MEM;
         }
-        automations[s_automation_storage.count++] = *compiled_entry;
+        automations[s_automation_storage.count++] = *entry;
     }
-    
+
     portEXIT_CRITICAL(&s_automation_storage.lock);
-    free(compiled_entry);
-    
-    return automation_storage_save_locked();
+    err = automation_storage_save_locked();
+    if (err == ESP_OK) notify_automation_listeners();
+    return err;
 }
 
 esp_err_t gw_automation_store_remove(const char *id)
@@ -346,7 +309,9 @@ esp_err_t gw_automation_store_remove(const char *id)
     
     portEXIT_CRITICAL(&s_automation_storage.lock);
     
-    return automation_storage_save_locked();
+    esp_err_t err = automation_storage_save_locked();
+    if (err == ESP_OK) notify_automation_listeners();
+    return err;
 }
 
 esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled)
@@ -367,7 +332,9 @@ esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled)
     
     portEXIT_CRITICAL(&s_automation_storage.lock);
 
-    return automation_storage_save_locked();
+    esp_err_t err = automation_storage_save_locked();
+    if (err == ESP_OK) notify_automation_listeners();
+    return err;
 }
 
 esp_err_t gw_automation_store_remove_all(void)
@@ -383,5 +350,7 @@ esp_err_t gw_automation_store_remove_all(void)
     s_automation_storage.count = 0;
     portEXIT_CRITICAL(&s_automation_storage.lock);
 
-    return automation_storage_save_locked();
+    esp_err_t err = automation_storage_save_locked();
+    if (err == ESP_OK) notify_automation_listeners();
+    return err;
 }

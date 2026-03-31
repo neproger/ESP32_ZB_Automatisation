@@ -35,7 +35,6 @@ typedef struct {
 
 // Initialize/start UART link to C6 explicitly (optional, can also start lazily on first command).
 esp_err_t gw_zigbee_link_start(void);
-// Request fresh device FlatBuffer snapshot from C6.
 // True after the first complete snapshot has been applied on S3.
 bool gw_zigbee_bootstrap_ready(void);
 // True when initial read_attr warmup task has queued all startup reads.

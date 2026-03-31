@@ -1,7 +1,6 @@
 ﻿//UTF-8
 //Automations.jsx
 import { useCallback, useMemo, useState } from 'react'
-import { postCbor, patchCbor, deleteCbor, execAction } from '../api.js'
 import { useGateway } from '../gateway.jsx'
 import AutomationEditor from '../components/automations/AutomationEditor.jsx'
 import AutomationList from '../components/automations/AutomationList.jsx'
@@ -15,7 +14,7 @@ import {
 } from '../components/automations/utils.js'
 
 export default function Automations() {
-	const { automations, devices, reloadAutomations } = useGateway()
+	const { automations, devices, reloadAutomations, setAutomationEnabled, removeAutomation: removeAutomationCmd, resetAllAutomations: resetAllAutomationsCmd, saveAutomation, execActions } = useGateway()
 	const [endpointsByUid, setEndpointsByUid] = useState({})
 	const [status, setStatus] = useState('')
 	const [draft, setDraft] = useState(null)
@@ -169,7 +168,7 @@ export default function Automations() {
 			const vErr = validateDraft(draft)
 			if (vErr) throw new Error(vErr)
 			const enabled = Boolean(draft?.enabled)
-			await postCbor('/api/automations', { id, name, enabled, automation: draft })
+			await saveAutomation({ ...draft, id, name, enabled })
 			setDraftStatus('Saved (waiting WS sync)')
 		} catch (e) {
 			setDraftStatus(String(e?.message ?? e))
@@ -184,19 +183,19 @@ export default function Automations() {
 			if (actions.length === 0) throw new Error('No actions to test')
 			const vErr = validateDraft({ ...draft, triggers: [], conditions: [] })
 			if (vErr) throw new Error(vErr)
-			await execAction(actions)
+			await execActions(actions)
 			setDraftStatus('Actions executed (queued)')
 		} catch (e) {
 			setDraftStatus(String(e?.message ?? e))
 		}
-	}, [draft, validateDraft])
+	}, [draft, validateDraft, execActions])
 
 	const toggleEnabled = async (a) => {
 		setStatus('')
 		try {
 			const id = String(a?.id ?? '')
 			if (!id) return
-			await patchCbor(`/api/automations/${encodeURIComponent(id)}`, { enabled: !Boolean(a?.enabled) })
+			await setAutomationEnabled(id, !Boolean(a?.enabled))
 			setStatus('Updated (waiting WS sync)')
 		} catch (e) {
 			setStatus(String(e?.message ?? e))
@@ -209,7 +208,7 @@ export default function Automations() {
 		if (!window.confirm(`Remove automation "${id}"?`)) return
 		setStatus('')
 		try {
-			await deleteCbor(`/api/automations/${encodeURIComponent(id)}`)
+			await removeAutomationCmd(id)
 			setStatus('Removed (waiting WS sync)')
 			if (String(draft?.id ?? '') === id) setDraft(null)
 		} catch (e) {
@@ -221,7 +220,7 @@ export default function Automations() {
 		if (!window.confirm('Remove ALL automations? This cannot be undone.')) return
 		setStatus('')
 		try {
-			await postCbor('/api/automations/reset', {})
+			await resetAllAutomationsCmd()
 			setStatus('All automations removed (waiting WS sync)')
 			setDraft(null)
 		} catch (e) {

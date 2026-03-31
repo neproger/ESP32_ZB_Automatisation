@@ -1,3 +1,13 @@
+import {
+  EVT_AUTOMATION_CHANGED,
+  EVT_DEVICE_STATE,
+  EVT_SETTINGS_CHANGED,
+  EVT_ZIGBEE_ATTR_REPORT,
+  EVT_ZIGBEE_COMMAND,
+  EVT_ZIGBEE_DEVICE_JOIN,
+  EVT_ZIGBEE_DEVICE_LEAVE,
+} from './eventNames.js'
+
 export const GW_PROTO_VERSION_V1 = 1
 
 export const GW_PROTO_MSG_SYNC_BEGIN = 0x40
@@ -12,6 +22,23 @@ export const GW_PROTO_MSG_SETTINGS = 0x4c
 export const GW_PROTO_MSG_SNAPSHOT_REQUEST = 0x4d
 export const GW_PROTO_MSG_AUTOMATION_UPSERT = 0x4e
 export const GW_PROTO_MSG_AUTOMATION_REMOVE = 0x4f
+export const GW_PROTO_MSG_CMD_PERMIT_JOIN = 0x50
+export const GW_PROTO_MSG_CMD_DEVICE_RENAME = 0x51
+export const GW_PROTO_MSG_CMD_DEVICE_REMOVE = 0x52
+export const GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL = 0x53
+export const GW_PROTO_MSG_CMD_GROUP_CREATE = 0x54
+export const GW_PROTO_MSG_CMD_GROUP_RENAME = 0x55
+export const GW_PROTO_MSG_CMD_GROUP_DELETE = 0x56
+export const GW_PROTO_MSG_CMD_GROUP_ITEM_SET = 0x57
+export const GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE = 0x58
+export const GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER = 0x59
+export const GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL = 0x5a
+export const GW_PROTO_MSG_CMD_SETTINGS_SET = 0x5b
+export const GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED = 0x5c
+export const GW_PROTO_MSG_CMD_AUTOMATION_REMOVE = 0x5d
+export const GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL = 0x5e
+export const GW_PROTO_MSG_CMD_AUTOMATION_SAVE = 0x5f
+export const GW_PROTO_MSG_CMD_ACTION_EXEC = 0x60
 
 export const GW_PROTO_SYNC_SCOPE_FULL = 1
 export const GW_PROTO_SYNC_SCOPE_DEVICES = 2
@@ -63,6 +90,31 @@ const AUTO_CONDITIONS_OFF = AUTO_TRIGGERS_OFF + AUTO_MAX_TRIGGERS * AUTO_TRIGGER
 const AUTO_ACTIONS_OFF = AUTO_CONDITIONS_OFF + AUTO_MAX_CONDITIONS * AUTO_CONDITION_SIZE
 const AUTO_STRING_TABLE_SIZE_OFF = AUTO_ACTIONS_OFF + AUTO_MAX_ACTIONS * AUTO_ACTION_SIZE
 const AUTO_STRING_TABLE_OFF = AUTO_STRING_TABLE_SIZE_OFF + 2
+const AUTO_ENTRY_SIZE = AUTO_STRING_TABLE_OFF + AUTO_MAX_STRING_TABLE_BYTES
+const GROUP_ID_SIZE = 32
+const GROUP_NAME_SIZE = 48
+const GROUP_LABEL_SIZE = 32
+
+const GW_AUTO_EVT_ZIGBEE_COMMAND = 1
+const GW_AUTO_EVT_ZIGBEE_ATTR_REPORT = 2
+const GW_AUTO_EVT_DEVICE_JOIN = 3
+const GW_AUTO_EVT_DEVICE_LEAVE = 4
+
+const GW_AUTO_OP_EQ = 1
+const GW_AUTO_OP_NE = 2
+const GW_AUTO_OP_GT = 3
+const GW_AUTO_OP_LT = 4
+const GW_AUTO_OP_GE = 5
+const GW_AUTO_OP_LE = 6
+
+const GW_AUTO_VAL_F64 = 1
+const GW_AUTO_VAL_BOOL = 2
+
+const GW_AUTO_ACT_DEVICE = 1
+const GW_AUTO_ACT_GROUP = 2
+const GW_AUTO_ACT_SCENE = 3
+const GW_AUTO_ACT_BIND = 4
+const GW_AUTO_ACT_FLAG_UNBIND = 1 << 0
 
 function readFixedString(view, offset, size) {
   const bytes = []
@@ -71,7 +123,7 @@ function readFixedString(view, offset, size) {
     if (b === 0) break
     bytes.push(b)
   }
-  return new TextDecoder().decode(new Uint8Array(bytes))
+  return new TextDecoder().decode(new Uint8Array(bytes)).replace(/[\u0000-\u001f\u007f]/g, '').trim()
 }
 
 function normalizeUid(v) {
@@ -217,6 +269,59 @@ function parseValue(payload) {
   }
 }
 
+function writeFixedString(view, offset, size, value) {
+  const text = String(value ?? '')
+  const bytes = new TextEncoder().encode(text)
+  const n = Math.min(size - 1, bytes.length)
+  for (let i = 0; i < size; i += 1) {
+    view.setUint8(offset + i, 0)
+  }
+  for (let i = 0; i < n; i += 1) {
+    view.setUint8(offset + i, bytes[i])
+  }
+}
+
+function normalizeStateValue(key, value) {
+  const k = String(key ?? '')
+  if (value == null) return null
+
+  if (k === 'temperature_c') {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return null
+    return n
+  }
+
+  if (k === 'humidity_pct') {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return null
+    return n
+  }
+
+  if (k === 'battery_pct') {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return null
+    return n
+  }
+
+  if (k === 'level') {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return null
+    return Math.max(0, Math.min(254, Math.round(n)))
+  }
+
+  if (k === 'onoff') {
+    return Boolean(value)
+  }
+
+  if (k === 'color_x' || k === 'color_y' || k === 'color_temp_mireds' || k === 'battery_mv') {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n < 0) return null
+    return Math.round(n)
+  }
+
+  return value
+}
+
 export function protoEncodeSnapshotRequest(seq = 1) {
   const buf = new ArrayBuffer(HDR_SIZE)
   const view = new DataView(buf)
@@ -225,6 +330,311 @@ export function protoEncodeSnapshotRequest(seq = 1) {
   view.setUint16(2, 0, true)
   view.setUint16(4, seq, true)
   view.setUint16(6, 0, true)
+  return buf
+}
+
+function encodeProtoFrame(type, payloadSize, seq = 1) {
+  const buf = new ArrayBuffer(HDR_SIZE + payloadSize)
+  const view = new DataView(buf)
+  view.setUint8(0, GW_PROTO_VERSION_V1)
+  view.setUint8(1, type)
+  view.setUint16(2, payloadSize, true)
+  view.setUint16(4, seq & 0xffff, true)
+  view.setUint16(6, 0, true)
+  return { buf, view }
+}
+
+export function protoEncodePermitJoin(seconds = 180, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_PERMIT_JOIN, 4, seq)
+  const v = Number(seconds)
+  view.setUint8(HDR_SIZE + 0, Number.isFinite(v) && v > 0 ? Math.min(255, Math.trunc(v)) : 180)
+  return buf
+}
+
+export function protoEncodeDeviceRename(deviceUid, name, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_DEVICE_RENAME, DEVICE_UID_SIZE + DEVICE_NAME_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
+  writeFixedString(view, HDR_SIZE + DEVICE_UID_SIZE, DEVICE_NAME_SIZE, name)
+  return buf
+}
+
+export function protoEncodeDeviceRemove(deviceUid, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_DEVICE_REMOVE, DEVICE_UID_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
+  return buf
+}
+
+export function protoEncodeDeviceRemoveAll(seq = 1) {
+  return encodeProtoFrame(GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL, 4, seq).buf
+}
+
+export function protoEncodeGroupCreate(id, name, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_CREATE, GROUP_ID_SIZE + GROUP_NAME_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, id)
+  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, GROUP_NAME_SIZE, name)
+  return buf
+}
+
+export function protoEncodeGroupRename(id, name, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_RENAME, GROUP_ID_SIZE + GROUP_NAME_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, id)
+  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, GROUP_NAME_SIZE, name)
+  return buf
+}
+
+export function protoEncodeGroupDelete(id, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_DELETE, GROUP_ID_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, id)
+  return buf
+}
+
+export function protoEncodeGroupItemSet(groupId, deviceUid, endpointId, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_SET, GROUP_ID_SIZE + DEVICE_UID_SIZE + 4, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, groupId)
+  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, DEVICE_UID_SIZE, deviceUid)
+  view.setUint8(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
+  return buf
+}
+
+export function protoEncodeGroupItemRemove(deviceUid, endpointId, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE, DEVICE_UID_SIZE + 4, seq)
+  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
+  view.setUint8(HDR_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
+  return buf
+}
+
+export function protoEncodeGroupItemReorder(groupId, deviceUid, endpointId, order, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER, GROUP_ID_SIZE + DEVICE_UID_SIZE + 8, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, groupId)
+  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, DEVICE_UID_SIZE, deviceUid)
+  view.setUint8(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
+  view.setUint32(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE + 4, Number(order) || 0, true)
+  return buf
+}
+
+export function protoEncodeGroupItemLabel(deviceUid, endpointId, label, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL, DEVICE_UID_SIZE + 4 + GROUP_LABEL_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
+  view.setUint8(HDR_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
+  writeFixedString(view, HDR_SIZE + DEVICE_UID_SIZE + 4, GROUP_LABEL_SIZE, label)
+  return buf
+}
+
+export function protoEncodeSettingsSet(settings, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_SET, 16, seq)
+  view.setUint32(HDR_SIZE + 0, Number(settings?.screensaver_timeout_ms) || 0, true)
+  view.setUint32(HDR_SIZE + 4, Number(settings?.weather_success_interval_ms) || 0, true)
+  view.setUint32(HDR_SIZE + 8, Number(settings?.weather_retry_interval_ms) || 0, true)
+  view.setUint8(HDR_SIZE + 12, settings?.timezone_auto ? 1 : 0)
+  view.setInt16(HDR_SIZE + 14, Number(settings?.timezone_offset_min) || 0, true)
+  return buf
+}
+
+export function protoEncodeAutomationSetEnabled(id, enabled, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED, AUTO_ID_SIZE + 4, seq)
+  writeFixedString(view, HDR_SIZE + 0, AUTO_ID_SIZE, id)
+  view.setUint8(HDR_SIZE + AUTO_ID_SIZE, enabled ? 1 : 0)
+  return buf
+}
+
+export function protoEncodeAutomationRemove(id, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_REMOVE, AUTO_ID_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, AUTO_ID_SIZE, id)
+  return buf
+}
+
+export function protoEncodeAutomationResetAll(seq = 1) {
+  return encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL, 4, seq).buf
+}
+
+function parseUnsignedInt(value, max = 0xffffffff) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const n = Math.trunc(value)
+    if (n < 0 || n > max) throw new Error(`value out of range: ${value}`)
+    return n
+  }
+  const s = String(value ?? '').trim()
+  if (!s) throw new Error('missing numeric value')
+  const n = Number.parseInt(s, 0)
+  if (!Number.isFinite(n) || n < 0 || n > max) throw new Error(`bad numeric value: ${s}`)
+  return n
+}
+
+function automationAddString(strtab, value) {
+  const text = String(value ?? '').trim()
+  if (!text) return 0
+  const existing = strtab.map.get(text)
+  if (existing != null) return existing
+  const bytes = new TextEncoder().encode(text)
+  const need = bytes.length + 1
+  if (strtab.bytes.length + need > AUTO_MAX_STRING_TABLE_BYTES) {
+    throw new Error('automation string table overflow')
+  }
+  const off = strtab.bytes.length
+  for (let i = 0; i < bytes.length; i += 1) strtab.bytes.push(bytes[i])
+  strtab.bytes.push(0)
+  strtab.map.set(text, off)
+  return off
+}
+
+function automationEventTypeToInt(value) {
+  switch (String(value ?? '')) {
+    case EVT_ZIGBEE_COMMAND: return GW_AUTO_EVT_ZIGBEE_COMMAND
+    case EVT_ZIGBEE_ATTR_REPORT: return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT
+    case EVT_ZIGBEE_DEVICE_JOIN: return GW_AUTO_EVT_DEVICE_JOIN
+    case EVT_ZIGBEE_DEVICE_LEAVE: return GW_AUTO_EVT_DEVICE_LEAVE
+    default: throw new Error(`unsupported trigger event_type: ${String(value ?? '')}`)
+  }
+}
+
+function automationOpToInt(value) {
+  switch (String(value ?? '')) {
+    case '==': return GW_AUTO_OP_EQ
+    case '!=': return GW_AUTO_OP_NE
+    case '>': return GW_AUTO_OP_GT
+    case '<': return GW_AUTO_OP_LT
+    case '>=': return GW_AUTO_OP_GE
+    case '<=': return GW_AUTO_OP_LE
+    default: throw new Error(`unsupported condition op: ${String(value ?? '')}`)
+  }
+}
+
+function encodeAutomationTrigger(view, base, trigger, strtab) {
+  const match = trigger?.match ?? {}
+  const eventType = automationEventTypeToInt(trigger?.event_type)
+  view.setUint8(base + 0, eventType)
+  if (match?.['payload.endpoint'] != null && match?.['payload.endpoint'] !== '') {
+    view.setUint8(base + 1, parseUnsignedInt(match['payload.endpoint'], 240))
+  }
+  view.setUint32(base + 4, automationAddString(strtab, match?.device_uid), true)
+  view.setUint32(base + 8, automationAddString(strtab, match?.['payload.cmd']), true)
+  if (match?.['payload.cluster'] != null && match?.['payload.cluster'] !== '') {
+    view.setUint16(base + 12, parseUnsignedInt(match['payload.cluster'], 0xffff), true)
+  }
+  if (match?.['payload.attr'] != null && match?.['payload.attr'] !== '') {
+    view.setUint16(base + 14, parseUnsignedInt(match['payload.attr'], 0xffff), true)
+  }
+}
+
+function encodeAutomationCondition(view, base, condition, strtab) {
+  const ref = condition?.ref ?? {}
+  const value = condition?.value
+  view.setUint8(base + 0, automationOpToInt(condition?.op))
+  view.setUint8(base + 2, ref?.endpoint ? parseUnsignedInt(ref.endpoint, 240) : 0)
+  view.setUint32(base + 6, automationAddString(strtab, ref?.device_uid), true)
+  view.setUint32(base + 10, automationAddString(strtab, ref?.key), true)
+  if (typeof value === 'boolean') {
+    view.setUint8(base + 1, GW_AUTO_VAL_BOOL)
+    view.setUint8(base + 14, value ? 1 : 0)
+  } else {
+    const num = Number(value)
+    if (!Number.isFinite(num)) throw new Error(`bad condition value: ${String(value ?? '')}`)
+    view.setUint8(base + 1, GW_AUTO_VAL_F64)
+    view.setFloat64(base + 14, num, true)
+  }
+}
+
+function encodeAutomationAction(view, base, action, strtab) {
+  const cmd = String(action?.cmd ?? '').trim()
+  if (!cmd) throw new Error('missing action.cmd')
+  view.setUint32(base + 8, automationAddString(strtab, cmd), true)
+
+  if (cmd === 'bind' || cmd === 'unbind') {
+    view.setUint8(base + 0, GW_AUTO_ACT_BIND)
+    view.setUint8(base + 1, parseUnsignedInt(action?.src_endpoint, 240))
+    view.setUint8(base + 2, parseUnsignedInt(action?.dst_endpoint, 240))
+    view.setUint8(base + 3, cmd === 'unbind' ? GW_AUTO_ACT_FLAG_UNBIND : 0)
+    view.setUint16(base + 4, parseUnsignedInt(action?.cluster_id, 0xffff), true)
+    view.setUint32(base + 12, automationAddString(strtab, action?.src_device_uid), true)
+    view.setUint32(base + 16, automationAddString(strtab, action?.dst_device_uid), true)
+    return
+  }
+
+  if (cmd === 'scene.store' || cmd === 'scene.recall') {
+    view.setUint8(base + 0, GW_AUTO_ACT_SCENE)
+    view.setUint16(base + 4, parseUnsignedInt(action?.group_id, 0xffff), true)
+    view.setUint16(base + 6, parseUnsignedInt(action?.scene_id, 0xff), true)
+    return
+  }
+
+  const hasGroup = action?.group_id != null && String(action?.group_id ?? '').trim() !== ''
+  if (hasGroup) {
+    view.setUint8(base + 0, GW_AUTO_ACT_GROUP)
+    view.setUint16(base + 4, parseUnsignedInt(action?.group_id, 0xffff), true)
+  } else {
+    view.setUint8(base + 0, GW_AUTO_ACT_DEVICE)
+    view.setUint8(base + 1, parseUnsignedInt(action?.endpoint, 240))
+    view.setUint32(base + 12, automationAddString(strtab, action?.device_uid), true)
+  }
+
+  if (cmd === 'level.move_to_level') {
+    view.setUint32(base + 20, parseUnsignedInt(action?.level, 254), true)
+    view.setUint32(base + 24, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
+  } else if (cmd === 'color.move_to_color_xy') {
+    view.setUint32(base + 20, parseUnsignedInt(action?.x, 0xffff), true)
+    view.setUint32(base + 24, parseUnsignedInt(action?.y, 0xffff), true)
+    view.setUint32(base + 28, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
+  } else if (cmd === 'color.move_to_color_temperature') {
+    view.setUint32(base + 20, parseUnsignedInt(action?.mireds, 0xffffffff), true)
+    view.setUint32(base + 24, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
+  }
+}
+
+function encodeAutomationEntryPayload(draft) {
+  const triggers = Array.isArray(draft?.triggers) ? draft.triggers : []
+  const conditions = Array.isArray(draft?.conditions) ? draft.conditions : []
+  const actions = Array.isArray(draft?.actions) ? draft.actions : []
+  if (triggers.length > AUTO_MAX_TRIGGERS) throw new Error('too many triggers')
+  if (conditions.length > AUTO_MAX_CONDITIONS) throw new Error('too many conditions')
+  if (actions.length > AUTO_MAX_ACTIONS) throw new Error('too many actions')
+
+  const payload = new ArrayBuffer(AUTO_ENTRY_SIZE)
+  const view = new DataView(payload)
+  writeFixedString(view, 0, AUTO_ID_SIZE, draft?.id)
+  writeFixedString(view, AUTO_ID_SIZE, AUTO_NAME_SIZE, draft?.name)
+  view.setUint8(80, draft?.enabled ? 1 : 0)
+  view.setUint8(82, triggers.length)
+  view.setUint8(83, conditions.length)
+  view.setUint8(84, actions.length)
+
+  const strtab = { bytes: [0], map: new Map([['', 0]]) }
+
+  for (let i = 0; i < triggers.length; i += 1) {
+    encodeAutomationTrigger(view, AUTO_TRIGGERS_OFF + i * AUTO_TRIGGER_SIZE, triggers[i], strtab)
+  }
+  for (let i = 0; i < conditions.length; i += 1) {
+    encodeAutomationCondition(view, AUTO_CONDITIONS_OFF + i * AUTO_CONDITION_SIZE, conditions[i], strtab)
+  }
+  for (let i = 0; i < actions.length; i += 1) {
+    encodeAutomationAction(view, AUTO_ACTIONS_OFF + i * AUTO_ACTION_SIZE, actions[i], strtab)
+  }
+
+  view.setUint16(AUTO_STRING_TABLE_SIZE_OFF, strtab.bytes.length, true)
+  for (let i = 0; i < strtab.bytes.length; i += 1) {
+    view.setUint8(AUTO_STRING_TABLE_OFF + i, strtab.bytes[i])
+  }
+  return new Uint8Array(payload)
+}
+
+export function protoEncodeAutomationSave(draft, seq = 1) {
+  const payload = encodeAutomationEntryPayload(draft)
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_SAVE, payload.length, seq)
+  new Uint8Array(buf, HDR_SIZE).set(payload)
+  return buf
+}
+
+export function protoEncodeActionExec(actions, seq = 1) {
+  const list = Array.isArray(actions) ? actions : [actions]
+  const payload = encodeAutomationEntryPayload({
+    id: 'action_exec',
+    name: 'action_exec',
+    enabled: false,
+    triggers: [],
+    conditions: [],
+    actions: list,
+  })
+  const { buf } = encodeProtoFrame(GW_PROTO_MSG_CMD_ACTION_EXEC, payload.length, seq)
+  new Uint8Array(buf, HDR_SIZE).set(payload)
   return buf
 }
 
@@ -255,11 +665,11 @@ export function protoCreateSnapshotAccumulator() {
 
 function automationEventTypeToString(type) {
   switch (Number(type || 0)) {
-    case 1: return 'zigbee.command'
-    case 2: return 'zigbee.attr_report'
-    case 3: return 'device.join'
-    case 4: return 'device.leave'
-    default: return 'zigbee.command'
+    case 1: return EVT_ZIGBEE_COMMAND
+    case 2: return EVT_ZIGBEE_ATTR_REPORT
+    case 3: return EVT_ZIGBEE_DEVICE_JOIN
+    case 4: return EVT_ZIGBEE_DEVICE_LEAVE
+    default: return EVT_ZIGBEE_COMMAND
   }
 }
 
@@ -500,14 +910,16 @@ export function protoFrameToEvent(frame) {
     const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
     const endpointId = Number(view.getUint8(STATE_ENDPOINT_OFF) || 0)
     const key = readFixedString(view, STATE_KEY_OFF, STATE_KEY_SIZE)
+    const value = normalizeStateValue(key, parseValue(payload))
+    if (!uid || !endpointId || !key || value == null) return null
     return {
       ts_ms,
-      type: 'device.state',
+      type: EVT_DEVICE_STATE,
       data: {
         device_id: uid,
         endpoint_id: endpointId,
         key,
-        value: parseValue(payload),
+        value,
       },
     }
   }
@@ -517,7 +929,7 @@ export function protoFrameToEvent(frame) {
       ts_ms,
       type: 'gateway.event',
       data: {
-        event_type: 'settings.changed',
+        event_type: EVT_SETTINGS_CHANGED,
         source: 'gw_proto',
         msg: 'settings updated',
       },
@@ -530,7 +942,7 @@ export function protoFrameToEvent(frame) {
       ts_ms,
       type: 'gateway.event',
       data: {
-        event_type: 'automation.changed',
+        event_type: EVT_AUTOMATION_CHANGED,
         source: 'gw_proto',
         msg: `automation ${item.id} updated`,
       },
@@ -543,7 +955,7 @@ export function protoFrameToEvent(frame) {
       ts_ms,
       type: 'gateway.event',
       data: {
-        event_type: 'automation.changed',
+        event_type: EVT_AUTOMATION_CHANGED,
         source: 'gw_proto',
         msg: `automation ${id} removed`,
       },
@@ -640,6 +1052,15 @@ export function protoApplyFrame(acc, frame, onCommit) {
     if (!device) return
     device.short_addr = view.getUint16(ENDPOINT_SHORT_ADDR_OFF, true)
     const endpointId = view.getUint8(ENDPOINT_ID_OFF)
+    console.debug('[gw_proto] ENDPOINT_UPSERT', {
+      uid,
+      endpointId,
+      shortAddr: device.short_addr,
+      profileId: view.getUint16(ENDPOINT_PROFILE_ID_OFF, true),
+      deviceId: view.getUint16(ENDPOINT_DEVICE_ID_OFF, true),
+      inCount: view.getUint8(ENDPOINT_IN_CLUSTER_COUNT_OFF),
+      outCount: view.getUint8(ENDPOINT_OUT_CLUSTER_COUNT_OFF),
+    })
     const ep = ensureEndpoint(device, endpointId)
     if (!ep) return
     ep.profile_id = view.getUint16(ENDPOINT_PROFILE_ID_OFF, true)
@@ -685,14 +1106,18 @@ export function protoApplyFrame(acc, frame, onCommit) {
     const endpointId = String(view.getUint8(STATE_ENDPOINT_OFF))
     const key = readFixedString(view, STATE_KEY_OFF, STATE_KEY_SIZE)
     if (!endpointId || !key) return
-    if (!acc.deviceStates[uid]) acc.deviceStates[uid] = {}
-    if (!acc.deviceStates[uid][endpointId]) acc.deviceStates[uid][endpointId] = {}
-		acc.deviceStates[uid][endpointId][key] = parseValue(payload)
+    const value = normalizeStateValue(key, parseValue(payload))
+    if (value == null) return
+    const nextUidState = { ...(acc.deviceStates[uid] || {}) }
+    const nextEndpointState = { ...(nextUidState[endpointId] || {}) }
+    nextEndpointState[key] = value
+    nextUidState[endpointId] = nextEndpointState
+    acc.deviceStates[uid] = nextUidState
 
 		const device = ensureDevice(acc, uid)
     const ep = ensureEndpoint(device, Number(endpointId))
     if (ep) {
-      ep.live_state = acc.deviceStates[uid][endpointId]
+      ep.live_state = nextEndpointState
     }
 
     if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
@@ -709,7 +1134,19 @@ export function protoApplyFrame(acc, frame, onCommit) {
     const endpointId = String(view.getUint8(STATE_ENDPOINT_OFF))
     const key = readFixedString(view, STATE_REMOVE_KEY_OFF, STATE_KEY_SIZE)
     if (uid && endpointId && key && acc.deviceStates[uid]?.[endpointId]) {
-      delete acc.deviceStates[uid][endpointId][key]
+      const nextUidState = { ...acc.deviceStates[uid] }
+      const nextEndpointState = { ...(nextUidState[endpointId] || {}) }
+      delete nextEndpointState[key]
+      nextUidState[endpointId] = nextEndpointState
+      acc.deviceStates[uid] = nextUidState
+
+      const device = acc.devicesByUid[uid]
+      const ep = Array.isArray(device?.endpoints)
+        ? device.endpoints.find((x) => Number(x?.endpoint ?? 0) === Number(endpointId))
+        : null
+      if (ep) {
+        ep.live_state = nextEndpointState
+      }
       if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
         onCommit({
           devices: sortSnapshotDevices(acc),

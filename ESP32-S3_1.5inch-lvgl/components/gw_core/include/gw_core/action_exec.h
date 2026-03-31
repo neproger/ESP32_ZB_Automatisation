@@ -5,15 +5,11 @@
 
 #include "esp_err.h"
 
-#include "gw_core/automation_compiled.h"
+#include "gw_core/gw_proto.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// Execute a single action definition (CBOR map, same schema as UI uses).
-// Returns ESP_OK if action was accepted/scheduled.
-esp_err_t gw_action_exec_cbor(const uint8_t *buf, size_t len, char *err, size_t err_size);
 
 // Fast-path executor for compiled rules (avoids dynamic allocations at runtime).
 // Currently supports the MVP zigbee commands used by Automations UI:
@@ -28,12 +24,14 @@ esp_err_t gw_action_exec_compiled_zigbee(const char *cmd,
                                         char *err,
                                         size_t err_size);
 
-// Execute a compiled action record from a `.gwar` file.
-// This is the main runtime path for automations (no JSON parsing).
-esp_err_t gw_action_exec_compiled(const gw_auto_compiled_t *compiled,
-                                 const gw_auto_bin_action_v2_t *action,
-                                 char *err,
-                                 size_t err_size);
+esp_err_t gw_action_exec_action(const gw_automation_entry_t *entry,
+                                const gw_auto_bin_action_v2_t *action,
+                                char *err,
+                                size_t err_size);
+
+esp_err_t gw_action_exec_entry(const gw_automation_entry_t *entry,
+                               char *err,
+                               size_t err_size);
 
 #ifdef __cplusplus
 }

@@ -19,7 +19,6 @@
 #include "gw_core/device_storage.h"
 #include "gw_core/event_bus.h"
 #include "gw_core/gw_proto.h"
-#include "gw_core/gw_uart_proto.h"
 #include "gw_core/state_store.h"
 #include "gw_core/types.h"
 #include "gw_proto/gw_proto_uart.h"
@@ -29,7 +28,7 @@
 #define GW_UART_BAUD 230400
 #define GW_UART_RX_BUF_SIZE 1024
 #define GW_UART_TX_BUF_SIZE 1024
-#define GW_UART_EVT_Q_LEN 16
+#define GW_UART_DRIVER_Q_LEN 16
 #define GW_UART_TX_EVENT_Q 24
 
 static const char *TAG = "gw_uart";
@@ -72,6 +71,7 @@ static bool uart_write_all(const uint8_t *data, size_t len)
 }
 static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static void snapshot_request_async(void);
+static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame);
 
 #if defined(UART_SCLK_XTAL)
 #define GW_UART_SCLK_SRC UART_SCLK_XTAL
@@ -82,20 +82,6 @@ static void snapshot_request_async(void);
 static const char *msg_type_name(uint8_t t)
 {
     switch (t) {
-        case GW_UART_MSG_HELLO:
-            return "HELLO";
-        case GW_UART_MSG_HELLO_ACK:
-            return "HELLO_ACK";
-        case GW_UART_MSG_PING:
-            return "PING";
-        case GW_UART_MSG_PONG:
-            return "PONG";
-        case GW_UART_MSG_CMD_REQ:
-            return "CMD_REQ";
-        case GW_UART_MSG_CMD_RSP:
-            return "CMD_RSP";
-        case GW_UART_MSG_EVT:
-            return "EVT";
         case GW_PROTO_MSG_SYNC_BEGIN:
             return "PROTO_SYNC_BEGIN";
         case GW_PROTO_MSG_SYNC_END:
@@ -122,6 +108,26 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_GROUP_ITEM_REMOVE";
         case GW_PROTO_MSG_SETTINGS:
             return "PROTO_SETTINGS";
+        case GW_PROTO_MSG_SNAPSHOT_REQUEST:
+            return "PROTO_SNAPSHOT_REQUEST";
+        case GW_PROTO_MSG_CMD_RESULT:
+            return "PROTO_CMD_RESULT";
+        case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:
+            return "PROTO_CMD_WIFI_CONFIG_SET";
+        case GW_PROTO_MSG_CMD_NET_SERVICES_START:
+            return "PROTO_CMD_NET_SERVICES_START";
+        case GW_PROTO_MSG_CMD_READ_ATTR:
+            return "PROTO_CMD_READ_ATTR";
+        case GW_PROTO_MSG_CMD_ONOFF:
+            return "PROTO_CMD_ONOFF";
+        case GW_PROTO_MSG_CMD_LEVEL:
+            return "PROTO_CMD_LEVEL";
+        case GW_PROTO_MSG_CMD_COLOR_XY:
+            return "PROTO_CMD_COLOR_XY";
+        case GW_PROTO_MSG_CMD_COLOR_TEMP:
+            return "PROTO_CMD_COLOR_TEMP";
+        case GW_PROTO_MSG_EVENT_ZB:
+            return "PROTO_EVENT_ZB";
         default:
             return "UNKNOWN";
     }
@@ -151,43 +157,6 @@ static bool is_forwardable_event(const char *type)
         return true;
     }
     return false;
-}
-
-static uint16_t clamp_u16_i32(int32_t v)
-{
-    if (v <= 0) {
-        return 0;
-    }
-    if (v >= 65535) {
-        return 65535;
-    }
-    return (uint16_t)v;
-}
-
-static gw_uart_status_t map_esp_err_to_status(esp_err_t err)
-{
-    if (err == ESP_OK) {
-        return GW_UART_STATUS_OK;
-    }
-    if (err == ESP_ERR_INVALID_ARG) {
-        return GW_UART_STATUS_INVALID_ARGS;
-    }
-    if (err == ESP_ERR_INVALID_STATE) {
-        return GW_UART_STATUS_NOT_READY;
-    }
-    if (err == ESP_ERR_NOT_FOUND) {
-        return GW_UART_STATUS_NOT_FOUND;
-    }
-    if (err == ESP_ERR_NOT_SUPPORTED) {
-        return GW_UART_STATUS_UNSUPPORTED;
-    }
-    if (err == ESP_ERR_TIMEOUT) {
-        return GW_UART_STATUS_TIMEOUT;
-    }
-    if (err == ESP_ERR_NO_MEM) {
-        return GW_UART_STATUS_BUSY;
-    }
-    return GW_UART_STATUS_INTERNAL_ERROR;
 }
 
 static bool uid_matches(const gw_device_uid_t *uid, const char *uid_str)
@@ -440,7 +409,7 @@ static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload,
     if (gw_proto_uart_build_frame(&hdr, payload, payload_len, raw, sizeof(raw), &raw_len) != ESP_OK) {
         return;
     }
-    if (msg_type == GW_UART_MSG_EVT) {
+    if (msg_type == GW_PROTO_MSG_EVENT_ZB) {
         ESP_LOGD(TAG, "UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
     } else {
         ESP_LOGI(TAG, "UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
@@ -457,68 +426,65 @@ static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload,
     }
 }
 
-static void uart_send_cmd_rsp(uint16_t seq, uint32_t req_id, gw_uart_status_t status, esp_err_t err)
+static void uart_send_proto_cmd_result(uint16_t seq, esp_err_t err)
 {
-    gw_uart_cmd_rsp_v1_t rsp = {
-        .req_id = req_id,
-        .status = (uint16_t)status,
-        .zb_status = 0,
+    gw_proto_cmd_result_v1_t rsp = {
+        .request_seq = seq,
+        .status = (int32_t)err,
     };
-
-    strlcpy(rsp.message, (err == ESP_OK) ? "ok" : esp_err_to_name(err), sizeof(rsp.message));
-    uart_send_frame(GW_UART_MSG_CMD_RSP, seq, &rsp, sizeof(rsp));
+    uart_send_frame(GW_PROTO_MSG_CMD_RESULT, seq, &rsp, sizeof(rsp));
 }
 
 static uint8_t map_evt_kind(const char *type)
 {
     if (!type) {
-        return GW_UART_EVT_NET_STATE;
+        return GW_PROTO_EVENT_NET_STATE;
     }
     if (strcmp(type, "zigbee.attr_report") == 0) {
-        return GW_UART_EVT_ATTR_REPORT;
+        return GW_PROTO_EVENT_ATTR_REPORT;
     }
     if (strcmp(type, "zigbee.command") == 0) {
-        return GW_UART_EVT_COMMAND;
+        return GW_PROTO_EVENT_COMMAND;
     }
     if (strstr(type, "join") != NULL) {
-        return GW_UART_EVT_DEVICE_JOIN;
+        return GW_PROTO_EVENT_DEVICE_JOIN;
     }
     if (strstr(type, "leave") != NULL) {
-        return GW_UART_EVT_DEVICE_LEAVE;
+        return GW_PROTO_EVENT_DEVICE_LEAVE;
     }
-    return GW_UART_EVT_NET_STATE;
+    return GW_PROTO_EVENT_NET_STATE;
 }
 
 static uint8_t map_evt_value_type(uint8_t t)
 {
     switch ((gw_event_value_type_t)t) {
         case GW_EVENT_VALUE_BOOL:
-            return GW_UART_VALUE_BOOL;
+            return GW_PROTO_EVENT_VALUE_BOOL;
         case GW_EVENT_VALUE_I64:
-            return GW_UART_VALUE_I64;
+            return GW_PROTO_EVENT_VALUE_I64;
         case GW_EVENT_VALUE_F64:
-            return GW_UART_VALUE_F32;
+            return GW_PROTO_EVENT_VALUE_F32;
         case GW_EVENT_VALUE_TEXT:
-            return GW_UART_VALUE_TEXT;
+            return GW_PROTO_EVENT_VALUE_TEXT;
         case GW_EVENT_VALUE_NONE:
         default:
-            return GW_UART_VALUE_NONE;
+            return GW_PROTO_EVENT_VALUE_NONE;
     }
 }
 
 static void uart_send_event(const gw_event_t *e)
 {
-    gw_uart_evt_v1_t evt;
+    gw_proto_event_v1_t evt;
     memset(&evt, 0, sizeof(evt));
 
     evt.event_id = e->id;
     evt.ts_ms = e->ts_ms;
-    evt.evt_id = map_evt_kind(e->type);
+    evt.event_id_kind = map_evt_kind(e->type);
     strlcpy(evt.event_type, e->type, sizeof(evt.event_type));
     if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
         strlcpy(evt.cmd, e->payload_cmd, sizeof(evt.cmd));
     }
-    strlcpy(evt.device_uid, e->device_uid, sizeof(evt.device_uid));
+    strlcpy(evt.device_uid.uid, e->device_uid, sizeof(evt.device_uid.uid));
     evt.short_addr = e->short_addr;
     evt.endpoint = e->payload_endpoint;
     evt.cluster_id = e->payload_cluster;
@@ -529,7 +495,7 @@ static void uart_send_event(const gw_event_t *e)
     evt.value_f32 = (float)e->payload_value_f64;
     strlcpy(evt.value_text, e->payload_value_text, sizeof(evt.value_text));
 
-    uart_send_frame(GW_UART_MSG_EVT, s_evt_seq++, &evt, sizeof(evt));
+    uart_send_frame(GW_PROTO_MSG_EVENT_ZB, s_evt_seq++, &evt, sizeof(evt));
 }
 
 static void on_event(const gw_event_t *event, void *user_ctx)
@@ -554,179 +520,36 @@ static void on_event(const gw_event_t *event, void *user_ctx)
     (void)xQueueSend(s_evt_q, event, 0);
 }
 
-static esp_err_t exec_cmd_req(const gw_uart_cmd_req_v1_t *req)
-{
-    gw_device_uid_t uid = {0};
-    bool has_uid = req->device_uid[0] != '\0';
-
-    if (has_uid) {
-        strlcpy(uid.uid, req->device_uid, sizeof(uid.uid));
-    }
-
-    switch ((gw_uart_cmd_id_t)req->cmd_id) {
-        case GW_UART_CMD_PERMIT_JOIN: {
-            if (req->param0 < 0 || req->param0 > 255) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_zigbee_permit_join((uint8_t)req->param0);
-        }
-
-        case GW_UART_CMD_ONOFF: {
-            if (!has_uid || req->endpoint == 0 || req->param0 < 0 || req->param0 > 2) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_zigbee_onoff_cmd(&uid, req->endpoint, (gw_zigbee_onoff_cmd_t)req->param0);
-        }
-
-        case GW_UART_CMD_LEVEL: {
-            if (!has_uid || req->endpoint == 0 || req->param0 < 0 || req->param0 > 254 || req->param1 < 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            gw_zigbee_level_t lv = {
-                .level = (uint8_t)req->param0,
-                .transition_ms = clamp_u16_i32(req->param1 * 100),
-            };
-            return gw_zigbee_level_move_to_level(&uid, req->endpoint, lv);
-        }
-
-        case GW_UART_CMD_COLOR_XY: {
-            if (!has_uid || req->endpoint == 0 || req->param0 < 0 || req->param1 < 0 || req->param2 < 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            gw_zigbee_color_xy_t xy = {
-                .x = clamp_u16_i32(req->param0),
-                .y = clamp_u16_i32(req->param1),
-                .transition_ms = clamp_u16_i32(req->param2 * 100),
-            };
-            return gw_zigbee_color_move_to_xy(&uid, req->endpoint, xy);
-        }
-
-        case GW_UART_CMD_COLOR_TEMP: {
-            if (!has_uid || req->endpoint == 0 || req->param0 <= 0 || req->param1 < 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            gw_zigbee_color_temp_t ct = {
-                .mireds = clamp_u16_i32(req->param0),
-                .transition_ms = clamp_u16_i32(req->param1 * 100),
-            };
-            return gw_zigbee_color_move_to_temp(&uid, req->endpoint, ct);
-        }
-
-        case GW_UART_CMD_READ_ATTR: {
-            // attr_id can validly be 0x0000 for many clusters (onoff/level/etc).
-            if (!has_uid || req->endpoint == 0 || req->cluster_id == 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_zigbee_read_attr(&uid, req->endpoint, req->cluster_id, req->attr_id);
-        }
-
-        case GW_UART_CMD_WRITE_ATTR:
-        case GW_UART_CMD_IDENTIFY:
-            return ESP_ERR_NOT_SUPPORTED;
-
-        case GW_UART_CMD_SYNC_SNAPSHOT:
-            snapshot_request_async();
-            return ESP_OK;
-        case GW_UART_CMD_SET_DEVICE_NAME: {
-            if (!has_uid) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            char name_buf[sizeof(req->value_text)] = {0};
-            strlcpy(name_buf, req->value_text, sizeof(name_buf));
-            return gw_device_registry_set_name(&uid, name_buf);
-        }
-        case GW_UART_CMD_REMOVE_DEVICE: {
-            if (!has_uid) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            gw_device_full_t device = {0};
-            esp_err_t err = gw_device_storage_get(&uid, &device);
-            if (err != ESP_OK) {
-                return err;
-            }
-            if (device.short_addr == 0) {
-                return ESP_ERR_INVALID_STATE;
-            }
-            return gw_zigbee_device_leave(&uid, device.short_addr, false);
-        }
-        case GW_UART_CMD_REMOVE_ALL_DEVICES: {
-            size_t iterations = 0;
-            while (iterations < GW_DEVICE_MAX_DEVICES) {
-                gw_device_full_t device = {0};
-                if (gw_device_storage_get_by_index(0, &device) != ESP_OK) {
-                    break;
-                }
-                if (device.device_uid.uid[0] == '\0') {
-                    break;
-                }
-                if (device.short_addr != 0) {
-                    (void)gw_zigbee_device_leave(&device.device_uid, device.short_addr, false);
-                }
-                (void)gw_zb_model_remove_device(&device.device_uid);
-                (void)gw_state_store_remove_uid(&device.device_uid);
-                (void)gw_device_registry_remove(&device.device_uid);
-                uart_send_proto_device_remove(device.device_uid.uid, s_evt_seq++);
-                iterations++;
-            }
-            return ESP_OK;
-        }
-        case GW_UART_CMD_WIFI_CONFIG_SET:
-            return ESP_ERR_NOT_SUPPORTED;
-        case GW_UART_CMD_NET_SERVICES_START:
-            return ESP_ERR_NOT_SUPPORTED;
-        default:
-            return ESP_ERR_NOT_SUPPORTED;
-    }
-}
-
-static void handle_cmd_req(const gw_proto_uart_frame_t *frame)
-{
-    gw_uart_cmd_req_v1_t req;
-    memset(&req, 0, sizeof(req));
-
-    size_t copy_len = frame->hdr.len < sizeof(req) ? frame->hdr.len : sizeof(req);
-    if (copy_len > 0) {
-        memcpy(&req, frame->payload, copy_len);
-    }
-    req.device_uid[sizeof(req.device_uid) - 1] = '\0';
-    req.value_text[sizeof(req.value_text) - 1] = '\0';
-    req.value_blob[sizeof(req.value_blob) - 1] = '\0';
-
-    uint32_t req_id = req.req_id ? req.req_id : frame->hdr.seq;
-    if ((gw_uart_cmd_id_t)req.cmd_id == GW_UART_CMD_SYNC_SNAPSHOT) {
-        ESP_LOGI(TAG,
-                 "%s requested (seq=%u req_id=%u)",
-                 "SYNC_SNAPSHOT",
-                 (unsigned)frame->hdr.seq,
-                 (unsigned)req_id);
-        uart_send_cmd_rsp(frame->hdr.seq, req_id, GW_UART_STATUS_OK, ESP_OK);
-        snapshot_request_async();
-        return;
-    }
-
-    esp_err_t err = exec_cmd_req(&req);
-    gw_uart_status_t st = map_esp_err_to_status(err);
-    uart_send_cmd_rsp(frame->hdr.seq, req_id, st, err);
-}
-
 static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
 {
-    if (frame->hdr.type == GW_UART_MSG_EVT) {
+    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
         ESP_LOGD(TAG, "UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     } else {
         ESP_LOGI(TAG, "UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     }
 
     switch (frame->hdr.type) {
-        case GW_UART_MSG_PING:
-            uart_send_frame(GW_UART_MSG_PONG, frame->hdr.seq, NULL, 0);
+        case GW_PROTO_MSG_SNAPSHOT_REQUEST:
+        case GW_PROTO_MSG_CMD_PERMIT_JOIN:
+        case GW_PROTO_MSG_CMD_DEVICE_RENAME:
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE:
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL:
+        case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:
+        case GW_PROTO_MSG_CMD_NET_SERVICES_START:
+        case GW_PROTO_MSG_CMD_READ_ATTR:
+        case GW_PROTO_MSG_CMD_ONOFF:
+        case GW_PROTO_MSG_CMD_LEVEL:
+        case GW_PROTO_MSG_CMD_COLOR_XY:
+        case GW_PROTO_MSG_CMD_COLOR_TEMP:
+        case GW_PROTO_MSG_CMD_IDENTIFY:
+        case GW_PROTO_MSG_CMD_BIND:
+        case GW_PROTO_MSG_CMD_UNBIND:
+        case GW_PROTO_MSG_CMD_SCENE_STORE:
+        case GW_PROTO_MSG_CMD_SCENE_RECALL: {
+            esp_err_t err = exec_proto_command(frame);
+            uart_send_proto_cmd_result(frame->hdr.seq, err);
             break;
-        case GW_UART_MSG_HELLO:
-            uart_send_frame(GW_UART_MSG_HELLO_ACK, frame->hdr.seq, NULL, 0);
-            break;
-        case GW_UART_MSG_CMD_REQ:
-            handle_cmd_req(frame);
-            break;
+        }
         default:
             break;
     }
@@ -757,6 +580,157 @@ static void uart_snapshot_task(void *arg)
             (void)uart_send_snapshot((uint16_t)(s_evt_seq++));
             s_snapshot_tx_active = false;
         }
+    }
+}
+
+static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
+{
+    if (!frame) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (frame->hdr.type) {
+        case GW_PROTO_MSG_SNAPSHOT_REQUEST:
+            snapshot_request_async();
+            return ESP_OK;
+
+        case GW_PROTO_MSG_CMD_PERMIT_JOIN: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_permit_join_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_permit_join_v1_t *msg = (const gw_proto_cmd_permit_join_v1_t *)frame->payload;
+            return gw_zigbee_permit_join(msg->seconds);
+        }
+
+        case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)frame->payload;
+            return gw_device_registry_set_name(&msg->device_uid, msg->name);
+        }
+
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_device_remove_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)frame->payload;
+            gw_device_full_t device = {0};
+            esp_err_t err = gw_device_storage_get(&msg->device_uid, &device);
+            if (err != ESP_OK) {
+                return err;
+            }
+            if (device.short_addr == 0) {
+                return ESP_ERR_INVALID_STATE;
+            }
+            return gw_zigbee_device_leave(&msg->device_uid, device.short_addr, false);
+        }
+
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL: {
+            size_t iterations = 0;
+            while (iterations < GW_DEVICE_MAX_DEVICES) {
+                gw_device_full_t device = {0};
+                if (gw_device_storage_get_by_index(0, &device) != ESP_OK) {
+                    break;
+                }
+                if (device.device_uid.uid[0] == '\0') {
+                    break;
+                }
+                if (device.short_addr != 0) {
+                    (void)gw_zigbee_device_leave(&device.device_uid, device.short_addr, false);
+                }
+                (void)gw_zb_model_remove_device(&device.device_uid);
+                (void)gw_state_store_remove_uid(&device.device_uid);
+                (void)gw_device_registry_remove(&device.device_uid);
+                uart_send_proto_device_remove(device.device_uid.uid, s_evt_seq++);
+                iterations++;
+            }
+            return ESP_OK;
+        }
+
+        case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:
+            return ESP_ERR_NOT_SUPPORTED;
+
+        case GW_PROTO_MSG_CMD_NET_SERVICES_START:
+            return ESP_ERR_NOT_SUPPORTED;
+
+        case GW_PROTO_MSG_CMD_READ_ATTR: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_read_attr_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_read_attr_v1_t *msg = (const gw_proto_cmd_read_attr_v1_t *)frame->payload;
+            if (msg->endpoint == 0 || msg->cluster_id == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_zigbee_read_attr(&msg->device_uid, msg->endpoint, msg->cluster_id, msg->attr_id);
+        }
+
+        case GW_PROTO_MSG_CMD_ONOFF: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_onoff_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_onoff_v1_t *msg = (const gw_proto_cmd_onoff_v1_t *)frame->payload;
+            if (msg->endpoint == 0 || msg->cmd > GW_ZIGBEE_ONOFF_CMD_TOGGLE) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_zigbee_onoff_cmd(&msg->device_uid, msg->endpoint, (gw_zigbee_onoff_cmd_t)msg->cmd);
+        }
+
+        case GW_PROTO_MSG_CMD_LEVEL: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_level_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_level_v1_t *msg = (const gw_proto_cmd_level_v1_t *)frame->payload;
+            if (msg->endpoint == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            gw_zigbee_level_t lv = {
+                .level = msg->level,
+                .transition_ms = (uint16_t)(msg->transition_ds * 100u),
+            };
+            return gw_zigbee_level_move_to_level(&msg->device_uid, msg->endpoint, lv);
+        }
+
+        case GW_PROTO_MSG_CMD_COLOR_XY: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_color_xy_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_color_xy_v1_t *msg = (const gw_proto_cmd_color_xy_v1_t *)frame->payload;
+            if (msg->endpoint == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            gw_zigbee_color_xy_t xy = {
+                .x = msg->x,
+                .y = msg->y,
+                .transition_ms = (uint16_t)(msg->transition_ds * 100u),
+            };
+            return gw_zigbee_color_move_to_xy(&msg->device_uid, msg->endpoint, xy);
+        }
+
+        case GW_PROTO_MSG_CMD_COLOR_TEMP: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_color_temp_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_color_temp_v1_t *msg = (const gw_proto_cmd_color_temp_v1_t *)frame->payload;
+            if (msg->endpoint == 0 || msg->mireds == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            gw_zigbee_color_temp_t ct = {
+                .mireds = msg->mireds,
+                .transition_ms = (uint16_t)(msg->transition_ds * 100u),
+            };
+            return gw_zigbee_color_move_to_temp(&msg->device_uid, msg->endpoint, ct);
+        }
+
+        case GW_PROTO_MSG_CMD_IDENTIFY:
+        case GW_PROTO_MSG_CMD_BIND:
+        case GW_PROTO_MSG_CMD_UNBIND:
+        case GW_PROTO_MSG_CMD_SCENE_STORE:
+        case GW_PROTO_MSG_CMD_SCENE_RECALL:
+            return ESP_ERR_NOT_SUPPORTED;
+
+        default:
+            return ESP_ERR_NOT_SUPPORTED;
     }
 }
 
@@ -811,7 +785,7 @@ esp_err_t gw_uart_link_start(void)
         .source_clk = GW_UART_SCLK_SRC,
     };
 
-    ESP_RETURN_ON_ERROR(uart_driver_install(GW_UART_PORT, GW_UART_RX_BUF_SIZE, GW_UART_TX_BUF_SIZE, GW_UART_EVT_Q_LEN, NULL, 0), TAG, "uart_driver_install failed");
+    ESP_RETURN_ON_ERROR(uart_driver_install(GW_UART_PORT, GW_UART_RX_BUF_SIZE, GW_UART_TX_BUF_SIZE, GW_UART_DRIVER_Q_LEN, NULL, 0), TAG, "uart_driver_install failed");
     ESP_RETURN_ON_ERROR(uart_param_config(GW_UART_PORT, &cfg), TAG, "uart_param_config failed");
     ESP_RETURN_ON_ERROR(uart_set_pin(GW_UART_PORT, GW_UART_TX_PIN, GW_UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE), TAG, "uart_set_pin failed");
 
@@ -839,8 +813,3 @@ esp_err_t gw_uart_link_start(void)
     ESP_LOGI(TAG, "UART binary link started: UART1 TX=GPIO%d RX=GPIO%d baud=%d", GW_UART_TX_PIN, GW_UART_RX_PIN, GW_UART_BAUD);
     return ESP_OK;
 }
-
-
-
-
-

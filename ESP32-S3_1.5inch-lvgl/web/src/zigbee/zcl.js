@@ -1,4 +1,4 @@
-export function hex16(v) {
+﻿export function hex16(v) {
   const n = Number(v ?? 0)
   if (!Number.isFinite(n)) return ''
   const x = Math.max(0, Math.min(0xffff, n)) >>> 0
@@ -74,7 +74,7 @@ export function describeAttr(clusterId, attrId) {
   // A small set of useful attributes; extend incrementally.
   if (c === 0x0006 && a === 0x0000) return { name: 'OnOff', unit: null }
 
-  // Temperature Measurement: MeasuredValue is int16 in 0.01°C.
+  // Temperature Measurement: MeasuredValue is int16 in 0.01 °C.
   if (c === 0x0402 && a === 0x0000) return { name: 'MeasuredValue', unit: '°C', scale: 0.01, signed: true }
 
   // Relative Humidity Measurement: MeasuredValue is uint16 in 0.01%.
@@ -114,4 +114,5 @@ export function formatSensorValue(sensorRow) {
 
   return info?.unit ? `${raw} ${info.unit}` : `${raw}`
 }
+
 

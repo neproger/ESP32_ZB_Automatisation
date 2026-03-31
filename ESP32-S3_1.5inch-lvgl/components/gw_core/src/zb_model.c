@@ -3,6 +3,31 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+
+#define GW_ZB_MODEL_LISTENER_CAP 4
+typedef struct {
+    gw_zb_model_listener_t cb;
+    void *user_ctx;
+} gw_zb_model_listener_slot_t;
+static gw_zb_model_listener_slot_t s_listeners[GW_ZB_MODEL_LISTENER_CAP];
+static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void notify_zb_model_listeners(const gw_zb_endpoint_t *ep, bool removed)
+{
+    gw_zb_model_listener_slot_t listeners[GW_ZB_MODEL_LISTENER_CAP];
+    size_t listener_count = 0;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb) {
+            listeners[listener_count++] = s_listeners[i];
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < listener_count; i++) {
+        listeners[i].cb(ep, removed, listeners[i].user_ctx);
+    }
+}
 
 static bool s_inited;
 static gw_zb_endpoint_t s_eps[GW_ZB_MAX_ENDPOINTS];
@@ -26,6 +51,48 @@ esp_err_t gw_zb_model_init(void)
     return ESP_OK;
 }
 
+esp_err_t gw_zb_model_add_listener(gw_zb_model_listener_t cb, void *user_ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
+        if (!s_listeners[i].cb) {
+            s_listeners[i].cb = cb;
+            s_listeners[i].user_ctx = user_ctx;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t gw_zb_model_remove_listener(gw_zb_model_listener_t cb, void *user_ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            s_listeners[i].cb = NULL;
+            s_listeners[i].user_ctx = NULL;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
 {
     if (!s_inited || ep == NULL || ep->uid.uid[0] == '\0' || ep->endpoint == 0) {
@@ -46,6 +113,7 @@ esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
             if (changed) {
                 s_eps[i].version = ++s_version_seq;
             }
+            notify_zb_model_listeners(&s_eps[i], false);
             return ESP_OK;
         }
     }
@@ -60,6 +128,7 @@ esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)
     
     // Auto-sync to persistent storage when new endpoint is discovered
     (void)gw_device_registry_sync_endpoints(&ep->uid);
+    notify_zb_model_listeners(&s_eps[s_ep_count - 1], false);
     return ESP_OK;
 }
 
@@ -70,25 +139,42 @@ esp_err_t gw_zb_model_remove_device(const gw_device_uid_t *uid)
     }
 
     size_t write_idx = 0;
+    gw_zb_endpoint_t removed_eps[GW_ZB_MAX_ENDPOINTS];
+    size_t removed_count = 0;
     for (size_t i = 0; i < s_ep_count; i++) {
         if (!uid_equals(&s_eps[i].uid, uid)) {
             if (write_idx != i) {
                 s_eps[write_idx] = s_eps[i];
             }
             write_idx++;
+        } else if (removed_count < GW_ZB_MAX_ENDPOINTS) {
+            removed_eps[removed_count++] = s_eps[i];
         }
     }
     for (size_t i = write_idx; i < s_ep_count; i++) {
         memset(&s_eps[i], 0, sizeof(s_eps[i]));
     }
     s_ep_count = write_idx;
+    for (size_t i = 0; i < removed_count; i++) {
+        notify_zb_model_listeners(&removed_eps[i], true);
+    }
     return ESP_OK;
 }
 
 size_t gw_zb_model_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps)
 {
-    if (!s_inited || uid == NULL || out_eps == NULL || max_eps == 0) {
+    if (!s_inited || uid == NULL) {
         return 0;
+    }
+
+    if (out_eps == NULL || max_eps == 0) {
+        size_t count = 0;
+        for (size_t i = 0; i < s_ep_count; i++) {
+            if (uid_equals(&s_eps[i].uid, uid)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     size_t written = 0;
@@ -98,6 +184,27 @@ size_t gw_zb_model_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *
         }
     }
     return written;
+}
+
+esp_err_t gw_zb_model_get_endpoint_by_index(const gw_device_uid_t *uid, size_t index, gw_zb_endpoint_t *out_ep)
+{
+    if (!s_inited || uid == NULL || out_ep == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t match_index = 0;
+    for (size_t i = 0; i < s_ep_count; i++) {
+        if (!uid_equals(&s_eps[i].uid, uid)) {
+            continue;
+        }
+        if (match_index == index) {
+            *out_ep = s_eps[i];
+            return ESP_OK;
+        }
+        match_index++;
+    }
+
+    return ESP_ERR_NOT_FOUND;
 }
 
 bool gw_zb_model_find_uid_by_short(uint16_t short_addr, gw_device_uid_t *out_uid)

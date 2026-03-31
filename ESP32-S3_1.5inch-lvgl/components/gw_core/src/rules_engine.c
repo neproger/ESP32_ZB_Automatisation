@@ -18,6 +18,7 @@
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/event_bus.h"
+#include "gw_core/event_names.h"
 #include "gw_core/state_store.h"
 #include "gw_core/types.h"
 
@@ -170,7 +171,7 @@ static void publish_rules_fired(const gw_event_t *e, const char *automation_id)
 {
     char msg[128];
     snprintf(msg, sizeof(msg), "automation_id=%s", automation_id ? automation_id : "");
-    gw_event_bus_publish("rules.fired", "rules", e ? e->device_uid : "", e ? e->short_addr : 0, msg);
+    gw_event_bus_publish(GW_EVT_RULES_FIRED, "rules", e ? e->device_uid : "", e ? e->short_addr : 0, msg);
 }
 
 static void publish_rules_action(const char *automation_id, size_t idx, bool ok, const char *err)
@@ -181,7 +182,7 @@ static void publish_rules_action(const char *automation_id, size_t idx, bool ok,
     } else {
         snprintf(msg, sizeof(msg), "automation_id=%s idx=%u ok=1", automation_id, (unsigned)idx);
     }
-    gw_event_bus_publish("rules.action", "rules", "", 0, msg);
+    gw_event_bus_publish(GW_EVT_RULES_ACTION, "rules", "", 0, msg);
 }
 
 typedef struct {
@@ -222,10 +223,10 @@ static void build_payload_view_from_event(const gw_event_t *e, event_payload_vie
 
 static gw_auto_evt_type_t evt_type_from_event(const gw_event_t *e)
 {
-    if (strcmp(e->type, "zigbee.command") == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
-    if (strcmp(e->type, "zigbee.attr_report") == 0) return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
-    if (strcmp(e->type, "device.join") == 0) return GW_AUTO_EVT_DEVICE_JOIN;
-    if (strcmp(e->type, "device.leave") == 0) return GW_AUTO_EVT_DEVICE_LEAVE;
+    if (strcmp(e->type, GW_EVT_ZIGBEE_COMMAND) == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
+    if (strcmp(e->type, GW_EVT_ZIGBEE_ATTR_REPORT) == 0) return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
+    if (strcmp(e->type, GW_EVT_ZIGBEE_DEVICE_JOIN) == 0) return GW_AUTO_EVT_DEVICE_JOIN;
+    if (strcmp(e->type, GW_EVT_ZIGBEE_DEVICE_LEAVE) == 0) return GW_AUTO_EVT_DEVICE_LEAVE;
     return 0;
 }
 
@@ -556,12 +557,7 @@ static void process_event(const gw_event_t *e)
 
         for (uint8_t ai = 0; ai < entry->actions_count; ai++) {
             char errbuf[96] = {0};
-            gw_auto_compiled_t temp_compiled = {
-                .strings = (char *)entry->string_table,
-                .hdr.strings_size = entry->string_table_size,
-            };
-
-            esp_err_t rc = gw_action_exec_compiled(&temp_compiled, &entry->actions[ai], errbuf, sizeof(errbuf));
+            esp_err_t rc = gw_action_exec_action(entry, &entry->actions[ai], errbuf, sizeof(errbuf));
             if (rc != ESP_OK) {
                 publish_rules_action(entry->id, ai, false, errbuf[0] ? errbuf : "exec failed");
                 break;

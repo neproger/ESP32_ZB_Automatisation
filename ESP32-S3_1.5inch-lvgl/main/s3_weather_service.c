@@ -14,6 +14,7 @@
 #include "s3_geoip_http.h"
 #include "s3_weather_http.h"
 #include "gw_core/event_bus.h"
+#include "gw_core/event_names.h"
 #include "gw_core/net_time.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/state_store.h"
@@ -208,7 +209,6 @@ static void apply_timezone_now_and_publish(const char *reason)
 
     char msg[96] = {0};
     (void)snprintf(msg, sizeof(msg), "tz=%s reason=%s", tz_name, reason ? reason : "unknown");
-    gw_event_bus_publish("net_time.tz_updated", "settings", "", 0, msg);
 }
 
 static void settings_event_listener(const gw_event_t *event, void *user_ctx)
@@ -217,10 +217,10 @@ static void settings_event_listener(const gw_event_t *event, void *user_ctx)
     if (!event) {
         return;
     }
-    if (strcmp(event->type, "settings.changed") != 0) {
+    if (strcmp(event->type, GW_EVT_SETTINGS_CHANGED) != 0) {
         return;
     }
-    apply_timezone_now_and_publish("settings.changed");
+    apply_timezone_now_and_publish(GW_EVT_SETTINGS_CHANGED);
 }
 
 void s3_weather_service_get_location(char *out, size_t out_size)
@@ -240,10 +240,10 @@ static void persist_geo_to_state_store(double lat, double lon)
     const uint64_t ts_ms = now_ts_ms();
     (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_lat", (float)lat, ts_ms);
     (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_lon", (float)lon, ts_ms);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_lat",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_lat",
                             kWeatherEndpoint, "weather_lat", 0, 0,
                             GW_EVENT_VALUE_F64, false, 0, lat, NULL, NULL, 0);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_lon",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_lon",
                             kWeatherEndpoint, "weather_lon", 0, 0,
                             GW_EVENT_VALUE_F64, false, 0, lon, NULL, NULL, 0);
 }
@@ -258,7 +258,7 @@ static void persist_location_to_state_store(const char *location)
     strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
     (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_location", location, ts_ms);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_location",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_location",
                             kWeatherEndpoint, "weather_location", 0, 0,
                             GW_EVENT_VALUE_TEXT, false, 0, 0.0, location, NULL, 0);
 }
@@ -273,7 +273,7 @@ static void persist_weather_status_to_state_store(const char *status)
     strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
     (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_status", status, ts_ms);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_status",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_status",
                             kWeatherEndpoint, "weather_status", 0, 0,
                             GW_EVENT_VALUE_TEXT, false, 0, 0.0, status, NULL, 0);
 }
@@ -287,7 +287,7 @@ static void persist_timezone_to_state_store(const char *tz_name)
     strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
     (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_tz", tz_name, ts_ms);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_tz",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_tz",
                             kWeatherEndpoint, "weather_tz", 0, 0,
                             GW_EVENT_VALUE_TEXT, false, 0, 0.0, tz_name, NULL, 0);
 }
@@ -363,19 +363,19 @@ static void persist_weather_to_state_store(const s3_weather_result_t *res)
     (void)gw_state_store_set_u32(&uid, kWeatherEndpoint, "weather_code", (uint32_t)res->weather_code, ts_ms);
     (void)gw_state_store_set_u64(&uid, kWeatherEndpoint, "weather_updated_ms", ts_ms, ts_ms);
 
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_temp_c",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_temp_c",
                             kWeatherEndpoint, "weather_temp_c", 0, 0,
                             GW_EVENT_VALUE_F64, false, 0, res->temperature_c, NULL, NULL, 0);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_humidity_pct",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_humidity_pct",
                             kWeatherEndpoint, "weather_humidity_pct", 0, 0,
                             GW_EVENT_VALUE_F64, false, 0, res->humidity_pct, NULL, NULL, 0);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_wind_kmh",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_wind_kmh",
                             kWeatherEndpoint, "weather_wind_kmh", 0, 0,
                             GW_EVENT_VALUE_F64, false, 0, res->wind_speed_kmh, NULL, NULL, 0);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_code",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_code",
                             kWeatherEndpoint, "weather_code", 0, 0,
                             GW_EVENT_VALUE_I64, false, (int64_t)res->weather_code, 0.0, NULL, NULL, 0);
-    gw_event_bus_publish_zb("device.state", "weather", kWeatherUid, 0, "weather_updated_ms",
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "weather", kWeatherUid, 0, "weather_updated_ms",
                             kWeatherEndpoint, "weather_updated_ms", 0, 0,
                             GW_EVENT_VALUE_I64, false, (int64_t)ts_ms, 0.0, NULL, NULL, 0);
 }

@@ -17,7 +17,11 @@ typedef struct {
     int16_t timezone_offset_min;
 } gw_project_settings_t;
 
+typedef void (*gw_project_settings_listener_t)(const gw_project_settings_t *settings, void *user_ctx);
+
 esp_err_t gw_project_settings_init(void);
+esp_err_t gw_project_settings_add_listener(gw_project_settings_listener_t cb, void *user_ctx);
+esp_err_t gw_project_settings_remove_listener(gw_project_settings_listener_t cb, void *user_ctx);
 esp_err_t gw_project_settings_get(gw_project_settings_t *out);
 esp_err_t gw_project_settings_set(const gw_project_settings_t *in);
 void gw_project_settings_get_defaults(gw_project_settings_t *out);

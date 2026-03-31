@@ -1,11 +1,20 @@
 ﻿//UTF-8
 //gateway.jsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { cborDecode } from './cbor.js'
 import { groupsProtoApplyFrame } from './groupsStore.js'
+import { setWsCommandSender } from './wsCommandBus.js'
 import {
 	protoApplyFrame,
+	protoEncodeActionExec,
+	protoEncodeAutomationSave,
+	protoEncodeAutomationRemove,
+	protoEncodeAutomationResetAll,
+	protoEncodeAutomationSetEnabled,
 	protoCreateSnapshotAccumulator,
+	protoEncodeDeviceRemove,
+	protoEncodeDeviceRemoveAll,
+	protoEncodeDeviceRename,
+	protoEncodePermitJoin,
 	protoEncodeSnapshotRequest,
 	protoFrameToEvent,
 	protoParseSettingsFrame,
@@ -30,6 +39,21 @@ export function GatewayProvider({ children }) {
 	const wsRef = useRef(null)
 	const reconnectTimerRef = useRef(null)
 	const protoSnapshotRef = useRef(protoCreateSnapshotAccumulator())
+	const seqRef = useRef(1)
+
+	const nextSeq = useCallback(() => {
+		const v = seqRef.current & 0xffff
+		seqRef.current = ((seqRef.current + 1) & 0xffff) || 1
+		return v
+	}, [])
+
+	const sendProtoCommand = useCallback((buffer) => {
+		const ws = wsRef.current
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			throw new Error('ws not connected')
+		}
+		ws.send(buffer)
+	}, [])
 
 	const applyDeviceList = useCallback((list) => {
 		const safeList = Array.isArray(list) ? list : []
@@ -73,6 +97,7 @@ export function GatewayProvider({ children }) {
 				if (wsRef.current !== ws) return
 				attempts = 0
 				setWsStatus('connected')
+				setWsCommandSender(sendProtoCommand)
 				protoSnapshotRef.current = protoCreateSnapshotAccumulator()
 				ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
 			}
@@ -112,16 +137,6 @@ export function GatewayProvider({ children }) {
 						})
 						return
 					}
-					const msg = cborDecode(ev.data)
-					if (!msg || typeof msg !== 'object') return
-					const type = String(msg?.type ?? '')
-					if (!type) return
-
-					setEvents((prev) => {
-						const next = [...prev, msg]
-						return next.length > 30 ? next.slice(next.length - 30) : next
-					})
-
 				} catch {
 					// ignore parse errors
 				}
@@ -130,6 +145,7 @@ export function GatewayProvider({ children }) {
 			ws.onclose = () => {
 				if (wsRef.current !== ws) return
 				if (cancelled) return
+				setWsCommandSender(null)
 				setWsStatus('disconnected')
 				attempts += 1
 				const delay = Math.min(5000, 250 * 2 ** Math.min(attempts, 5))
@@ -145,10 +161,11 @@ export function GatewayProvider({ children }) {
 		connect()
 		return () => {
 			cancelled = true
+			setWsCommandSender(null)
 			cleanup()
 			setWsStatus('disconnected')
 		}
-	}, [applyDeviceList])
+	}, [applyDeviceList, sendProtoCommand])
 
 	const loadAutomations = useCallback(async () => {
 		const ws = wsRef.current
@@ -160,6 +177,42 @@ export function GatewayProvider({ children }) {
 		return automations
 	}, [automations])
 
+	const permitJoin = useCallback(async (seconds = 180) => {
+		sendProtoCommand(protoEncodePermitJoin(seconds, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const renameDevice = useCallback(async (deviceUid, name) => {
+		sendProtoCommand(protoEncodeDeviceRename(deviceUid, name, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const removeDevice = useCallback(async (deviceUid) => {
+		sendProtoCommand(protoEncodeDeviceRemove(deviceUid, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const removeAllDevices = useCallback(async () => {
+		sendProtoCommand(protoEncodeDeviceRemoveAll(nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const setAutomationEnabled = useCallback(async (id, enabled) => {
+		sendProtoCommand(protoEncodeAutomationSetEnabled(id, enabled, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const removeAutomation = useCallback(async (id) => {
+		sendProtoCommand(protoEncodeAutomationRemove(id, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const resetAllAutomations = useCallback(async () => {
+		sendProtoCommand(protoEncodeAutomationResetAll(nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const saveAutomation = useCallback(async (draft) => {
+		sendProtoCommand(protoEncodeAutomationSave(draft, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
+	const execActions = useCallback(async (actions) => {
+		sendProtoCommand(protoEncodeActionExec(actions, nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
 	const value = useMemo(
 		() => ({
 			devices,
@@ -170,8 +223,17 @@ export function GatewayProvider({ children }) {
 			wsStatus,
 			reloadDevices: loadDevices,
 			reloadAutomations: loadAutomations,
+			permitJoin,
+			renameDevice,
+			removeDevice,
+			removeAllDevices,
+			setAutomationEnabled,
+			removeAutomation,
+			resetAllAutomations,
+			saveAutomation,
+			execActions,
 		}),
-		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations],
+		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations, permitJoin, renameDevice, removeDevice, removeAllDevices, setAutomationEnabled, removeAutomation, resetAllAutomations, saveAutomation, execActions],
 	)
 
 	return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>

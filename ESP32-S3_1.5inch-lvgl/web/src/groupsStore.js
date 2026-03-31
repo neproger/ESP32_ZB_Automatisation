@@ -1,6 +1,15 @@
 //UTF-8
 //groupsStore.js
-import { postCbor } from './api.js'
+import {
+	protoEncodeGroupCreate,
+	protoEncodeGroupDelete,
+	protoEncodeGroupItemLabel,
+	protoEncodeGroupItemRemove,
+	protoEncodeGroupItemReorder,
+	protoEncodeGroupItemSet,
+	protoEncodeGroupRename,
+} from './proto.js'
+import { sendWsCommand } from './wsCommandBus.js'
 
 const CHANGED_EVENT = 'gw_groups_changed'
 const GW_PROTO_MSG_SYNC_BEGIN = 0x40
@@ -70,7 +79,7 @@ function readFixedString(view, offset, size) {
 		if (b === 0) break
 		bytes.push(b)
 	}
-	return new TextDecoder().decode(new Uint8Array(bytes))
+	return new TextDecoder().decode(new Uint8Array(bytes)).replace(/[\u0000-\u001f\u007f]/g, '').trim()
 }
 
 function commitGroups(groups, items) {
@@ -108,23 +117,23 @@ export function endpointLabelGet(deviceUid, endpoint) {
 
 export async function groupsCreate(name) {
 	const n = String(name ?? '').trim()
-	if (!n) return null
-	const res = await postCbor('/api/groups', { op: 'create', name: n })
-	return String(res?.id ?? '')
+	if (!n) return ''
+	sendWsCommand(protoEncodeGroupCreate('', n, Date.now() & 0xffff))
+	return 'queued'
 }
 
 export async function groupsRename(id, name) {
 	const gid = String(id ?? '')
 	const n = String(name ?? '').trim()
 	if (!gid || !n) return false
-	await postCbor('/api/groups', { op: 'rename', id: gid, name: n })
+	sendWsCommand(protoEncodeGroupRename(gid, n, Date.now() & 0xffff))
 	return true
 }
 
 export async function groupsDelete(id) {
 	const gid = String(id ?? '')
 	if (!gid) return false
-	await postCbor('/api/groups', { op: 'delete', id: gid })
+	sendWsCommand(protoEncodeGroupDelete(gid, Date.now() & 0xffff))
 	return true
 }
 
@@ -134,9 +143,9 @@ export async function groupSetForEndpoint(deviceUid, endpoint, groupId) {
 	const gid = String(groupId ?? '')
 	if (!uid || ep <= 0) return false
 	if (!gid) {
-		await postCbor('/api/groups/items', { op: 'remove', device_uid: uid, endpoint_id: ep })
+		sendWsCommand(protoEncodeGroupItemRemove(uid, ep, Date.now() & 0xffff))
 	} else {
-		await postCbor('/api/groups/items', { op: 'set', group_id: gid, device_uid: uid, endpoint_id: ep })
+		sendWsCommand(protoEncodeGroupItemSet(gid, uid, ep, Date.now() & 0xffff))
 	}
 	return true
 }
@@ -145,12 +154,7 @@ export async function endpointLabelSet(deviceUid, endpoint, label) {
 	const uid = normalizeUid(deviceUid)
 	const ep = Number(endpoint ?? 0)
 	if (!uid || ep <= 0) return false
-	await postCbor('/api/groups/items', {
-		op: 'label',
-		device_uid: uid,
-		endpoint_id: ep,
-		label: String(label ?? ''),
-	})
+	sendWsCommand(protoEncodeGroupItemLabel(uid, ep, String(label ?? ''), Date.now() & 0xffff))
 	return true
 }
 
@@ -163,13 +167,7 @@ export async function groupReorder(groupId, orderedItems) {
 		const uid = normalizeUid(it?.device_uid)
 		const ep = Number(it?.endpoint_id ?? 0)
 		if (!uid || ep <= 0) continue
-		await postCbor('/api/groups/items', {
-			op: 'reorder',
-			group_id: gid,
-			device_uid: uid,
-			endpoint_id: ep,
-			order: i + 1,
-		})
+		sendWsCommand(protoEncodeGroupItemReorder(gid, uid, ep, i + 1, Date.now() & 0xffff))
 	}
 	return true
 }
@@ -241,8 +239,8 @@ export function groupsProtoApplyFrame(frame) {
 			group_id: readFixedString(view, 0, 32),
 			device_uid: normalizeUid(readFixedString(view, 32, 19)),
 			endpoint_id: Number(view.getUint8(51) || 0),
-			order: Number(view.getUint32(56, true)),
-			label: readFixedString(view, 60, 32),
+			order: Number(view.getUint32(59, true)),
+			label: readFixedString(view, 63, 32),
 		}
 		const idx = target.findIndex((it) => normalizeUid(it?.device_uid) === item.device_uid && Number(it?.endpoint_id ?? 0) === item.endpoint_id)
 		if (idx >= 0) target[idx] = item

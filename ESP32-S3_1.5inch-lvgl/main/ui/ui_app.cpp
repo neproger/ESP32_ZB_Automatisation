@@ -35,7 +35,7 @@ uint32_t screensaver_timeout_ms()
     if (gw_project_settings_get(&cfg) == ESP_OK) {
         return cfg.screensaver_timeout_ms;
     }
-    return 4000;
+    return 10000;
 }
 
 void splash_show(bool show)

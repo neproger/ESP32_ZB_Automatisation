@@ -12,8 +12,6 @@
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"
 
-#include "gw_core/event_bus.h"
-
 static const char *TAG = "gw_net_time";
 
 static const uint32_t kDefaultSyncIntervalMs = 6u * 60u * 60u * 1000u;
@@ -95,15 +93,11 @@ static esp_err_t perform_sync_once(void)
     esp_err_t err = esp_netif_sntp_sync_wait(wait_ticks);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SNTP sync timeout/fail: %s", esp_err_to_name(err));
-        gw_event_bus_publish("net_time.sync_failed", "net_time", "", 0, esp_err_to_name(err));
         return err;
     }
 
     update_ref_from_system_time();
     ESP_LOGI(TAG, "time synced, epoch_ms=%llu", (unsigned long long)gw_net_time_last_sync_ms());
-    char msg[64];
-    (void)snprintf(msg, sizeof(msg), "epoch_ms=%llu", (unsigned long long)gw_net_time_last_sync_ms());
-    gw_event_bus_publish("net_time.synced", "net_time", "", 0, msg);
     return ESP_OK;
 }
 

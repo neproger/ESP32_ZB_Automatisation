@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 
 #include "gw_core/event_bus.h"
+#include "gw_core/event_names.h"
 #include "gw_core/state_store.h"
 #include "gw_http/gw_http.h"
 
@@ -76,7 +77,7 @@ static void wifi_state_publish_text(const char *key, const char *value, uint64_t
     gw_device_uid_t uid = {0};
     wifi_state_uid(&uid);
     (void)gw_state_store_set_text(&uid, kWifiEndpoint, key, value ? value : "", ts_ms);
-    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "wifi", kWifiUid, 0, key,
                             kWifiEndpoint, key, 0, 0,
                             GW_EVENT_VALUE_TEXT, false, 0, 0.0, value ? value : "", NULL, 0);
 }
@@ -86,29 +87,9 @@ static void wifi_state_publish_bool(const char *key, bool value, uint64_t ts_ms)
     gw_device_uid_t uid = {0};
     wifi_state_uid(&uid);
     (void)gw_state_store_set_bool(&uid, kWifiEndpoint, key, value, ts_ms);
-    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
+    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "wifi", kWifiUid, 0, key,
                             kWifiEndpoint, key, 0, 0,
                             GW_EVENT_VALUE_BOOL, value, 0, 0.0, NULL, NULL, 0);
-}
-
-static void wifi_state_publish_u32(const char *key, uint32_t value, uint64_t ts_ms)
-{
-    gw_device_uid_t uid = {0};
-    wifi_state_uid(&uid);
-    (void)gw_state_store_set_u32(&uid, kWifiEndpoint, key, value, ts_ms);
-    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
-                            kWifiEndpoint, key, 0, 0,
-                            GW_EVENT_VALUE_I64, false, (int64_t)value, 0.0, NULL, NULL, 0);
-}
-
-static void wifi_state_publish_u64(const char *key, uint64_t value, uint64_t ts_ms)
-{
-    gw_device_uid_t uid = {0};
-    wifi_state_uid(&uid);
-    (void)gw_state_store_set_u64(&uid, kWifiEndpoint, key, value, ts_ms);
-    gw_event_bus_publish_zb("device.state", "wifi", kWifiUid, 0, key,
-                            kWifiEndpoint, key, 0, 0,
-                            GW_EVENT_VALUE_I64, false, (int64_t)value, 0.0, NULL, NULL, 0);
 }
 
 static void wifi_state_update(const char *status,
@@ -118,14 +99,13 @@ static void wifi_state_update(const char *status,
                               const char *last_error,
                               uint32_t retries)
 {
+    (void)status;
+    (void)retries;
     const uint64_t ts_ms = wifi_now_ms();
-    wifi_state_publish_text("wifi_status", status ? status : "", ts_ms);
     wifi_state_publish_bool("wifi_connected", connected, ts_ms);
     wifi_state_publish_text("wifi_ssid", ssid ? ssid : "", ts_ms);
     wifi_state_publish_text("wifi_ip", ip ? ip : "", ts_ms);
     wifi_state_publish_text("wifi_error", last_error ? last_error : "", ts_ms);
-    wifi_state_publish_u32("wifi_retries", retries, ts_ms);
-    wifi_state_publish_u64("wifi_updated_ms", ts_ms, ts_ms);
 }
 
 static bool wifi_is_connected_local(void)
@@ -145,12 +125,10 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
             ESP_LOGW(TAG, "Wi-Fi disconnected, retry %d/%d", s_ctx.retries, s_ctx.max_retries);
             (void)snprintf(msg, sizeof(msg), "disconnected: reason=%u retry %d/%d", disc ? (unsigned)disc->reason : 0U, s_ctx.retries, s_ctx.max_retries);
             wifi_state_update("reconnecting", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
-            gw_event_bus_publish("wifi_disconnected", "wifi", "", 0, msg);
             esp_wifi_connect();
         } else {
             (void)snprintf(msg, sizeof(msg), "disconnected: reason=%u retries exhausted", disc ? (unsigned)disc->reason : 0U);
             wifi_state_update("failed", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
-            gw_event_bus_publish("wifi_connect_failed", "wifi", "", 0, msg);
             xEventGroupSetBits(s_ctx.event_group, GW_WIFI_FAIL_BIT);
         }
         return;
@@ -172,7 +150,6 @@ static void gw_wifi_event_handler(void *arg, esp_event_base_t event_base, int32_
             } else {
                 (void)snprintf(msg, sizeof(msg), "ip=" IPSTR " web=http://" IPSTR ":%u/", IP2STR(&event->ip_info.ip), IP2STR(&event->ip_info.ip), (unsigned)port);
             }
-            gw_event_bus_publish("wifi_got_ip", "wifi", "", 0, msg);
         }
         if (port == 0 || port == 80) {
             ESP_LOGI(TAG, "Web UI: http://" IPSTR "/", IP2STR(&event->ip_info.ip));
@@ -284,7 +261,6 @@ static esp_err_t gw_wifi_scan_build_candidates(gw_wifi_candidate_t *candidates, 
     if (ap_num == 0) {
         ESP_LOGW(TAG, "Scan found 0 APs");
         wifi_state_update("scan_empty", false, s_last_ssid, "", "scan found 0 APs", 0);
-        gw_event_bus_publish("wifi_scan", "wifi", "", 0, "scan found 0 APs");
         return ESP_OK;
     }
 
@@ -332,7 +308,6 @@ static esp_err_t gw_wifi_scan_build_candidates(gw_wifi_candidate_t *candidates, 
                  (unsigned)GW_WIFI_APS_COUNT, (unsigned)ap_num, (unsigned)fetch_num);
         gw_wifi_log_scan_results(records, fetch_num);
         wifi_state_update("scan_no_match", false, "", "", "no known SSIDs found", 0);
-        gw_event_bus_publish("wifi_scan", "wifi", "", 0, "no known SSIDs found in scan results");
         free(records);
         return ESP_OK;
     }
@@ -365,7 +340,6 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
         char msg[96];
         (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
         wifi_state_update("connecting", false, s_last_ssid, "", "", 0);
-        gw_event_bus_publish("wifi_connecting", "wifi", "", 0, msg);
     }
 
     if (s_wifi_started) {
@@ -399,7 +373,6 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
             char msg[96];
             (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
             wifi_state_update("connected", true, s_last_ssid, "", "", 0);
-            gw_event_bus_publish("wifi_connected", "wifi", "", 0, msg);
         }
         return ESP_OK;
     }
@@ -409,7 +382,6 @@ static esp_err_t gw_wifi_try_connect_one(const gw_wifi_ap_credential_t *ap, int 
         char msg[96];
         (void)snprintf(msg, sizeof(msg), "ssid=%s", ap->ssid);
         wifi_state_update("failed", false, s_last_ssid, "", msg, (uint32_t)s_ctx.retries);
-        gw_event_bus_publish("wifi_connect_failed", "wifi", "", 0, msg);
     }
     return ESP_FAIL;
 }

@@ -1,5 +1,6 @@
 ﻿//UTF-8
 //TriggersSection.jsx
+import { EVT_ZIGBEE_ATTR_REPORT, EVT_ZIGBEE_COMMAND, EVT_ZIGBEE_DEVICE_JOIN, EVT_ZIGBEE_DEVICE_LEAVE } from '../../../eventNames.js'
 import { getEmitsByPrefix, getEndpointOptions, getReports, toNumberOrString } from '../utils.js'
 
 export default function TriggersSection({
@@ -59,29 +60,29 @@ export default function TriggersSection({
 							<div className="row">
 								<label className="muted">event_type</label>
 								<select
-									value={String(t?.event_type ?? 'zigbee.command')}
+									value={String(t?.event_type ?? EVT_ZIGBEE_COMMAND)}
 									onChange={(e) => {
-										const nextType = String(e.target.value ?? 'zigbee.command')
+										const nextType = String(e.target.value ?? EVT_ZIGBEE_COMMAND)
 										const match = { ...(t?.match ?? {}) }
-										if (nextType === 'zigbee.attr_report') delete match['payload.cmd']
-										else if (nextType === 'zigbee.command') delete match['payload.attr']
-										else if (nextType === 'device.join' || nextType === 'device.leave') {
+										if (nextType === EVT_ZIGBEE_ATTR_REPORT) delete match['payload.cmd']
+										else if (nextType === EVT_ZIGBEE_COMMAND) delete match['payload.attr']
+										else if (nextType === EVT_ZIGBEE_DEVICE_JOIN || nextType === EVT_ZIGBEE_DEVICE_LEAVE) {
 											for (const k of Object.keys(match)) if (k.startsWith('payload.')) delete match[k]
 										}
 										updateTrigger(idx, { event_type: nextType, match })
 									}}
 								>
-									<option value="zigbee.command">zigbee.command</option>
-									<option value="zigbee.attr_report">zigbee.attr_report</option>
-									<option value="device.join">device.join</option>
-									<option value="device.leave">device.leave</option>
+									<option value={EVT_ZIGBEE_COMMAND}>{EVT_ZIGBEE_COMMAND}</option>
+									<option value={EVT_ZIGBEE_ATTR_REPORT}>{EVT_ZIGBEE_ATTR_REPORT}</option>
+									<option value={EVT_ZIGBEE_DEVICE_JOIN}>{EVT_ZIGBEE_DEVICE_JOIN}</option>
+									<option value={EVT_ZIGBEE_DEVICE_LEAVE}>{EVT_ZIGBEE_DEVICE_LEAVE}</option>
 								</select>
 							</div>
 							<button onClick={() => removeTrigger(idx)}>Remove</button>
 						</div>
 
 						<div style={{ height: 8 }} />
-						{String(t?.event_type ?? 'zigbee.command') === 'zigbee.command' ? (
+						{String(t?.event_type ?? EVT_ZIGBEE_COMMAND) === EVT_ZIGBEE_COMMAND ? (
 							<div className="row" style={{ marginTop: 6 }}>
 								<label className="muted">cmd</label>
 								<select
@@ -121,7 +122,7 @@ export default function TriggersSection({
 							</div>
 						) : null}
 
-						{String(t?.event_type ?? '') === 'zigbee.attr_report' ? (
+						{String(t?.event_type ?? '') === EVT_ZIGBEE_ATTR_REPORT ? (
 							<div className="row" style={{ marginTop: 6 }}>
 								<label className="muted">report</label>
 								<select

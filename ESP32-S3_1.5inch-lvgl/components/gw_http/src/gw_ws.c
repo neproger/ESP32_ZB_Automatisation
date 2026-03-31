@@ -1,4 +1,4 @@
-#include "gw_http/gw_ws.h"
+﻿#include "gw_http/gw_ws.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -9,20 +9,23 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "gw_core/device_storage.h"
+#include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
-#include "gw_core/event_bus.h"
 #include "gw_core/group_store.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/state_store.h"
+#include "gw_core/zb_model.h"
 #include "gw_proto/gw_proto_frame.h"
 #include "gw_proto/gw_proto_map.h"
 #include "gw_proto/gw_proto_snapshot.h"
+#include "gw_zigbee/gw_zigbee.h"
 
 static const char *TAG = "gw_ws";
 static const bool kWsUsePsram = true;
@@ -33,44 +36,39 @@ typedef struct {
 } gw_ws_client_t;
 
 typedef struct {
-    uint8_t *buf;
+    int fd;
+    uint8_t *data;
     size_t len;
-    size_t cap;
-} cbor_wr_t;
+} ws_tx_msg_t;
 
 static httpd_handle_t s_server;
 static portMUX_TYPE s_client_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t s_ws_seq = 1;
 
 #define GW_WS_MAX_CLIENTS 2
-#define GW_WS_EVENT_Q_CAP 4
-#define GW_WS_EVENT_TASK_PRIO 2
-#define GW_WS_EVENT_TASK_STACK 4096
+#define GW_WS_TX_Q_CAP 32
+#define GW_WS_TX_TASK_PRIO 2
+#define GW_WS_TX_TASK_STACK 4096
 static gw_ws_client_t s_clients[GW_WS_MAX_CLIENTS];
-static QueueHandle_t s_event_q;
-static TaskHandle_t s_event_task;
-static bool s_event_q_caps_alloc;
+static QueueHandle_t s_tx_q;
+static TaskHandle_t s_tx_task;
+static StaticQueue_t s_tx_q_struct;
+static uint8_t s_tx_q_storage[GW_WS_TX_Q_CAP * sizeof(ws_tx_msg_t)];
+static bool s_device_updates_suppressed;
+static esp_timer_handle_t s_device_suppress_timer;
 
-static void map_state_key(uint16_t cluster, uint16_t attr, char *out, size_t out_size);
-
-static void ws_refresh_out_queue_binding(void)
-{
-    bool has_subscribers = false;
-    portENTER_CRITICAL(&s_client_lock);
-    for (size_t i = 0; i < GW_WS_MAX_CLIENTS; i++) {
-        if (s_clients[i].fd != 0 && s_clients[i].subscribed_events) {
-            has_subscribers = true;
-            break;
-        }
-    }
-    portEXIT_CRITICAL(&s_client_lock);
-
-    if (has_subscribers) {
-        gw_event_bus_set_out_queue(s_event_q);
-    } else {
-        gw_event_bus_set_out_queue(NULL);
-    }
-}
+static size_t ws_collect_client_fds(int *fds, size_t max_fds);
+static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
+static void ws_send_proto_devices_snapshot_to_fds(const int *fds, size_t fd_count);
+static void ws_resume_device_updates_work(void *arg);
+static void ws_device_suppress_timer_cb(void *arg);
+static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
+static void ws_on_state_changed(const gw_state_item_t *item, void *user_ctx);
+static void ws_on_device_changed(const gw_device_t *device, bool removed, void *user_ctx);
+static void ws_on_endpoint_changed(const gw_zb_endpoint_t *ep, bool removed, void *user_ctx);
+static void ws_on_groups_changed(void *user_ctx);
+static void ws_on_settings_changed(const gw_project_settings_t *settings, void *user_ctx);
+static void ws_on_automations_changed(void *user_ctx);
 
 static void ws_client_remove_fd(int fd)
 {
@@ -82,7 +80,6 @@ static void ws_client_remove_fd(int fd)
         }
     }
     portEXIT_CRITICAL(&s_client_lock);
-    ws_refresh_out_queue_binding();
 }
 
 static bool ws_client_add_fd(int fd)
@@ -107,162 +104,7 @@ static bool ws_client_add_fd(int fd)
         }
     }
     portEXIT_CRITICAL(&s_client_lock);
-    if (ok) {
-        ws_refresh_out_queue_binding();
-    }
     return ok;
-}
-
-static bool cbor_wr_reserve(cbor_wr_t *w, size_t add)
-{
-    if (!w) return false;
-    if (w->len + add <= w->cap) return true;
-    size_t new_cap = w->cap ? w->cap : 128;
-    while (new_cap < w->len + add) new_cap *= 2;
-    uint8_t *nb = NULL;
-    if (kWsUsePsram) {
-        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    if (!nb) {
-        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    if (!nb) {
-        nb = (uint8_t *)heap_caps_realloc(w->buf, new_cap, MALLOC_CAP_8BIT);
-    }
-    if (!nb) return false;
-    w->buf = nb;
-    w->cap = new_cap;
-    return true;
-}
-
-static bool cbor_wr_u8(cbor_wr_t *w, uint8_t v)
-{
-    if (!cbor_wr_reserve(w, 1)) return false;
-    w->buf[w->len++] = v;
-    return true;
-}
-
-static bool cbor_wr_mem(cbor_wr_t *w, const void *src, size_t n)
-{
-    if (!cbor_wr_reserve(w, n)) return false;
-    memcpy(w->buf + w->len, src, n);
-    w->len += n;
-    return true;
-}
-
-static bool cbor_wr_uint(cbor_wr_t *w, uint8_t major, uint64_t v)
-{
-    if (v < 24) {
-        return cbor_wr_u8(w, (uint8_t)((major << 5) | (uint8_t)v));
-    }
-    if (v <= 0xff) {
-        if (!cbor_wr_u8(w, (uint8_t)((major << 5) | 24))) return false;
-        return cbor_wr_u8(w, (uint8_t)v);
-    }
-    if (v <= 0xffff) {
-        uint8_t b[2] = {(uint8_t)(v >> 8), (uint8_t)v};
-        if (!cbor_wr_u8(w, (uint8_t)((major << 5) | 25))) return false;
-        return cbor_wr_mem(w, b, sizeof(b));
-    }
-    if (v <= 0xffffffffULL) {
-        uint8_t b[4] = {(uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v};
-        if (!cbor_wr_u8(w, (uint8_t)((major << 5) | 26))) return false;
-        return cbor_wr_mem(w, b, sizeof(b));
-    }
-    uint8_t b[8] = {
-        (uint8_t)(v >> 56), (uint8_t)(v >> 48), (uint8_t)(v >> 40), (uint8_t)(v >> 32),
-        (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v};
-    if (!cbor_wr_u8(w, (uint8_t)((major << 5) | 27))) return false;
-    return cbor_wr_mem(w, b, sizeof(b));
-}
-
-static bool cbor_wr_text(cbor_wr_t *w, const char *s)
-{
-    if (!s) s = "";
-    size_t n = strlen(s);
-    if (!cbor_wr_uint(w, 3, n)) return false;
-    return cbor_wr_mem(w, s, n);
-}
-
-static bool cbor_wr_bool(cbor_wr_t *w, bool v)
-{
-    return cbor_wr_u8(w, (uint8_t)((7 << 5) | (v ? 21 : 20)));
-}
-
-static bool cbor_wr_null(cbor_wr_t *w)
-{
-    return cbor_wr_u8(w, (uint8_t)((7 << 5) | 22));
-}
-
-static bool cbor_wr_i64(cbor_wr_t *w, int64_t v)
-{
-    if (v >= 0) {
-        return cbor_wr_uint(w, 0, (uint64_t)v);
-    }
-    return cbor_wr_uint(w, 1, (uint64_t)(-1 - v));
-}
-
-static bool cbor_wr_f64(cbor_wr_t *w, double v)
-{
-    union {
-        double d;
-        uint64_t u;
-    } u = {0};
-    u.d = v;
-    uint8_t b[8] = {
-        (uint8_t)(u.u >> 56), (uint8_t)(u.u >> 48), (uint8_t)(u.u >> 40), (uint8_t)(u.u >> 32),
-        (uint8_t)(u.u >> 24), (uint8_t)(u.u >> 16), (uint8_t)(u.u >> 8), (uint8_t)u.u};
-    if (!cbor_wr_u8(w, (uint8_t)((7 << 5) | 27))) return false;
-    return cbor_wr_mem(w, b, sizeof(b));
-}
-
-static void ws_transfer_done_cb(esp_err_t err, int socket, void *arg)
-{
-    (void)err;
-    (void)socket;
-    free(arg);
-}
-
-static esp_err_t ws_send_binary_async(int fd, const uint8_t *buf, size_t len)
-{
-    if (!s_server || !buf || len == 0) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (httpd_ws_get_fd_info(s_server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
-        ws_client_remove_fd(fd);
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    uint8_t *copy = NULL;
-    if (kWsUsePsram) {
-        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    if (!copy) {
-        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    if (!copy) {
-        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_8BIT);
-    }
-    if (!copy) return ESP_ERR_NO_MEM;
-    memcpy(copy, buf, len);
-
-    httpd_ws_frame_t frame = {
-        .type = HTTPD_WS_TYPE_BINARY,
-        .payload = copy,
-        .len = len,
-    };
-    esp_err_t err = httpd_ws_send_data_async(s_server, fd, &frame, ws_transfer_done_cb, copy);
-    if (err != ESP_OK) {
-        free(copy);
-        ws_client_remove_fd(fd);
-        return err;
-    }
-    return ESP_OK;
-}
-
-static esp_err_t ws_send_cbor_async(int fd, const uint8_t *buf, size_t len)
-{
-    return ws_send_binary_async(fd, buf, len);
 }
 
 static esp_err_t ws_send_proto_frame_async(int fd, uint8_t type, uint16_t seq, const void *payload, uint16_t payload_len)
@@ -300,6 +142,188 @@ static esp_err_t ws_send_proto_frame_sync(httpd_req_t *req, uint8_t type, uint16
     return httpd_ws_send_frame(req, &frame);
 }
 
+static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len)
+{
+    if (!s_server || !s_tx_q || fd <= 0 || !buf || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t *copy = NULL;
+    if (kWsUsePsram) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!copy) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!copy) {
+        copy = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_8BIT);
+    }
+    if (!copy) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(copy, buf, len);
+
+    ws_tx_msg_t msg = {
+        .fd = fd,
+        .data = copy,
+        .len = len,
+    };
+    if (xQueueSend(s_tx_q, &msg, 0) != pdTRUE) {
+        free(copy);
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len)
+{
+    if (!payload && payload_len != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (type) {
+        case GW_PROTO_MSG_CMD_PERMIT_JOIN: {
+            if (payload_len < sizeof(gw_proto_cmd_permit_join_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_permit_join_v1_t *msg = (const gw_proto_cmd_permit_join_v1_t *)payload;
+            const uint8_t seconds = msg->seconds > 0 ? msg->seconds : 180;
+            esp_err_t err = gw_zigbee_permit_join(seconds);
+            if (err == ESP_OK) {
+                (void)gw_ws_suppress_device_updates(12000);
+            }
+            return err;
+        }
+        case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
+            if (payload_len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)payload;
+            return gw_zigbee_set_device_name(&msg->device_uid, msg->name);
+        }
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
+            if (payload_len < sizeof(gw_proto_cmd_device_remove_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)payload;
+            return gw_zigbee_remove_device(&msg->device_uid);
+        }
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL: {
+            if (payload_len < sizeof(gw_proto_cmd_device_remove_all_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            return gw_zigbee_remove_all_devices();
+        }
+        case GW_PROTO_MSG_CMD_GROUP_CREATE: {
+            if (payload_len < sizeof(gw_proto_cmd_group_create_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_create_v1_t *msg = (const gw_proto_cmd_group_create_v1_t *)payload;
+            gw_group_entry_t created = {0};
+            return gw_group_store_create(msg->id[0] ? msg->id : NULL, msg->name, &created);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_RENAME: {
+            if (payload_len < sizeof(gw_proto_cmd_group_rename_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_rename_v1_t *msg = (const gw_proto_cmd_group_rename_v1_t *)payload;
+            return gw_group_store_rename(msg->id, msg->name);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_DELETE: {
+            if (payload_len < sizeof(gw_proto_cmd_group_delete_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_delete_v1_t *msg = (const gw_proto_cmd_group_delete_v1_t *)payload;
+            return gw_group_store_remove(msg->id);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_SET: {
+            if (payload_len < sizeof(gw_proto_cmd_group_item_set_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_item_set_v1_t *msg = (const gw_proto_cmd_group_item_set_v1_t *)payload;
+            return gw_group_store_set_endpoint(msg->group_id, &msg->device_uid, msg->endpoint);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE: {
+            if (payload_len < sizeof(gw_proto_cmd_group_item_remove_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_item_remove_v1_t *msg = (const gw_proto_cmd_group_item_remove_v1_t *)payload;
+            return gw_group_store_remove_endpoint(&msg->device_uid, msg->endpoint);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER: {
+            if (payload_len < sizeof(gw_proto_cmd_group_item_reorder_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_item_reorder_v1_t *msg = (const gw_proto_cmd_group_item_reorder_v1_t *)payload;
+            if (msg->order == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_group_store_reorder_endpoint(msg->group_id, &msg->device_uid, msg->endpoint, msg->order);
+        }
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL: {
+            if (payload_len < sizeof(gw_proto_cmd_group_item_label_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_group_item_label_v1_t *msg = (const gw_proto_cmd_group_item_label_v1_t *)payload;
+            return gw_group_store_set_endpoint_label(&msg->device_uid, msg->endpoint, msg->label);
+        }
+        case GW_PROTO_MSG_CMD_SETTINGS_SET: {
+            if (payload_len < sizeof(gw_proto_settings_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_settings_v1_t *msg = (const gw_proto_settings_v1_t *)payload;
+            gw_project_settings_t next = {
+                .screensaver_timeout_ms = msg->screensaver_timeout_ms,
+                .weather_success_interval_ms = msg->weather_success_interval_ms,
+                .weather_retry_interval_ms = msg->weather_retry_interval_ms,
+                .timezone_auto = (msg->timezone_auto != 0),
+                .timezone_offset_min = msg->timezone_offset_min,
+            };
+            if (!gw_project_settings_validate(&next)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_project_settings_set(&next);
+        }
+        case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED: {
+            if (payload_len < sizeof(gw_proto_cmd_automation_set_enabled_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_automation_set_enabled_v1_t *msg = (const gw_proto_cmd_automation_set_enabled_v1_t *)payload;
+            return gw_automation_store_set_enabled(msg->id, msg->enabled != 0);
+        }
+        case GW_PROTO_MSG_CMD_AUTOMATION_REMOVE: {
+            if (payload_len < sizeof(gw_proto_cmd_automation_remove_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_proto_cmd_automation_remove_v1_t *msg = (const gw_proto_cmd_automation_remove_v1_t *)payload;
+            return gw_automation_store_remove(msg->id);
+        }
+        case GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL: {
+            if (payload_len < sizeof(gw_proto_cmd_automation_reset_all_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            return gw_automation_store_remove_all();
+        }
+        case GW_PROTO_MSG_CMD_AUTOMATION_SAVE: {
+            if (payload_len < sizeof(gw_automation_entry_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_automation_entry_t *msg = (const gw_automation_entry_t *)payload;
+            return gw_automation_store_put_entry(msg);
+        }
+        case GW_PROTO_MSG_CMD_ACTION_EXEC: {
+            if (payload_len < sizeof(gw_automation_entry_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const gw_automation_entry_t *msg = (const gw_automation_entry_t *)payload;
+            char errbuf[128] = {0};
+            return gw_action_exec_entry(msg, errbuf, sizeof(errbuf));
+        }
+        default:
+            return ESP_ERR_NOT_SUPPORTED;
+    }
+}
+
 typedef struct {
     const int *fds;
     size_t fd_count;
@@ -335,6 +359,7 @@ typedef struct {
     uint32_t total_records;
     size_t device_index;
     size_t endpoint_index;
+    size_t endpoint_count;
     size_t state_index;
     ws_device_snapshot_stage_t stage;
     gw_device_full_t device;
@@ -405,13 +430,7 @@ static uint32_t ws_device_snapshot_total_records(void)
         if (gw_device_storage_get_by_index(i, &dev) != ESP_OK) {
             continue;
         }
-        for (uint8_t ep_idx = 0; ep_idx < dev.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ep_idx++) {
-            const gw_device_endpoint_t *ep = &dev.endpoints[ep_idx];
-            if (ep->profile_id == 0 && ep->device_id == 0 && ep->in_cluster_count == 0 && ep->out_cluster_count == 0) {
-                continue;
-            }
-            endpoint_count++;
-        }
+        endpoint_count += gw_zb_model_list_endpoints(&dev.device_uid, NULL, 0);
     }
 
     return (uint32_t)(device_count + endpoint_count + state_count);
@@ -553,6 +572,7 @@ static esp_err_t ws_device_snapshot_next(void *source_ctx,
                 strlcpy(it->device_view.name, it->device.name, sizeof(it->device_view.name));
 
                 gw_proto_fill_device(&it->device_msg, &it->device_view);
+                it->endpoint_count = gw_zb_model_list_endpoints(&it->device.device_uid, NULL, 0);
                 it->endpoint_index = 0;
                 it->stage = WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS;
                 it->device_index++;
@@ -566,24 +586,22 @@ static esp_err_t ws_device_snapshot_next(void *source_ctx,
         }
 
         if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS) {
-            while (it->endpoint_index < it->device.endpoint_count && it->endpoint_index < GW_DEVICE_MAX_ENDPOINTS) {
-                const gw_device_endpoint_t *stored = &it->device.endpoints[it->endpoint_index++];
-                if (stored->profile_id == 0 && stored->device_id == 0 &&
-                    stored->in_cluster_count == 0 && stored->out_cluster_count == 0) {
+            while (it->endpoint_index < it->endpoint_count && it->endpoint_index < GW_ZB_MAX_ENDPOINTS) {
+                if (gw_zb_model_get_endpoint_by_index(&it->device.device_uid,
+                                                      it->endpoint_index,
+                                                      &it->endpoint_view) != ESP_OK) {
+                    it->endpoint_index++;
+                    continue;
+                }
+                it->endpoint_index++;
+
+                if (it->endpoint_view.endpoint == 0 ||
+                    (it->endpoint_view.profile_id == 0 && it->endpoint_view.device_id == 0 &&
+                     it->endpoint_view.in_cluster_count == 0 && it->endpoint_view.out_cluster_count == 0)) {
                     continue;
                 }
 
-                memset(&it->endpoint_view, 0, sizeof(it->endpoint_view));
-                it->endpoint_view.uid = it->device.device_uid;
-                it->endpoint_view.short_addr = it->device.short_addr;
-                it->endpoint_view.endpoint = (uint8_t)it->endpoint_index;
                 it->endpoint_view.version = it->device.version;
-                it->endpoint_view.profile_id = stored->profile_id;
-                it->endpoint_view.device_id = stored->device_id;
-                it->endpoint_view.in_cluster_count = stored->in_cluster_count;
-                it->endpoint_view.out_cluster_count = stored->out_cluster_count;
-                memcpy(it->endpoint_view.in_clusters, stored->in_clusters, sizeof(it->endpoint_view.in_clusters));
-                memcpy(it->endpoint_view.out_clusters, stored->out_clusters, sizeof(it->endpoint_view.out_clusters));
 
                 gw_proto_fill_endpoint(&it->endpoint_msg, &it->endpoint_view);
                 *out_msg_type = GW_PROTO_MSG_ENDPOINT_UPSERT;
@@ -667,8 +685,35 @@ static esp_err_t ws_send_proto_devices_snapshot_sync(httpd_req_t *req, uint16_t 
     return err;
 }
 
+static void ws_send_proto_devices_snapshot_to_fds(const int *fds, size_t fd_count)
+{
+    if (!fds || fd_count == 0) {
+        return;
+    }
+    ws_device_snapshot_iter_t iter = {0};
+    if (ws_device_snapshot_rewind(&iter) != ESP_OK) {
+        return;
+    }
+    const ws_proto_emit_many_ctx_t ctx = {
+        .fds = fds,
+        .fd_count = fd_count,
+    };
+    const gw_proto_snapshot_source_t source = {
+        .source_ctx = &iter,
+        .total_records = iter.total_records,
+        .rewind = NULL,
+        .next = ws_device_snapshot_next,
+    };
+    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
+                                 (void *)&ctx,
+                                 GW_PROTO_SYNC_SCOPE_DEVICES,
+                                 s_ws_seq++,
+                                 &source);
+}
+
 static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
 {
+    (void)fd;
     const uint16_t seq = s_ws_seq++;
 
     esp_err_t err = ws_send_proto_devices_snapshot_sync(req, seq);
@@ -716,6 +761,31 @@ static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
         .total_records = 1,
     };
     return ws_send_proto_frame_sync(req, GW_PROTO_MSG_SYNC_END, seq, &settings_end, sizeof(settings_end));
+}
+
+static void ws_resume_device_updates_work(void *arg)
+{
+    (void)arg;
+    s_device_updates_suppressed = false;
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count == 0) {
+        return;
+    }
+    ESP_LOGI(TAG, "WS device updates resumed; sending fresh devices snapshot");
+    ws_send_proto_devices_snapshot_to_fds(fds, fd_count);
+}
+
+static void ws_device_suppress_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!s_server) {
+        s_device_updates_suppressed = false;
+        return;
+    }
+    if (httpd_queue_work(s_server, ws_resume_device_updates_work, NULL) != ESP_OK) {
+        s_device_updates_suppressed = false;
+    }
 }
 
 static void ws_send_proto_groups_snapshot_to_fds(const int *fds, size_t fd_count)
@@ -799,354 +869,147 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds)
     return fd_count;
 }
 
-static void ws_send_proto_state_event_to_fds(const gw_event_t *e, const int *fds, size_t fd_count)
+static void ws_send_proto_state_item_to_fds(const gw_state_item_t *item, const int *fds, size_t fd_count)
 {
-    if (!e || !fds || fd_count == 0 || e->device_uid[0] == '\0') {
+    if (!item || !fds || fd_count == 0 || item->uid.uid[0] == '\0') {
         return;
-    }
-
-    gw_state_item_t item = {0};
-    strlcpy(item.uid.uid, e->device_uid, sizeof(item.uid.uid));
-    item.endpoint = (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) ? e->payload_endpoint : 0;
-    item.ts_ms = e->ts_ms;
-
-    if ((e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) && e->payload_cmd[0] != '\0') {
-        strlcpy(item.key, e->payload_cmd, sizeof(item.key));
-    } else if ((e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) && (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR)) {
-        map_state_key(e->payload_cluster, e->payload_attr, item.key, sizeof(item.key));
-    } else {
-        return;
-    }
-
-    switch ((gw_event_value_type_t)e->payload_value_type) {
-        case GW_EVENT_VALUE_BOOL:
-            item.value_type = GW_STATE_VALUE_BOOL;
-            item.value_bool = (e->payload_value_bool != 0);
-            break;
-        case GW_EVENT_VALUE_I64:
-            item.value_type = (e->payload_value_i64 >= 0) ? GW_STATE_VALUE_U64 : GW_STATE_VALUE_F32;
-            if (item.value_type == GW_STATE_VALUE_U64) {
-                item.value_u64 = (uint64_t)e->payload_value_i64;
-            } else {
-                item.value_f32 = (float)e->payload_value_i64;
-            }
-            break;
-        case GW_EVENT_VALUE_F64:
-            item.value_type = GW_STATE_VALUE_F32;
-            item.value_f32 = (float)e->payload_value_f64;
-            break;
-        case GW_EVENT_VALUE_TEXT:
-            item.value_type = GW_STATE_VALUE_TEXT;
-            strlcpy(item.value_text, e->payload_value_text, sizeof(item.value_text));
-            break;
-        default:
-            return;
     }
 
     gw_proto_state_item_v1_t msg = {0};
-    gw_proto_fill_state_item(&msg, &item);
+    gw_proto_fill_state_item(&msg, item);
     for (size_t i = 0; i < fd_count; i++) {
         (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_STATE_ITEM, s_ws_seq++, &msg, sizeof(msg));
     }
 }
 
-static void ws_send_proto_device_delta_to_fds(const char *uid_str, bool remove_only, const int *fds, size_t fd_count)
+static void ws_send_proto_device_delta_to_fds(const gw_device_t *device, bool remove_only, const int *fds, size_t fd_count)
 {
-    if (!uid_str || uid_str[0] == '\0' || !fds || fd_count == 0) {
+    if (!device || device->device_uid.uid[0] == '\0' || !fds || fd_count == 0) {
         return;
     }
 
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, uid_str, sizeof(uid.uid));
-
     if (remove_only) {
         gw_proto_device_remove_v1_t rm = {0};
-        gw_proto_fill_device_remove(&rm, &uid);
+        gw_proto_fill_device_remove(&rm, &device->device_uid);
         for (size_t i = 0; i < fd_count; i++) {
             (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_DEVICE_REMOVE, s_ws_seq++, &rm, sizeof(rm));
         }
         return;
     }
 
-    gw_device_full_t dev = {0};
-    if (gw_device_storage_get(&uid, &dev) != ESP_OK) {
-        return;
-    }
-
-    gw_device_t item = {
-        .device_uid = dev.device_uid,
-        .short_addr = dev.short_addr,
-        .version = dev.version,
-        .last_seen_ms = dev.last_seen_ms,
-        .has_onoff = dev.has_onoff,
-        .has_button = dev.has_button,
-    };
-    strlcpy(item.name, dev.name, sizeof(item.name));
-
     gw_proto_device_v1_t msg = {0};
-    gw_proto_fill_device(&msg, &item);
+    gw_proto_fill_device(&msg, device);
     for (size_t i = 0; i < fd_count; i++) {
         (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_DEVICE_UPSERT, s_ws_seq++, &msg, sizeof(msg));
     }
+}
 
-    for (uint8_t ep_idx = 0; ep_idx < dev.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ep_idx++) {
-        const gw_device_endpoint_t *stored = &dev.endpoints[ep_idx];
-        if (stored->profile_id == 0 && stored->device_id == 0 && stored->in_cluster_count == 0 && stored->out_cluster_count == 0) {
-            continue;
-        }
-        gw_zb_endpoint_t ep = {0};
-        ep.uid = dev.device_uid;
-        ep.short_addr = dev.short_addr;
-        ep.endpoint = (uint8_t)(ep_idx + 1u);
-        ep.version = dev.version;
-        ep.profile_id = stored->profile_id;
-        ep.device_id = stored->device_id;
-        ep.in_cluster_count = stored->in_cluster_count;
-        ep.out_cluster_count = stored->out_cluster_count;
-        memcpy(ep.in_clusters, stored->in_clusters, sizeof(ep.in_clusters));
-        memcpy(ep.out_clusters, stored->out_clusters, sizeof(ep.out_clusters));
+static void ws_on_state_changed(const gw_state_item_t *item, void *user_ctx)
+{
+    (void)user_ctx;
+    if (s_device_updates_suppressed) {
+        return;
+    }
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count > 0) {
+        ws_send_proto_state_item_to_fds(item, fds, fd_count);
+    }
+}
 
-        gw_proto_endpoint_v1_t ep_msg = {0};
-        gw_proto_fill_endpoint(&ep_msg, &ep);
+static void ws_on_device_changed(const gw_device_t *device, bool removed, void *user_ctx)
+{
+    (void)user_ctx;
+    if (s_device_updates_suppressed) {
+        return;
+    }
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count > 0) {
+        ws_send_proto_device_delta_to_fds(device, removed, fds, fd_count);
+    }
+}
+
+static void ws_on_endpoint_changed(const gw_zb_endpoint_t *ep, bool removed, void *user_ctx)
+{
+    (void)user_ctx;
+    if (!ep || s_device_updates_suppressed) {
+        return;
+    }
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count == 0) {
+        return;
+    }
+    if (removed) {
+        gw_proto_endpoint_remove_v1_t rm = {0};
+        gw_proto_fill_endpoint_remove(&rm, &ep->uid, ep->endpoint, ep->short_addr);
         for (size_t i = 0; i < fd_count; i++) {
-            (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_ENDPOINT_UPSERT, s_ws_seq++, &ep_msg, sizeof(ep_msg));
+            (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_ENDPOINT_REMOVE, s_ws_seq++, &rm, sizeof(rm));
         }
+        return;
+    }
+    gw_proto_endpoint_v1_t msg = {0};
+    gw_proto_fill_endpoint(&msg, ep);
+    for (size_t i = 0; i < fd_count; i++) {
+        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_ENDPOINT_UPSERT, s_ws_seq++, &msg, sizeof(msg));
     }
 }
 
-static bool msg_kv_get(const char *msg, const char *key, char *out, size_t out_size)
+static void ws_on_groups_changed(void *user_ctx)
 {
-    if (!msg || !key || !out || out_size == 0) return false;
-    char needle[32];
-    (void)snprintf(needle, sizeof(needle), "%s=", key);
-    const char *p = strstr(msg, needle);
-    if (!p) return false;
-    p += strlen(needle);
-    size_t i = 0;
-    while (p[i] && p[i] != ' ' && i + 1 < out_size) {
-        out[i] = p[i];
-        i++;
+    (void)user_ctx;
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count > 0) {
+        ws_send_proto_groups_snapshot_to_fds(fds, fd_count);
     }
-    out[i] = '\0';
-    return i > 0;
 }
 
-static void map_state_key(uint16_t cluster, uint16_t attr, char *out, size_t out_size)
+static void ws_on_settings_changed(const gw_project_settings_t *settings, void *user_ctx)
 {
-    if (cluster == 0x0006 && attr == 0x0000) {
-        strlcpy(out, "onoff", out_size);
-        return;
+    (void)settings;
+    (void)user_ctx;
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count > 0) {
+        ws_send_proto_settings_to_fds(fds, fd_count);
     }
-    if (cluster == 0x0008 && attr == 0x0000) {
-        strlcpy(out, "level", out_size);
-        return;
-    }
-    if (cluster == 0x0300 && attr == 0x0003) {
-        strlcpy(out, "color_x", out_size);
-        return;
-    }
-    if (cluster == 0x0300 && attr == 0x0004) {
-        strlcpy(out, "color_y", out_size);
-        return;
-    }
-    if (cluster == 0x0300 && attr == 0x0007) {
-        strlcpy(out, "color_temp_mireds", out_size);
-        return;
-    }
-    if (cluster == 0x0402 && attr == 0x0000) {
-        strlcpy(out, "temperature_c", out_size);
-        return;
-    }
-    if (cluster == 0x0405 && attr == 0x0000) {
-        strlcpy(out, "humidity_pct", out_size);
-        return;
-    }
-    if (cluster == 0x0001 && attr == 0x0021) {
-        strlcpy(out, "battery_pct", out_size);
-        return;
-    }
-    if (cluster == 0x0001 && attr == 0x0020) {
-        strlcpy(out, "battery_mv", out_size);
-        return;
-    }
-    if (cluster == 0x0406 && attr == 0x0000) {
-        strlcpy(out, "occupancy", out_size);
-        return;
-    }
-    if (cluster == 0x0400 && attr == 0x0000) {
-        strlcpy(out, "illuminance_raw", out_size);
-        return;
-    }
-    if (cluster == 0x0403 && attr == 0x0000) {
-        strlcpy(out, "pressure_raw", out_size);
-        return;
-    }
-    (void)snprintf(out, out_size, "cluster_%04x_attr_%04x", (unsigned)cluster, (unsigned)attr);
 }
 
-static bool ws_encode_event(const gw_event_t *e, cbor_wr_t *w)
+static void ws_on_automations_changed(void *user_ctx)
 {
-    if (!e || !w) return false;
-
-    const char *out_type = NULL;
-    enum {DATA_AUTOM_FIRED, DATA_AUTOM_RESULT, DATA_GENERIC} data_kind;
-    char automation_id[GW_AUTOMATION_ID_MAX] = {0};
-    bool ok = false;
-    bool has_ok = false;
-    bool has_action_idx = false;
-    uint32_t action_idx = 0;
-    const char *err = NULL;
-
-    if (strcmp(e->type, "rules.fired") == 0) {
-        out_type = "automation.fired";
-        data_kind = DATA_AUTOM_FIRED;
-        if (!msg_kv_get(e->msg, "automation_id", automation_id, sizeof(automation_id))) return false;
-    } else if (strcmp(e->type, "rules.action") == 0) {
-        char tmp[16] = {0};
-        out_type = "automation.result";
-        data_kind = DATA_AUTOM_RESULT;
-        if (!msg_kv_get(e->msg, "automation_id", automation_id, sizeof(automation_id))) return false;
-        if (msg_kv_get(e->msg, "ok", tmp, sizeof(tmp))) {
-            has_ok = true;
-            ok = (strcmp(tmp, "1") == 0 || strcmp(tmp, "true") == 0);
-        }
-        if (msg_kv_get(e->msg, "idx", tmp, sizeof(tmp))) {
-            has_action_idx = true;
-            action_idx = (uint32_t)strtoul(tmp, NULL, 10);
-        }
-        const char *err_ptr = strstr(e->msg, "err=");
-        if (err_ptr) {
-            err_ptr += 4;
-            if (*err_ptr) err = err_ptr;
-        }
-    } else if (strncmp(e->type, "zigbee.", 7) == 0 || strncmp(e->type, "zigbee_", 7) == 0 ||
-               strncmp(e->type, "device.", 7) == 0 || strncmp(e->type, "automation.", 11) == 0 ||
-               strncmp(e->type, "settings.", 9) == 0) {
-        out_type = "gateway.event";
-        data_kind = DATA_GENERIC;
-    } else {
-        return false;
+    (void)user_ctx;
+    int fds[GW_WS_MAX_CLIENTS];
+    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
+    if (fd_count > 0) {
+        ws_send_proto_automations_snapshot_to_fds(fds, fd_count);
     }
-
-    // envelope: { ts_ms, type, data }
-    if (!cbor_wr_uint(w, 5, 3)) return false;
-    if (!cbor_wr_text(w, "ts_ms") || !cbor_wr_uint(w, 0, e->ts_ms)) return false;
-    if (!cbor_wr_text(w, "type") || !cbor_wr_text(w, out_type)) return false;
-    if (!cbor_wr_text(w, "data")) return false;
-
-    if (data_kind == DATA_AUTOM_FIRED) {
-        if (!cbor_wr_uint(w, 5, 1)) return false;
-        if (!cbor_wr_text(w, "automation_id") || !cbor_wr_text(w, automation_id)) return false;
-        return true;
-    }
-    if (data_kind == DATA_AUTOM_RESULT) {
-        uint64_t pairs = 2;
-        if (has_action_idx) pairs++;
-        if (err) pairs++;
-        if (!cbor_wr_uint(w, 5, pairs)) return false;
-        if (!cbor_wr_text(w, "automation_id") || !cbor_wr_text(w, automation_id)) return false;
-        if (!cbor_wr_text(w, "ok") || !cbor_wr_bool(w, has_ok ? ok : false)) return false;
-        if (has_action_idx) {
-            if (!cbor_wr_text(w, "action_idx") || !cbor_wr_uint(w, 0, action_idx)) return false;
-        }
-        if (err) {
-            if (!cbor_wr_text(w, "err") || !cbor_wr_text(w, err)) return false;
-        }
-        return true;
-    }
-    if (data_kind == DATA_GENERIC) {
-        uint64_t pairs = 4;
-        if (e->device_uid[0] != '\0') pairs++;
-        if (e->short_addr != 0) pairs++;
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) pairs++;
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) pairs++;
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) pairs++;
-        if (!cbor_wr_uint(w, 5, pairs)) return false;
-        if (!cbor_wr_text(w, "event_type") || !cbor_wr_text(w, e->type)) return false;
-        if (!cbor_wr_text(w, "source") || !cbor_wr_text(w, e->source)) return false;
-        if (!cbor_wr_text(w, "msg") || !cbor_wr_text(w, e->msg)) return false;
-        if (!cbor_wr_text(w, "has_value") || !cbor_wr_bool(w, (e->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) != 0)) return false;
-        if (e->device_uid[0] != '\0') {
-            if (!cbor_wr_text(w, "device_id") || !cbor_wr_text(w, e->device_uid)) return false;
-        }
-        if (e->short_addr != 0) {
-            if (!cbor_wr_text(w, "short_addr") || !cbor_wr_uint(w, 0, e->short_addr)) return false;
-        }
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) {
-            if (!cbor_wr_text(w, "endpoint_id") || !cbor_wr_uint(w, 0, e->payload_endpoint)) return false;
-        }
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) {
-            if (!cbor_wr_text(w, "cluster") || !cbor_wr_uint(w, 0, e->payload_cluster)) return false;
-        }
-        if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) {
-            if (!cbor_wr_text(w, "attr") || !cbor_wr_uint(w, 0, e->payload_attr)) return false;
-        }
-        return true;
-    }
-    return false;
 }
 
-static void ws_event_task_fn(void *arg)
+static void ws_tx_task_fn(void *arg)
 {
     (void)arg;
-    gw_event_t e;
     for (;;) {
-        if (xQueueReceive(s_event_q, &e, portMAX_DELAY) != pdTRUE) {
+        ws_tx_msg_t msg = {0};
+        if (xQueueReceive(s_tx_q, &msg, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        gw_event_bus_record_event(&e);
-
-        int fds[GW_WS_MAX_CLIENTS];
-        size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-        if (fd_count == 0) continue;
-
-        const bool is_state_event =
-            (strcmp(e.type, "device.state") == 0) ||
-            (strcmp(e.type, "zigbee.attr_report") == 0) ||
-            (strcmp(e.type, "zigbee.attr_read") == 0) ||
-            (strcmp(e.type, "zigbee.read_attr") == 0) ||
-            (strcmp(e.type, "zigbee.read_attr_resp") == 0);
-
-        bool emit_legacy_cbor = true;
-
-        if (is_state_event) {
-            ws_send_proto_state_event_to_fds(&e, fds, fd_count);
-            emit_legacy_cbor = false;
-        } else if ((strcmp(e.type, "device.join") == 0 || strcmp(e.type, "device.changed") == 0) && e.device_uid[0] != '\0') {
-            const bool remove_only = strcmp(e.msg, "proto_remove") == 0;
-            ws_send_proto_device_delta_to_fds(e.device_uid, remove_only, fds, fd_count);
-            emit_legacy_cbor = false;
-        } else if (strcmp(e.type, "device.leave") == 0 && e.device_uid[0] != '\0') {
-            ws_send_proto_device_delta_to_fds(e.device_uid, true, fds, fd_count);
-            emit_legacy_cbor = false;
-        } else if (strcmp(e.type, "group.changed") == 0) {
-            ws_send_proto_groups_snapshot_to_fds(fds, fd_count);
-            emit_legacy_cbor = false;
-        } else if (strcmp(e.type, "automation.changed") == 0) {
-            ws_send_proto_automations_snapshot_to_fds(fds, fd_count);
-            emit_legacy_cbor = false;
-        } else if (strcmp(e.type, "settings.changed") == 0) {
-            ws_send_proto_settings_to_fds(fds, fd_count);
-            emit_legacy_cbor = false;
-        }
-
-        if (!emit_legacy_cbor) {
-            continue;
-        }
-
-        cbor_wr_t w = {0};
-        if (!ws_encode_event(&e, &w)) {
-            free(w.buf);
-            continue;
-        }
-        for (size_t i = 0; i < fd_count; i++) {
-            esp_err_t err = ws_send_cbor_async(fds[i], w.buf, w.len);
-            if (err == ESP_ERR_NO_MEM) {
-                ESP_LOGW(TAG, "WS send OOM; dropping event");
-                break;
+        if (msg.data) {
+            if (s_server && msg.fd > 0 &&
+                httpd_ws_get_fd_info(s_server, msg.fd) == HTTPD_WS_CLIENT_WEBSOCKET) {
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_BINARY,
+                    .payload = msg.data,
+                    .len = msg.len,
+                };
+                esp_err_t err = httpd_ws_send_data(s_server, msg.fd, &frame);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "WS send failed fd=%d err=%s len=%u", msg.fd, esp_err_to_name(err), (unsigned)msg.len);
+                }
             }
+            free(msg.data);
         }
-        free(w.buf);
     }
 }
 
@@ -1193,8 +1056,12 @@ static esp_err_t ws_handler(httpd_req_t *req)
             gw_proto_hdr_t hdr = {0};
             const uint8_t *payload = NULL;
             err = gw_proto_frame_parse(buf, frame.len, &hdr, &payload);
-            if (err == ESP_OK && hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
-                err = ws_send_proto_snapshot_sync(req, fd);
+            if (err == ESP_OK) {
+                if (hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
+                    err = ws_send_proto_snapshot_sync(req, fd);
+                } else {
+                    err = ws_handle_proto_command(hdr.type, payload, hdr.len);
+                }
             }
         }
         free(buf);
@@ -1210,28 +1077,33 @@ esp_err_t gw_ws_register(httpd_handle_t server)
 
     s_server = server;
     memset(s_clients, 0, sizeof(s_clients));
-    s_event_q_caps_alloc = false;
-    s_event_q = xQueueCreateWithCaps(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (s_event_q) {
-        s_event_q_caps_alloc = true;
-    }
-    if (!s_event_q) {
-        s_event_q = xQueueCreate(GW_WS_EVENT_Q_CAP, sizeof(gw_event_t));
-        s_event_q_caps_alloc = false;
-    }
-    if (!s_event_q) {
+    s_device_updates_suppressed = false;
+    s_device_suppress_timer = NULL;
+    s_tx_q = xQueueCreateStatic(GW_WS_TX_Q_CAP,
+                                sizeof(ws_tx_msg_t),
+                                s_tx_q_storage,
+                                &s_tx_q_struct);
+    if (!s_tx_q) {
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
-    UBaseType_t task_ok = xTaskCreateWithCaps(ws_event_task_fn, "ws_events", GW_WS_EVENT_TASK_STACK, NULL, GW_WS_EVENT_TASK_PRIO, &s_event_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    UBaseType_t task_ok = xTaskCreateWithCaps(ws_tx_task_fn, "ws_tx", GW_WS_TX_TASK_STACK, NULL, GW_WS_TX_TASK_PRIO, &s_tx_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (task_ok != pdPASS) {
-        if (s_event_q_caps_alloc) {
-            vQueueDeleteWithCaps(s_event_q);
-        } else {
-            vQueueDelete(s_event_q);
-        }
-        s_event_q = NULL;
-        s_event_q_caps_alloc = false;
+        s_tx_q = NULL;
+        s_server = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    const esp_timer_create_args_t suppress_timer_args = {
+        .callback = ws_device_suppress_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ws_suppress",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&suppress_timer_args, &s_device_suppress_timer) != ESP_OK) {
+        vTaskDelete(s_tx_task);
+        s_tx_task = NULL;
+        s_tx_q = NULL;
         s_server = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -1247,20 +1119,21 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     };
     esp_err_t err = httpd_register_uri_handler(s_server, &ws_uri);
     if (err != ESP_OK) {
-        vTaskDelete(s_event_task);
-        s_event_task = NULL;
-        if (s_event_q_caps_alloc) {
-            vQueueDeleteWithCaps(s_event_q);
-        } else {
-            vQueueDelete(s_event_q);
-        }
-        s_event_q = NULL;
-        s_event_q_caps_alloc = false;
+        esp_timer_delete(s_device_suppress_timer);
+        s_device_suppress_timer = NULL;
+        vTaskDelete(s_tx_task);
+        s_tx_task = NULL;
+        s_tx_q = NULL;
         s_server = NULL;
         return err;
     }
-    gw_event_bus_set_out_queue(NULL);
-    ESP_LOGI(TAG, "WebSocket enabled at /ws (CBOR + gw_proto binary)");
+    (void)gw_state_store_add_listener(ws_on_state_changed, NULL);
+    (void)gw_device_registry_add_listener(ws_on_device_changed, NULL);
+    (void)gw_zb_model_add_listener(ws_on_endpoint_changed, NULL);
+    (void)gw_group_store_add_listener(ws_on_groups_changed, NULL);
+    (void)gw_project_settings_add_listener(ws_on_settings_changed, NULL);
+    (void)gw_automation_store_add_listener(ws_on_automations_changed, NULL);
+    ESP_LOGI(TAG, "WebSocket enabled at /ws (gw_proto snapshots/deltas)");
     return ESP_OK;
 }
 
@@ -1268,25 +1141,49 @@ void gw_ws_unregister(void)
 {
     if (!s_server) return;
 
-    gw_event_bus_set_out_queue(NULL);
     portENTER_CRITICAL(&s_client_lock);
     memset(s_clients, 0, sizeof(s_clients));
     portEXIT_CRITICAL(&s_client_lock);
 
-    if (s_event_task) {
-        vTaskDelete(s_event_task);
-        s_event_task = NULL;
+    if (s_tx_task) {
+        vTaskDelete(s_tx_task);
+        s_tx_task = NULL;
     }
-    if (s_event_q) {
-        if (s_event_q_caps_alloc) {
-            vQueueDeleteWithCaps(s_event_q);
-        } else {
-            vQueueDelete(s_event_q);
+    if (s_device_suppress_timer) {
+        esp_timer_stop(s_device_suppress_timer);
+        esp_timer_delete(s_device_suppress_timer);
+        s_device_suppress_timer = NULL;
+    }
+    if (s_tx_q) {
+        ws_tx_msg_t msg = {0};
+        while (xQueueReceive(s_tx_q, &msg, 0) == pdTRUE) {
+            free(msg.data);
         }
-        s_event_q = NULL;
-        s_event_q_caps_alloc = false;
+        s_tx_q = NULL;
     }
+    (void)gw_state_store_remove_listener(ws_on_state_changed, NULL);
+    (void)gw_device_registry_remove_listener(ws_on_device_changed, NULL);
+    (void)gw_zb_model_remove_listener(ws_on_endpoint_changed, NULL);
+    (void)gw_group_store_remove_listener(ws_on_groups_changed, NULL);
+    (void)gw_project_settings_remove_listener(ws_on_settings_changed, NULL);
+    (void)gw_automation_store_remove_listener(ws_on_automations_changed, NULL);
     s_server = NULL;
 }
+
+esp_err_t gw_ws_suppress_device_updates(uint32_t duration_ms)
+{
+    if (!s_server || !s_device_suppress_timer || duration_ms == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_device_updates_suppressed = true;
+    (void)esp_timer_stop(s_device_suppress_timer);
+    esp_err_t err = esp_timer_start_once(s_device_suppress_timer, (uint64_t)duration_ms * 1000ULL);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "WS device updates suppressed for %u ms", (unsigned)duration_ms);
+    }
+    return err;
+}
+
+
 
 

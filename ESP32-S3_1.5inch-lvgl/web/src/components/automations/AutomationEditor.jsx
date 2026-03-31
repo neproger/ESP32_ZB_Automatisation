@@ -1,6 +1,7 @@
 ﻿//UTF-8
 //AutomationEditor.jsx
 import { useCallback, useMemo } from 'react'
+import { EVT_ZIGBEE_COMMAND } from '../../eventNames.js'
 import { ensureArray, getDeviceOptions } from './utils.js'
 import TriggersSection from './sections/TriggersSection.jsx'
 import ConditionsSection from './sections/ConditionsSection.jsx'
@@ -37,7 +38,7 @@ export default function AutomationEditor({
 	const removeCondition = (idx) => setField('conditions', conditions.filter((_, i) => i !== idx))
 	const removeAction = (idx) => setField('actions', actions.filter((_, i) => i !== idx))
 
-	const addTrigger = () => setField('triggers', [...triggers, { type: 'event', event_type: 'zigbee.command', match: { 'payload.cmd': 'toggle' } }])
+	const addTrigger = () => setField('triggers', [...triggers, { type: 'event', event_type: EVT_ZIGBEE_COMMAND, match: { 'payload.cmd': 'toggle' } }])
 	const addCondition = () => {
 		const fromTrigger = String(triggers?.[0]?.match?.device_uid ?? '')
 		setField('conditions', [...conditions, { type: 'state', op: '>', ref: { device_uid: fromTrigger, endpoint: 1, key: 'temperature_c' }, value: 10 }])

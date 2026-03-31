@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include "gw_core/storage.h"
 
 static const char *TAG = "gw_settings";
@@ -10,7 +11,7 @@ static const char *TAG = "gw_settings";
 static const uint32_t SETTINGS_MAGIC = 0x53545447; // STTG
 static const uint16_t SETTINGS_VERSION = 1;
 
-static const uint32_t kDefaultScreensaverTimeoutMs = 4000;
+static const uint32_t kDefaultScreensaverTimeoutMs = 10000;
 static const uint32_t kDefaultWeatherSuccessIntervalMs = 60 * 60 * 1000;
 static const uint32_t kDefaultWeatherRetryIntervalMs = 10 * 1000;
 static const bool kDefaultTimezoneAuto = true;
@@ -27,6 +28,29 @@ static const int16_t kMaxTimezoneOffsetMin = 14 * 60;
 
 static gw_storage_t s_settings_storage;
 static bool s_inited = false;
+#define GW_SETTINGS_LISTENER_CAP 4
+typedef struct {
+    gw_project_settings_listener_t cb;
+    void *user_ctx;
+} gw_settings_listener_slot_t;
+static gw_settings_listener_slot_t s_listeners[GW_SETTINGS_LISTENER_CAP];
+static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void notify_settings_listeners(const gw_project_settings_t *settings)
+{
+    gw_settings_listener_slot_t listeners[GW_SETTINGS_LISTENER_CAP];
+    size_t listener_count = 0;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_SETTINGS_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb) {
+            listeners[listener_count++] = s_listeners[i];
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < listener_count; i++) {
+        listeners[i].cb(settings, listeners[i].user_ctx);
+    }
+}
 
 static const gw_storage_desc_t s_settings_desc = {
     .key = "proj_settings",
@@ -137,6 +161,44 @@ esp_err_t gw_project_settings_init(void)
     return ESP_OK;
 }
 
+esp_err_t gw_project_settings_add_listener(gw_project_settings_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_SETTINGS_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    for (size_t i = 0; i < GW_SETTINGS_LISTENER_CAP; i++) {
+        if (!s_listeners[i].cb) {
+            s_listeners[i].cb = cb;
+            s_listeners[i].user_ctx = user_ctx;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t gw_project_settings_remove_listener(gw_project_settings_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_SETTINGS_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            s_listeners[i].cb = NULL;
+            s_listeners[i].user_ctx = NULL;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t gw_project_settings_get(gw_project_settings_t *out)
 {
     if (!s_inited || !out) {
@@ -162,5 +224,9 @@ esp_err_t gw_project_settings_set(const gw_project_settings_t *in)
     s_settings_storage.count = 1;
     portEXIT_CRITICAL(&s_settings_storage.lock);
 
-    return persist_current();
+    esp_err_t err = persist_current();
+    if (err == ESP_OK) {
+        notify_settings_listeners(in);
+    }
+    return err;
 }

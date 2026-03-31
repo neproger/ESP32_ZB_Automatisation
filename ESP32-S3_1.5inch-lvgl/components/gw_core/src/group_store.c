@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "gw_core/storage.h"
 
 static const char *TAG = "gw_groups";
@@ -23,6 +24,29 @@ static gw_storage_t s_groups_storage;
 static gw_storage_t s_items_storage;
 static bool s_initialized = false;
 static uint32_t s_version_seq = 0;
+#define GW_GROUP_LISTENER_CAP 4
+typedef struct {
+    gw_group_store_listener_t cb;
+    void *user_ctx;
+} gw_group_listener_slot_t;
+static gw_group_listener_slot_t s_listeners[GW_GROUP_LISTENER_CAP];
+static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void notify_group_listeners(void)
+{
+    gw_group_listener_slot_t listeners[GW_GROUP_LISTENER_CAP];
+    size_t listener_count = 0;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_GROUP_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb) {
+            listeners[listener_count++] = s_listeners[i];
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < listener_count; i++) {
+        listeners[i].cb(listeners[i].user_ctx);
+    }
+}
 
 static const gw_storage_desc_t s_groups_desc = {
     .key = "groups",
@@ -140,6 +164,44 @@ esp_err_t gw_group_store_init(void)
              (unsigned)s_groups_storage.count,
              (unsigned)s_items_storage.count);
     return ESP_OK;
+}
+
+esp_err_t gw_group_store_add_listener(gw_group_store_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_GROUP_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    for (size_t i = 0; i < GW_GROUP_LISTENER_CAP; i++) {
+        if (!s_listeners[i].cb) {
+            s_listeners[i].cb = cb;
+            s_listeners[i].user_ctx = user_ctx;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t gw_group_store_remove_listener(gw_group_store_listener_t cb, void *user_ctx)
+{
+    if (!cb) return ESP_ERR_INVALID_ARG;
+    portENTER_CRITICAL(&s_listener_lock);
+    for (size_t i = 0; i < GW_GROUP_LISTENER_CAP; i++) {
+        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
+            s_listeners[i].cb = NULL;
+            s_listeners[i].user_ctx = NULL;
+            portEXIT_CRITICAL(&s_listener_lock);
+            return ESP_OK;
+        }
+    }
+    portEXIT_CRITICAL(&s_listener_lock);
+    return ESP_ERR_NOT_FOUND;
 }
 
 size_t gw_group_store_count(void)
@@ -269,6 +331,7 @@ esp_err_t gw_group_store_create(const char *id_opt, const char *name, gw_group_e
     esp_err_t err = persist_all();
     if (err != ESP_OK) return err;
     if (out_created) *out_created = entry;
+    notify_group_listeners();
     return ESP_OK;
 }
 
@@ -288,7 +351,9 @@ esp_err_t gw_group_store_rename(const char *id, const char *name)
     groups[idx].updated_at_ms = now_ms();
     portEXIT_CRITICAL(&s_groups_storage.lock);
 
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }
 
 esp_err_t gw_group_store_remove(const char *id)
@@ -323,7 +388,9 @@ esp_err_t gw_group_store_remove(const char *id)
     s_items_storage.count = write;
     portEXIT_CRITICAL(&s_items_storage.lock);
 
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }
 
 esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_t *device_uid, uint8_t endpoint)
@@ -360,7 +427,9 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
         items[existing_idx].version = next_version();
         portEXIT_CRITICAL(&s_items_storage.lock);
         (void)touch_group_version(group_id, updated_at_ms);
-        return persist_all();
+        esp_err_t err = persist_all();
+        if (err == ESP_OK) notify_group_listeners();
+        return err;
     }
 
     if (s_items_storage.count >= GROUP_ITEMS_MAX) {
@@ -381,7 +450,9 @@ esp_err_t gw_group_store_set_endpoint(const char *group_id, const gw_device_uid_
         (void)touch_group_version(moved_from_group_id, updated_at_ms);
     }
     (void)touch_group_version(group_id, updated_at_ms);
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }
 
 esp_err_t gw_group_store_remove_endpoint(const gw_device_uid_t *device_uid, uint8_t endpoint)
@@ -416,7 +487,9 @@ esp_err_t gw_group_store_remove_endpoint(const gw_device_uid_t *device_uid, uint
     if (removed_group_id[0] != '\0') {
         (void)touch_group_version(removed_group_id, updated_at_ms);
     }
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }
 
 esp_err_t gw_group_store_reorder_endpoint(const char *group_id, const gw_device_uid_t *device_uid, uint8_t endpoint, uint32_t order)
@@ -440,7 +513,9 @@ esp_err_t gw_group_store_reorder_endpoint(const char *group_id, const gw_device_
 
     if (!updated) return ESP_ERR_NOT_FOUND;
     (void)touch_group_version(group_id, updated_at_ms);
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }
 
 esp_err_t gw_group_store_set_endpoint_label(const gw_device_uid_t *device_uid, uint8_t endpoint, const char *label)
@@ -467,5 +542,7 @@ esp_err_t gw_group_store_set_endpoint_label(const gw_device_uid_t *device_uid, u
     if (group_id[0] != '\0') {
         (void)touch_group_version(group_id, updated_at_ms);
     }
-    return persist_all();
+    esp_err_t err = persist_all();
+    if (err == ESP_OK) notify_group_listeners();
+    return err;
 }

@@ -1,4 +1,5 @@
 #include "gw_core/event_bus.h"
+#include "gw_core/event_names.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -29,37 +30,6 @@ typedef struct {
 static gw_event_listener_slot_t s_listeners[GW_EVENT_LISTENER_CAP];
 static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static QueueHandle_t s_out_q;
-
-static bool event_should_go_to_out_queue(const char *type)
-{
-    if (!type || !type[0]) {
-        return false;
-    }
-    if (strcmp(type, "rules.fired") == 0 || strcmp(type, "rules.action") == 0) {
-        return true;
-    }
-    if (strcmp(type, "device.join") == 0 || strcmp(type, "device.leave") == 0) {
-        return true;
-    }
-    if (strcmp(type, "device.changed") == 0 || strcmp(type, "automation.changed") == 0) {
-        return true;
-    }
-    if (strcmp(type, "settings.changed") == 0) {
-        return true;
-    }
-    if (strncmp(type, "zigbee.", 7) == 0 || strncmp(type, "zigbee_", 7) == 0) {
-        return true;
-    }
-    if (strncmp(type, "automation.", 11) == 0) {
-        return true;
-    }
-    if (strncmp(type, "settings.", 9) == 0) {
-        return true;
-    }
-    return false;
-}
-
 static void safe_copy_str(char *dst, size_t dst_size, const char *src)
 {
     if (dst == NULL || dst_size == 0) {
@@ -87,7 +57,7 @@ static void gw_event_bus_publish_internal(const char *type,
                                           int64_t value_i64,
                                           double value_f64,
                                           const char *value_text,
-                                          const uint8_t *payload_cbor,
+                                          const uint8_t *payload_bytes,
                                           size_t payload_len);
 
 esp_err_t gw_event_bus_init(void)
@@ -123,12 +93,6 @@ void gw_event_bus_publish(const char *type, const char *source, const char *devi
                                   GW_EVENT_VALUE_NONE, false, 0, 0.0, NULL, NULL, 0);
 }
 
-void gw_event_bus_publish_cbor(const char *type, const char *source, const char *device_uid, uint16_t short_addr, const uint8_t *payload_cbor, size_t payload_len)
-{
-    gw_event_bus_publish_internal(type, source, device_uid, short_addr, "", 0, 0, NULL, 0, 0,
-                                  GW_EVENT_VALUE_NONE, false, 0, 0.0, NULL, payload_cbor, payload_len);
-}
-
 void gw_event_bus_publish_zb(const char *type,
                              const char *source,
                              const char *device_uid,
@@ -143,15 +107,15 @@ void gw_event_bus_publish_zb(const char *type,
                              int64_t value_i64,
                              double value_f64,
                              const char *value_text,
-                             const uint8_t *payload_cbor,
+                             const uint8_t *payload_bytes,
                              size_t payload_len)
 {
     const bool is_attr_event =
         (type && (
-            strcmp(type, "zigbee.attr_report") == 0 ||
-            strcmp(type, "zigbee.attr_read") == 0 ||
-            strcmp(type, "zigbee.read_attr") == 0 ||
-            strcmp(type, "zigbee.read_attr_resp") == 0));
+            strcmp(type, GW_EVT_ZIGBEE_ATTR_REPORT) == 0 ||
+            strcmp(type, GW_EVT_ZIGBEE_ATTR_READ) == 0 ||
+            strcmp(type, GW_EVT_ZIGBEE_READ_ATTR) == 0 ||
+            strcmp(type, GW_EVT_ZIGBEE_READ_ATTR_RSP) == 0));
 
     uint8_t flags = 0;
     if (endpoint > 0) flags |= GW_EVENT_PAYLOAD_HAS_ENDPOINT;
@@ -160,7 +124,7 @@ void gw_event_bus_publish_zb(const char *type,
     if (attr_id || is_attr_event) flags |= GW_EVENT_PAYLOAD_HAS_ATTR;
     if (value_type != GW_EVENT_VALUE_NONE) flags |= GW_EVENT_PAYLOAD_HAS_VALUE;
     gw_event_bus_publish_internal(type, source, device_uid, short_addr, msg, flags, endpoint, cmd, cluster_id, attr_id,
-                                  value_type, value_bool, value_i64, value_f64, value_text, payload_cbor, payload_len);
+                                  value_type, value_bool, value_i64, value_f64, value_text, payload_bytes, payload_len);
 }
 
 static void gw_event_bus_publish_internal(const char *type,
@@ -178,13 +142,13 @@ static void gw_event_bus_publish_internal(const char *type,
                                           int64_t value_i64,
                                           double value_f64,
                                           const char *value_text,
-                                          const uint8_t *payload_cbor,
+                                          const uint8_t *payload_bytes,
                                           size_t payload_len)
 {
     if (!s_inited) {
         return;
     }
-    (void)payload_cbor;
+    (void)payload_bytes;
     (void)payload_len;
 
     gw_event_t e = {0};
@@ -224,30 +188,8 @@ static void gw_event_bus_publish_internal(const char *type,
         listeners[i].cb(&e, listeners[i].user_ctx);
     }
 
-    // Duplicate event log + ring insert for UI/debugging (async when possible).
-    bool route_to_ws = event_should_go_to_out_queue(e.type);
-    if (s_out_q && route_to_ws) {
-        if (xQueueSend(s_out_q, &e, 0) == pdTRUE) {
-            ESP_LOGI(TAG,
-                     "pub id=%u type=%s src=%s uid=%s short=0x%04x ws=1",
-                     (unsigned)e.id,
-                     e.type,
-                     e.source,
-                     e.device_uid,
-                     (unsigned)e.short_addr);
-            return;
-        }
-        ESP_LOGW(TAG,
-                 "pub id=%u type=%s src=%s uid=%s short=0x%04x ws_drop=1",
-                 (unsigned)e.id,
-                 e.type,
-                 e.source,
-                 e.device_uid,
-                 (unsigned)e.short_addr);
-    }
-
     ESP_LOGI(TAG,
-             "pub id=%u type=%s src=%s uid=%s short=0x%04x ws=0",
+             "pub id=%u type=%s src=%s uid=%s short=0x%04x",
              (unsigned)e.id,
              e.type,
              e.source,
@@ -305,11 +247,6 @@ esp_err_t gw_event_bus_remove_listener(gw_event_bus_listener_t cb, void *user_ct
     }
     portEXIT_CRITICAL(&s_listener_lock);
     return ESP_ERR_NOT_FOUND;
-}
-
-void gw_event_bus_set_out_queue(QueueHandle_t q)
-{
-    s_out_q = q;
 }
 
 void gw_event_bus_record_event(const gw_event_t *e)
