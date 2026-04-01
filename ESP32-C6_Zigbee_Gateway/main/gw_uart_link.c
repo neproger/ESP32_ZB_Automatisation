@@ -8,18 +8,17 @@
 
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "esp_timer.h"
 
 #include "esp_zigbee_gateway.h"
 #include "gw_core/device_registry.h"
-#include "gw_core/device_storage.h"
-#include "gw_core/event_bus.h"
+
 #include "gw_core/gw_proto.h"
-#include "gw_core/state_store.h"
 #include "gw_core/types.h"
 #include "gw_proto/gw_proto_uart.h"
 #include "gw_zigbee/gw_zigbee.h"
@@ -29,18 +28,28 @@
 #define GW_UART_RX_BUF_SIZE 1024
 #define GW_UART_TX_BUF_SIZE 1024
 #define GW_UART_DRIVER_Q_LEN 16
-#define GW_UART_TX_EVENT_Q 24
-
 static const char *TAG = "gw_uart";
 
-static QueueHandle_t s_evt_q;
-static TaskHandle_t s_tx_task;
 static TaskHandle_t s_rx_task;
 static TaskHandle_t s_snapshot_task;
-static SemaphoreHandle_t s_tx_lock;
+static TaskHandle_t s_tx_task;
+static TaskHandle_t s_remove_all_task;
 static uint16_t s_evt_seq = 1;
+static portMUX_TYPE s_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_snapshot_requested;
 static volatile bool s_snapshot_tx_active;
+static esp_timer_handle_t s_snapshot_debounce_timer;
+static QueueHandle_t s_tx_queue;
+
+static const uint32_t GW_SNAPSHOT_DEBOUNCE_MS = 1500;
+static const uint32_t GW_UART_TX_PACING_US = 3000;
+static const uint32_t GW_REMOVE_ALL_STEP_MS = 6000;
+static const size_t GW_UART_TX_QUEUE_LEN = 32;
+
+typedef struct {
+    size_t len;
+    uint8_t data[];
+} gw_uart_tx_item_t;
 
 static bool uart_write_all(const uint8_t *data, size_t len)
 {
@@ -71,7 +80,11 @@ static bool uart_write_all(const uint8_t *data, size_t len)
 }
 static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static void snapshot_request_async(void);
+static void snapshot_request_debounced(void);
+static void snapshot_debounce_timer_cb(void *arg);
 static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame);
+static void uart_tx_task(void *arg);
+static void remove_all_task(void *arg);
 
 #if defined(UART_SCLK_XTAL)
 #define GW_UART_SCLK_SRC UART_SCLK_XTAL
@@ -131,40 +144,6 @@ static const char *msg_type_name(uint8_t t)
         default:
             return "UNKNOWN";
     }
-}
-
-static bool is_forwardable_event(const char *type)
-{
-    if (!type || !type[0]) {
-        return false;
-    }
-    if (strncmp(type, "zigbee.", 7) == 0) {
-        return true;
-    }
-    if (strncmp(type, "zigbee_", 7) == 0) {
-        return true;
-    }
-    if (strcmp(type, "device.join") == 0 || strcmp(type, "device.leave") == 0) {
-        return true;
-    }
-    if (strcmp(type, "device.changed") == 0) {
-        return true;
-    }
-    if (strncmp(type, "system.", 7) == 0) {
-        return true;
-    }
-    if (strncmp(type, "system_", 7) == 0) {
-        return true;
-    }
-    return false;
-}
-
-static bool uid_matches(const gw_device_uid_t *uid, const char *uid_str)
-{
-    if (!uid || !uid_str) {
-        return false;
-    }
-    return strncmp(uid->uid, uid_str, sizeof(uid->uid)) == 0;
 }
 
 static void uart_send_proto_sync_begin(uint16_t seq, uint32_t total_records)
@@ -233,65 +212,6 @@ static void uart_send_proto_endpoint_record(const gw_device_full_t *device,
     uart_send_frame(GW_PROTO_MSG_ENDPOINT_UPSERT, seq, &msg, sizeof(msg));
 }
 
-static void uart_send_proto_state_record(const gw_state_item_t *item, uint16_t seq)
-{
-    gw_proto_state_item_v1_t msg = {0};
-    if (!item) {
-        return;
-    }
-
-    msg.uid = item->uid;
-    msg.endpoint = 0;
-    msg.value_type = (uint8_t)item->value_type;
-    strlcpy(msg.key, item->key, sizeof(msg.key));
-    msg.version = 0;
-    msg.value_bool = item->value_bool ? 1u : 0u;
-    msg.value_f32 = item->value_f32;
-    msg.value_u32 = item->value_u32;
-    msg.value_u64 = item->value_u64;
-    msg.ts_ms = item->ts_ms;
-    uart_send_frame(GW_PROTO_MSG_STATE_ITEM, seq, &msg, sizeof(msg));
-}
-
-static size_t count_state_items_for_uid(const gw_device_uid_t *uid)
-{
-    size_t count = 0;
-    const size_t state_count = gw_state_store_count();
-    if (!uid) {
-        return 0;
-    }
-
-    for (size_t i = 0; i < state_count; ++i) {
-        gw_state_item_t item = {0};
-        if (gw_state_store_get_by_index(i, &item) != ESP_OK) {
-            continue;
-        }
-        if (uid_matches(&item.uid, uid->uid)) {
-            count++;
-        }
-    }
-    return count;
-}
-
-static void uart_send_proto_states_for_uid(const gw_device_uid_t *uid, uint16_t seq)
-{
-    const size_t state_count = gw_state_store_count();
-    if (!uid) {
-        return;
-    }
-
-    for (size_t i = 0; i < state_count; ++i) {
-        gw_state_item_t item = {0};
-        if (gw_state_store_get_by_index(i, &item) != ESP_OK) {
-            continue;
-        }
-        if (!uid_matches(&item.uid, uid->uid)) {
-            continue;
-        }
-        uart_send_proto_state_record(&item, seq);
-    }
-}
-
 static void uart_send_proto_device_remove(const char *uid_str, uint16_t seq)
 {
     gw_proto_device_remove_v1_t msg = {0};
@@ -302,41 +222,14 @@ static void uart_send_proto_device_remove(const char *uid_str, uint16_t seq)
     uart_send_frame(GW_PROTO_MSG_DEVICE_REMOVE, seq, &msg, sizeof(msg));
 }
 
-static void uart_send_snapshot_device_delta(const char *uid_str, uint16_t seq)
-{
-    if (!uid_str || uid_str[0] == '\0') {
-        return;
-    }
-
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, uid_str, sizeof(uid.uid));
-    gw_device_full_t device = {0};
-    if (gw_device_storage_get(&uid, &device) != ESP_OK) {
-        return;
-    }
-
-    uart_send_proto_device_record(&device, seq);
-
-    for (uint8_t ep_idx = 0; ep_idx < device.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ++ep_idx) {
-        const uint8_t endpoint = (uint8_t)(ep_idx + 1u);
-        const gw_device_endpoint_t *ep = &device.endpoints[ep_idx];
-        if (ep->profile_id == 0 && ep->device_id == 0 && ep->in_cluster_count == 0 && ep->out_cluster_count == 0) {
-            continue;
-        }
-        uart_send_proto_endpoint_record(&device, endpoint, ep, seq);
-    }
-    uart_send_proto_states_for_uid(&device.device_uid, seq);
-}
-
 static esp_err_t uart_send_snapshot(uint16_t base_seq)
 {
-    const size_t dev_count = gw_device_storage_count();
+    const size_t dev_count = gw_device_registry_count();
     size_t endpoint_count = 0;
-    size_t state_count = 0;
 
     for (size_t di = 0; di < dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_storage_get_by_index(di, &device) != ESP_OK) {
+        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         for (uint8_t ep_idx = 0; ep_idx < device.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ++ep_idx) {
@@ -346,24 +239,23 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
             }
             endpoint_count++;
         }
-        state_count += count_state_items_for_uid(&device.device_uid);
     }
 
-    uart_send_proto_sync_begin(base_seq, (uint32_t)(dev_count + endpoint_count + state_count));
+    uart_send_proto_sync_begin(base_seq, (uint32_t)(dev_count + endpoint_count));
 
     // Phase 1: send only device topology roots first.
     for (size_t di = 0; di < dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_storage_get_by_index(di, &device) != ESP_OK) {
+        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         uart_send_proto_device_record(&device, base_seq);
     }
 
-    // Phase 2: stream endpoint metadata followed by cached state for the same device.
+    // Phase 2: stream endpoint metadata for the same device.
     for (size_t di = 0; di < dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_storage_get_by_index(di, &device) != ESP_OK) {
+        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
 
@@ -375,11 +267,9 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
             }
             uart_send_proto_endpoint_record(&device, endpoint, ep, base_seq);
         }
-        uart_send_proto_states_for_uid(&device.device_uid, base_seq);
     }
 
-    uart_send_proto_sync_end(base_seq, (uint32_t)(dev_count + endpoint_count + state_count));
-    ESP_LOGI(TAG, "Proto snapshot sent: devices=%u endpoints=%u states=%u", (unsigned)dev_count, (unsigned)endpoint_count, (unsigned)state_count);
+    uart_send_proto_sync_end(base_seq, (uint32_t)(dev_count + endpoint_count));
     return ESP_OK;
 }
 
@@ -389,6 +279,33 @@ static void snapshot_request_async(void)
     if (s_snapshot_task) {
         xTaskNotifyGive(s_snapshot_task);
     }
+}
+
+static void snapshot_debounce_timer_cb(void *arg)
+{
+    (void)arg;
+    snapshot_request_async();
+}
+
+static void snapshot_request_debounced(void)
+{
+    if (!s_snapshot_debounce_timer) {
+        snapshot_request_async();
+        return;
+    }
+    (void)esp_timer_stop(s_snapshot_debounce_timer);
+    if (esp_timer_start_once(s_snapshot_debounce_timer, (uint64_t)GW_SNAPSHOT_DEBOUNCE_MS * 1000ULL) != ESP_OK) {
+        snapshot_request_async();
+    }
+}
+
+static uint16_t next_evt_seq(void)
+{
+    uint16_t seq = 0;
+    portENTER_CRITICAL(&s_seq_lock);
+    seq = s_evt_seq++;
+    portEXIT_CRITICAL(&s_seq_lock);
+    return seq;
 }
 
 static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len)
@@ -402,6 +319,7 @@ static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload,
     };
     uint8_t raw[GW_PROTO_UART_MAX_FRAME_SIZE];
     size_t raw_len = 0;
+    gw_uart_tx_item_t *item = NULL;
 
     if (payload_len > GW_PROTO_UART_MAX_PAYLOAD) {
         return;
@@ -409,20 +327,91 @@ static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload,
     if (gw_proto_uart_build_frame(&hdr, payload, payload_len, raw, sizeof(raw), &raw_len) != ESP_OK) {
         return;
     }
-    if (msg_type == GW_PROTO_MSG_EVENT_ZB) {
-        ESP_LOGD(TAG, "UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
-    } else {
-        ESP_LOGI(TAG, "UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
+    if (!s_tx_queue) {
+        ESP_LOGW(TAG, "UART TX queue not ready, drop %s seq=%u len=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)raw_len);
+        return;
     }
-    if (s_tx_lock) {
-        (void)xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+
+    item = (gw_uart_tx_item_t *)malloc(sizeof(*item) + raw_len);
+    if (!item) {
+        ESP_LOGW(TAG, "UART TX alloc failed %s seq=%u len=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)raw_len);
+        return;
     }
-    bool ok = uart_write_all(raw, raw_len);
-    if (s_tx_lock) {
-        (void)xSemaphoreGive(s_tx_lock);
+    item->len = raw_len;
+    memcpy(item->data, raw, raw_len);
+
+    if (xQueueSend(s_tx_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "UART TX queue full, drop %s seq=%u len=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)raw_len);
+        free(item);
     }
-    if (!ok) {
-        ESP_LOGW(TAG, "UART TX drop %s seq=%u len=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)raw_len);
+}
+
+static void uart_tx_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        gw_uart_tx_item_t *item = NULL;
+        if (xQueueReceive(s_tx_queue, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (!item) {
+            continue;
+        }
+
+        bool ok = uart_write_all(item->data, item->len);
+        if (!ok) {
+            ESP_LOGW(TAG, "UART TX drop frame len=%u", (unsigned)item->len);
+        }
+        free(item);
+
+        if (GW_UART_TX_PACING_US > 0) {
+            esp_rom_delay_us(GW_UART_TX_PACING_US);
+        }
+    }
+}
+
+static void remove_all_task(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        gw_device_uid_t remove_list[GW_DEVICE_MAX_DEVICES] = {0};
+        size_t remove_count = 0;
+        const size_t dev_count = gw_device_registry_count();
+
+        for (size_t i = 0; i < dev_count && remove_count < GW_DEVICE_MAX_DEVICES; ++i) {
+            gw_device_full_t device = {0};
+            if (gw_device_registry_get_full_by_index(i, &device) != ESP_OK) {
+                continue;
+            }
+            if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
+                continue;
+            }
+            remove_list[remove_count++] = device.device_uid;
+        }
+
+        for (size_t i = 0; i < remove_count; ++i) {
+            gw_device_full_t device = {0};
+            if (gw_device_registry_get_full(&remove_list[i], &device) != ESP_OK) {
+                continue;
+            }
+            if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
+                continue;
+            }
+
+            esp_err_t err = gw_zigbee_device_leave(&device.device_uid, device.short_addr, false);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "remove_all leave schedule failed uid=%s short=0x%04x err=%s",
+                         device.device_uid.uid,
+                         device.short_addr,
+                         esp_err_to_name(err));
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(GW_REMOVE_ALL_STEP_MS));
+        }
     }
 }
 
@@ -435,99 +424,8 @@ static void uart_send_proto_cmd_result(uint16_t seq, esp_err_t err)
     uart_send_frame(GW_PROTO_MSG_CMD_RESULT, seq, &rsp, sizeof(rsp));
 }
 
-static uint8_t map_evt_kind(const char *type)
-{
-    if (!type) {
-        return GW_PROTO_EVENT_NET_STATE;
-    }
-    if (strcmp(type, "zigbee.attr_report") == 0) {
-        return GW_PROTO_EVENT_ATTR_REPORT;
-    }
-    if (strcmp(type, "zigbee.command") == 0) {
-        return GW_PROTO_EVENT_COMMAND;
-    }
-    if (strstr(type, "join") != NULL) {
-        return GW_PROTO_EVENT_DEVICE_JOIN;
-    }
-    if (strstr(type, "leave") != NULL) {
-        return GW_PROTO_EVENT_DEVICE_LEAVE;
-    }
-    return GW_PROTO_EVENT_NET_STATE;
-}
-
-static uint8_t map_evt_value_type(uint8_t t)
-{
-    switch ((gw_event_value_type_t)t) {
-        case GW_EVENT_VALUE_BOOL:
-            return GW_PROTO_EVENT_VALUE_BOOL;
-        case GW_EVENT_VALUE_I64:
-            return GW_PROTO_EVENT_VALUE_I64;
-        case GW_EVENT_VALUE_F64:
-            return GW_PROTO_EVENT_VALUE_F32;
-        case GW_EVENT_VALUE_TEXT:
-            return GW_PROTO_EVENT_VALUE_TEXT;
-        case GW_EVENT_VALUE_NONE:
-        default:
-            return GW_PROTO_EVENT_VALUE_NONE;
-    }
-}
-
-static void uart_send_event(const gw_event_t *e)
-{
-    gw_proto_event_v1_t evt;
-    memset(&evt, 0, sizeof(evt));
-
-    evt.event_id = e->id;
-    evt.ts_ms = e->ts_ms;
-    evt.event_id_kind = map_evt_kind(e->type);
-    strlcpy(evt.event_type, e->type, sizeof(evt.event_type));
-    if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
-        strlcpy(evt.cmd, e->payload_cmd, sizeof(evt.cmd));
-    }
-    strlcpy(evt.device_uid.uid, e->device_uid, sizeof(evt.device_uid.uid));
-    evt.short_addr = e->short_addr;
-    evt.endpoint = e->payload_endpoint;
-    evt.cluster_id = e->payload_cluster;
-    evt.attr_id = e->payload_attr;
-    evt.value_type = map_evt_value_type(e->payload_value_type);
-    evt.value_bool = e->payload_value_bool;
-    evt.value_i64 = e->payload_value_i64;
-    evt.value_f32 = (float)e->payload_value_f64;
-    strlcpy(evt.value_text, e->payload_value_text, sizeof(evt.value_text));
-
-    uart_send_frame(GW_PROTO_MSG_EVENT_ZB, s_evt_seq++, &evt, sizeof(evt));
-}
-
-static void on_event(const gw_event_t *event, void *user_ctx)
-{
-    (void)user_ctx;
-    if (!event || !s_evt_q) {
-        return;
-    }
-    if (!is_forwardable_event(event->type)) {
-        return;
-    }
-    // During snapshot transfer keep UART line dedicated to stream frames.
-    if (s_snapshot_tx_active) {
-        return;
-    }
-    if (strcmp(event->type, "device.join") == 0 && event->device_uid[0] != '\0') {
-        uart_send_snapshot_device_delta(event->device_uid, s_evt_seq++);
-    }
-    if (strcmp(event->type, "device.leave") == 0 && event->device_uid[0] != '\0') {
-        uart_send_proto_device_remove(event->device_uid, s_evt_seq++);
-    }
-    (void)xQueueSend(s_evt_q, event, 0);
-}
-
 static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
 {
-    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
-        ESP_LOGD(TAG, "UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
-    } else {
-        ESP_LOGI(TAG, "UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
-    }
-
     switch (frame->hdr.type) {
         case GW_PROTO_MSG_SNAPSHOT_REQUEST:
         case GW_PROTO_MSG_CMD_PERMIT_JOIN:
@@ -555,17 +453,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
     }
 }
 
-static void uart_tx_task(void *arg)
-{
-    (void)arg;
-    gw_event_t e;
-    for (;;) {
-        if (xQueueReceive(s_evt_q, &e, portMAX_DELAY) == pdTRUE) {
-            uart_send_event(&e);
-        }
-    }
-}
-
 static void uart_snapshot_task(void *arg)
 {
     (void)arg;
@@ -577,7 +464,7 @@ static void uart_snapshot_task(void *arg)
         while (s_snapshot_requested) {
             s_snapshot_requested = false;
             s_snapshot_tx_active = true;
-            (void)uart_send_snapshot((uint16_t)(s_evt_seq++));
+            (void)uart_send_snapshot(next_evt_seq());
             s_snapshot_tx_active = false;
         }
     }
@@ -616,7 +503,7 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             }
             const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)frame->payload;
             gw_device_full_t device = {0};
-            esp_err_t err = gw_device_storage_get(&msg->device_uid, &device);
+            esp_err_t err = gw_device_registry_get_full(&msg->device_uid, &device);
             if (err != ESP_OK) {
                 return err;
             }
@@ -627,24 +514,10 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
         }
 
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL: {
-            size_t iterations = 0;
-            while (iterations < GW_DEVICE_MAX_DEVICES) {
-                gw_device_full_t device = {0};
-                if (gw_device_storage_get_by_index(0, &device) != ESP_OK) {
-                    break;
-                }
-                if (device.device_uid.uid[0] == '\0') {
-                    break;
-                }
-                if (device.short_addr != 0) {
-                    (void)gw_zigbee_device_leave(&device.device_uid, device.short_addr, false);
-                }
-                (void)gw_zb_model_remove_device(&device.device_uid);
-                (void)gw_state_store_remove_uid(&device.device_uid);
-                (void)gw_device_registry_remove(&device.device_uid);
-                uart_send_proto_device_remove(device.device_uid.uid, s_evt_seq++);
-                iterations++;
+            if (s_remove_all_task == NULL) {
+                return ESP_ERR_INVALID_STATE;
             }
+            xTaskNotifyGive(s_remove_all_task);
             return ESP_OK;
         }
 
@@ -789,21 +662,26 @@ esp_err_t gw_uart_link_start(void)
     ESP_RETURN_ON_ERROR(uart_param_config(GW_UART_PORT, &cfg), TAG, "uart_param_config failed");
     ESP_RETURN_ON_ERROR(uart_set_pin(GW_UART_PORT, GW_UART_TX_PIN, GW_UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE), TAG, "uart_set_pin failed");
 
-    s_evt_q = xQueueCreate(GW_UART_TX_EVENT_Q, sizeof(gw_event_t));
-    if (!s_evt_q) {
+    s_tx_queue = xQueueCreate(GW_UART_TX_QUEUE_LEN, sizeof(gw_uart_tx_item_t *));
+    if (!s_tx_queue) {
         return ESP_ERR_NO_MEM;
     }
-    s_tx_lock = xSemaphoreCreateMutex();
-    if (!s_tx_lock) {
+    const esp_timer_create_args_t debounce_timer_args = {
+        .callback = snapshot_debounce_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "c6_snap_db",
+        .skip_unhandled_events = true,
+    };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&debounce_timer_args, &s_snapshot_debounce_timer), TAG, "esp_timer_create failed");
+
+    if (xTaskCreate(uart_snapshot_task, "uart_snap", 9216, NULL, 6, &s_snapshot_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-
-    ESP_RETURN_ON_ERROR(gw_event_bus_add_listener(on_event, NULL), TAG, "gw_event_bus_add_listener failed");
-
     if (xTaskCreate(uart_tx_task, "uart_tx", 4096, NULL, 6, &s_tx_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(uart_snapshot_task, "uart_snap", 9216, NULL, 6, &s_snapshot_task) != pdPASS) {
+    if (xTaskCreate(remove_all_task, "uart_rm_all", 4096, NULL, 5, &s_remove_all_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(uart_rx_task, "uart_rx", 4096, NULL, 6, &s_rx_task) != pdPASS) {
@@ -811,5 +689,23 @@ esp_err_t gw_uart_link_start(void)
     }
 
     ESP_LOGI(TAG, "UART binary link started: UART1 TX=GPIO%d RX=GPIO%d baud=%d", GW_UART_TX_PIN, GW_UART_RX_PIN, GW_UART_BAUD);
+    return ESP_OK;
+}
+
+esp_err_t gw_uart_link_send_event_zb(const gw_proto_event_v1_t *event)
+{
+    if (!event) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_tx_queue) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    uart_send_frame(GW_PROTO_MSG_EVENT_ZB, next_evt_seq(), event, sizeof(*event));
+    return ESP_OK;
+}
+
+esp_err_t gw_uart_link_request_snapshot_debounced(void)
+{
+    snapshot_request_debounced();
     return ESP_OK;
 }

@@ -95,12 +95,15 @@ const AUTO_ENTRY_SIZE = AUTO_STRING_TABLE_OFF + AUTO_MAX_STRING_TABLE_BYTES
 const GROUP_ID_SIZE = 32
 const GROUP_NAME_SIZE = 48
 const GROUP_LABEL_SIZE = 32
+const TRACE_KIND_OFF = 1
+const TRACE_OK_OFF = 2
 const TRACE_TS_OFF = 5
-const TRACE_TYPE_OFF = 13
-const TRACE_SOURCE_OFF = 45
-const TRACE_UID_OFF = 61
-const TRACE_SHORT_ADDR_OFF = 80
-const TRACE_MSG_OFF = 82
+const TRACE_UID_OFF = 13
+const TRACE_SHORT_ADDR_OFF = 32
+const TRACE_ACTION_INDEX_OFF = 34
+const TRACE_AUTOMATION_ID_OFF = 36
+const TRACE_ERROR_TEXT_OFF = 68
+const TRACE_ERROR_TEXT_SIZE = 96
 
 const GW_AUTO_EVT_ZIGBEE_COMMAND = 1
 const GW_AUTO_EVT_ZIGBEE_ATTR_REPORT = 2
@@ -970,17 +973,30 @@ export function protoFrameToEvent(frame) {
   }
 
   if (frame.type === GW_PROTO_MSG_EVENT_TRACE) {
-    const eventType = readFixedString(view, TRACE_TYPE_OFF, 32)
-    const source = readFixedString(view, TRACE_SOURCE_OFF, 16)
+    const kind = view.getUint8(TRACE_KIND_OFF)
+    const ok = view.getUint8(TRACE_OK_OFF) !== 0
     const uid = readFixedString(view, TRACE_UID_OFF, DEVICE_UID_SIZE)
     const shortAddr = view.getUint16(TRACE_SHORT_ADDR_OFF, true)
-    const msg = readFixedString(view, TRACE_MSG_OFF, 128)
+    const actionIndex = view.getUint16(TRACE_ACTION_INDEX_OFF, true)
+    const automationId = readFixedString(view, TRACE_AUTOMATION_ID_OFF, AUTO_ID_SIZE)
+    const errorText = readFixedString(view, TRACE_ERROR_TEXT_OFF, TRACE_ERROR_TEXT_SIZE)
+    let eventType = 'trace.unknown'
+    let msg = ''
+    if (kind === 1) {
+      eventType = EVT_RULES_FIRED
+      msg = `automation_id=${automationId}`
+    } else if (kind === 2) {
+      eventType = EVT_RULES_ACTION
+      msg = ok
+        ? `automation_id=${automationId} idx=${actionIndex} ok=1`
+        : `automation_id=${automationId} idx=${actionIndex} ok=0 err=${errorText}`
+    }
     return {
       ts_ms: Number(view.getBigUint64(TRACE_TS_OFF, true)),
       type: 'gateway.event',
       data: {
         event_type: eventType,
-        source,
+        source: 'rules',
         device_id: uid,
         short_addr: shortAddr,
         msg,

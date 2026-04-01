@@ -1,6 +1,9 @@
 idf_component_register(
     SRCS
-        "src/gw_zigbee.c"
+        "src/gw_zigbee_support.c"
+        "src/gw_zigbee_discovery.c"
+        "src/gw_zigbee_actions.c"
+        "src/gw_zigbee_admin.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES
@@ -9,4 +12,3 @@ idf_component_register(
         gw_core
         espressif__esp-zigbee-lib
 )
-

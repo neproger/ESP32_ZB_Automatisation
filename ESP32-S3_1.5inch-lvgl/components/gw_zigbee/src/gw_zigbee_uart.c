@@ -165,42 +165,6 @@ static const char *msg_type_name(uint8_t t)
     }
 }
 
-static const char *evt_id_name(uint8_t evt_id)
-{
-    switch ((gw_proto_event_id_t)evt_id) {
-        case GW_PROTO_EVENT_ATTR_REPORT:
-            return "ATTR_REPORT";
-        case GW_PROTO_EVENT_COMMAND:
-            return "COMMAND";
-        case GW_PROTO_EVENT_DEVICE_JOIN:
-            return "DEVICE_JOIN";
-        case GW_PROTO_EVENT_DEVICE_LEAVE:
-            return "DEVICE_LEAVE";
-        case GW_PROTO_EVENT_NET_STATE:
-            return "NET_STATE";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-static const char *cluster_name(uint16_t cluster_id)
-{
-    switch (cluster_id) {
-        case 0x0006:
-            return "OnOff";
-        case 0x0008:
-            return "Level";
-        case 0x0300:
-            return "ColorControl";
-        case 0x0402:
-            return "Temperature";
-        case 0x0405:
-            return "Humidity";
-        default:
-            return "-";
-    }
-}
-
 static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
 {
     if (!ep || cluster_id == 0) {
@@ -317,9 +281,8 @@ static void initial_state_sync_task(void *arg)
     free(eps);
     free(devices);
 
-    ESP_LOGI(TAG, "initial state sync done: read_attr queued=%u missing(before=%u after=%u)",
+    ESP_LOGI(TAG, "initial state sync done: queued=%u missing_after=%u",
              (unsigned)ok_count,
-             (unsigned)missing_before,
              (unsigned)missing_after);
     s_initial_state_sync_done = true;
     s_initial_state_sync_started = false;
@@ -392,9 +355,7 @@ static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *pay
     hdr.reserved = 0;
 
     ESP_RETURN_ON_ERROR(gw_proto_uart_build_frame(&hdr, payload, payload_len, raw, sizeof(raw), &raw_len), TAG, "build_frame failed");
-    if (msg_type == GW_PROTO_MSG_EVENT_ZB) {
-        GW_UART_TRACE_D("UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
-    } else {
+    if (msg_type == GW_PROTO_MSG_SYNC_BEGIN || msg_type == GW_PROTO_MSG_SYNC_END || msg_type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
         GW_UART_TRACE_I("UART TX %s seq=%u payload=%u", msg_type_name(msg_type), (unsigned)seq, (unsigned)payload_len);
     }
     if (s_tx_lock) {
@@ -409,9 +370,9 @@ static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *pay
 
 static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
 {
-    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
-        GW_UART_TRACE_D("UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
-    } else {
+    if (frame->hdr.type == GW_PROTO_MSG_SYNC_BEGIN ||
+        frame->hdr.type == GW_PROTO_MSG_SYNC_END ||
+        frame->hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
         GW_UART_TRACE_I("UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     }
 
@@ -434,23 +395,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         return;
     }
 
-    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
-        if (frame->hdr.len == 0) {
-            return;
-        }
-        gw_proto_event_v1_t evt = {0};
-        size_t n = frame->hdr.len < sizeof(evt) ? frame->hdr.len : sizeof(evt);
-        memcpy(&evt, frame->payload, n);
-        evt.event_type[sizeof(evt.event_type) - 1] = '\0';
-        evt.cmd[sizeof(evt.cmd) - 1] = '\0';
-        evt.device_uid.uid[sizeof(evt.device_uid.uid) - 1] = '\0';
-        evt.value_text[sizeof(evt.value_text) - 1] = '\0';
-        GW_UART_TRACE_I("UART EVT %s(%u) type=%s uid=%s short=0x%04x ep=%u cluster=0x%04x(%s) attr=0x%04x cmd=%s",
-                        evt_id_name(evt.event_id_kind), (unsigned)evt.event_id_kind, evt.event_type,
-                        evt.device_uid.uid, (unsigned)evt.short_addr, (unsigned)evt.endpoint,
-                        (unsigned)evt.cluster_id, cluster_name(evt.cluster_id), (unsigned)evt.attr_id, evt.cmd);
-    }
-
     switch (frame->hdr.type) {
         case GW_PROTO_MSG_SYNC_BEGIN:
             s_snapshot_last_chunk_us = esp_timer_get_time();
@@ -466,6 +410,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             s_snapshot_received_records = 0;
             s_snapshot_received_state_items = 0;
             s_bootstrap_ready = false;
+            ESP_LOGI(TAG, "Proto sync begin: expected=%u", (unsigned)s_snapshot_expected_records);
             break;
         case GW_PROTO_MSG_SYNC_END:
             s_snapshot_last_chunk_us = esp_timer_get_time();
@@ -553,7 +498,13 @@ static void rx_task(void *arg)
             off += consumed;
 
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "UART parse error: %s", esp_err_to_name(err));
+                ESP_LOGW(TAG,
+                         "UART parse error: %s chunk=%d consumed=%u offset=%u ready=%u",
+                         esp_err_to_name(err),
+                         n,
+                         (unsigned)consumed,
+                         (unsigned)off,
+                         ready ? 1u : 0u);
                 continue;
             }
             if (ready) {

@@ -332,19 +332,16 @@ static void runtime_proto_listener(gw_proto_bus_channel_t channel, const gw_prot
     if (!hdr || hdr->type != GW_PROTO_MSG_EVENT_ZB || !payload || hdr->len == 0) {
         return;
     }
+    if (hdr->len < sizeof(gw_proto_event_v1_t)) {
+        return;
+    }
 
-    gw_proto_event_v1_t event = {0};
-    const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
-    memcpy(&event, payload, n);
-    event.event_type[sizeof(event.event_type) - 1] = '\0';
-    event.cmd[sizeof(event.cmd) - 1] = '\0';
-    event.device_uid.uid[sizeof(event.device_uid.uid) - 1] = '\0';
-    event.value_text[sizeof(event.value_text) - 1] = '\0';
+    const gw_proto_event_v1_t *event = (const gw_proto_event_v1_t *)payload;
 
     gw_device_uid_t uid = {0};
-    bool have_uid = resolve_uid(&event, &uid);
+    bool have_uid = resolve_uid(event, &uid);
 
-    switch ((gw_proto_event_id_t)event.event_id_kind) {
+    switch ((gw_proto_event_id_t)event->event_id_kind) {
         case GW_PROTO_EVENT_DEVICE_JOIN:
         case GW_PROTO_EVENT_DEVICE_LEAVE:
         case GW_PROTO_EVENT_COMMAND:
@@ -356,13 +353,13 @@ static void runtime_proto_listener(gw_proto_bus_channel_t channel, const gw_prot
     }
 
     const bool is_state_event =
-        (event.event_id_kind == GW_PROTO_EVENT_ATTR_REPORT) ||
-        (event.event_id_kind == GW_PROTO_EVENT_NET_STATE && event.cluster_id != 0 && event.attr_id != 0);
+        (event->event_id_kind == GW_PROTO_EVENT_ATTR_REPORT) ||
+        (event->event_id_kind == GW_PROTO_EVENT_NET_STATE && event->cluster_id != 0 && event->attr_id != 0);
     if (is_state_event) {
         if (!have_uid) {
             return;
         }
-        process_attr_report(&uid, &event);
+        process_attr_report(&uid, event);
         return;
     }
 }

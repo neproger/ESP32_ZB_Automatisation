@@ -18,6 +18,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_event.h"
 #include "esp_vfs_dev.h"
 #include "esp_vfs_usb_serial_jtag.h"
 #include "esp_vfs_eventfd.h"
@@ -29,10 +30,8 @@
 #include "zb_config_platform.h"
 
 #include "gw_zigbee/gw_zigbee.h"
-#include "gw_core/event_bus.h"
 #include "gw_core/device_registry.h"
-#include "gw_core/sensor_store.h"
-#include "gw_core/state_store.h"
+#include "gw_core/gw_proto.h"
 #include "gw_core/zb_model.h"
 #include "gw_uart_link.h"
 
@@ -55,6 +54,58 @@ static const char *TAG = "ESP_ZB_GATEWAY";
 #define GW_ZB_ATTR_MEASURED_VALUE             0x0000
 #define GW_ZB_ATTR_OCCUPANCY                  0x0000
 #define GW_ZB_ATTR_BATTERY_VOLTAGE            0x0020
+
+static void uart_send_zb_event(uint8_t event_kind,
+                               const gw_device_uid_t *uid,
+                               uint16_t short_addr,
+                               uint8_t endpoint,
+                               uint16_t cluster_id,
+                               uint16_t attr_id,
+                               uint8_t value_type,
+                               bool value_bool,
+                               int64_t value_i64,
+                               float value_f32,
+                               const char *cmd,
+                               const char *value_text)
+{
+    gw_proto_event_v1_t evt = {0};
+    evt.event_id = 0;
+    evt.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    evt.event_id_kind = event_kind;
+    if (uid) {
+        evt.device_uid = *uid;
+    }
+    evt.short_addr = short_addr;
+    evt.endpoint = endpoint;
+    evt.cluster_id = cluster_id;
+    evt.attr_id = attr_id;
+    evt.value_type = value_type;
+    evt.value_bool = value_bool ? 1u : 0u;
+    evt.value_i64 = value_i64;
+    evt.value_f32 = value_f32;
+    if (cmd) {
+        strlcpy(evt.cmd, cmd, sizeof(evt.cmd));
+    }
+    if (value_text) {
+        strlcpy(evt.value_text, value_text, sizeof(evt.value_text));
+    }
+    (void)gw_uart_link_send_event_zb(&evt);
+}
+
+static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_addr, uint64_t ts_ms)
+{
+    if (!uid || uid->uid[0] == '\0') {
+        return;
+    }
+
+    gw_device_t d = {0};
+    if (gw_device_registry_get(uid, &d) != ESP_OK) {
+        return;
+    }
+    d.short_addr = short_addr;
+    d.last_seen_ms = ts_ms;
+    (void)gw_device_registry_upsert(&d);
+}
 
 static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
 {
@@ -86,16 +137,6 @@ static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
     return "unknown";
 }
 
-static void gw_log_heap_task(void *arg)
-{
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    size_t free8 = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    size_t largest8 = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    ESP_LOGI(TAG, "heap after start: free=%u largest=%u", (unsigned)free8, (unsigned)largest8);
-    vTaskDelete(NULL);
-}
-
 static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message)
 {
     if (callback_id == ESP_ZB_CORE_REPORT_ATTR_CB_ID) {
@@ -114,108 +155,16 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
             (void)gw_zigbee_discover_by_short(src_short);
         }
 
-        // Persist interesting sensor values for UI/debugging.
         const uint16_t cluster_id = m->cluster;
         const uint16_t attr_id = m->attribute.id;
         if (uid.uid[0] != '\0' && m->attribute.data.value != NULL) {
-            gw_sensor_value_t v = {0};
-            v.uid = uid;
-            v.short_addr = src_short;
-            v.endpoint = m->src_endpoint;
-            v.cluster_id = cluster_id;
-            v.attr_id = attr_id;
-            v.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-
-            if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT && attr_id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID &&
-                m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 && m->attribute.data.size >= 2) {
-                v.value_type = GW_SENSOR_VALUE_I32;
-                v.value_i32 = *((const int16_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-
-                // Normalized state key for automations.
-                (void)gw_state_store_set_f32(&uid, "temperature_c", ((float)v.value_i32) / 100.0f, v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT && attr_id == ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 && m->attribute.data.size >= 2) {
-                v.value_type = GW_SENSOR_VALUE_U32;
-                v.value_u32 = *((const uint16_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-
-                (void)gw_state_store_set_f32(&uid, "humidity_pct", ((float)v.value_u32) / 100.0f, v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 && m->attribute.data.size >= 1) {
-                v.value_type = GW_SENSOR_VALUE_U32;
-                v.value_u32 = *((const uint8_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-
-                // Battery percentage is 0.5% units. Normalize to integer percent.
-                (void)gw_state_store_set_u32(&uid, "battery_pct", (uint32_t)(v.value_u32 / 2u), v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID &&
-                       (m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL || m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) &&
-                       m->attribute.data.size >= 1) {
-                uint8_t onoff = *((const uint8_t *)m->attribute.data.value);
-                (void)gw_state_store_set_bool(&uid, "onoff", onoff != 0, v.ts_ms);
-            } else if (cluster_id == GW_ZB_CLUSTER_OCCUPANCY_SENSING &&
-                       attr_id == GW_ZB_ATTR_OCCUPANCY &&
-                       (m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_8BITMAP || m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) &&
-                       m->attribute.data.size >= 1) {
-                uint8_t occ = *((const uint8_t *)m->attribute.data.value);
-                (void)gw_state_store_set_bool(&uid, "occupancy", (occ & 0x01u) != 0, v.ts_ms);
-            } else if (cluster_id == GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT &&
-                       attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 &&
-                       m->attribute.data.size >= 2) {
-                v.value_type = GW_SENSOR_VALUE_U32;
-                v.value_u32 = *((const uint16_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-                (void)gw_state_store_set_u32(&uid, "illuminance_raw", v.value_u32, v.ts_ms);
-            } else if (cluster_id == GW_ZB_CLUSTER_PRESSURE_MEASUREMENT &&
-                       attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 &&
-                       m->attribute.data.size >= 2) {
-                v.value_type = GW_SENSOR_VALUE_I32;
-                v.value_i32 = *((const int16_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-                (void)gw_state_store_set_f32(&uid, "pressure_raw", (float)v.value_i32, v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG &&
-                       attr_id == GW_ZB_ATTR_BATTERY_VOLTAGE &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 &&
-                       m->attribute.data.size >= 1) {
-                uint32_t mv = (uint32_t)(*((const uint8_t *)m->attribute.data.value)) * 100u;
-                (void)gw_state_store_set_u32(&uid, "battery_mv", mv, v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL &&
-                       attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 &&
-                       m->attribute.data.size >= 1) {
-                v.value_type = GW_SENSOR_VALUE_U32;
-                v.value_u32 = *((const uint8_t *)m->attribute.data.value);
-                (void)gw_sensor_store_upsert(&v);
-                (void)gw_state_store_set_u32(&uid, "level", v.value_u32, v.ts_ms);
-            } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL &&
-                       m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 &&
-                       m->attribute.data.size >= 2 &&
-                       (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID ||
-                        attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID ||
-                        attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID)) {
-                const uint16_t raw = *((const uint16_t *)m->attribute.data.value);
-                v.value_type = GW_SENSOR_VALUE_U32;
-                v.value_u32 = raw;
-                (void)gw_sensor_store_upsert(&v);
-                if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID) {
-                    (void)gw_state_store_set_u32(&uid, "color_x", (uint32_t)raw, v.ts_ms);
-                } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID) {
-                    (void)gw_state_store_set_u32(&uid, "color_y", (uint32_t)raw, v.ts_ms);
-                } else {
-                    (void)gw_state_store_set_u32(&uid, "color_temp_mireds", (uint32_t)raw, v.ts_ms);
-                }
-            }
-
-            // Keep last seen fresh on any attribute report.
-            (void)gw_state_store_set_u64(&uid, "last_seen_ms", v.ts_ms, v.ts_ms);
+            const uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+            touch_device_last_seen(&uid, src_short, ts_ms);
         }
 
         // Normalized event: zigbee.attr_report (msg + structured payload)
         {
-            gw_event_value_type_t vtype = GW_EVENT_VALUE_NONE;
+            gw_proto_event_value_type_t vtype = GW_PROTO_EVENT_VALUE_NONE;
             bool vbool = false;
             int64_t vi64 = 0;
             double vf64 = 0.0;
@@ -224,83 +173,70 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                 if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID &&
                     (m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL || m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) &&
                     m->attribute.data.size >= 1) {
-                    vtype = GW_EVENT_VALUE_BOOL;
+                    vtype = GW_PROTO_EVENT_VALUE_BOOL;
                     vbool = (*((const uint8_t *)m->attribute.data.value) != 0);
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
                            attr_id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 && m->attribute.data.size >= 2) {
-                    vtype = GW_EVENT_VALUE_F64;
+                    vtype = GW_PROTO_EVENT_VALUE_F32;
                     vf64 = ((double)(*((const int16_t *)m->attribute.data.value))) / 100.0;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
                            attr_id == ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 && m->attribute.data.size >= 2) {
-                    vtype = GW_EVENT_VALUE_F64;
+                    vtype = GW_PROTO_EVENT_VALUE_F32;
                     vf64 = ((double)(*((const uint16_t *)m->attribute.data.value))) / 100.0;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG &&
                            attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 && m->attribute.data.size >= 1) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const uint8_t *)m->attribute.data.value) / 2u);
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG &&
                            attr_id == GW_ZB_ATTR_BATTERY_VOLTAGE &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 && m->attribute.data.size >= 1) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const uint8_t *)m->attribute.data.value)) * 100;
                 } else if (cluster_id == GW_ZB_CLUSTER_OCCUPANCY_SENSING &&
                            attr_id == GW_ZB_ATTR_OCCUPANCY &&
                            (m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_8BITMAP || m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) &&
                            m->attribute.data.size >= 1) {
-                    vtype = GW_EVENT_VALUE_BOOL;
+                    vtype = GW_PROTO_EVENT_VALUE_BOOL;
                     vbool = ((*((const uint8_t *)m->attribute.data.value) & 0x01u) != 0);
                 } else if (cluster_id == GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT &&
                            attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 && m->attribute.data.size >= 2) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const uint16_t *)m->attribute.data.value));
                 } else if (cluster_id == GW_ZB_CLUSTER_PRESSURE_MEASUREMENT &&
                            attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 && m->attribute.data.size >= 2) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const int16_t *)m->attribute.data.value));
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL &&
                            attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 && m->attribute.data.size >= 1) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const uint8_t *)m->attribute.data.value));
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL &&
                            m->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 && m->attribute.data.size >= 2 &&
                            (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID ||
                             attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID ||
                             attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID)) {
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)(*((const uint16_t *)m->attribute.data.value));
                 }
             }
-            char msg[96];
-            (void)snprintf(msg,
-                           sizeof(msg),
-                           "report cluster=0x%04x attr=0x%04x ep=%u type=0x%02x size=%u",
-                           (unsigned)cluster_id,
-                           (unsigned)attr_id,
-                           (unsigned)m->src_endpoint,
-                           (unsigned)m->attribute.data.type,
-                           (unsigned)m->attribute.data.size);
-            gw_event_bus_publish_zb("zigbee.attr_report",
-                                    "zigbee",
-                                    uid.uid,
-                                    src_short,
-                                    msg,
-                                    m->src_endpoint,
-                                    NULL,
-                                    cluster_id,
-                                    attr_id,
-                                    vtype,
-                                    vbool,
-                                    vi64,
-                                    vf64,
-                                    vtext,
-                                    NULL,
-                                    0);
+            uart_send_zb_event(GW_PROTO_EVENT_ATTR_REPORT,
+                               &uid,
+                               src_short,
+                               m->src_endpoint,
+                               cluster_id,
+                               attr_id,
+                               (uint8_t)vtype,
+                               vbool,
+                               vi64,
+                               (float)vf64,
+                               NULL,
+                               vtext);
         }
 
         return ESP_OK;
@@ -325,54 +261,41 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         for (esp_zb_zcl_read_attr_resp_variable_t *it = m->variables; it != NULL; it = it->next) {
             const uint16_t cluster_id = m->info.cluster;
             const uint16_t attr_id = it->attribute.id;
-            gw_event_value_type_t vtype = GW_EVENT_VALUE_NONE;
+            gw_proto_event_value_type_t vtype = GW_PROTO_EVENT_VALUE_NONE;
             bool vbool = false;
             int64_t vi64 = 0;
             double vf64 = 0.0;
             bool has_state_update = false;
 
             if (uid.uid[0] != '\0' && it->status == ESP_ZB_ZCL_STATUS_SUCCESS && it->attribute.data.value != NULL) {
-                gw_sensor_value_t v = {0};
-                v.uid = uid;
-                v.short_addr = src_short;
-                v.endpoint = m->info.src_endpoint;
-                v.cluster_id = cluster_id;
-                v.attr_id = attr_id;
-                v.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+                const uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
 
                 if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT && attr_id == ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID &&
                     it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 && it->attribute.data.size >= 2) {
-                    v.value_type = GW_SENSOR_VALUE_I32;
-                    v.value_i32 = *((const int16_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    vtype = GW_EVENT_VALUE_F64;
-                    vf64 = ((double)v.value_i32) / 100.0;
+                    const int16_t raw = *((const int16_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_F32;
+                    vf64 = ((double)raw) / 100.0;
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
                            attr_id == ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID && it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 &&
                            it->attribute.data.size >= 2) {
-                    v.value_type = GW_SENSOR_VALUE_U32;
-                    v.value_u32 = *((const uint16_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    vtype = GW_EVENT_VALUE_F64;
-                    vf64 = ((double)v.value_u32) / 100.0;
+                    const uint16_t raw = *((const uint16_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_F32;
+                    vf64 = ((double)raw) / 100.0;
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG &&
                            attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID && it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 &&
                            it->attribute.data.size >= 1) {
-                    v.value_type = GW_SENSOR_VALUE_U32;
-                    v.value_u32 = *((const uint8_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    vtype = GW_EVENT_VALUE_I64;
-                    vi64 = (int64_t)(v.value_u32 / 2u);
+                    const uint8_t raw = *((const uint8_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
+                    vi64 = (int64_t)(raw / 2u);
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF &&
                            attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID &&
                            (it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL || it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) &&
                            it->attribute.data.size >= 1) {
                     uint8_t onoff = *((const uint8_t *)it->attribute.data.value);
-                    (void)gw_state_store_set_bool(&uid, "onoff", onoff != 0, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_BOOL;
+                    vtype = GW_PROTO_EVENT_VALUE_BOOL;
                     vbool = (onoff != 0);
                     has_state_update = true;
                 } else if (cluster_id == GW_ZB_CLUSTER_OCCUPANCY_SENSING &&
@@ -381,51 +304,40 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                            it->attribute.data.size >= 1) {
                     uint8_t occ = *((const uint8_t *)it->attribute.data.value);
                     bool occupied = ((occ & 0x01u) != 0);
-                    (void)gw_state_store_set_bool(&uid, "occupancy", occupied, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_BOOL;
+                    vtype = GW_PROTO_EVENT_VALUE_BOOL;
                     vbool = occupied;
                     has_state_update = true;
                 } else if (cluster_id == GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT &&
                            attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
                            it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 &&
                            it->attribute.data.size >= 2) {
-                    v.value_type = GW_SENSOR_VALUE_U32;
-                    v.value_u32 = *((const uint16_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    (void)gw_state_store_set_u32(&uid, "illuminance_raw", v.value_u32, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_I64;
-                    vi64 = (int64_t)v.value_u32;
+                    const uint16_t raw = *((const uint16_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
+                    vi64 = (int64_t)raw;
                     has_state_update = true;
                 } else if (cluster_id == GW_ZB_CLUSTER_PRESSURE_MEASUREMENT &&
                            attr_id == GW_ZB_ATTR_MEASURED_VALUE &&
                            it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_S16 &&
                            it->attribute.data.size >= 2) {
-                    v.value_type = GW_SENSOR_VALUE_I32;
-                    v.value_i32 = *((const int16_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    (void)gw_state_store_set_f32(&uid, "pressure_raw", (float)v.value_i32, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_I64;
-                    vi64 = (int64_t)v.value_i32;
+                    const int16_t raw = *((const int16_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
+                    vi64 = (int64_t)raw;
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG &&
                            attr_id == GW_ZB_ATTR_BATTERY_VOLTAGE &&
                            it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 &&
                            it->attribute.data.size >= 1) {
                     uint32_t mv = (uint32_t)(*((const uint8_t *)it->attribute.data.value)) * 100u;
-                    (void)gw_state_store_set_u32(&uid, "battery_mv", mv, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)mv;
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL &&
                            attr_id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID &&
                            it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8 &&
                            it->attribute.data.size >= 1) {
-                    v.value_type = GW_SENSOR_VALUE_U32;
-                    v.value_u32 = *((const uint8_t *)it->attribute.data.value);
-                    (void)gw_sensor_store_upsert(&v);
-                    (void)gw_state_store_set_u32(&uid, "level", v.value_u32, v.ts_ms);
-                    vtype = GW_EVENT_VALUE_I64;
-                    vi64 = (int64_t)v.value_u32;
+                    const uint8_t raw = *((const uint8_t *)it->attribute.data.value);
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
+                    vi64 = (int64_t)raw;
                     has_state_update = true;
                 } else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL &&
                            it->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16 &&
@@ -434,43 +346,30 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                             attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID ||
                             attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID)) {
                     const uint16_t raw = *((const uint16_t *)it->attribute.data.value);
-                    v.value_type = GW_SENSOR_VALUE_U32;
-                    v.value_u32 = raw;
-                    (void)gw_sensor_store_upsert(&v);
-                    if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID) {
-                        (void)gw_state_store_set_u32(&uid, "color_x", (uint32_t)raw, v.ts_ms);
-                    } else if (attr_id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID) {
-                        (void)gw_state_store_set_u32(&uid, "color_y", (uint32_t)raw, v.ts_ms);
-                    } else {
-                        (void)gw_state_store_set_u32(&uid, "color_temp_mireds", (uint32_t)raw, v.ts_ms);
-                    }
-                    vtype = GW_EVENT_VALUE_I64;
+                    vtype = GW_PROTO_EVENT_VALUE_I64;
                     vi64 = (int64_t)raw;
                     has_state_update = true;
                 }
 
                 if (has_state_update) {
-                    gw_event_bus_publish_zb("zigbee.attr_read",
-                                            "zigbee",
-                                            uid.uid,
-                                            src_short,
-                                            "read_attr state",
-                                            m->info.src_endpoint,
-                                            NULL,
-                                            cluster_id,
-                                            attr_id,
-                                            vtype,
-                                            vbool,
-                                            vi64,
-                                            vf64,
-                                            NULL,
-                                            NULL,
-                                            0);
+                    touch_device_last_seen(&uid, src_short, ts_ms);
+                    uart_send_zb_event(GW_PROTO_EVENT_ATTR_REPORT,
+                                       &uid,
+                                       src_short,
+                                       m->info.src_endpoint,
+                                       cluster_id,
+                                       attr_id,
+                                       (uint8_t)vtype,
+                                       vbool,
+                                       vi64,
+                                       (float)vf64,
+                                       NULL,
+                                       NULL);
                 }
             }
         }
 
-        gw_event_bus_publish("zigbee_read_attr_resp", "zigbee", uid.uid, src_short, "read attr response received");
+        ESP_LOGD(TAG, "read attr response processed: uid=%s short=0x%04x", uid.uid, (unsigned)src_short);
         return ESP_OK;
     }
 
@@ -486,9 +385,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                 onoff = *((const uint8_t *)m->attribute.data.value);
             }
 
-            char msg[80];
-            (void)snprintf(msg, sizeof(msg), "onoff=%u dst_ep=%u", (unsigned)onoff, (unsigned)m->info.dst_endpoint);
-            gw_event_bus_publish("zigbee_onoff_attr", "zigbee", "", 0, msg);
+            ESP_LOGI(TAG, "onoff attr dst_ep=%u value=%u", (unsigned)m->info.dst_endpoint, (unsigned)onoff);
         }
 
         return ESP_OK;
@@ -517,32 +414,18 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
-        char msg[128];
-        (void)snprintf(msg,
-                       sizeof(msg),
-                       "cmd cluster=0x%04x id=0x%02x src=0x%04x ep=%u rssi=%d",
-                       (unsigned)m->info.cluster,
-                       (unsigned)m->info.command.id,
-                       (unsigned)src_short,
-                       (unsigned)m->info.src_endpoint,
-                       (int)m->info.header.rssi);
-
-        gw_event_bus_publish_zb("zigbee.command",
-                                "zigbee",
-                                uid.uid,
-                                src_short,
-                                msg,
-                                m->info.src_endpoint,
-                                cmd_name,
-                                m->info.cluster,
-                                0,
-                                GW_EVENT_VALUE_NONE,
-                                false,
-                                0,
-                                0.0,
-                                NULL,
-                                NULL,
-                                0);
+        uart_send_zb_event(GW_PROTO_EVENT_COMMAND,
+                           &uid,
+                           src_short,
+                           m->info.src_endpoint,
+                           m->info.cluster,
+                           0,
+                           GW_PROTO_EVENT_VALUE_NONE,
+                           false,
+                           0,
+                           0.0f,
+                           cmd_name,
+                           NULL);
     }
 
     return ESP_OK;
@@ -699,7 +582,7 @@ static void esp_zb_task(void *pvParameters)
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_WITH_ON_OFF);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP_WITH_ON_OFF);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP_WITH_ON_OFF);
-    gw_event_bus_publish("zigbee_ready", "zigbee", "", 0, "registered privilege handlers for onoff+level");
+    ESP_LOGI(TAG, "registered privilege handlers for onoff+level");
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_stack_main_loop();
@@ -708,8 +591,8 @@ static void esp_zb_task(void *pvParameters)
 
 void app_main(void)
 {
-    // Keep runtime logging moderate for stable UART timings under load.
-    esp_log_level_set("gw_uart", ESP_LOG_INFO);
+    // Keep Zigbee runtime visible; UART transport stays quiet unless something is wrong.
+    esp_log_level_set("gw_uart", ESP_LOG_WARN);
     esp_log_level_set("gw_zigbee", ESP_LOG_INFO);
     esp_log_level_set("ESP_ZB_GATEWAY", ESP_LOG_INFO);
 
@@ -721,19 +604,14 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(gw_event_bus_init());
     ESP_ERROR_CHECK(gw_zb_model_init());
-    ESP_ERROR_CHECK(gw_sensor_store_init());
-    ESP_ERROR_CHECK(gw_state_store_init());
     ESP_ERROR_CHECK(gw_device_registry_init());
     ESP_ERROR_CHECK(gw_uart_link_start());
-    gw_event_bus_publish("boot", "system", "", 0, "c6 thin zigbee router started");
+    ESP_LOGI(TAG, "c6 thin zigbee router started");
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     ESP_ERROR_CHECK(esp_zb_gateway_console_init());
 #endif
     xTaskCreate(esp_zb_task, "Zigbee_main", 8192, NULL, GW_TASK_PRIO_ZIGBEE, NULL);
-    // Logging path (vfprintf) can consume notable stack on C6, keep a safer margin.
-    xTaskCreate(gw_log_heap_task, "heap_log", 4096, NULL, 1, NULL);
 }
 
 

@@ -18,7 +18,6 @@
 
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
-#include "gw_core/event_names.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/state_store.h"
 #include "gw_core/types.h"
@@ -171,19 +170,17 @@ static uint32_t trigger_index_lookup(const rules_cache_t *cache, const trigger_k
 
 static void publish_rules_fired(const gw_proto_event_v1_t *e, const char *automation_id)
 {
-    gw_proto_bus_event_v1_t trace = {0};
-    char msg[128];
-    snprintf(msg, sizeof(msg), "automation_id=%s", automation_id ? automation_id : "");
+    gw_proto_trace_v1_t trace = {0};
     trace.v = 1;
+    trace.kind = GW_PROTO_TRACE_RULES_FIRED;
+    trace.ok = 1;
     trace.id = ++s_trace_id;
     trace.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    strlcpy(trace.type, GW_EVT_RULES_FIRED, sizeof(trace.type));
-    strlcpy(trace.source, "rules", sizeof(trace.source));
     if (e) {
         strlcpy(trace.device_uid, e->device_uid.uid, sizeof(trace.device_uid));
         trace.short_addr = e->short_addr;
     }
-    strlcpy(trace.msg, msg, sizeof(trace.msg));
+    strlcpy(trace.automation_id, automation_id ? automation_id : "", sizeof(trace.automation_id));
     const gw_proto_hdr_t hdr = {
         .version = GW_PROTO_VERSION_V1,
         .type = GW_PROTO_MSG_EVENT_TRACE,
@@ -196,19 +193,15 @@ static void publish_rules_fired(const gw_proto_event_v1_t *e, const char *automa
 
 static void publish_rules_action(const char *automation_id, size_t idx, bool ok, const char *err)
 {
-    gw_proto_bus_event_v1_t trace = {0};
-    char msg[192];
-    if (err) {
-        snprintf(msg, sizeof(msg), "automation_id=%s idx=%u ok=0 err=%s", automation_id, (unsigned)idx, err);
-    } else {
-        snprintf(msg, sizeof(msg), "automation_id=%s idx=%u ok=1", automation_id, (unsigned)idx);
-    }
+    gw_proto_trace_v1_t trace = {0};
     trace.v = 1;
+    trace.kind = GW_PROTO_TRACE_RULES_ACTION;
+    trace.ok = ok ? 1 : 0;
     trace.id = ++s_trace_id;
     trace.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-    strlcpy(trace.type, GW_EVT_RULES_ACTION, sizeof(trace.type));
-    strlcpy(trace.source, "rules", sizeof(trace.source));
-    strlcpy(trace.msg, msg, sizeof(trace.msg));
+    trace.action_index = (uint16_t)idx;
+    strlcpy(trace.automation_id, automation_id ? automation_id : "", sizeof(trace.automation_id));
+    strlcpy(trace.error_text, err ? err : "", sizeof(trace.error_text));
     const gw_proto_hdr_t hdr = {
         .version = GW_PROTO_VERSION_V1,
         .type = GW_PROTO_MSG_EVENT_TRACE,
@@ -634,16 +627,13 @@ static void rules_proto_listener(gw_proto_bus_channel_t channel, const gw_proto_
     if (!s_inited || !s_q || !hdr || hdr->type != GW_PROTO_MSG_EVENT_ZB || !payload || hdr->len == 0) {
         return;
     }
+    if (hdr->len < sizeof(gw_proto_event_v1_t)) {
+        return;
+    }
 
-    gw_proto_event_v1_t event = {0};
-    const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
-    memcpy(&event, payload, n);
-    event.event_type[sizeof(event.event_type) - 1] = '\0';
-    event.cmd[sizeof(event.cmd) - 1] = '\0';
-    event.device_uid.uid[sizeof(event.device_uid.uid) - 1] = '\0';
-    event.value_text[sizeof(event.value_text) - 1] = '\0';
+    const gw_proto_event_v1_t *event = (const gw_proto_event_v1_t *)payload;
 
-    if (xQueueSend(s_q, &event, 0) != pdTRUE) {
+    if (xQueueSend(s_q, event, 0) != pdTRUE) {
         ESP_LOGW(TAG, "rules event queue overflow");
     }
 }

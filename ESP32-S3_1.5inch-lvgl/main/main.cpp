@@ -32,8 +32,7 @@
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
 static constexpr uint32_t kUiBootTaskStack = 12288;
-static constexpr uint32_t kMemDiagTaskStack = 3072;
-static constexpr uint32_t kTaskSnapshotPeriod = 4;
+static constexpr uint32_t kZigbeeBootstrapWaitMs = 15000;
 static bool s_http_started = false;
 static volatile bool s_ui_ready_for_http = false;
 
@@ -49,49 +48,6 @@ static void log_struct_sizes_once(void)
              (unsigned)sizeof(gw_proto_group_item_v1_t),
              (unsigned)sizeof(gw_proto_settings_v1_t),
              (unsigned)GW_PROTO_FRAME_MAX_SIZE);
-}
-
-static void log_heap_periodic(void)
-{
-    ESP_LOGI(TAG_APP,
-             "Heap periodic: internal=%u min=%u (largest=%u) dma=%u min=%u (largest=%u) psram=%u min=%u (largest=%u)",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-}
-
-static void log_task_memory_snapshot(void)
-{
-    const UBaseType_t task_count = uxTaskGetNumberOfTasks();
-    if (task_count == 0) {
-        return;
-    }
-
-    TaskStatus_t *tasks = (TaskStatus_t *)heap_caps_malloc(sizeof(TaskStatus_t) * task_count, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!tasks) {
-        ESP_LOGW(TAG_APP, "Task memory snapshot skipped: OOM for %u tasks", (unsigned)task_count);
-        return;
-    }
-
-    const UBaseType_t got = uxTaskGetSystemState(tasks, task_count, nullptr);
-    ESP_LOGI(TAG_APP, "Task memory snapshot: tasks=%u", (unsigned)got);
-    for (UBaseType_t i = 0; i < got; i++) {
-        const TaskStatus_t *t = &tasks[i];
-        ESP_LOGI(TAG_APP,
-                 "task name=%s prio=%u stack_hwm=%u task_num=%u state=%u",
-                 t->pcTaskName ? t->pcTaskName : "?",
-                 (unsigned)t->uxCurrentPriority,
-                 (unsigned)t->usStackHighWaterMark,
-                 (unsigned)t->xTaskNumber,
-                 (unsigned)t->eCurrentState);
-    }
-    free(tasks);
 }
 
 static bool http_has_memory_headroom(void)
@@ -136,19 +92,6 @@ static void ui_boot_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void mem_diag_task(void *arg)
-{
-    (void)arg;
-    uint32_t tick = 0;
-    for (;;) {
-        log_heap_periodic();
-        if ((tick++ % kTaskSnapshotPeriod) == 0) {
-            log_task_memory_snapshot();
-        }
-        vTaskDelay(pdMS_TO_TICKS(15000));
-    }
-}
-
 extern "C" void app_main(void)
 {
     esp_err_t nvs_err = nvs_flash_init();
@@ -162,7 +105,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_proto_bus_init());
     log_struct_sizes_once();
     // Keep noisy subsystems quiet while we debug task stacks and heap pressure.
-    esp_log_level_set("gw_zigbee_uart", ESP_LOG_WARN);
+    esp_log_level_set("gw_zigbee_uart", ESP_LOG_INFO);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
     esp_log_level_set("gw_runtime_sync", ESP_LOG_WARN);
     esp_log_level_set("gw_state_store", ESP_LOG_WARN);
@@ -180,27 +123,37 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_proto_ingest_init());
     ESP_ERROR_CHECK(gw_rules_init());
     ESP_ERROR_CHECK(gw_runtime_sync_init());
-    ESP_ERROR_CHECK(gw_net_time_init(NULL));
-    ESP_ERROR_CHECK(s3_weather_service_start());
 
-    // Start Zigbee UART backend before display/UI to prioritize Wi-Fi and HTTP bring-up.
+    // Bring up Zigbee link first and give C6 snapshot bootstrap an exclusive startup window.
     esp_err_t zb_link_err = gw_zigbee_link_start();
     if (zb_link_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
+    } else {
+        const TickType_t poll_ticks = pdMS_TO_TICKS(100);
+        uint32_t waited_ms = 0;
+        while (!gw_zigbee_bootstrap_ready() && waited_ms < kZigbeeBootstrapWaitMs) {
+            vTaskDelay(poll_ticks);
+            waited_ms += 100;
+        }
+        if (gw_zigbee_bootstrap_ready()) {
+            ESP_LOGI(TAG_APP, "Zigbee bootstrap ready before network startup (%u ms)", (unsigned)waited_ms);
+        } else {
+            ESP_LOGW(TAG_APP, "Zigbee bootstrap wait timed out after %u ms", (unsigned)kZigbeeBootstrapWaitMs);
+        }
     }
 
-    // Start Wi-Fi service before display/UI to reserve Wi-Fi internal resources first.
+    ESP_ERROR_CHECK(gw_net_time_init(NULL));
+
+    // Network-facing services start only after Zigbee bootstrap window.
     esp_err_t wifi_boot_err = gw_wifi_start();
     if (wifi_boot_err != ESP_OK) {
         ESP_LOGW(TAG_APP, "Wi-Fi service start failed (%s)", esp_err_to_name(wifi_boot_err));
     }
+    ESP_ERROR_CHECK(s3_weather_service_start());
 
     // HTTP start may mount SPIFFS (flash operations). Stack must be internal RAM.
     if (xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG_APP, "http_start task create failed");
-    }
-    if (xTaskCreateWithCaps(mem_diag_task, "mem_diag", kMemDiagTaskStack, NULL, 2, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
-        ESP_LOGW(TAG_APP, "mem_diag task create failed");
     }
     if (kEnableHttpServer) {
         ESP_LOGI(TAG_APP, "HTTP start deferred until UI init completes");

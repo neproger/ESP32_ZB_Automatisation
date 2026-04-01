@@ -2,13 +2,9 @@
 
 #include <string.h>
 
-#include "esp_log.h"
-
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/runtime_sync.h"
 #include "gw_core/state_store.h"
-
-static const char *TAG = "gw_proto_ingest";
 static bool s_inited;
 
 static void gw_proto_ingest_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
@@ -24,63 +20,45 @@ static void gw_proto_ingest_listener(gw_proto_bus_channel_t channel, const gw_pr
             return;
         }
         case GW_PROTO_MSG_SYNC_BEGIN: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_sync_begin_v1_t)) {
                 return;
             }
-            gw_proto_sync_begin_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_sync_begin(&msg);
+            (void)gw_proto_ingest_apply_sync_begin((const gw_proto_sync_begin_v1_t *)payload);
             return;
         }
         case GW_PROTO_MSG_SYNC_END: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_sync_end_v1_t)) {
                 return;
             }
-            gw_proto_sync_end_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_sync_end(&msg, true);
+            (void)gw_proto_ingest_apply_sync_end((const gw_proto_sync_end_v1_t *)payload, true);
             return;
         }
         case GW_PROTO_MSG_DEVICE_UPSERT: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_device_v1_t)) {
                 return;
             }
-            gw_proto_device_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_device(&msg);
+            (void)gw_proto_ingest_apply_device((const gw_proto_device_v1_t *)payload);
             return;
         }
         case GW_PROTO_MSG_DEVICE_REMOVE: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_device_remove_v1_t)) {
                 return;
             }
-            gw_proto_device_remove_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_device_remove(&msg);
+            (void)gw_proto_ingest_apply_device_remove((const gw_proto_device_remove_v1_t *)payload);
             return;
         }
         case GW_PROTO_MSG_ENDPOINT_UPSERT: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_endpoint_v1_t)) {
                 return;
             }
-            gw_proto_endpoint_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_endpoint(&msg);
+            (void)gw_proto_ingest_apply_endpoint((const gw_proto_endpoint_v1_t *)payload);
             return;
         }
         case GW_PROTO_MSG_STATE_ITEM: {
-            if (!payload || hdr->len == 0) {
+            if (!payload || hdr->len < sizeof(gw_proto_state_item_v1_t)) {
                 return;
             }
-            gw_proto_state_item_v1_t msg = {0};
-            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
-            memcpy(&msg, payload, n);
-            (void)gw_proto_ingest_apply_state_item(&msg);
+            (void)gw_proto_ingest_apply_state_item((const gw_proto_state_item_v1_t *)payload);
             return;
         }
         default:
@@ -131,11 +109,6 @@ esp_err_t gw_proto_ingest_apply_device(const gw_proto_device_v1_t *msg)
     d.last_seen_ms = msg->last_seen_ms;
     d.has_onoff = (msg->has_onoff != 0);
     d.has_button = (msg->has_button != 0);
-    ESP_LOGI(TAG,
-             "Proto device upsert uid=%s short=0x%04x name=%s",
-             msg->device_uid.uid,
-             (unsigned)msg->short_addr,
-             msg->name);
     return gw_runtime_sync_snapshot_upsert_device(&d);
 }
 
@@ -191,6 +164,5 @@ esp_err_t gw_proto_ingest_apply_device_remove(const gw_proto_device_remove_v1_t 
     if (!msg) {
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGI(TAG, "Proto device remove uid=%s", msg->device_uid.uid);
     return gw_runtime_sync_snapshot_remove_device(&msg->device_uid);
 }

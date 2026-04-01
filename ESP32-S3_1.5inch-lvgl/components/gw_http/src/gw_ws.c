@@ -9,7 +9,6 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -55,14 +54,9 @@ static QueueHandle_t s_tx_q;
 static TaskHandle_t s_tx_task;
 static StaticQueue_t s_tx_q_struct;
 static uint8_t s_tx_q_storage[GW_WS_TX_Q_CAP * sizeof(ws_tx_msg_t)];
-static bool s_device_updates_suppressed;
-static esp_timer_handle_t s_device_suppress_timer;
 
 static size_t ws_collect_client_fds(int *fds, size_t max_fds);
 static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
-static void ws_send_proto_devices_snapshot_to_fds(const int *fds, size_t fd_count);
-static void ws_resume_device_updates_work(void *arg);
-static void ws_device_suppress_timer_cb(void *arg);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
 static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
 
@@ -184,11 +178,7 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             }
             const gw_proto_cmd_permit_join_v1_t *msg = (const gw_proto_cmd_permit_join_v1_t *)payload;
             const uint8_t seconds = msg->seconds > 0 ? msg->seconds : 180;
-            esp_err_t err = gw_zigbee_permit_join(seconds);
-            if (err == ESP_OK) {
-                (void)gw_ws_suppress_device_updates(12000);
-            }
-            return err;
+            return gw_zigbee_permit_join(seconds);
         }
         case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
             if (payload_len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
@@ -321,11 +311,6 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
 }
 
 typedef struct {
-    const int *fds;
-    size_t fd_count;
-} ws_proto_emit_many_ctx_t;
-
-typedef struct {
     size_t group_count;
     size_t group_index;
     size_t item_index;
@@ -375,25 +360,6 @@ static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
 {
     httpd_req_t *req = (httpd_req_t *)emit_ctx;
     return ws_send_proto_frame_sync(req, msg_type, seq, payload, payload_len);
-}
-
-static esp_err_t ws_snapshot_emit_many(void *emit_ctx,
-                                       uint8_t msg_type,
-                                       uint16_t seq,
-                                       const void *payload,
-                                       uint16_t payload_len)
-{
-    const ws_proto_emit_many_ctx_t *ctx = (const ws_proto_emit_many_ctx_t *)emit_ctx;
-    if (!ctx || !ctx->fds || ctx->fd_count == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    for (size_t i = 0; i < ctx->fd_count; i++) {
-        esp_err_t err = ws_send_proto_frame_async(ctx->fds[i], msg_type, seq, payload, payload_len);
-        if (err != ESP_OK) {
-            return err;
-        }
-    }
-    return ESP_OK;
 }
 
 static uint32_t ws_group_snapshot_total_records(void)
@@ -681,32 +647,6 @@ static esp_err_t ws_send_proto_devices_snapshot_sync(httpd_req_t *req, uint16_t 
     return err;
 }
 
-static void ws_send_proto_devices_snapshot_to_fds(const int *fds, size_t fd_count)
-{
-    if (!fds || fd_count == 0) {
-        return;
-    }
-    ws_device_snapshot_iter_t iter = {0};
-    if (ws_device_snapshot_rewind(&iter) != ESP_OK) {
-        return;
-    }
-    const ws_proto_emit_many_ctx_t ctx = {
-        .fds = fds,
-        .fd_count = fd_count,
-    };
-    const gw_proto_snapshot_source_t source = {
-        .source_ctx = &iter,
-        .total_records = iter.total_records,
-        .rewind = NULL,
-        .next = ws_device_snapshot_next,
-    };
-    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
-                                 (void *)&ctx,
-                                 GW_PROTO_SYNC_SCOPE_DEVICES,
-                                 s_ws_seq++,
-                                 &source);
-}
-
 static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
 {
     (void)fd;
@@ -759,31 +699,6 @@ static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
     return ws_send_proto_frame_sync(req, GW_PROTO_MSG_SYNC_END, seq, &settings_end, sizeof(settings_end));
 }
 
-static void ws_resume_device_updates_work(void *arg)
-{
-    (void)arg;
-    s_device_updates_suppressed = false;
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count == 0) {
-        return;
-    }
-    ESP_LOGI(TAG, "WS device updates resumed; sending fresh devices snapshot");
-    ws_send_proto_devices_snapshot_to_fds(fds, fd_count);
-}
-
-static void ws_device_suppress_timer_cb(void *arg)
-{
-    (void)arg;
-    if (!s_server) {
-        s_device_updates_suppressed = false;
-        return;
-    }
-    if (httpd_queue_work(s_server, ws_resume_device_updates_work, NULL) != ESP_OK) {
-        s_device_updates_suppressed = false;
-    }
-}
-
 static size_t ws_collect_client_fds(int *fds, size_t max_fds)
 {
     size_t fd_count = 0;
@@ -797,7 +712,7 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds)
     return fd_count;
 }
 
-static void ws_send_proto_trace_to_fds(const gw_proto_bus_event_v1_t *event, const int *fds, size_t fd_count)
+static void ws_send_proto_trace_to_fds(const gw_proto_trace_v1_t *event, const int *fds, size_t fd_count)
 {
     if (!event || !fds || fd_count == 0) {
         return;
@@ -830,7 +745,7 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
     }
 
     if (channel == GW_PROTO_BUS_CHANNEL_TRACE && hdr->type == GW_PROTO_MSG_EVENT_TRACE) {
-        gw_proto_bus_event_v1_t event = {0};
+        gw_proto_trace_v1_t event = {0};
         const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
         memcpy(&event, payload, n);
         ws_send_proto_trace_to_fds(&event, fds, fd_count);
@@ -851,9 +766,7 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
             case GW_PROTO_MSG_GROUP_ITEM_REMOVE:
             case GW_PROTO_MSG_AUTOMATION_UPSERT:
             case GW_PROTO_MSG_AUTOMATION_REMOVE:
-                if (!s_device_updates_suppressed) {
-                    ws_send_proto_model_to_fds(hdr->type, payload, hdr->len, fds, fd_count);
-                }
+                ws_send_proto_model_to_fds(hdr->type, payload, hdr->len, fds, fd_count);
                 return;
             default:
                 return;
@@ -951,8 +864,6 @@ esp_err_t gw_ws_register(httpd_handle_t server)
 
     s_server = server;
     memset(s_clients, 0, sizeof(s_clients));
-    s_device_updates_suppressed = false;
-    s_device_suppress_timer = NULL;
     s_tx_q = xQueueCreateStatic(GW_WS_TX_Q_CAP,
                                 sizeof(ws_tx_msg_t),
                                 s_tx_q_storage,
@@ -963,20 +874,6 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     }
     UBaseType_t task_ok = xTaskCreateWithCaps(ws_tx_task_fn, "ws_tx", GW_WS_TX_TASK_STACK, NULL, GW_WS_TX_TASK_PRIO, &s_tx_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (task_ok != pdPASS) {
-        s_tx_q = NULL;
-        s_server = NULL;
-        return ESP_ERR_NO_MEM;
-    }
-    const esp_timer_create_args_t suppress_timer_args = {
-        .callback = ws_device_suppress_timer_cb,
-        .arg = NULL,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "ws_suppress",
-        .skip_unhandled_events = true,
-    };
-    if (esp_timer_create(&suppress_timer_args, &s_device_suppress_timer) != ESP_OK) {
-        vTaskDelete(s_tx_task);
-        s_tx_task = NULL;
         s_tx_q = NULL;
         s_server = NULL;
         return ESP_ERR_NO_MEM;
@@ -993,8 +890,6 @@ esp_err_t gw_ws_register(httpd_handle_t server)
     };
     esp_err_t err = httpd_register_uri_handler(s_server, &ws_uri);
     if (err != ESP_OK) {
-        esp_timer_delete(s_device_suppress_timer);
-        s_device_suppress_timer = NULL;
         vTaskDelete(s_tx_task);
         s_tx_task = NULL;
         s_tx_q = NULL;
@@ -1018,11 +913,6 @@ void gw_ws_unregister(void)
         vTaskDelete(s_tx_task);
         s_tx_task = NULL;
     }
-    if (s_device_suppress_timer) {
-        esp_timer_stop(s_device_suppress_timer);
-        esp_timer_delete(s_device_suppress_timer);
-        s_device_suppress_timer = NULL;
-    }
     if (s_tx_q) {
         ws_tx_msg_t msg = {0};
         while (xQueueReceive(s_tx_q, &msg, 0) == pdTRUE) {
@@ -1032,20 +922,6 @@ void gw_ws_unregister(void)
     }
     (void)gw_proto_bus_remove_listener(ws_on_proto_bus_message, NULL);
     s_server = NULL;
-}
-
-esp_err_t gw_ws_suppress_device_updates(uint32_t duration_ms)
-{
-    if (!s_server || !s_device_suppress_timer || duration_ms == 0) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    s_device_updates_suppressed = true;
-    (void)esp_timer_stop(s_device_suppress_timer);
-    esp_err_t err = esp_timer_start_once(s_device_suppress_timer, (uint64_t)duration_ms * 1000ULL);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "WS device updates suppressed for %u ms", (unsigned)duration_ms);
-    }
-    return err;
 }
 
 
