@@ -10,8 +10,7 @@
 
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
-#include "gw_core/event_bus.h"
-#include "gw_core/event_names.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
 #include "gw_core/zb_model.h"
@@ -46,23 +45,15 @@ static void snapshot_stale_remove_uid(const gw_device_uid_t *uid)
     }
 }
 
-static bool is_event_type(const char *type, const char *expected)
-{
-    if (!type) {
-        return false;
-    }
-    return strcmp(type, expected) == 0;
-}
-
-static bool resolve_uid(const gw_event_t *e, gw_device_uid_t *out_uid)
+static bool resolve_uid(const gw_proto_event_v1_t *e, gw_device_uid_t *out_uid)
 {
     if (!e || !out_uid) {
         return false;
     }
     memset(out_uid, 0, sizeof(*out_uid));
 
-    if (e->device_uid[0] != '\0') {
-        strlcpy(out_uid->uid, e->device_uid, sizeof(out_uid->uid));
+    if (e->device_uid.uid[0] != '\0') {
+        strlcpy(out_uid->uid, e->device_uid.uid, sizeof(out_uid->uid));
         return true;
     }
     if (e->short_addr != 0 && gw_zb_model_find_uid_by_short(e->short_addr, out_uid)) {
@@ -72,72 +63,72 @@ static bool resolve_uid(const gw_event_t *e, gw_device_uid_t *out_uid)
 }
 
 
-static bool value_as_bool(const gw_event_t *e, bool *out)
+static bool value_as_bool(const gw_proto_event_v1_t *e, bool *out)
 {
     if (!e || !out) {
         return false;
     }
-    switch ((gw_event_value_type_t)e->payload_value_type) {
-        case GW_EVENT_VALUE_BOOL:
-            *out = (e->payload_value_bool != 0);
+    switch ((gw_proto_event_value_type_t)e->value_type) {
+        case GW_PROTO_EVENT_VALUE_BOOL:
+            *out = (e->value_bool != 0);
             return true;
-        case GW_EVENT_VALUE_I64:
-            *out = (e->payload_value_i64 != 0);
+        case GW_PROTO_EVENT_VALUE_I64:
+            *out = (e->value_i64 != 0);
             return true;
-        case GW_EVENT_VALUE_F64:
-            *out = (e->payload_value_f64 != 0.0);
+        case GW_PROTO_EVENT_VALUE_F32:
+            *out = (e->value_f32 != 0.0f);
             return true;
         default:
             return false;
     }
 }
 
-static bool value_as_i64(const gw_event_t *e, int64_t *out)
+static bool value_as_i64(const gw_proto_event_v1_t *e, int64_t *out)
 {
     if (!e || !out) {
         return false;
     }
-    switch ((gw_event_value_type_t)e->payload_value_type) {
-        case GW_EVENT_VALUE_I64:
-            *out = e->payload_value_i64;
+    switch ((gw_proto_event_value_type_t)e->value_type) {
+        case GW_PROTO_EVENT_VALUE_I64:
+            *out = e->value_i64;
             return true;
-        case GW_EVENT_VALUE_BOOL:
-            *out = e->payload_value_bool ? 1 : 0;
+        case GW_PROTO_EVENT_VALUE_BOOL:
+            *out = e->value_bool ? 1 : 0;
             return true;
-        case GW_EVENT_VALUE_F64:
-            *out = (int64_t)e->payload_value_f64;
+        case GW_PROTO_EVENT_VALUE_F32:
+            *out = (int64_t)e->value_f32;
             return true;
         default:
             return false;
     }
 }
 
-static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
+static void process_attr_report(const gw_device_uid_t *uid, const gw_proto_event_v1_t *e)
 {
     if (!uid || uid->uid[0] == '\0' || !e) {
         return;
     }
-    if (!(e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) || !(e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR)) {
+    if (e->cluster_id == 0) {
         return;
     }
 
-    const uint16_t cluster = e->payload_cluster;
-    const uint16_t attr = e->payload_attr;
-    const uint8_t endpoint = (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) ? e->payload_endpoint : 0;
+    const uint16_t cluster = e->cluster_id;
+    const uint16_t attr = e->attr_id;
+    const uint8_t endpoint = e->endpoint;
 
     // Temperature (0x0402/0x0000), hundredths of Celsius.
     if (cluster == 0x0402 && attr == 0x0000) {
         gw_sensor_value_t v = {0};
         v.uid = *uid;
         v.short_addr = e->short_addr;
-        v.endpoint = e->payload_endpoint;
+        v.endpoint = e->endpoint;
         v.cluster_id = cluster;
         v.attr_id = attr;
         v.ts_ms = e->ts_ms;
         float celsius = 0.0f;
 
-        if ((gw_event_value_type_t)e->payload_value_type == GW_EVENT_VALUE_F64) {
-            celsius = (float)e->payload_value_f64;
+        if ((gw_proto_event_value_type_t)e->value_type == GW_PROTO_EVENT_VALUE_F32) {
+            celsius = e->value_f32;
             v.value_type = GW_SENSOR_VALUE_I32;
             v.value_i32 = (int32_t)(celsius * 100.0f);
             (void)gw_sensor_store_upsert(&v);
@@ -159,14 +150,14 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
         gw_sensor_value_t v = {0};
         v.uid = *uid;
         v.short_addr = e->short_addr;
-        v.endpoint = e->payload_endpoint;
+        v.endpoint = e->endpoint;
         v.cluster_id = cluster;
         v.attr_id = attr;
         v.ts_ms = e->ts_ms;
         float humidity = 0.0f;
 
-        if ((gw_event_value_type_t)e->payload_value_type == GW_EVENT_VALUE_F64) {
-            humidity = (float)e->payload_value_f64;
+        if ((gw_proto_event_value_type_t)e->value_type == GW_PROTO_EVENT_VALUE_F32) {
+            humidity = e->value_f32;
             v.value_type = GW_SENSOR_VALUE_U32;
             v.value_u32 = (uint32_t)(humidity * 100.0f);
             (void)gw_sensor_store_upsert(&v);
@@ -190,7 +181,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             gw_sensor_value_t v = {0};
             v.uid = *uid;
             v.short_addr = e->short_addr;
-            v.endpoint = e->payload_endpoint;
+            v.endpoint = e->endpoint;
             v.cluster_id = cluster;
             v.attr_id = attr;
             v.value_type = GW_SENSOR_VALUE_U32;
@@ -210,7 +201,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             gw_sensor_value_t v = {0};
             v.uid = *uid;
             v.short_addr = e->short_addr;
-            v.endpoint = e->payload_endpoint;
+            v.endpoint = e->endpoint;
             v.cluster_id = cluster;
             v.attr_id = attr;
             v.value_type = GW_SENSOR_VALUE_U32;
@@ -238,7 +229,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             gw_sensor_value_t v = {0};
             v.uid = *uid;
             v.short_addr = e->short_addr;
-            v.endpoint = e->payload_endpoint;
+            v.endpoint = e->endpoint;
             v.cluster_id = cluster;
             v.attr_id = attr;
             v.value_type = GW_SENSOR_VALUE_U32;
@@ -257,7 +248,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             gw_sensor_value_t v = {0};
             v.uid = *uid;
             v.short_addr = e->short_addr;
-            v.endpoint = e->payload_endpoint;
+            v.endpoint = e->endpoint;
             v.cluster_id = cluster;
             v.attr_id = attr;
             v.value_type = GW_SENSOR_VALUE_U32;
@@ -300,7 +291,7 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
             gw_sensor_value_t v = {0};
             v.uid = *uid;
             v.short_addr = e->short_addr;
-            v.endpoint = e->payload_endpoint;
+            v.endpoint = e->endpoint;
             v.cluster_id = cluster;
             v.attr_id = attr;
             v.value_type = GW_SENSOR_VALUE_I32;
@@ -315,18 +306,18 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     // Generic numeric/bool mirror for unsupported attrs.
     char key[40] = {0};
     (void)snprintf(key, sizeof(key), "cluster_%04x_attr_%04x", (unsigned)cluster, (unsigned)attr);
-    switch ((gw_event_value_type_t)e->payload_value_type) {
-        case GW_EVENT_VALUE_BOOL:
-            (void)gw_state_store_set_bool(uid, endpoint, key, e->payload_value_bool != 0, e->ts_ms);
+    switch ((gw_proto_event_value_type_t)e->value_type) {
+        case GW_PROTO_EVENT_VALUE_BOOL:
+            (void)gw_state_store_set_bool(uid, endpoint, key, e->value_bool != 0, e->ts_ms);
             break;
-        case GW_EVENT_VALUE_F64:
-            (void)gw_state_store_set_f32(uid, endpoint, key, (float)e->payload_value_f64, e->ts_ms);
+        case GW_PROTO_EVENT_VALUE_F32:
+            (void)gw_state_store_set_f32(uid, endpoint, key, e->value_f32, e->ts_ms);
             break;
-        case GW_EVENT_VALUE_I64:
-            if (e->payload_value_i64 >= 0) {
-                (void)gw_state_store_set_u64(uid, endpoint, key, (uint64_t)e->payload_value_i64, e->ts_ms);
+        case GW_PROTO_EVENT_VALUE_I64:
+            if (e->value_i64 >= 0) {
+                (void)gw_state_store_set_u64(uid, endpoint, key, (uint64_t)e->value_i64, e->ts_ms);
             } else {
-                (void)gw_state_store_set_f32(uid, endpoint, key, (float)e->payload_value_i64, e->ts_ms);
+                (void)gw_state_store_set_f32(uid, endpoint, key, (float)e->value_i64, e->ts_ms);
             }
             break;
         default:
@@ -334,45 +325,45 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_event_t *e)
     }
 }
 
-static void runtime_event_listener(const gw_event_t *event, void *user_ctx)
+static void runtime_proto_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
 {
+    (void)channel;
     (void)user_ctx;
-    if (!event) {
+    if (!hdr || hdr->type != GW_PROTO_MSG_EVENT_ZB || !payload || hdr->len == 0) {
         return;
     }
+
+    gw_proto_event_v1_t event = {0};
+    const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
+    memcpy(&event, payload, n);
+    event.event_type[sizeof(event.event_type) - 1] = '\0';
+    event.cmd[sizeof(event.cmd) - 1] = '\0';
+    event.device_uid.uid[sizeof(event.device_uid.uid) - 1] = '\0';
+    event.value_text[sizeof(event.value_text) - 1] = '\0';
 
     gw_device_uid_t uid = {0};
-    bool have_uid = resolve_uid(event, &uid);
+    bool have_uid = resolve_uid(&event, &uid);
 
-    if (is_event_type(event->type, GW_EVT_ZIGBEE_DEVICE_JOIN)) {
-        (void)have_uid;
-        return;
-    }
-
-    if (is_event_type(event->type, GW_EVT_ZIGBEE_DEVICE_LEAVE)) {
-        (void)have_uid;
-        return;
-    }
-
-    if (is_event_type(event->type, GW_EVT_ZIGBEE_COMMAND)) {
-        (void)have_uid;
-        return;
+    switch ((gw_proto_event_id_t)event.event_id_kind) {
+        case GW_PROTO_EVENT_DEVICE_JOIN:
+        case GW_PROTO_EVENT_DEVICE_LEAVE:
+        case GW_PROTO_EVENT_COMMAND:
+        case GW_PROTO_EVENT_NET_STATE:
+            (void)have_uid;
+            return;
+        default:
+            break;
     }
 
     const bool is_state_event =
-        (strcmp(event->type, GW_EVT_ZIGBEE_ATTR_REPORT) == 0) ||
-        (strcmp(event->type, GW_EVT_ZIGBEE_ATTR_READ) == 0) ||
-        (strcmp(event->type, GW_EVT_ZIGBEE_READ_ATTR) == 0) ||
-        (strcmp(event->type, GW_EVT_ZIGBEE_READ_ATTR_RSP) == 0 &&
-         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_VALUE) &&
-         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) &&
-         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) &&
-         (event->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR));
+        (event.event_id_kind == GW_PROTO_EVENT_ATTR_REPORT) ||
+        (event.event_id_kind == GW_PROTO_EVENT_NET_STATE && event.cluster_id != 0 && event.attr_id != 0);
     if (is_state_event) {
         if (!have_uid) {
             return;
         }
-        process_attr_report(&uid, event);
+        process_attr_report(&uid, &event);
+        return;
     }
 }
 
@@ -382,7 +373,7 @@ esp_err_t gw_runtime_sync_init(void)
         return ESP_OK;
     }
 
-    esp_err_t err = gw_event_bus_add_listener(runtime_event_listener, NULL);
+    esp_err_t err = gw_proto_bus_add_listener(runtime_proto_listener, GW_PROTO_BUS_CHANNEL_INGRESS, NULL);
     if (err != ESP_OK) {
         return err;
     }

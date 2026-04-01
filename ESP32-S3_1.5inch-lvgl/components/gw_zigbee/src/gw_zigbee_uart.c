@@ -16,6 +16,7 @@
 
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/gw_proto_ingest.h"
 #include "gw_core/state_store.h"
 #include "gw_proto/gw_proto_uart.h"
@@ -198,95 +199,6 @@ static const char *cluster_name(uint16_t cluster_id)
         default:
             return "-";
     }
-}
-
-static void apply_proto_sync_begin_from_c6(const gw_proto_sync_begin_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    s_snapshot_last_chunk_us = esp_timer_get_time();
-    s_snapshot_stream_active = true;
-    s_snapshot_retry_count = 0;
-    s_snapshot_last_retry_us = 0;
-    s_snapshot_expected_records = (uint16_t)msg->total_records;
-    s_snapshot_received_records = 0;
-    s_snapshot_received_state_items = 0;
-    s_bootstrap_ready = false;
-    (void)gw_proto_ingest_apply_sync_begin(msg);
-    ESP_LOGI(TAG, "Proto sync begin: scope=%u total=%u", (unsigned)msg->scope, (unsigned)msg->total_records);
-}
-
-static void apply_proto_sync_end_from_c6(const gw_proto_sync_end_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    s_snapshot_last_chunk_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "Proto sync end: scope=%u expected=%u received=%u",
-             (unsigned)msg->scope,
-             (unsigned)s_snapshot_expected_records,
-             (unsigned)s_snapshot_received_records);
-    s_snapshot_stream_active = false;
-    s_snapshot_last_chunk_us = 0;
-    s_snapshot_last_retry_us = 0;
-    s_snapshot_retry_count = 0;
-    if (s_snapshot_expected_records > 0 && s_snapshot_received_records < s_snapshot_expected_records) {
-        (void)gw_proto_ingest_apply_sync_end(msg, false);
-        ESP_LOGW(TAG, "Proto sync incomplete, requesting re-sync");
-        (void)request_snapshot_sync();
-    } else {
-        (void)gw_proto_ingest_apply_sync_end(msg, true);
-        s_bootstrap_ready = true;
-        if (s_snapshot_received_state_items == 0) {
-            start_initial_state_sync_once();
-        } else {
-            s_initial_state_sync_done = true;
-            s_initial_state_sync_started = false;
-            s_initial_state_sync_task = NULL;
-        }
-    }
-}
-
-static void apply_proto_device_from_c6(const gw_proto_device_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    (void)gw_proto_ingest_apply_device(msg);
-    s_snapshot_received_records++;
-    s_snapshot_last_chunk_us = esp_timer_get_time();
-}
-
-static void apply_proto_endpoint_from_c6(const gw_proto_endpoint_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    (void)gw_proto_ingest_apply_endpoint(msg);
-    s_snapshot_received_records++;
-    s_snapshot_last_chunk_us = esp_timer_get_time();
-}
-
-static void apply_proto_state_item_from_c6(const gw_proto_state_item_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    (void)gw_proto_ingest_apply_state_item(msg);
-    s_snapshot_received_records++;
-    s_snapshot_received_state_items++;
-    s_snapshot_last_chunk_us = esp_timer_get_time();
-}
-
-static void apply_proto_device_remove_from_c6(const gw_proto_device_remove_v1_t *msg)
-{
-    if (!msg) {
-        return;
-    }
-    (void)gw_proto_ingest_apply_device_remove(msg);
-    s_snapshot_received_records++;
-    s_snapshot_last_chunk_us = esp_timer_get_time();
 }
 
 static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
@@ -503,25 +415,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         GW_UART_TRACE_I("UART RX %s seq=%u payload=%u", msg_type_name(frame->hdr.type), (unsigned)frame->hdr.seq, (unsigned)frame->hdr.len);
     }
 
-    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
-        if (frame->hdr.len == 0) {
-            return;
-        }
-        gw_proto_event_v1_t evt = {0};
-        size_t n = frame->hdr.len < sizeof(evt) ? frame->hdr.len : sizeof(evt);
-        memcpy(&evt, frame->payload, n);
-        evt.event_type[sizeof(evt.event_type) - 1] = '\0';
-        evt.cmd[sizeof(evt.cmd) - 1] = '\0';
-        evt.device_uid.uid[sizeof(evt.device_uid.uid) - 1] = '\0';
-        evt.value_text[sizeof(evt.value_text) - 1] = '\0';
-        GW_UART_TRACE_I("UART EVT %s(%u) type=%s uid=%s short=0x%04x ep=%u cluster=0x%04x(%s) attr=0x%04x cmd=%s",
-                        evt_id_name(evt.event_id_kind), (unsigned)evt.event_id_kind, evt.event_type,
-                        evt.device_uid.uid, (unsigned)evt.short_addr, (unsigned)evt.endpoint,
-                        (unsigned)evt.cluster_id, cluster_name(evt.cluster_id), (unsigned)evt.attr_id, evt.cmd);
-        gw_proto_ingest_publish_event(&evt);
-        return;
-    }
-
     if (frame->hdr.type == GW_PROTO_MSG_CMD_RESULT) {
         gw_proto_cmd_result_v1_t rsp = {0};
         size_t n = frame->hdr.len < sizeof(rsp) ? frame->hdr.len : sizeof(rsp);
@@ -541,52 +434,80 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         return;
     }
 
-    if (frame->hdr.type == GW_PROTO_MSG_SYNC_BEGIN) {
-        gw_proto_sync_begin_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_sync_begin_from_c6(&msg);
-        return;
+    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB) {
+        if (frame->hdr.len == 0) {
+            return;
+        }
+        gw_proto_event_v1_t evt = {0};
+        size_t n = frame->hdr.len < sizeof(evt) ? frame->hdr.len : sizeof(evt);
+        memcpy(&evt, frame->payload, n);
+        evt.event_type[sizeof(evt.event_type) - 1] = '\0';
+        evt.cmd[sizeof(evt.cmd) - 1] = '\0';
+        evt.device_uid.uid[sizeof(evt.device_uid.uid) - 1] = '\0';
+        evt.value_text[sizeof(evt.value_text) - 1] = '\0';
+        GW_UART_TRACE_I("UART EVT %s(%u) type=%s uid=%s short=0x%04x ep=%u cluster=0x%04x(%s) attr=0x%04x cmd=%s",
+                        evt_id_name(evt.event_id_kind), (unsigned)evt.event_id_kind, evt.event_type,
+                        evt.device_uid.uid, (unsigned)evt.short_addr, (unsigned)evt.endpoint,
+                        (unsigned)evt.cluster_id, cluster_name(evt.cluster_id), (unsigned)evt.attr_id, evt.cmd);
     }
+
+    switch (frame->hdr.type) {
+        case GW_PROTO_MSG_SYNC_BEGIN:
+            s_snapshot_last_chunk_us = esp_timer_get_time();
+            s_snapshot_stream_active = true;
+            s_snapshot_retry_count = 0;
+            s_snapshot_last_retry_us = 0;
+            if (frame->hdr.len >= sizeof(gw_proto_sync_begin_v1_t)) {
+                const gw_proto_sync_begin_v1_t *msg = (const gw_proto_sync_begin_v1_t *)frame->payload;
+                s_snapshot_expected_records = (uint16_t)msg->total_records;
+            } else {
+                s_snapshot_expected_records = 0;
+            }
+            s_snapshot_received_records = 0;
+            s_snapshot_received_state_items = 0;
+            s_bootstrap_ready = false;
+            break;
+        case GW_PROTO_MSG_SYNC_END:
+            s_snapshot_last_chunk_us = esp_timer_get_time();
+            s_snapshot_stream_active = false;
+            s_snapshot_last_chunk_us = 0;
+            s_snapshot_last_retry_us = 0;
+            s_snapshot_retry_count = 0;
+            break;
+        case GW_PROTO_MSG_DEVICE_UPSERT:
+        case GW_PROTO_MSG_ENDPOINT_UPSERT:
+        case GW_PROTO_MSG_DEVICE_REMOVE:
+            s_snapshot_received_records++;
+            s_snapshot_last_chunk_us = esp_timer_get_time();
+            break;
+        case GW_PROTO_MSG_STATE_ITEM:
+            s_snapshot_received_records++;
+            s_snapshot_received_state_items++;
+            s_snapshot_last_chunk_us = esp_timer_get_time();
+            break;
+        default:
+            break;
+    }
+
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_INGRESS, &frame->hdr, frame->payload);
 
     if (frame->hdr.type == GW_PROTO_MSG_SYNC_END) {
-        gw_proto_sync_end_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_sync_end_from_c6(&msg);
-        return;
-    }
-
-    if (frame->hdr.type == GW_PROTO_MSG_DEVICE_UPSERT) {
-        gw_proto_device_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_device_from_c6(&msg);
-        return;
-    }
-
-    if (frame->hdr.type == GW_PROTO_MSG_DEVICE_REMOVE) {
-        gw_proto_device_remove_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_device_remove_from_c6(&msg);
-        return;
-    }
-
-    if (frame->hdr.type == GW_PROTO_MSG_ENDPOINT_UPSERT) {
-        gw_proto_endpoint_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_endpoint_from_c6(&msg);
-        return;
-    }
-
-    if (frame->hdr.type == GW_PROTO_MSG_STATE_ITEM) {
-        gw_proto_state_item_v1_t msg = {0};
-        size_t n = frame->hdr.len < sizeof(msg) ? frame->hdr.len : sizeof(msg);
-        memcpy(&msg, frame->payload, n);
-        apply_proto_state_item_from_c6(&msg);
-        return;
+        ESP_LOGI(TAG, "Proto sync end: expected=%u received=%u",
+                 (unsigned)s_snapshot_expected_records,
+                 (unsigned)s_snapshot_received_records);
+        if (s_snapshot_expected_records > 0 && s_snapshot_received_records < s_snapshot_expected_records) {
+            ESP_LOGW(TAG, "Proto sync incomplete, requesting re-sync");
+            (void)request_snapshot_sync();
+        } else {
+            s_bootstrap_ready = true;
+            if (s_snapshot_received_state_items == 0) {
+                start_initial_state_sync_once();
+            } else {
+                s_initial_state_sync_done = true;
+                s_initial_state_sync_started = false;
+                s_initial_state_sync_task = NULL;
+            }
+        }
     }
 }
 

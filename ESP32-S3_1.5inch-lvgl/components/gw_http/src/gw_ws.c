@@ -18,6 +18,7 @@
 #include "gw_core/device_storage.h"
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/group_store.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/state_store.h"
@@ -63,12 +64,7 @@ static void ws_send_proto_devices_snapshot_to_fds(const int *fds, size_t fd_coun
 static void ws_resume_device_updates_work(void *arg);
 static void ws_device_suppress_timer_cb(void *arg);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
-static void ws_on_state_changed(const gw_state_item_t *item, void *user_ctx);
-static void ws_on_device_changed(const gw_device_t *device, bool removed, void *user_ctx);
-static void ws_on_endpoint_changed(const gw_zb_endpoint_t *ep, bool removed, void *user_ctx);
-static void ws_on_groups_changed(void *user_ctx);
-static void ws_on_settings_changed(const gw_project_settings_t *settings, void *user_ctx);
-static void ws_on_automations_changed(void *user_ctx);
+static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
 
 static void ws_client_remove_fd(int fd)
 {
@@ -788,74 +784,6 @@ static void ws_device_suppress_timer_cb(void *arg)
     }
 }
 
-static void ws_send_proto_groups_snapshot_to_fds(const int *fds, size_t fd_count)
-{
-    if (!fds || fd_count == 0) {
-        return;
-    }
-
-    const uint16_t seq = s_ws_seq++;
-    ws_group_snapshot_iter_t iter = {0};
-    const ws_proto_emit_many_ctx_t emit_ctx = {
-        .fds = fds,
-        .fd_count = fd_count,
-    };
-    const gw_proto_snapshot_source_t source = {
-        .source_ctx = &iter,
-        .total_records = ws_group_snapshot_total_records(),
-        .rewind = ws_group_snapshot_rewind,
-        .next = ws_group_snapshot_next,
-    };
-    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
-                                 (void *)&emit_ctx,
-                                 GW_PROTO_SYNC_SCOPE_GROUPS,
-                                 seq,
-                                 &source);
-}
-
-static void ws_send_proto_automations_snapshot_to_fds(const int *fds, size_t fd_count)
-{
-    if (!fds || fd_count == 0) {
-        return;
-    }
-
-    const uint16_t seq = s_ws_seq++;
-    ws_automation_snapshot_iter_t iter = {0};
-    const ws_proto_emit_many_ctx_t emit_ctx = {
-        .fds = fds,
-        .fd_count = fd_count,
-    };
-    const gw_proto_snapshot_source_t source = {
-        .source_ctx = &iter,
-        .total_records = ws_automation_snapshot_total_records(),
-        .rewind = ws_automation_snapshot_rewind,
-        .next = ws_automation_snapshot_next,
-    };
-    (void)gw_proto_send_snapshot(ws_snapshot_emit_many,
-                                 (void *)&emit_ctx,
-                                 GW_PROTO_SYNC_SCOPE_AUTOMATIONS,
-                                 seq,
-                                 &source);
-}
-
-static void ws_send_proto_settings_to_fds(const int *fds, size_t fd_count)
-{
-    if (!fds || fd_count == 0) {
-        return;
-    }
-
-    gw_project_settings_t settings = {0};
-    if (gw_project_settings_get(&settings) != ESP_OK) {
-        return;
-    }
-
-    gw_proto_settings_v1_t msg = {0};
-    gw_proto_fill_settings(&msg, &settings);
-    for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_SETTINGS, s_ws_seq++, &msg, sizeof(msg));
-    }
-}
-
 static size_t ws_collect_client_fds(int *fds, size_t max_fds)
 {
     size_t fd_count = 0;
@@ -869,71 +797,30 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds)
     return fd_count;
 }
 
-static void ws_send_proto_state_item_to_fds(const gw_state_item_t *item, const int *fds, size_t fd_count)
+static void ws_send_proto_trace_to_fds(const gw_proto_bus_event_v1_t *event, const int *fds, size_t fd_count)
 {
-    if (!item || !fds || fd_count == 0 || item->uid.uid[0] == '\0') {
+    if (!event || !fds || fd_count == 0) {
         return;
     }
-
-    gw_proto_state_item_v1_t msg = {0};
-    gw_proto_fill_state_item(&msg, item);
     for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_STATE_ITEM, s_ws_seq++, &msg, sizeof(msg));
+        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_EVENT_TRACE, s_ws_seq++, event, sizeof(*event));
     }
 }
 
-static void ws_send_proto_device_delta_to_fds(const gw_device_t *device, bool remove_only, const int *fds, size_t fd_count)
+static void ws_send_proto_model_to_fds(uint8_t type, const void *payload, uint16_t payload_len, const int *fds, size_t fd_count)
 {
-    if (!device || device->device_uid.uid[0] == '\0' || !fds || fd_count == 0) {
+    if (!payload || !fds || fd_count == 0 || payload_len == 0) {
         return;
     }
-
-    if (remove_only) {
-        gw_proto_device_remove_v1_t rm = {0};
-        gw_proto_fill_device_remove(&rm, &device->device_uid);
-        for (size_t i = 0; i < fd_count; i++) {
-            (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_DEVICE_REMOVE, s_ws_seq++, &rm, sizeof(rm));
-        }
-        return;
-    }
-
-    gw_proto_device_v1_t msg = {0};
-    gw_proto_fill_device(&msg, device);
     for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_DEVICE_UPSERT, s_ws_seq++, &msg, sizeof(msg));
+        (void)ws_send_proto_frame_async(fds[i], type, s_ws_seq++, payload, payload_len);
     }
 }
 
-static void ws_on_state_changed(const gw_state_item_t *item, void *user_ctx)
+static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
 {
     (void)user_ctx;
-    if (s_device_updates_suppressed) {
-        return;
-    }
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count > 0) {
-        ws_send_proto_state_item_to_fds(item, fds, fd_count);
-    }
-}
-
-static void ws_on_device_changed(const gw_device_t *device, bool removed, void *user_ctx)
-{
-    (void)user_ctx;
-    if (s_device_updates_suppressed) {
-        return;
-    }
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count > 0) {
-        ws_send_proto_device_delta_to_fds(device, removed, fds, fd_count);
-    }
-}
-
-static void ws_on_endpoint_changed(const gw_zb_endpoint_t *ep, bool removed, void *user_ctx)
-{
-    (void)user_ctx;
-    if (!ep || s_device_updates_suppressed) {
+    if (!hdr || !payload || hdr->len == 0) {
         return;
     }
     int fds[GW_WS_MAX_CLIENTS];
@@ -941,49 +828,36 @@ static void ws_on_endpoint_changed(const gw_zb_endpoint_t *ep, bool removed, voi
     if (fd_count == 0) {
         return;
     }
-    if (removed) {
-        gw_proto_endpoint_remove_v1_t rm = {0};
-        gw_proto_fill_endpoint_remove(&rm, &ep->uid, ep->endpoint, ep->short_addr);
-        for (size_t i = 0; i < fd_count; i++) {
-            (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_ENDPOINT_REMOVE, s_ws_seq++, &rm, sizeof(rm));
-        }
+
+    if (channel == GW_PROTO_BUS_CHANNEL_TRACE && hdr->type == GW_PROTO_MSG_EVENT_TRACE) {
+        gw_proto_bus_event_v1_t event = {0};
+        const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
+        memcpy(&event, payload, n);
+        ws_send_proto_trace_to_fds(&event, fds, fd_count);
         return;
     }
-    gw_proto_endpoint_v1_t msg = {0};
-    gw_proto_fill_endpoint(&msg, ep);
-    for (size_t i = 0; i < fd_count; i++) {
-        (void)ws_send_proto_frame_async(fds[i], GW_PROTO_MSG_ENDPOINT_UPSERT, s_ws_seq++, &msg, sizeof(msg));
-    }
-}
 
-static void ws_on_groups_changed(void *user_ctx)
-{
-    (void)user_ctx;
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count > 0) {
-        ws_send_proto_groups_snapshot_to_fds(fds, fd_count);
-    }
-}
-
-static void ws_on_settings_changed(const gw_project_settings_t *settings, void *user_ctx)
-{
-    (void)settings;
-    (void)user_ctx;
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count > 0) {
-        ws_send_proto_settings_to_fds(fds, fd_count);
-    }
-}
-
-static void ws_on_automations_changed(void *user_ctx)
-{
-    (void)user_ctx;
-    int fds[GW_WS_MAX_CLIENTS];
-    size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
-    if (fd_count > 0) {
-        ws_send_proto_automations_snapshot_to_fds(fds, fd_count);
+    if (channel == GW_PROTO_BUS_CHANNEL_MODEL) {
+        switch (hdr->type) {
+            case GW_PROTO_MSG_STATE_ITEM:
+            case GW_PROTO_MSG_DEVICE_UPSERT:
+            case GW_PROTO_MSG_DEVICE_REMOVE:
+            case GW_PROTO_MSG_ENDPOINT_UPSERT:
+            case GW_PROTO_MSG_ENDPOINT_REMOVE:
+            case GW_PROTO_MSG_SETTINGS:
+            case GW_PROTO_MSG_GROUP_UPSERT:
+            case GW_PROTO_MSG_GROUP_REMOVE:
+            case GW_PROTO_MSG_GROUP_ITEM_UPSERT:
+            case GW_PROTO_MSG_GROUP_ITEM_REMOVE:
+            case GW_PROTO_MSG_AUTOMATION_UPSERT:
+            case GW_PROTO_MSG_AUTOMATION_REMOVE:
+                if (!s_device_updates_suppressed) {
+                    ws_send_proto_model_to_fds(hdr->type, payload, hdr->len, fds, fd_count);
+                }
+                return;
+            default:
+                return;
+        }
     }
 }
 
@@ -1127,12 +1001,7 @@ esp_err_t gw_ws_register(httpd_handle_t server)
         s_server = NULL;
         return err;
     }
-    (void)gw_state_store_add_listener(ws_on_state_changed, NULL);
-    (void)gw_device_registry_add_listener(ws_on_device_changed, NULL);
-    (void)gw_zb_model_add_listener(ws_on_endpoint_changed, NULL);
-    (void)gw_group_store_add_listener(ws_on_groups_changed, NULL);
-    (void)gw_project_settings_add_listener(ws_on_settings_changed, NULL);
-    (void)gw_automation_store_add_listener(ws_on_automations_changed, NULL);
+    (void)gw_proto_bus_add_listener(ws_on_proto_bus_message, GW_PROTO_BUS_CHANNEL_TRACE | GW_PROTO_BUS_CHANNEL_MODEL, NULL);
     ESP_LOGI(TAG, "WebSocket enabled at /ws (gw_proto snapshots/deltas)");
     return ESP_OK;
 }
@@ -1161,12 +1030,7 @@ void gw_ws_unregister(void)
         }
         s_tx_q = NULL;
     }
-    (void)gw_state_store_remove_listener(ws_on_state_changed, NULL);
-    (void)gw_device_registry_remove_listener(ws_on_device_changed, NULL);
-    (void)gw_zb_model_remove_listener(ws_on_endpoint_changed, NULL);
-    (void)gw_group_store_remove_listener(ws_on_groups_changed, NULL);
-    (void)gw_project_settings_remove_listener(ws_on_settings_changed, NULL);
-    (void)gw_automation_store_remove_listener(ws_on_automations_changed, NULL);
+    (void)gw_proto_bus_remove_listener(ws_on_proto_bus_message, NULL);
     s_server = NULL;
 }
 

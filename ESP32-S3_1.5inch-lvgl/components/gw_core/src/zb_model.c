@@ -1,32 +1,29 @@
 #include "gw_core/zb_model.h"
 #include "gw_core/device_registry.h"
+#include "gw_core/gw_proto_bus.h"
 
 #include <stdbool.h>
 #include <string.h>
-#include "freertos/FreeRTOS.h"
-
-#define GW_ZB_MODEL_LISTENER_CAP 4
-typedef struct {
-    gw_zb_model_listener_t cb;
-    void *user_ctx;
-} gw_zb_model_listener_slot_t;
-static gw_zb_model_listener_slot_t s_listeners[GW_ZB_MODEL_LISTENER_CAP];
-static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+#include "gw_proto/gw_proto_map.h"
 
 static void notify_zb_model_listeners(const gw_zb_endpoint_t *ep, bool removed)
 {
-    gw_zb_model_listener_slot_t listeners[GW_ZB_MODEL_LISTENER_CAP];
-    size_t listener_count = 0;
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb) {
-            listeners[listener_count++] = s_listeners[i];
+    if (ep && ep->uid.uid[0] != '\0' && ep->endpoint != 0) {
+        if (removed) {
+            gw_proto_endpoint_remove_v1_t msg = {0};
+            gw_proto_hdr_t hdr = {0};
+            gw_proto_fill_endpoint_remove(&msg, &ep->uid, ep->endpoint, ep->short_addr);
+            gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_ENDPOINT_REMOVE, sizeof(msg), 0);
+            (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
+        } else {
+            gw_proto_endpoint_v1_t msg = {0};
+            gw_proto_hdr_t hdr = {0};
+            gw_proto_fill_endpoint(&msg, ep);
+            gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_ENDPOINT_UPSERT, sizeof(msg), 0);
+            (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
         }
     }
-    portEXIT_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < listener_count; i++) {
-        listeners[i].cb(ep, removed, listeners[i].user_ctx);
-    }
+
 }
 
 static bool s_inited;
@@ -49,48 +46,6 @@ esp_err_t gw_zb_model_init(void)
     s_version_seq = 0;
     memset(s_eps, 0, sizeof(s_eps));
     return ESP_OK;
-}
-
-esp_err_t gw_zb_model_add_listener(gw_zb_model_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
-        if (!s_listeners[i].cb) {
-            s_listeners[i].cb = cb;
-            s_listeners[i].user_ctx = user_ctx;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NO_MEM;
-}
-
-esp_err_t gw_zb_model_remove_listener(gw_zb_model_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_ZB_MODEL_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            s_listeners[i].cb = NULL;
-            s_listeners[i].user_ctx = NULL;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep)

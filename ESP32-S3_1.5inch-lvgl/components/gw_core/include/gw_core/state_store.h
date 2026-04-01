@@ -46,11 +46,7 @@ typedef struct {
     uint64_t ts_ms;
 } gw_state_item_t;
 
-typedef void (*gw_state_store_listener_t)(const gw_state_item_t *item, void *user_ctx);
-
 esp_err_t gw_state_store_init(void);
-esp_err_t gw_state_store_add_listener(gw_state_store_listener_t cb, void *user_ctx);
-esp_err_t gw_state_store_remove_listener(gw_state_store_listener_t cb, void *user_ctx);
 
 esp_err_t gw_state_store_set_bool(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, bool value, uint64_t ts_ms);
 esp_err_t gw_state_store_set_f32(const gw_device_uid_t *uid, uint8_t endpoint, const char *key, float value, uint64_t ts_ms);

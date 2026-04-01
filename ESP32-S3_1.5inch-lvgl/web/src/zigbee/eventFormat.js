@@ -1,46 +1,44 @@
-import { EVT_AUTOMATION_CHANGED, EVT_DEVICE_REMOVE, EVT_DEVICE_STATE, EVT_DEVICE_SYNC_READY } from '../eventNames.js'
+﻿import { EVT_AUTOMATION_CHANGED, EVT_DEVICE_STATE } from '../eventNames.js'
 import { formatDeviceStateValue, getDeviceStateKeyLabel } from './stateFormat.js'
 
 const ENDPOINT_KIND_LABELS = {
-  color_light: 'цветная лампа',
-  dimmable_light: 'диммируемый свет',
-  relay: 'реле',
-  dimmer_switch: 'диммер',
-  switch: 'кнопка/выключатель',
-  temp_humidity_sensor: 'датчик температуры и влажности',
-  temperature_sensor: 'датчик температуры',
-  humidity_sensor: 'датчик влажности',
-  occupancy_sensor: 'датчик присутствия',
-  illuminance_sensor: 'датчик освещенности',
-  pressure_sensor: 'датчик давления',
-  flow_sensor: 'датчик потока',
-  sensor: 'сенсор',
+  color_light: 'С†РІРµС‚РЅР°СЏ Р»Р°РјРїР°',
+  dimmable_light: 'РґРёРјРјРёСЂСѓРµРјС‹Р№ СЃРІРµС‚',
+  relay: 'СЂРµР»Рµ',
+  dimmer_switch: 'РґРёРјРјРµСЂ',
+  switch: 'РєРЅРѕРїРєР°/РІС‹РєР»СЋС‡Р°С‚РµР»СЊ',
+  temp_humidity_sensor: 'РґР°С‚С‡РёРє С‚РµРјРїРµСЂР°С‚СѓСЂС‹ Рё РІР»Р°Р¶РЅРѕСЃС‚Рё',
+  temperature_sensor: 'РґР°С‚С‡РёРє С‚РµРјРїРµСЂР°С‚СѓСЂС‹',
+  humidity_sensor: 'РґР°С‚С‡РёРє РІР»Р°Р¶РЅРѕСЃС‚Рё',
+  occupancy_sensor: 'РґР°С‚С‡РёРє РїСЂРёСЃСѓС‚СЃС‚РІРёСЏ',
+  illuminance_sensor: 'РґР°С‚С‡РёРє РѕСЃРІРµС‰РµРЅРЅРѕСЃС‚Рё',
+  pressure_sensor: 'РґР°С‚С‡РёРє РґР°РІР»РµРЅРёСЏ',
+  flow_sensor: 'РґР°С‚С‡РёРє РїРѕС‚РѕРєР°',
+  sensor: 'СЃРµРЅСЃРѕСЂ',
   unknown: 'endpoint',
 }
 
 const GATEWAY_EVENT_LABELS = {
-  'zigbee.read_attr_resp': 'ответ на чтение атрибута',
-  'zigbee.cmd_queue': 'отправка команды',
-  'zigbee.cmd_sent': 'команда отправлена',
-  [EVT_DEVICE_SYNC_READY]: 'синхронизация устройств завершена',
-  [EVT_DEVICE_REMOVE]: 'устройство удалено',
-  [EVT_AUTOMATION_CHANGED]: 'список автоматизаций обновлен',
-  'proto.sync_begin': 'начало синхронизации',
-  'proto.sync_end': 'конец синхронизации',
+  'zigbee.read_attr_resp': 'РѕС‚РІРµС‚ РЅР° С‡С‚РµРЅРёРµ Р°С‚СЂРёР±СѓС‚Р°',
+  'zigbee.cmd_queue': 'РѕС‚РїСЂР°РІРєР° РєРѕРјР°РЅРґС‹',
+  'zigbee.cmd_sent': 'РєРѕРјР°РЅРґР° РѕС‚РїСЂР°РІР»РµРЅР°',
+  [EVT_AUTOMATION_CHANGED]: 'СЃРїРёСЃРѕРє Р°РІС‚РѕРјР°С‚РёР·Р°С†РёР№ РѕР±РЅРѕРІР»РµРЅ',
+  'proto.sync_begin': 'РЅР°С‡Р°Р»Рѕ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё',
+  'proto.sync_end': 'РєРѕРЅРµС† СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё',
 }
 
 const DEVICE_EVENT_LABELS = {
-  command: 'команда устройства',
-  join: 'устройство присоединилось',
-  leave: 'устройство вышло из сети',
-  updated: 'устройство обновлено',
+  command: 'РєРѕРјР°РЅРґР° СѓСЃС‚СЂРѕР№СЃС‚РІР°',
+  join: 'СѓСЃС‚СЂРѕР№СЃС‚РІРѕ РїСЂРёСЃРѕРµРґРёРЅРёР»РѕСЃСЊ',
+  leave: 'СѓСЃС‚СЂРѕР№СЃС‚РІРѕ РІС‹С€Р»Рѕ РёР· СЃРµС‚Рё',
+  updated: 'СѓСЃС‚СЂРѕР№СЃС‚РІРѕ РѕР±РЅРѕРІР»РµРЅРѕ',
 }
 
 const AUTOMATION_EVENT_LABELS = {
-  'automation.run': 'запуск автоматизации',
-  'automation.action': 'выполнение действия',
-  'automation.result': 'результат автоматизации',
-  [EVT_AUTOMATION_CHANGED]: 'список автоматизаций обновлен',
+  'automation.run': 'Р·Р°РїСѓСЃРє Р°РІС‚РѕРјР°С‚РёР·Р°С†РёРё',
+  'automation.action': 'РІС‹РїРѕР»РЅРµРЅРёРµ РґРµР№СЃС‚РІРёСЏ',
+  'automation.result': 'СЂРµР·СѓР»СЊС‚Р°С‚ Р°РІС‚РѕРјР°С‚РёР·Р°С†РёРё',
+  [EVT_AUTOMATION_CHANGED]: 'СЃРїРёСЃРѕРє Р°РІС‚РѕРјР°С‚РёР·Р°С†РёР№ РѕР±РЅРѕРІР»РµРЅ',
 }
 
 function normalizeUid(v) {
@@ -84,37 +82,37 @@ function formatEndpointLabel(device, endpointId) {
 
 function formatGatewayEvent(data) {
   const evType = String(data?.event_type ?? '')
-  const label = GATEWAY_EVENT_LABELS[evType] || evType || 'событие шлюза'
+  const label = GATEWAY_EVENT_LABELS[evType] || evType || 'СЃРѕР±С‹С‚РёРµ С€Р»СЋР·Р°'
   const source = String(data?.source ?? '').trim()
   const shortAddr = Number(data?.short_addr ?? NaN)
   const parts = [label]
   parts.push(...collectCommandDetails(data))
-  if (source) parts.push(`источник: ${source}`)
+  if (source) parts.push(`РёСЃС‚РѕС‡РЅРёРє: ${source}`)
   if (Number.isFinite(shortAddr)) parts.push(`short: 0x${Math.max(0, shortAddr).toString(16).toUpperCase()}`)
-  return parts.join(' · ')
+  return parts.join(' В· ')
 }
 
 function formatDeviceEvent(data) {
   const ev = String(data?.event ?? '')
-  const label = DEVICE_EVENT_LABELS[ev] || ev || 'событие устройства'
+  const label = DEVICE_EVENT_LABELS[ev] || ev || 'СЃРѕР±С‹С‚РёРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°'
   const source = String(data?.source ?? '').trim()
   const parts = [label, ...collectCommandDetails(data)]
-  if (source) parts.push(`источник: ${source}`)
-  return parts.join(' · ')
+  if (source) parts.push(`РёСЃС‚РѕС‡РЅРёРє: ${source}`)
+  return parts.join(' В· ')
 }
 
 function formatAutomationEvent(data) {
   const eventType = String(data?.event_type ?? '')
-  const base = AUTOMATION_EVENT_LABELS[eventType] || 'автоматизация'
+  const base = AUTOMATION_EVENT_LABELS[eventType] || 'Р°РІС‚РѕРјР°С‚РёР·Р°С†РёСЏ'
   const id = String(data?.automation_id ?? '').trim()
   const actionIdx = Number(data?.action_idx ?? NaN)
   const hasOk = typeof data?.ok === 'boolean'
-  const okText = hasOk ? (data.ok ? 'успех' : 'ошибка') : ''
+  const okText = hasOk ? (data.ok ? 'СѓСЃРїРµС…' : 'РѕС€РёР±РєР°') : ''
   const parts = [base]
   if (id) parts.push(`id: ${id}`)
-  if (Number.isFinite(actionIdx)) parts.push(`действие #${actionIdx}`)
+  if (Number.isFinite(actionIdx)) parts.push(`РґРµР№СЃС‚РІРёРµ #${actionIdx}`)
   if (okText) parts.push(okText)
-  return parts.join(' · ')
+  return parts.join(' В· ')
 }
 
 export function formatEventData(event, options = {}) {
@@ -131,7 +129,7 @@ export function formatEventData(event, options = {}) {
     const keyLabel = getDeviceStateKeyLabel(key)
     const device = typeof getDeviceByUid === 'function' ? getDeviceByUid(uid) : null
     const epLabel = formatEndpointLabel(device, endpoint)
-    return `${epLabel} · ${keyLabel}: ${prettyValue}`
+    return `${epLabel} В· ${keyLabel}: ${prettyValue}`
   }
 
   if (type === 'gateway.event') {

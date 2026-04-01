@@ -17,8 +17,6 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 
-#include "gw_core/event_bus.h"
-#include "gw_core/event_names.h"
 #include "gw_core/state_store.h"
 #include "gw_http/gw_http.h"
 
@@ -77,9 +75,6 @@ static void wifi_state_publish_text(const char *key, const char *value, uint64_t
     gw_device_uid_t uid = {0};
     wifi_state_uid(&uid);
     (void)gw_state_store_set_text(&uid, kWifiEndpoint, key, value ? value : "", ts_ms);
-    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "wifi", kWifiUid, 0, key,
-                            kWifiEndpoint, key, 0, 0,
-                            GW_EVENT_VALUE_TEXT, false, 0, 0.0, value ? value : "", NULL, 0);
 }
 
 static void wifi_state_publish_bool(const char *key, bool value, uint64_t ts_ms)
@@ -87,9 +82,6 @@ static void wifi_state_publish_bool(const char *key, bool value, uint64_t ts_ms)
     gw_device_uid_t uid = {0};
     wifi_state_uid(&uid);
     (void)gw_state_store_set_bool(&uid, kWifiEndpoint, key, value, ts_ms);
-    gw_event_bus_publish_zb(GW_EVT_DEVICE_STATE, "wifi", kWifiUid, 0, key,
-                            kWifiEndpoint, key, 0, 0,
-                            GW_EVENT_VALUE_BOOL, value, 0, 0.0, NULL, NULL, 0);
 }
 
 static void wifi_state_update(const char *status,

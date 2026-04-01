@@ -1,33 +1,30 @@
 #include "gw_core/device_registry.h"
 #include "gw_core/device_storage.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/zb_classify.h"
+#include "gw_proto/gw_proto_map.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include "freertos/FreeRTOS.h"
-
-#define GW_DEVICE_LISTENER_CAP 4
-typedef struct {
-    gw_device_registry_listener_t cb;
-    void *user_ctx;
-} gw_device_listener_slot_t;
-static gw_device_listener_slot_t s_listeners[GW_DEVICE_LISTENER_CAP];
-static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void notify_device_listeners(const gw_device_t *device, bool removed)
 {
-    gw_device_listener_slot_t listeners[GW_DEVICE_LISTENER_CAP];
-    size_t listener_count = 0;
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb) {
-            listeners[listener_count++] = s_listeners[i];
+    if (device && device->device_uid.uid[0] != '\0') {
+        if (removed) {
+            gw_proto_device_remove_v1_t msg = {0};
+            gw_proto_hdr_t hdr = {0};
+            gw_proto_fill_device_remove(&msg, &device->device_uid);
+            gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_DEVICE_REMOVE, sizeof(msg), 0);
+            (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
+        } else {
+            gw_proto_device_v1_t msg = {0};
+            gw_proto_hdr_t hdr = {0};
+            gw_proto_fill_device(&msg, device);
+            gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_DEVICE_UPSERT, sizeof(msg), 0);
+            (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
         }
     }
-    portEXIT_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < listener_count; i++) {
-        listeners[i].cb(device, removed, listeners[i].user_ctx);
-    }
+
 }
 
 static void derive_caps_from_topology(gw_device_t *device)
@@ -73,48 +70,6 @@ static void derive_caps_from_topology(gw_device_t *device)
 esp_err_t gw_device_registry_init(void)
 {
     return gw_device_storage_init();
-}
-
-esp_err_t gw_device_registry_add_listener(gw_device_registry_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
-        if (!s_listeners[i].cb) {
-            s_listeners[i].cb = cb;
-            s_listeners[i].user_ctx = user_ctx;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NO_MEM;
-}
-
-esp_err_t gw_device_registry_remove_listener(gw_device_registry_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_DEVICE_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            s_listeners[i].cb = NULL;
-            s_listeners[i].user_ctx = NULL;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t gw_device_registry_upsert(const gw_device_t *device)

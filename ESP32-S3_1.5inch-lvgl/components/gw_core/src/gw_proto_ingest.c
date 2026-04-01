@@ -4,92 +4,100 @@
 
 #include "esp_log.h"
 
-#include "gw_core/event_bus.h"
-#include "gw_core/event_names.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/runtime_sync.h"
 #include "gw_core/state_store.h"
 
 static const char *TAG = "gw_proto_ingest";
+static bool s_inited;
 
-static gw_event_value_type_t map_value_type(uint8_t t)
+static void gw_proto_ingest_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
 {
-    switch ((gw_proto_event_value_type_t)t) {
-        case GW_PROTO_EVENT_VALUE_BOOL:
-            return GW_EVENT_VALUE_BOOL;
-        case GW_PROTO_EVENT_VALUE_I64:
-            return GW_EVENT_VALUE_I64;
-        case GW_PROTO_EVENT_VALUE_F32:
-            return GW_EVENT_VALUE_F64;
-        case GW_PROTO_EVENT_VALUE_TEXT:
-            return GW_EVENT_VALUE_TEXT;
-        case GW_PROTO_EVENT_VALUE_NONE:
-        default:
-            return GW_EVENT_VALUE_NONE;
-    }
-}
-
-static const char *fallback_evt_type(uint8_t evt_id)
-{
-    switch ((gw_proto_event_id_t)evt_id) {
-        case GW_PROTO_EVENT_ATTR_REPORT:
-            return GW_EVT_ZIGBEE_ATTR_REPORT;
-        case GW_PROTO_EVENT_COMMAND:
-            return GW_EVT_ZIGBEE_COMMAND;
-        case GW_PROTO_EVENT_DEVICE_JOIN:
-            return GW_EVT_ZIGBEE_DEVICE_JOIN;
-        case GW_PROTO_EVENT_DEVICE_LEAVE:
-            return GW_EVT_ZIGBEE_DEVICE_LEAVE;
-        case GW_PROTO_EVENT_NET_STATE:
-        default:
-            return GW_EVT_ZIGBEE_NET_STATE;
-    }
-}
-
-static void normalize_evt_type(const char *in_type, char *out_type, size_t out_size, uint8_t evt_id)
-{
-    if (!out_type || out_size == 0) {
+    (void)channel;
+    (void)user_ctx;
+    if (!hdr) {
         return;
     }
-    out_type[0] = '\0';
 
-    if (in_type && in_type[0]) {
-        if (strncmp(in_type, "zigbee_", 7) == 0) {
-            (void)snprintf(out_type, out_size, "zigbee.%s", in_type + 7);
+    switch ((gw_proto_msg_type_t)hdr->type) {
+        case GW_PROTO_MSG_EVENT_ZB: {
             return;
         }
-        strlcpy(out_type, in_type, out_size);
-        return;
+        case GW_PROTO_MSG_SYNC_BEGIN: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_sync_begin_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_sync_begin(&msg);
+            return;
+        }
+        case GW_PROTO_MSG_SYNC_END: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_sync_end_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_sync_end(&msg, true);
+            return;
+        }
+        case GW_PROTO_MSG_DEVICE_UPSERT: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_device_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_device(&msg);
+            return;
+        }
+        case GW_PROTO_MSG_DEVICE_REMOVE: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_device_remove_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_device_remove(&msg);
+            return;
+        }
+        case GW_PROTO_MSG_ENDPOINT_UPSERT: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_endpoint_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_endpoint(&msg);
+            return;
+        }
+        case GW_PROTO_MSG_STATE_ITEM: {
+            if (!payload || hdr->len == 0) {
+                return;
+            }
+            gw_proto_state_item_v1_t msg = {0};
+            const size_t n = hdr->len < sizeof(msg) ? hdr->len : sizeof(msg);
+            memcpy(&msg, payload, n);
+            (void)gw_proto_ingest_apply_state_item(&msg);
+            return;
+        }
+        default:
+            return;
     }
-
-    strlcpy(out_type, fallback_evt_type(evt_id), out_size);
 }
 
-void gw_proto_ingest_publish_event(const gw_proto_event_v1_t *evt)
+esp_err_t gw_proto_ingest_init(void)
 {
-    if (!evt) {
-        return;
+    if (s_inited) {
+        return ESP_OK;
     }
-
-    char type_buf[32];
-    normalize_evt_type(evt->event_type, type_buf, sizeof(type_buf), evt->event_id_kind);
-    gw_event_value_type_t vtype = map_value_type(evt->value_type);
-
-    gw_event_bus_publish_zb(type_buf,
-                            "zigbee-uart",
-                            evt->device_uid.uid,
-                            evt->short_addr,
-                            "from_c6",
-                            evt->endpoint,
-                            evt->cmd,
-                            evt->cluster_id,
-                            evt->attr_id,
-                            vtype,
-                            evt->value_bool != 0,
-                            evt->value_i64,
-                            (double)evt->value_f32,
-                            evt->value_text,
-                            NULL,
-                            0);
+    esp_err_t err = gw_proto_bus_add_listener(gw_proto_ingest_listener, GW_PROTO_BUS_CHANNEL_INGRESS, NULL);
+    if (err == ESP_OK) {
+        s_inited = true;
+    }
+    return err;
 }
 
 esp_err_t gw_proto_ingest_apply_sync_begin(const gw_proto_sync_begin_v1_t *msg)
@@ -106,9 +114,7 @@ esp_err_t gw_proto_ingest_apply_sync_end(const gw_proto_sync_end_v1_t *msg, bool
         return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err = gw_runtime_sync_snapshot_end();
-    if (publish_sync_ready) {
-        gw_event_bus_publish(GW_EVT_DEVICE_SYNC_READY, "zigbee-uart", "", 0, "proto_sync_ready");
-    }
+    (void)publish_sync_ready;
     return err;
 }
 
@@ -186,7 +192,5 @@ esp_err_t gw_proto_ingest_apply_device_remove(const gw_proto_device_remove_v1_t 
         return ESP_ERR_INVALID_ARG;
     }
     ESP_LOGI(TAG, "Proto device remove uid=%s", msg->device_uid.uid);
-    esp_err_t err = gw_runtime_sync_snapshot_remove_device(&msg->device_uid);
-    gw_event_bus_publish(GW_EVT_DEVICE_REMOVE, "zigbee-uart", msg->device_uid.uid, 0, "proto_remove");
-    return err;
+    return gw_runtime_sync_snapshot_remove_device(&msg->device_uid);
 }

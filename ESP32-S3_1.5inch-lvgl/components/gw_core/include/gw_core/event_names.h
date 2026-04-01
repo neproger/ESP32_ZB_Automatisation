@@ -15,9 +15,6 @@ extern "C" {
 #define GW_EVT_ZIGBEE_NET_STATE     "zigbee.net_state"
 
 // Canonical model events.
-#define GW_EVT_DEVICE_STATE         "device.state"
-#define GW_EVT_DEVICE_SYNC_READY    "device.sync_ready"
-#define GW_EVT_DEVICE_REMOVE        "device.remove"
 #define GW_EVT_GROUP_CHANGED        "group.changed"
 #define GW_EVT_SETTINGS_CHANGED     "settings.changed"
 #define GW_EVT_AUTOMATION_CHANGED   "automation.changed"

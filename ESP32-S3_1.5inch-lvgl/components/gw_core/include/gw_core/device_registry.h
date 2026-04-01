@@ -19,11 +19,7 @@ typedef struct {
     bool has_button;
 } gw_device_t;
 
-typedef void (*gw_device_registry_listener_t)(const gw_device_t *device, bool removed, void *user_ctx);
-
 esp_err_t gw_device_registry_init(void);
-esp_err_t gw_device_registry_add_listener(gw_device_registry_listener_t cb, void *user_ctx);
-esp_err_t gw_device_registry_remove_listener(gw_device_registry_listener_t cb, void *user_ctx);
 esp_err_t gw_device_registry_upsert(const gw_device_t *device);
 esp_err_t gw_device_registry_get(const gw_device_uid_t *uid, gw_device_t *out_device);
 esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *name);

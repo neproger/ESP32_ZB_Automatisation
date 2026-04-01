@@ -95,6 +95,7 @@ typedef enum {
     GW_PROTO_MSG_CMD_SCENE_STORE = 0x6C,
     GW_PROTO_MSG_CMD_SCENE_RECALL = 0x6D,
     GW_PROTO_MSG_EVENT_ZB = 0x6E,
+    GW_PROTO_MSG_EVENT_TRACE = 0x6F,
 } gw_proto_msg_type_t;
 
 typedef enum {
@@ -135,6 +136,43 @@ typedef enum {
     GW_PROTO_EVENT_VALUE_F32 = 3,
     GW_PROTO_EVENT_VALUE_TEXT = 4,
 } gw_proto_event_value_type_t;
+
+typedef enum {
+    GW_PROTO_BUS_EVENT_PAYLOAD_HAS_ENDPOINT = 1 << 0,
+    GW_PROTO_BUS_EVENT_PAYLOAD_HAS_CMD      = 1 << 1,
+    GW_PROTO_BUS_EVENT_PAYLOAD_HAS_CLUSTER  = 1 << 2,
+    GW_PROTO_BUS_EVENT_PAYLOAD_HAS_ATTR     = 1 << 3,
+    GW_PROTO_BUS_EVENT_PAYLOAD_HAS_VALUE    = 1 << 4,
+} gw_proto_bus_event_payload_flag_t;
+
+typedef enum {
+    GW_PROTO_BUS_EVENT_VALUE_NONE = 0,
+    GW_PROTO_BUS_EVENT_VALUE_BOOL = 1,
+    GW_PROTO_BUS_EVENT_VALUE_I64  = 2,
+    GW_PROTO_BUS_EVENT_VALUE_F64  = 3,
+    GW_PROTO_BUS_EVENT_VALUE_TEXT = 4,
+} gw_proto_bus_event_value_type_t;
+
+typedef struct GW_PROTO_PACKED {
+    uint8_t v;
+    uint32_t id;
+    uint64_t ts_ms;
+    char type[32];
+    char source[16];
+    char device_uid[GW_DEVICE_UID_STRLEN];
+    uint16_t short_addr;
+    char msg[128];
+    uint8_t payload_flags;
+    uint8_t payload_endpoint;
+    uint16_t payload_cluster;
+    uint16_t payload_attr;
+    char payload_cmd[32];
+    uint8_t payload_value_type;
+    uint8_t payload_value_bool;
+    int64_t payload_value_i64;
+    double payload_value_f64;
+    char payload_value_text[64];
+} gw_proto_bus_event_v1_t;
 
 typedef enum {
     GW_AUTO_OP_EQ = 1,

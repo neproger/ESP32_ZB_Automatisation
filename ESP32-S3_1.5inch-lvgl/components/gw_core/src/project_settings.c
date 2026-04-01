@@ -4,7 +4,9 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/storage.h"
+#include "gw_proto/gw_proto_map.h"
 
 static const char *TAG = "gw_settings";
 
@@ -38,6 +40,14 @@ static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void notify_settings_listeners(const gw_project_settings_t *settings)
 {
+    if (settings) {
+        gw_proto_settings_v1_t msg = {0};
+        gw_proto_hdr_t hdr = {0};
+        gw_proto_fill_settings(&msg, settings);
+        gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_SETTINGS, sizeof(msg), 0);
+        (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
+    }
+
     gw_settings_listener_slot_t listeners[GW_SETTINGS_LISTENER_CAP];
     size_t listener_count = 0;
     portENTER_CRITICAL(&s_listener_lock);

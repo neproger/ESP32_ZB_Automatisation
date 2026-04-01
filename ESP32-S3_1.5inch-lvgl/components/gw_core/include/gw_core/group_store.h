@@ -10,11 +10,7 @@
 extern "C" {
 #endif
 
-typedef void (*gw_group_store_listener_t)(void *user_ctx);
-
 esp_err_t gw_group_store_init(void);
-esp_err_t gw_group_store_add_listener(gw_group_store_listener_t cb, void *user_ctx);
-esp_err_t gw_group_store_remove_listener(gw_group_store_listener_t cb, void *user_ctx);
 
 size_t gw_group_store_count(void);
 esp_err_t gw_group_store_get_by_index(size_t index, gw_group_entry_t *out_group);

@@ -7,6 +7,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "gw_core/gw_proto_bus.h"
+#include "gw_proto/gw_proto_map.h"
 
 static const char *TAG = "gw_state_store";
 
@@ -16,13 +18,6 @@ static size_t s_item_count;
 static size_t s_item_cap;
 static uint32_t s_version_seq;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
-#define GW_STATE_LISTENER_CAP 4
-typedef struct {
-    gw_state_store_listener_t cb;
-    void *user_ctx;
-} gw_state_listener_slot_t;
-static gw_state_listener_slot_t s_listeners[GW_STATE_LISTENER_CAP];
-static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
 {
@@ -152,48 +147,6 @@ esp_err_t gw_state_store_init(void)
     return ESP_OK;
 }
 
-esp_err_t gw_state_store_add_listener(gw_state_store_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_STATE_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    for (size_t i = 0; i < GW_STATE_LISTENER_CAP; i++) {
-        if (!s_listeners[i].cb) {
-            s_listeners[i].cb = cb;
-            s_listeners[i].user_ctx = user_ctx;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NO_MEM;
-}
-
-esp_err_t gw_state_store_remove_listener(gw_state_store_listener_t cb, void *user_ctx)
-{
-    if (!cb) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    portENTER_CRITICAL(&s_listener_lock);
-    for (size_t i = 0; i < GW_STATE_LISTENER_CAP; i++) {
-        if (s_listeners[i].cb == cb && s_listeners[i].user_ctx == user_ctx) {
-            s_listeners[i].cb = NULL;
-            s_listeners[i].user_ctx = NULL;
-            portEXIT_CRITICAL(&s_listener_lock);
-            return ESP_OK;
-        }
-    }
-    portEXIT_CRITICAL(&s_listener_lock);
-    return ESP_ERR_NOT_FOUND;
-}
-
 static esp_err_t upsert_item(const gw_state_item_t *item)
 {
     if (!s_inited || item == NULL || item->uid.uid[0] == '\0' || item->key[0] == '\0') {
@@ -282,18 +235,12 @@ log_and_return:
     }
 
     if (op != OP_NONE) {
-        gw_state_listener_slot_t listeners[GW_STATE_LISTENER_CAP];
-        size_t listener_count = 0;
-        portENTER_CRITICAL(&s_listener_lock);
-        for (size_t i = 0; i < GW_STATE_LISTENER_CAP; i++) {
-            if (s_listeners[i].cb) {
-                listeners[listener_count++] = s_listeners[i];
-            }
-        }
-        portEXIT_CRITICAL(&s_listener_lock);
-        for (size_t i = 0; i < listener_count; i++) {
-            listeners[i].cb(&next, listeners[i].user_ctx);
-        }
+        gw_proto_state_item_v1_t msg = {0};
+        gw_proto_hdr_t hdr = {0};
+        gw_proto_fill_state_item(&msg, &next);
+        gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_STATE_ITEM, sizeof(msg), 0);
+        (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
+
     }
 
     return ESP_OK;

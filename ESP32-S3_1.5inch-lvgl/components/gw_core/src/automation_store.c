@@ -8,6 +8,8 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "gw_core/gw_proto_bus.h"
+#include "gw_proto/gw_proto_map.h"
 
 static const char *TAG = "gw_autos";
 
@@ -40,6 +42,28 @@ static void notify_automation_listeners(void)
     for (size_t i = 0; i < listener_count; i++) {
         listeners[i].cb(listeners[i].user_ctx);
     }
+}
+
+static void publish_automation_upsert(const gw_automation_entry_t *entry)
+{
+    if (!entry || entry->id[0] == '\0') {
+        return;
+    }
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_AUTOMATION_UPSERT, sizeof(*entry), 0);
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, entry);
+}
+
+static void publish_automation_remove(const char *id)
+{
+    if (!id || id[0] == '\0') {
+        return;
+    }
+    gw_proto_automation_remove_v1_t msg = {0};
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_automation_remove(&msg, id);
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_AUTOMATION_REMOVE, sizeof(msg), 0);
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
 }
 
 static bool automation_storage_ready(void)
@@ -282,7 +306,10 @@ esp_err_t gw_automation_store_put_entry(const gw_automation_entry_t *entry)
 
     portEXIT_CRITICAL(&s_automation_storage.lock);
     err = automation_storage_save_locked();
-    if (err == ESP_OK) notify_automation_listeners();
+    if (err == ESP_OK) {
+        publish_automation_upsert(entry);
+        notify_automation_listeners();
+    }
     return err;
 }
 
@@ -292,6 +319,7 @@ esp_err_t gw_automation_store_remove(const char *id)
         return ESP_ERR_INVALID_ARG;
     }
 
+    char removed_id[GW_AUTOMATION_ID_MAX] = {0};
     portENTER_CRITICAL(&s_automation_storage.lock);
     size_t idx = find_automation_index_by_id(id);
     if (idx == (size_t)-1) {
@@ -301,6 +329,7 @@ esp_err_t gw_automation_store_remove(const char *id)
     
     // Shift remaining automations down
     gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
+    strlcpy(removed_id, automations[idx].id, sizeof(removed_id));
     for (size_t i = idx + 1; i < s_automation_storage.count; i++) {
         automations[i - 1] = automations[i];
     }
@@ -310,7 +339,10 @@ esp_err_t gw_automation_store_remove(const char *id)
     portEXIT_CRITICAL(&s_automation_storage.lock);
     
     esp_err_t err = automation_storage_save_locked();
-    if (err == ESP_OK) notify_automation_listeners();
+    if (err == ESP_OK) {
+        publish_automation_remove(removed_id);
+        notify_automation_listeners();
+    }
     return err;
 }
 
@@ -320,6 +352,7 @@ esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled)
         return ESP_ERR_INVALID_ARG;
     }
 
+    gw_automation_entry_t updated_entry = {0};
     portENTER_CRITICAL(&s_automation_storage.lock);
     size_t idx = find_automation_index_by_id(id);
     if (idx == (size_t)-1) {
@@ -329,11 +362,15 @@ esp_err_t gw_automation_store_set_enabled(const char *id, bool enabled)
     
     gw_automation_entry_t *automations = (gw_automation_entry_t *)s_automation_storage.data;
     automations[idx].enabled = enabled;
+    updated_entry = automations[idx];
     
     portEXIT_CRITICAL(&s_automation_storage.lock);
 
     esp_err_t err = automation_storage_save_locked();
-    if (err == ESP_OK) notify_automation_listeners();
+    if (err == ESP_OK) {
+        publish_automation_upsert(&updated_entry);
+        notify_automation_listeners();
+    }
     return err;
 }
 
@@ -343,14 +380,26 @@ esp_err_t gw_automation_store_remove_all(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    gw_automation_entry_t removed[AUTOMATION_STORAGE_MAX_ITEMS];
+    memset(removed, 0, sizeof(removed));
+    size_t removed_count = 0;
     portENTER_CRITICAL(&s_automation_storage.lock);
     if (s_automation_storage.data && s_automation_storage.count > 0) {
+        removed_count = s_automation_storage.count < AUTOMATION_STORAGE_MAX_ITEMS
+                            ? s_automation_storage.count
+                            : AUTOMATION_STORAGE_MAX_ITEMS;
+        memcpy(removed, s_automation_storage.data, removed_count * sizeof(gw_automation_entry_t));
         memset(s_automation_storage.data, 0, s_automation_storage.count * sizeof(gw_automation_entry_t));
     }
     s_automation_storage.count = 0;
     portEXIT_CRITICAL(&s_automation_storage.lock);
 
     esp_err_t err = automation_storage_save_locked();
-    if (err == ESP_OK) notify_automation_listeners();
+    if (err == ESP_OK) {
+        for (size_t i = 0; i < removed_count; i++) {
+            publish_automation_remove(removed[i].id);
+        }
+        notify_automation_listeners();
+    }
     return err;
 }

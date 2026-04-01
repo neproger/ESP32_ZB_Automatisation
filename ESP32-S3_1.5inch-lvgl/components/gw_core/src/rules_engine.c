@@ -9,6 +9,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -17,8 +18,8 @@
 
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
-#include "gw_core/event_bus.h"
 #include "gw_core/event_names.h"
+#include "gw_core/gw_proto_bus.h"
 #include "gw_core/state_store.h"
 #include "gw_core/types.h"
 
@@ -66,6 +67,7 @@ static bool s_inited;
 static QueueHandle_t s_q;
 static bool s_q_caps_alloc;
 static TaskHandle_t s_task;
+static uint32_t s_trace_id;
 
 static const char *strtab_at(const gw_automation_entry_t *entry, uint32_t off)
 {
@@ -167,22 +169,54 @@ static uint32_t trigger_index_lookup(const rules_cache_t *cache, const trigger_k
     return 0;
 }
 
-static void publish_rules_fired(const gw_event_t *e, const char *automation_id)
+static void publish_rules_fired(const gw_proto_event_v1_t *e, const char *automation_id)
 {
+    gw_proto_bus_event_v1_t trace = {0};
     char msg[128];
     snprintf(msg, sizeof(msg), "automation_id=%s", automation_id ? automation_id : "");
-    gw_event_bus_publish(GW_EVT_RULES_FIRED, "rules", e ? e->device_uid : "", e ? e->short_addr : 0, msg);
+    trace.v = 1;
+    trace.id = ++s_trace_id;
+    trace.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    strlcpy(trace.type, GW_EVT_RULES_FIRED, sizeof(trace.type));
+    strlcpy(trace.source, "rules", sizeof(trace.source));
+    if (e) {
+        strlcpy(trace.device_uid, e->device_uid.uid, sizeof(trace.device_uid));
+        trace.short_addr = e->short_addr;
+    }
+    strlcpy(trace.msg, msg, sizeof(trace.msg));
+    const gw_proto_hdr_t hdr = {
+        .version = GW_PROTO_VERSION_V1,
+        .type = GW_PROTO_MSG_EVENT_TRACE,
+        .len = sizeof(trace),
+        .seq = 0,
+        .reserved = 0,
+    };
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_TRACE, &hdr, &trace);
 }
 
 static void publish_rules_action(const char *automation_id, size_t idx, bool ok, const char *err)
 {
+    gw_proto_bus_event_v1_t trace = {0};
     char msg[192];
     if (err) {
         snprintf(msg, sizeof(msg), "automation_id=%s idx=%u ok=0 err=%s", automation_id, (unsigned)idx, err);
     } else {
         snprintf(msg, sizeof(msg), "automation_id=%s idx=%u ok=1", automation_id, (unsigned)idx);
     }
-    gw_event_bus_publish(GW_EVT_RULES_ACTION, "rules", "", 0, msg);
+    trace.v = 1;
+    trace.id = ++s_trace_id;
+    trace.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    strlcpy(trace.type, GW_EVT_RULES_ACTION, sizeof(trace.type));
+    strlcpy(trace.source, "rules", sizeof(trace.source));
+    strlcpy(trace.msg, msg, sizeof(trace.msg));
+    const gw_proto_hdr_t hdr = {
+        .version = GW_PROTO_VERSION_V1,
+        .type = GW_PROTO_MSG_EVENT_TRACE,
+        .len = sizeof(trace),
+        .seq = 0,
+        .reserved = 0,
+    };
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_TRACE, &hdr, &trace);
 }
 
 typedef struct {
@@ -197,47 +231,57 @@ typedef struct {
     bool has_attr;
 } event_payload_view_t;
 
-static void build_payload_view_from_event(const gw_event_t *e, event_payload_view_t *out)
+static void build_payload_view_from_event(const gw_proto_event_v1_t *e, event_payload_view_t *out)
 {
     memset(out, 0, sizeof(*out));
     if (!e) return;
 
-    if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ENDPOINT) {
-        out->endpoint = e->payload_endpoint;
+    if (e->endpoint > 0) {
+        out->endpoint = e->endpoint;
         out->has_endpoint = true;
     }
-    if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CMD) {
-        strlcpy(out->cmd_buf, e->payload_cmd, sizeof(out->cmd_buf));
+    if (e->cmd[0]) {
+        strlcpy(out->cmd_buf, e->cmd, sizeof(out->cmd_buf));
         out->cmd = out->cmd_buf;
         out->has_cmd = out->cmd_buf[0] != '\0';
     }
-    if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_CLUSTER) {
-        out->cluster_id = e->payload_cluster;
+    if (e->cluster_id != 0) {
+        out->cluster_id = e->cluster_id;
         out->has_cluster = true;
     }
-    if (e->payload_flags & GW_EVENT_PAYLOAD_HAS_ATTR) {
-        out->attr_id = e->payload_attr;
+    if (e->attr_id != 0) {
+        out->attr_id = e->attr_id;
         out->has_attr = true;
     }
 }
 
-static gw_auto_evt_type_t evt_type_from_event(const gw_event_t *e)
+static gw_auto_evt_type_t evt_type_from_event(const gw_proto_event_v1_t *e)
 {
-    if (strcmp(e->type, GW_EVT_ZIGBEE_COMMAND) == 0) return GW_AUTO_EVT_ZIGBEE_COMMAND;
-    if (strcmp(e->type, GW_EVT_ZIGBEE_ATTR_REPORT) == 0) return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
-    if (strcmp(e->type, GW_EVT_ZIGBEE_DEVICE_JOIN) == 0) return GW_AUTO_EVT_DEVICE_JOIN;
-    if (strcmp(e->type, GW_EVT_ZIGBEE_DEVICE_LEAVE) == 0) return GW_AUTO_EVT_DEVICE_LEAVE;
-    return 0;
+    if (!e) {
+        return 0;
+    }
+    switch ((gw_proto_event_id_t)e->event_id_kind) {
+        case GW_PROTO_EVENT_COMMAND:
+            return GW_AUTO_EVT_ZIGBEE_COMMAND;
+        case GW_PROTO_EVENT_ATTR_REPORT:
+            return GW_AUTO_EVT_ZIGBEE_ATTR_REPORT;
+        case GW_PROTO_EVENT_DEVICE_JOIN:
+            return GW_AUTO_EVT_DEVICE_JOIN;
+        case GW_PROTO_EVENT_DEVICE_LEAVE:
+            return GW_AUTO_EVT_DEVICE_LEAVE;
+        default:
+            return 0;
+    }
 }
 
 static bool trigger_matches(const gw_automation_entry_t *entry,
                             const gw_auto_bin_trigger_v2_t *t,
                             gw_auto_evt_type_t evt_type,
-                            const gw_event_t *e,
+                            const gw_proto_event_v1_t *e,
                             const event_payload_view_t *pv)
 {
     if (t->event_type != evt_type) return false;
-    if (t->device_uid_off && strcmp(strtab_at(entry, t->device_uid_off), e->device_uid) != 0) return false;
+    if (t->device_uid_off && strcmp(strtab_at(entry, t->device_uid_off), e->device_uid.uid) != 0) return false;
     if (t->endpoint && (!pv->has_endpoint || pv->endpoint != t->endpoint)) return false;
 
     if (evt_type == GW_AUTO_EVT_ZIGBEE_COMMAND) {
@@ -395,7 +439,7 @@ static void reload_automation_cache(void)
 }
 
 static uint32_t lookup_candidate_mask(const rules_cache_t *cache,
-                                      const gw_event_t *e,
+                                      const gw_proto_event_v1_t *e,
                                       const event_payload_view_t *pv,
                                       gw_auto_evt_type_t evt_type)
 {
@@ -403,8 +447,8 @@ static uint32_t lookup_candidate_mask(const rules_cache_t *cache,
         return 0;
     }
 
-    const bool ev_has_uid = e->device_uid[0] != '\0';
-    const uint32_t ev_uid_hash = ev_has_uid ? fnv1a32(e->device_uid) : 0;
+    const bool ev_has_uid = e->device_uid.uid[0] != '\0';
+    const uint32_t ev_uid_hash = ev_has_uid ? fnv1a32(e->device_uid.uid) : 0;
 
     uint32_t mask = 0;
     trigger_key_t k = {0};
@@ -501,9 +545,9 @@ static uint32_t lookup_candidate_mask(const rules_cache_t *cache,
     return mask;
 }
 
-static void process_event(const gw_event_t *e)
+static void process_event(const gw_proto_event_v1_t *e)
 {
-    if (!e || !e->type[0] || strcmp(e->source, "rules") == 0) {
+    if (!e) {
         return;
     }
 
@@ -569,7 +613,7 @@ static void process_event(const gw_event_t *e)
 
 static void rules_task(void *arg)
 {
-    gw_event_t e;
+    gw_proto_event_v1_t e;
     for (;;) {
         if (xQueueReceive(s_q, &e, portMAX_DELAY) == pdTRUE) {
             process_event(&e);
@@ -583,13 +627,24 @@ static void rules_automation_listener(void *user_ctx)
     reload_automation_cache();
 }
 
-static void rules_event_listener(const gw_event_t *event, void *user_ctx)
+static void rules_proto_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
 {
+    (void)channel;
     (void)user_ctx;
-    if (s_inited && s_q && event) {
-        if (xQueueSend(s_q, event, 0) != pdTRUE) {
-            ESP_LOGW(TAG, "rules event queue overflow");
-        }
+    if (!s_inited || !s_q || !hdr || hdr->type != GW_PROTO_MSG_EVENT_ZB || !payload || hdr->len == 0) {
+        return;
+    }
+
+    gw_proto_event_v1_t event = {0};
+    const size_t n = hdr->len < sizeof(event) ? hdr->len : sizeof(event);
+    memcpy(&event, payload, n);
+    event.event_type[sizeof(event.event_type) - 1] = '\0';
+    event.cmd[sizeof(event.cmd) - 1] = '\0';
+    event.device_uid.uid[sizeof(event.device_uid.uid) - 1] = '\0';
+    event.value_text[sizeof(event.value_text) - 1] = '\0';
+
+    if (xQueueSend(s_q, &event, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "rules event queue overflow");
     }
 }
 
@@ -600,18 +655,18 @@ esp_err_t gw_rules_init(void)
     }
 
     s_q_caps_alloc = false;
-    s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_proto_event_v1_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (s_q) {
         s_q_caps_alloc = true;
     }
     if (!s_q) {
-        s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_q = xQueueCreateWithCaps(GW_RULES_EVENT_Q_CAP, sizeof(gw_proto_event_v1_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (s_q) {
             s_q_caps_alloc = true;
         }
     }
     if (!s_q) {
-        s_q = xQueueCreate(GW_RULES_EVENT_Q_CAP, sizeof(gw_event_t));
+        s_q = xQueueCreate(GW_RULES_EVENT_Q_CAP, sizeof(gw_proto_event_v1_t));
         s_q_caps_alloc = false;
     }
     if (!s_q) {
@@ -645,7 +700,7 @@ esp_err_t gw_rules_init(void)
         return ESP_FAIL;
     }
 
-    gw_event_bus_add_listener(rules_event_listener, NULL);
+    (void)gw_proto_bus_add_listener(rules_proto_listener, GW_PROTO_BUS_CHANNEL_INGRESS, NULL);
     (void)gw_automation_store_add_listener(rules_automation_listener, NULL);
     reload_automation_cache();
 

@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         "src/storage.c"
         "src/device_storage.c"
-        "src/event_bus.c"
+        "src/gw_proto_bus.c"
         "src/device_registry.c"
         "src/automation_store.c"
         "src/group_store.c"
@@ -25,6 +25,7 @@ idf_component_register(
         nvs_flash
         spiffs
         esp_netif
+        gw_proto
         gw_zigbee
         json
 )

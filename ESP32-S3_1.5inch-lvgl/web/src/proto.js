@@ -39,6 +39,7 @@ export const GW_PROTO_MSG_CMD_AUTOMATION_REMOVE = 0x5d
 export const GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL = 0x5e
 export const GW_PROTO_MSG_CMD_AUTOMATION_SAVE = 0x5f
 export const GW_PROTO_MSG_CMD_ACTION_EXEC = 0x60
+export const GW_PROTO_MSG_EVENT_TRACE = 0x6f
 
 export const GW_PROTO_SYNC_SCOPE_FULL = 1
 export const GW_PROTO_SYNC_SCOPE_DEVICES = 2
@@ -94,6 +95,12 @@ const AUTO_ENTRY_SIZE = AUTO_STRING_TABLE_OFF + AUTO_MAX_STRING_TABLE_BYTES
 const GROUP_ID_SIZE = 32
 const GROUP_NAME_SIZE = 48
 const GROUP_LABEL_SIZE = 32
+const TRACE_TS_OFF = 5
+const TRACE_TYPE_OFF = 13
+const TRACE_SOURCE_OFF = 45
+const TRACE_UID_OFF = 61
+const TRACE_SHORT_ADDR_OFF = 80
+const TRACE_MSG_OFF = 82
 
 const GW_AUTO_EVT_ZIGBEE_COMMAND = 1
 const GW_AUTO_EVT_ZIGBEE_ATTR_REPORT = 2
@@ -958,6 +965,25 @@ export function protoFrameToEvent(frame) {
         event_type: EVT_AUTOMATION_CHANGED,
         source: 'gw_proto',
         msg: `automation ${id} removed`,
+      },
+    }
+  }
+
+  if (frame.type === GW_PROTO_MSG_EVENT_TRACE) {
+    const eventType = readFixedString(view, TRACE_TYPE_OFF, 32)
+    const source = readFixedString(view, TRACE_SOURCE_OFF, 16)
+    const uid = readFixedString(view, TRACE_UID_OFF, DEVICE_UID_SIZE)
+    const shortAddr = view.getUint16(TRACE_SHORT_ADDR_OFF, true)
+    const msg = readFixedString(view, TRACE_MSG_OFF, 128)
+    return {
+      ts_ms: Number(view.getBigUint64(TRACE_TS_OFF, true)),
+      type: 'gateway.event',
+      data: {
+        event_type: eventType,
+        source,
+        device_id: uid,
+        short_addr: shortAddr,
+        msg,
       },
     }
   }

@@ -4,10 +4,11 @@
 #include "gw_wifi.h"
 #include "gw_http/gw_http.h"
 #include "s3_weather_service.h"
-#include "gw_core/event_bus.h"
 #include "gw_core/device_registry.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/group_store.h"
+#include "gw_core/gw_proto_bus.h"
+#include "gw_core/gw_proto_ingest.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"
@@ -158,7 +159,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(nvs_err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(gw_event_bus_init());
+    ESP_ERROR_CHECK(gw_proto_bus_init());
     log_struct_sizes_once();
     // Keep noisy subsystems quiet while we debug task stacks and heap pressure.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_WARN);
@@ -176,6 +177,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gw_automation_store_init());
     ESP_ERROR_CHECK(gw_group_store_init());
     ESP_ERROR_CHECK(gw_project_settings_init());
+    ESP_ERROR_CHECK(gw_proto_ingest_init());
     ESP_ERROR_CHECK(gw_rules_init());
     ESP_ERROR_CHECK(gw_runtime_sync_init());
     ESP_ERROR_CHECK(gw_net_time_init(NULL));

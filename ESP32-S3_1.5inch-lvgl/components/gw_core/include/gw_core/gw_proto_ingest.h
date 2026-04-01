@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-void gw_proto_ingest_publish_event(const gw_proto_event_v1_t *evt);
+esp_err_t gw_proto_ingest_init(void);
 
 esp_err_t gw_proto_ingest_apply_sync_begin(const gw_proto_sync_begin_v1_t *msg);
 esp_err_t gw_proto_ingest_apply_sync_end(const gw_proto_sync_end_v1_t *msg, bool publish_sync_ready);

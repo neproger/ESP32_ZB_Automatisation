@@ -31,11 +31,7 @@ typedef struct {
     uint16_t out_clusters[GW_ZB_MAX_CLUSTERS];
 } gw_zb_endpoint_t;
 
-typedef void (*gw_zb_model_listener_t)(const gw_zb_endpoint_t *ep, bool removed, void *user_ctx);
-
 esp_err_t gw_zb_model_init(void);
-esp_err_t gw_zb_model_add_listener(gw_zb_model_listener_t cb, void *user_ctx);
-esp_err_t gw_zb_model_remove_listener(gw_zb_model_listener_t cb, void *user_ctx);
 esp_err_t gw_zb_model_upsert_endpoint(const gw_zb_endpoint_t *ep);
 esp_err_t gw_zb_model_remove_device(const gw_device_uid_t *uid);
 size_t gw_zb_model_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps);
