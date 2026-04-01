@@ -67,6 +67,13 @@ esp_err_t gw_storage_init(gw_storage_t *storage, const gw_storage_desc_t *desc, 
     }
 
     if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_NVS_NOT_FOUND) {
+            storage->count = 0;
+            memset(storage->data, 0, desc->max_items * desc->item_size);
+            storage->initialized = true;
+            ESP_LOGI(TAG, "Storage initialized empty: %s (0/%zu items)", desc->key, desc->max_items);
+            return ESP_OK;
+        }
         ESP_LOGE(TAG, "Failed to load storage data: %s", esp_err_to_name(err));
         free(storage->data);
         return err;

@@ -160,6 +160,8 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_CMD_COLOR_TEMP";
         case GW_PROTO_MSG_EVENT_ZB:
             return "PROTO_EVENT_ZB";
+        case GW_PROTO_MSG_LINK_ACK:
+            return "PROTO_LINK_ACK";
         default:
             return "UNKNOWN";
     }
@@ -397,6 +399,35 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
 
     switch (frame->hdr.type) {
         case GW_PROTO_MSG_SYNC_BEGIN:
+        case GW_PROTO_MSG_DEVICE_UPSERT:
+        case GW_PROTO_MSG_ENDPOINT_UPSERT:
+        case GW_PROTO_MSG_DEVICE_REMOVE:
+        case GW_PROTO_MSG_SYNC_END:
+            // ACK every topology snapshot frame so the C6 sender can retry missing ones in place.
+            (void)uart_send_frame(GW_PROTO_MSG_LINK_ACK, frame->hdr.seq, NULL, 0);
+            break;
+        default:
+            break;
+    }
+
+    if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB && frame->hdr.len >= sizeof(gw_proto_event_v1_t)) {
+        const gw_proto_event_v1_t *evt = (const gw_proto_event_v1_t *)frame->payload;
+        if (evt->event_id_kind == GW_PROTO_EVENT_NET_STATE) {
+            ESP_LOGI(TAG,
+                     "Peer net-state event: cmd=%s value=%s ts=%llu",
+                     evt->cmd,
+                     evt->value_text,
+                     (unsigned long long)evt->ts_ms);
+            s_bootstrap_ready = false;
+            s_initial_state_sync_done = false;
+            if (!s_snapshot_stream_active) {
+                (void)request_proto_async(GW_PROTO_MSG_SNAPSHOT_REQUEST, NULL, 0, "peer-online snapshot sync");
+            }
+        }
+    }
+
+    switch (frame->hdr.type) {
+        case GW_PROTO_MSG_SYNC_BEGIN:
             s_snapshot_last_chunk_us = esp_timer_get_time();
             s_snapshot_stream_active = true;
             s_snapshot_retry_count = 0;
@@ -445,6 +476,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             (void)request_snapshot_sync();
         } else {
             s_bootstrap_ready = true;
+            // Canonical snapshot only carries topology; states are warmed up immediately after sync.
             if (s_snapshot_received_state_items == 0) {
                 start_initial_state_sync_once();
             } else {

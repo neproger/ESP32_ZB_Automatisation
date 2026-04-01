@@ -513,15 +513,19 @@ esp_err_t gw_device_registry_sync_endpoints(const gw_device_uid_t *uid)
         }
     }
 
-    gw_device_t updated = {
-        .device_uid = d.device_uid,
-        .short_addr = d.short_addr,
-        .last_seen_ms = d.last_seen_ms,
-        .has_onoff = d.has_onoff,
-        .has_button = d.has_button,
-    };
-    strlcpy(updated.name, d.name, sizeof(updated.name));
-    return gw_device_registry_upsert(&updated);
+    portENTER_CRITICAL(&s_device_storage.lock);
+    size_t idx = find_device_index_by_uid(uid);
+    if (idx == (size_t)-1) {
+        portEXIT_CRITICAL(&s_device_storage.lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    gw_device_full_t *devices = (gw_device_full_t *)s_device_storage.data;
+    devices[idx] = d;
+    assign_default_name_if_needed(&devices[idx]);
+    portEXIT_CRITICAL(&s_device_storage.lock);
+
+    return gw_storage_save(&s_device_storage);
 }
 
 size_t gw_device_registry_list_endpoints(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps)

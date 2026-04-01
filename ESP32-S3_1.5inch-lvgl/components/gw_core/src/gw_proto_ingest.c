@@ -5,6 +5,7 @@
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/runtime_sync.h"
 #include "gw_core/state_store.h"
+
 static bool s_inited;
 
 static void gw_proto_ingest_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)

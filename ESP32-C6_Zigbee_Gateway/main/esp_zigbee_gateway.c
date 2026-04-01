@@ -92,6 +92,29 @@ static void uart_send_zb_event(uint8_t event_kind,
     (void)gw_uart_link_send_event_zb(&evt);
 }
 
+static void uart_send_net_state_online(void)
+{
+    gw_proto_event_v1_t evt = {0};
+    evt.event_id = 0;
+    evt.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    evt.event_id_kind = GW_PROTO_EVENT_NET_STATE;
+    strlcpy(evt.cmd, "online", sizeof(evt.cmd));
+    strlcpy(evt.value_text, "c6_boot", sizeof(evt.value_text));
+    (void)gw_uart_link_send_event_zb(&evt);
+}
+static bool s_snapshot_runtime_ready_sent;
+
+static void announce_snapshot_runtime_ready_once(void)
+{
+    if (s_snapshot_runtime_ready_sent) {
+        return;
+    }
+    s_snapshot_runtime_ready_sent = true;
+    gw_uart_link_set_snapshot_ready(true);
+    uart_send_net_state_online();
+    ESP_LOGI(TAG, "startup topology bootstrap ready");
+}
+
 static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_addr, uint64_t ts_ms)
 {
     if (!uid || uid->uid[0] == '\0') {
@@ -482,6 +505,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_FORMATION);
             } else {
                 ESP_LOGI(TAG, "Device rebooted (join closed by default, open via Web UI permit_join)");
+                announce_snapshot_runtime_ready_once();
             }
         } else {
             ESP_LOGE(TAG, "Failed to initialize Zigbee stack (status: %s)", esp_err_to_name(err_status));
@@ -504,6 +528,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_BDB_SIGNAL_STEERING:
         if (err_status == ESP_OK) {
             ESP_LOGI(TAG, "Network steering started");
+            announce_snapshot_runtime_ready_once();
         }
         break;
     case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:
