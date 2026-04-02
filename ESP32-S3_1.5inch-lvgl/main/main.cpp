@@ -112,9 +112,9 @@ extern "C" void app_main(void)
     esp_log_level_set("gw_net_time", ESP_LOG_WARN);
 
     ESP_ERROR_CHECK(gw_sensor_store_init());
+    ESP_ERROR_CHECK(gw_model_init());
     ESP_ERROR_CHECK(gw_automation_store_init());
     ESP_ERROR_CHECK(gw_project_settings_init());
-    ESP_ERROR_CHECK(gw_model_init());
     ESP_ERROR_CHECK(gw_rules_init());
 
     ESP_LOGW(TAG_APP, "Legacy stores and legacy runtime are disabled for gw_model bringup");

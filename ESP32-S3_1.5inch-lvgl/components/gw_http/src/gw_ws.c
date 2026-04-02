@@ -15,10 +15,11 @@
 #include "freertos/task.h"
 
 #include "gw_core/action_exec.h"
-#include "gw_core/automation_store.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/project_settings.h"
+#include "gw_model/gw_model_automation.h"
 #include "gw_model/gw_model_groups.h"
+#include "gw_model/gw_model_settings.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
 #include "gw_proto/gw_proto_frame.h"
@@ -58,6 +59,7 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds);
 static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
 static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
+static esp_err_t ws_remove_all_automations(void);
 
 static bool ws_fd_is_alive(int fd)
 {
@@ -285,34 +287,40 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             if (!gw_project_settings_validate(&next)) {
                 return ESP_ERR_INVALID_ARG;
             }
-            return gw_project_settings_set(&next);
+            return gw_model_set_settings(msg, NULL, NULL);
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED: {
             if (payload_len < sizeof(gw_proto_cmd_automation_set_enabled_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_automation_set_enabled_v1_t *msg = (const gw_proto_cmd_automation_set_enabled_v1_t *)payload;
-            return gw_automation_store_set_enabled(msg->id, msg->enabled != 0);
+            gw_automation_entry_t entry = {0};
+            esp_err_t err = gw_model_get_automation(msg->id, &entry);
+            if (err != ESP_OK) {
+                return err;
+            }
+            entry.enabled = msg->enabled != 0;
+            return gw_model_upsert_automation(&entry, NULL, NULL);
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_REMOVE: {
             if (payload_len < sizeof(gw_proto_cmd_automation_remove_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_automation_remove_v1_t *msg = (const gw_proto_cmd_automation_remove_v1_t *)payload;
-            return gw_automation_store_remove(msg->id);
+            return gw_model_remove_automation(msg->id, NULL);
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL: {
             if (payload_len < sizeof(gw_proto_cmd_automation_reset_all_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            return gw_automation_store_remove_all();
+            return ws_remove_all_automations();
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_SAVE: {
             if (payload_len < sizeof(gw_automation_entry_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_automation_entry_t *msg = (const gw_automation_entry_t *)payload;
-            return gw_automation_store_put_entry(msg);
+            return gw_model_upsert_automation(msg, NULL, NULL);
         }
         case GW_PROTO_MSG_CMD_ACTION_EXEC: {
             if (payload_len < sizeof(gw_automation_entry_t)) {
@@ -373,6 +381,32 @@ static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
     return ws_send_proto_frame_sync(req, msg_type, seq, payload, payload_len);
 }
 
+static esp_err_t ws_remove_all_automations(void)
+{
+    const size_t count = gw_model_count_automations();
+    if (count == 0) {
+        return ESP_OK;
+    }
+
+    gw_automation_entry_t *items = (gw_automation_entry_t *)calloc(count, sizeof(gw_automation_entry_t));
+    if (!items) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const size_t loaded = gw_model_list_automations(items, count);
+    esp_err_t result = ESP_OK;
+    for (size_t i = 0; i < loaded; ++i) {
+        esp_err_t err = gw_model_remove_automation(items[i].id, NULL);
+        if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+            result = err;
+            break;
+        }
+    }
+
+    free(items);
+    return result;
+}
+
 static uint32_t ws_group_snapshot_total_records(void)
 {
     return (uint32_t)(gw_model_count_groups() + gw_model_count_group_items());
@@ -380,7 +414,7 @@ static uint32_t ws_group_snapshot_total_records(void)
 
 static uint32_t ws_automation_snapshot_total_records(void)
 {
-    return (uint32_t)gw_automation_store_count();
+    return (uint32_t)gw_model_count_automations();
 }
 
 static uint32_t ws_device_snapshot_total_records(void)
@@ -407,7 +441,7 @@ static esp_err_t ws_automation_snapshot_rewind(void *source_ctx)
         return ESP_ERR_INVALID_ARG;
     }
     memset(it, 0, sizeof(*it));
-    it->count = gw_automation_store_count();
+    it->count = gw_model_count_automations();
     return ESP_OK;
 }
 
@@ -470,7 +504,7 @@ static esp_err_t ws_automation_snapshot_next(void *source_ctx,
     }
 
     while (it->index < it->count) {
-        if (gw_automation_store_get_by_index(it->index++, &it->entry) != ESP_OK) {
+        if (gw_model_get_automation_by_index(it->index++, &it->entry) != ESP_OK) {
             continue;
         }
         *out_msg_type = GW_PROTO_MSG_AUTOMATION_UPSERT;
@@ -612,8 +646,8 @@ static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
         return err;
     }
 
-    gw_project_settings_t settings = {0};
-    if (gw_project_settings_get(&settings) != ESP_OK) {
+    gw_proto_settings_v1_t settings_msg = {0};
+    if (gw_model_get_settings(&settings_msg) != ESP_OK) {
         return ESP_OK;
     }
 
@@ -628,8 +662,6 @@ static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd)
         return err;
     }
 
-    gw_proto_settings_v1_t settings_msg = {0};
-    gw_proto_fill_settings(&settings_msg, &settings);
     err = ws_send_proto_frame_sync(req, GW_PROTO_MSG_SETTINGS, seq, &settings_msg, sizeof(settings_msg));
     if (err != ESP_OK) {
         return err;

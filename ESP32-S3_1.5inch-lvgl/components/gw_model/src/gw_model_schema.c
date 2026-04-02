@@ -94,6 +94,45 @@ static bool group_item_record_equals(const void *lhs_record, const void *rhs_rec
     return memcmp(lhs_record, rhs_record, sizeof(gw_proto_group_item_v1_t)) == 0;
 }
 
+static void settings_key_of(const void *record, void *out_key)
+{
+    (void)record;
+    uint8_t *key = (uint8_t *)out_key;
+    *key = 1u;
+}
+
+static bool settings_key_equals(const void *lhs_key, const void *rhs_key)
+{
+    return (*(const uint8_t *)lhs_key) == (*(const uint8_t *)rhs_key);
+}
+
+static bool settings_record_equals(const void *lhs_record, const void *rhs_record)
+{
+    return memcmp(lhs_record, rhs_record, sizeof(gw_proto_settings_v1_t)) == 0;
+}
+
+typedef struct {
+    char id[GW_AUTOMATION_ID_MAX];
+} gw_model_automation_key_t;
+
+static void automation_key_of(const void *record, void *out_key)
+{
+    const gw_automation_entry_t *r = (const gw_automation_entry_t *)record;
+    gw_model_automation_key_t *key = (gw_model_automation_key_t *)out_key;
+    memset(key, 0, sizeof(*key));
+    memcpy(key->id, r->id, sizeof(key->id));
+}
+
+static bool automation_key_equals(const void *lhs_key, const void *rhs_key)
+{
+    return memcmp(lhs_key, rhs_key, sizeof(gw_model_automation_key_t)) == 0;
+}
+
+static bool automation_record_equals(const void *lhs_record, const void *rhs_record)
+{
+    return memcmp(lhs_record, rhs_record, sizeof(gw_automation_entry_t)) == 0;
+}
+
 const micro_db_table_schema_t GW_MODEL_SCHEMA_TOPOLOGY_DEVICE = {
     .name = "topology_device",
     .record_size = sizeof(gw_proto_device_v1_t),
@@ -157,4 +196,30 @@ const micro_db_table_schema_t GW_MODEL_SCHEMA_GROUP_ITEM = {
     .key_of = group_item_key_of,
     .key_equals = group_item_key_equals,
     .record_equals = group_item_record_equals,
+};
+
+const micro_db_table_schema_t GW_MODEL_SCHEMA_SETTINGS = {
+    .name = "settings",
+    .record_size = sizeof(gw_proto_settings_v1_t),
+    .key_size = sizeof(uint8_t),
+    .max_records = 1,
+    .backing = MICRO_DB_BACKING_RAM | MICRO_DB_BACKING_NVS,
+    .flags = MICRO_DB_TABLE_F_VERSIONED,
+    .persist_key = "settings",
+    .key_of = settings_key_of,
+    .key_equals = settings_key_equals,
+    .record_equals = settings_record_equals,
+};
+
+const micro_db_table_schema_t GW_MODEL_SCHEMA_AUTOMATION = {
+    .name = "automation",
+    .record_size = sizeof(gw_automation_entry_t),
+    .key_size = sizeof(gw_model_automation_key_t),
+    .max_records = 32,
+    .backing = MICRO_DB_BACKING_RAM | MICRO_DB_BACKING_NVS,
+    .flags = MICRO_DB_TABLE_F_VERSIONED,
+    .persist_key = "autos",
+    .key_of = automation_key_of,
+    .key_equals = automation_key_equals,
+    .record_equals = automation_record_equals,
 };

@@ -2,9 +2,8 @@
 
 #include <stdint.h>
 
-#include "gw_core/state_store.h"
 #include "gw_core/types.h"
-#include "gw_core/zb_model.h"
+#include "gw_core/model_types.h"
 
 #ifdef __cplusplus
 extern "C" {

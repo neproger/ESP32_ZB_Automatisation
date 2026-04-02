@@ -2,16 +2,10 @@ idf_component_register(
     SRCS
         "src/storage.c"
         "src/gw_proto_bus.c"
-        "src/device_registry.c"
         "src/automation_store.c"
-        "src/group_store.c"
         "src/project_settings.c"
-        "src/zb_model.c"
         "src/zb_classify.c"
         "src/sensor_store.c"
-        "src/state_store.c"
-        "src/runtime_sync.c"
-        "src/gw_proto_ingest.c"
         "src/rules_engine.c"
         "src/action_exec.c"
         "src/net_time.c"
@@ -24,6 +18,7 @@ idf_component_register(
         nvs_flash
         spiffs
         esp_netif
+        gw_model
         gw_proto
         gw_zigbee
         json

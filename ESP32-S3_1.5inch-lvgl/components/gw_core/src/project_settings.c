@@ -5,13 +5,10 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/storage.h"
+#include "gw_model/gw_model_settings.h"
 #include "gw_proto/gw_proto_map.h"
 
 static const char *TAG = "gw_settings";
-
-static const uint32_t SETTINGS_MAGIC = 0x53545447; // STTG
-static const uint16_t SETTINGS_VERSION = 1;
 
 static const uint32_t kDefaultScreensaverTimeoutMs = 10000;
 static const uint32_t kDefaultWeatherSuccessIntervalMs = 60 * 60 * 1000;
@@ -28,15 +25,42 @@ static const uint32_t kMaxWeatherRetryIntervalMs = 10 * 60 * 1000;
 static const int16_t kMinTimezoneOffsetMin = -12 * 60;
 static const int16_t kMaxTimezoneOffsetMin = 14 * 60;
 
-static gw_storage_t s_settings_storage;
 static bool s_inited = false;
+
 #define GW_SETTINGS_LISTENER_CAP 4
 typedef struct {
     gw_project_settings_listener_t cb;
     void *user_ctx;
 } gw_settings_listener_slot_t;
+
 static gw_settings_listener_slot_t s_listeners[GW_SETTINGS_LISTENER_CAP];
 static portMUX_TYPE s_listener_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void proto_to_project(const gw_proto_settings_v1_t *src, gw_project_settings_t *dst)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src) {
+        return;
+    }
+    dst->screensaver_timeout_ms = src->screensaver_timeout_ms;
+    dst->weather_success_interval_ms = src->weather_success_interval_ms;
+    dst->weather_retry_interval_ms = src->weather_retry_interval_ms;
+    dst->timezone_auto = src->timezone_auto != 0;
+    dst->timezone_offset_min = src->timezone_offset_min;
+}
+
+static void project_to_proto(const gw_project_settings_t *src, gw_proto_settings_v1_t *dst)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src) {
+        return;
+    }
+    dst->screensaver_timeout_ms = src->screensaver_timeout_ms;
+    dst->weather_success_interval_ms = src->weather_success_interval_ms;
+    dst->weather_retry_interval_ms = src->weather_retry_interval_ms;
+    dst->timezone_auto = src->timezone_auto ? 1u : 0u;
+    dst->timezone_offset_min = src->timezone_offset_min;
+}
 
 static void notify_settings_listeners(const gw_project_settings_t *settings)
 {
@@ -57,19 +81,11 @@ static void notify_settings_listeners(const gw_project_settings_t *settings)
         }
     }
     portEXIT_CRITICAL(&s_listener_lock);
+
     for (size_t i = 0; i < listener_count; i++) {
         listeners[i].cb(settings, listeners[i].user_ctx);
     }
 }
-
-static const gw_storage_desc_t s_settings_desc = {
-    .key = "proj_settings",
-    .item_size = sizeof(gw_project_settings_t),
-    .max_items = 1,
-    .magic = SETTINGS_MAGIC,
-    .version = SETTINGS_VERSION,
-    .namespace = "settings",
-};
 
 void gw_project_settings_get_defaults(gw_project_settings_t *out)
 {
@@ -108,62 +124,43 @@ bool gw_project_settings_validate(const gw_project_settings_t *in)
     return true;
 }
 
-static esp_err_t persist_current(void)
-{
-    return gw_storage_save(&s_settings_storage);
-}
-
 esp_err_t gw_project_settings_init(void)
 {
     if (s_inited) {
         return ESP_OK;
     }
 
-    esp_err_t err = gw_storage_init(&s_settings_storage, &s_settings_desc, GW_STORAGE_NVS);
+    gw_proto_settings_v1_t stored = {0};
+    esp_err_t err = gw_model_get_settings(&stored);
+    if (err == ESP_ERR_NOT_FOUND) {
+        gw_project_settings_t defaults = {0};
+        gw_proto_settings_v1_t proto_defaults = {0};
+        gw_project_settings_get_defaults(&defaults);
+        project_to_proto(&defaults, &proto_defaults);
+        err = gw_model_set_settings(&proto_defaults, NULL, NULL);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "settings default init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        s_inited = true;
+        ESP_LOGI(TAG, "project settings initialized with defaults");
+        return ESP_OK;
+    }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "settings storage init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "settings load failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    bool need_persist = false;
-    bool init_defaults = false;
-    bool repaired_invalid = false;
-    portENTER_CRITICAL(&s_settings_storage.lock);
-    if (s_settings_storage.count == 0) {
-        gw_project_settings_t defaults = {0};
-        gw_project_settings_get_defaults(&defaults);
-        ((gw_project_settings_t *)s_settings_storage.data)[0] = defaults;
-        s_settings_storage.count = 1;
-        need_persist = true;
-        init_defaults = true;
-    } else if (s_settings_storage.count > 1) {
-        gw_project_settings_t keep = ((gw_project_settings_t *)s_settings_storage.data)[0];
-        if (!gw_project_settings_validate(&keep)) {
-            gw_project_settings_get_defaults(&keep);
+    gw_project_settings_t cur = {0};
+    proto_to_project(&stored, &cur);
+    if (!gw_project_settings_validate(&cur)) {
+        gw_project_settings_get_defaults(&cur);
+        gw_proto_settings_v1_t repaired = {0};
+        project_to_proto(&cur, &repaired);
+        err = gw_model_set_settings(&repaired, NULL, NULL);
+        if (err != ESP_OK) {
+            return err;
         }
-        ((gw_project_settings_t *)s_settings_storage.data)[0] = keep;
-        s_settings_storage.count = 1;
-        need_persist = true;
-    } else {
-        gw_project_settings_t cur = ((gw_project_settings_t *)s_settings_storage.data)[0];
-        if (!gw_project_settings_validate(&cur)) {
-            gw_project_settings_get_defaults(&cur);
-            ((gw_project_settings_t *)s_settings_storage.data)[0] = cur;
-            need_persist = true;
-            repaired_invalid = true;
-        }
-    }
-    portEXIT_CRITICAL(&s_settings_storage.lock);
-
-    if (need_persist) {
-        esp_err_t save_err = persist_current();
-        if (save_err != ESP_OK) {
-            return save_err;
-        }
-    }
-    if (init_defaults) {
-        ESP_LOGI(TAG, "project settings initialized with defaults");
-    } else if (repaired_invalid) {
         ESP_LOGW(TAG, "invalid persisted settings replaced with defaults");
     }
 
@@ -214,9 +211,13 @@ esp_err_t gw_project_settings_get(gw_project_settings_t *out)
     if (!s_inited || !out) {
         return ESP_ERR_INVALID_ARG;
     }
-    portENTER_CRITICAL(&s_settings_storage.lock);
-    *out = ((gw_project_settings_t *)s_settings_storage.data)[0];
-    portEXIT_CRITICAL(&s_settings_storage.lock);
+
+    gw_proto_settings_v1_t stored = {0};
+    esp_err_t err = gw_model_get_settings(&stored);
+    if (err != ESP_OK) {
+        return err;
+    }
+    proto_to_project(&stored, out);
     return ESP_OK;
 }
 
@@ -229,12 +230,9 @@ esp_err_t gw_project_settings_set(const gw_project_settings_t *in)
         return ESP_ERR_INVALID_ARG;
     }
 
-    portENTER_CRITICAL(&s_settings_storage.lock);
-    ((gw_project_settings_t *)s_settings_storage.data)[0] = *in;
-    s_settings_storage.count = 1;
-    portEXIT_CRITICAL(&s_settings_storage.lock);
-
-    esp_err_t err = persist_current();
+    gw_proto_settings_v1_t record = {0};
+    project_to_proto(in, &record);
+    esp_err_t err = gw_model_set_settings(&record, NULL, NULL);
     if (err == ESP_OK) {
         notify_settings_listeners(in);
     }

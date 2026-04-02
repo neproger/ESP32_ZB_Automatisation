@@ -23,16 +23,6 @@ static size_t s_group_item_owner_cap;
 
 static void group_item_owner_attach(const char *group_id, uint32_t slot);
 
-static void normalize_endpoint_key(const gw_model_endpoint_key_t *in, gw_model_endpoint_key_t *out)
-{
-    memset(out, 0, sizeof(*out));
-    if (!in) {
-        return;
-    }
-    out->uid = in->uid;
-    out->endpoint = in->endpoint;
-}
-
 enum {
     GROUP_OWNER_EMPTY = 0,
     GROUP_OWNER_USED = 1,
@@ -360,7 +350,6 @@ esp_err_t gw_model_upsert_group_item(const gw_proto_group_item_v1_t *record,
     if (had_existing && memcmp(existing.group_id, record->group_id, sizeof(existing.group_id)) != 0) {
         group_item_owner_detach(existing.group_id, existing_slot);
         group_item_owner_attach(record->group_id, slot);
-        (void)gw_model_notify_group_item_upsert(record);
         return ESP_OK;
     }
 
@@ -378,28 +367,24 @@ esp_err_t gw_model_upsert_group_item(const gw_proto_group_item_v1_t *record,
 esp_err_t gw_model_get_group_item(const gw_model_endpoint_key_t *key,
                                   gw_proto_group_item_v1_t *out_record)
 {
-    gw_model_endpoint_key_t normalized = {0};
-    normalize_endpoint_key(key, &normalized);
-    return micro_db_table_get(&s_group_item_table, &normalized, out_record);
+    return micro_db_table_get(&s_group_item_table, key, out_record);
 }
 
 esp_err_t gw_model_remove_group_item(const gw_model_endpoint_key_t *key,
                                      bool *out_removed)
 {
-    gw_model_endpoint_key_t normalized = {0};
-    normalize_endpoint_key(key, &normalized);
     uint32_t slot = 0;
     gw_proto_group_item_v1_t record = {0};
-    const bool have_slot = (micro_db_table_get_slot(&s_group_item_table, &normalized, &slot) == ESP_OK);
+    const bool have_slot = (micro_db_table_get_slot(&s_group_item_table, key, &slot) == ESP_OK);
     if (have_slot) {
         (void)micro_db_table_get_by_slot(&s_group_item_table, slot, &record);
     }
 
     bool removed = false;
-    esp_err_t err = micro_db_table_remove(&s_group_item_table, &normalized, out_removed ? out_removed : &removed);
+    esp_err_t err = micro_db_table_remove(&s_group_item_table, key, out_removed ? out_removed : &removed);
     if (err == ESP_OK && have_slot && (out_removed ? *out_removed : removed)) {
         group_item_owner_detach(record.group_id, slot);
-        (void)gw_model_notify_group_item_remove(&normalized);
+        (void)gw_model_notify_group_item_remove(key);
     }
     return err;
 }

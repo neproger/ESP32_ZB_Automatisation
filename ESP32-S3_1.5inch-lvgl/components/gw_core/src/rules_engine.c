@@ -19,8 +19,8 @@
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/state_store.h"
 #include "gw_core/types.h"
+#include "gw_model/gw_model_state.h"
 
 static const char *TAG = "gw_rules";
 
@@ -287,7 +287,7 @@ static bool trigger_matches(const gw_automation_entry_t *entry,
     return true;
 }
 
-static bool state_to_number_bool(const gw_state_item_t *s, double *out_n, bool *out_b)
+static bool state_to_number_bool(const gw_proto_state_item_v1_t *s, double *out_n, bool *out_b)
 {
     if (!s) return false;
     switch (s->value_type) {
@@ -312,6 +312,33 @@ static bool state_to_number_bool(const gw_state_item_t *s, double *out_n, bool *
     }
 }
 
+typedef struct {
+    const char *key;
+    bool found;
+    gw_proto_state_item_v1_t best;
+} state_lookup_any_ctx_t;
+
+static bool find_state_any_cb(const void *record, void *user_ctx)
+{
+    const gw_proto_state_item_v1_t *st = (const gw_proto_state_item_v1_t *)record;
+    state_lookup_any_ctx_t *ctx = (state_lookup_any_ctx_t *)user_ctx;
+
+    if (!st || !ctx || !ctx->key) {
+        return true;
+    }
+
+    if (strncmp(st->key, ctx->key, sizeof(st->key)) != 0) {
+        return true;
+    }
+
+    if (!ctx->found || st->ts_ms > ctx->best.ts_ms || (st->ts_ms == ctx->best.ts_ms && st->version > ctx->best.version)) {
+        ctx->best = *st;
+        ctx->found = true;
+    }
+
+    return true;
+}
+
 static bool conditions_pass(const gw_automation_entry_t *entry)
 {
     if (entry->conditions_count == 0) return true;
@@ -324,12 +351,25 @@ static bool conditions_pass(const gw_automation_entry_t *entry)
 
         gw_device_uid_t uid = {0};
         strlcpy(uid.uid, uid_s, sizeof(uid.uid));
-        gw_state_item_t st = {0};
+        gw_proto_state_item_v1_t st = {0};
         esp_err_t state_err = ESP_OK;
         if (co->endpoint > 0) {
-            state_err = gw_state_store_get(&uid, co->endpoint, key, &st);
+            gw_model_state_key_t state_key = {0};
+            state_key.uid = uid;
+            state_key.endpoint = co->endpoint;
+            strlcpy(state_key.key, key, sizeof(state_key.key));
+            state_err = gw_model_get_state(&state_key, &st);
         } else {
-            state_err = gw_state_store_get_any(&uid, key, &st);
+            state_lookup_any_ctx_t ctx = {
+                .key = key,
+                .found = false,
+            };
+            (void)gw_model_iter_state_for_device(&uid, find_state_any_cb, &ctx);
+            if (ctx.found) {
+                st = ctx.best;
+            } else {
+                state_err = ESP_ERR_NOT_FOUND;
+            }
         }
         if (state_err != ESP_OK) return false;
 

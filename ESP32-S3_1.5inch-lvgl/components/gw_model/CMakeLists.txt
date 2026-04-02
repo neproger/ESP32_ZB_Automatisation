@@ -5,6 +5,8 @@ idf_component_register(
         "src/gw_model_topology.c"
         "src/gw_model_state.c"
         "src/gw_model_groups.c"
+        "src/gw_model_settings.c"
+        "src/gw_model_automation.c"
         "src/gw_model_sync.c"
         "src/gw_model_notify.c"
     INCLUDE_DIRS
