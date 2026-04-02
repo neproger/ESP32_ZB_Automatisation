@@ -4,21 +4,17 @@
 #include "gw_wifi.h"
 #include "gw_http/gw_http.h"
 #include "s3_weather_service.h"
-#include "gw_core/device_registry.h"
 #include "gw_core/automation_store.h"
-#include "gw_core/group_store.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/gw_proto_ingest.h"
 #include "gw_core/project_settings.h"
 #include "gw_core/sensor_store.h"
-#include "gw_core/state_store.h"
 #include "gw_core/rules_engine.h"
-#include "gw_core/runtime_sync.h"
 #include "gw_core/net_time.h"
-#include "gw_core/zb_model.h"
 #include "gw_core/gw_proto.h"
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_proto/gw_proto_frame.h"
+#include "gw_proto/gw_proto_map.h"
+#include "gw_model/gw_model.h"
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -32,7 +28,9 @@
 static const char *TAG_APP = "s3_backend";
 static constexpr bool kEnableHttpServer = true;
 static constexpr uint32_t kUiBootTaskStack = 12288;
-static constexpr uint32_t kZigbeeBootstrapWaitMs = 15000;
+static constexpr bool kEnableZigbeeRuntime = true;
+static constexpr bool kEnableWeatherRuntime = true;
+static constexpr bool kEnableWifiRuntime = true;
 static bool s_http_started = false;
 static volatile bool s_ui_ready_for_http = false;
 
@@ -104,7 +102,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_proto_bus_init());
     log_struct_sizes_once();
-    // Keep noisy subsystems quiet while we debug task stacks and heap pressure.
+    // Temporary model-first bringup: boot UI on gw_model without legacy stores.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_INFO);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
     esp_log_level_set("gw_runtime_sync", ESP_LOG_WARN);
@@ -113,54 +111,44 @@ extern "C" void app_main(void)
     esp_log_level_set("s3_weather_http", ESP_LOG_WARN);
     esp_log_level_set("gw_net_time", ESP_LOG_WARN);
 
-    ESP_ERROR_CHECK(gw_zb_model_init());
     ESP_ERROR_CHECK(gw_sensor_store_init());
-    ESP_ERROR_CHECK(gw_state_store_init());
-    ESP_ERROR_CHECK(gw_device_registry_init());
     ESP_ERROR_CHECK(gw_automation_store_init());
-    ESP_ERROR_CHECK(gw_group_store_init());
     ESP_ERROR_CHECK(gw_project_settings_init());
-    ESP_ERROR_CHECK(gw_proto_ingest_init());
+    ESP_ERROR_CHECK(gw_model_init());
     ESP_ERROR_CHECK(gw_rules_init());
-    ESP_ERROR_CHECK(gw_runtime_sync_init());
 
-    // Bring up Zigbee link first and give C6 snapshot bootstrap an exclusive startup window.
-    esp_err_t zb_link_err = gw_zigbee_link_start();
-    if (zb_link_err != ESP_OK) {
-        ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
-    } else {
-        const TickType_t poll_ticks = pdMS_TO_TICKS(100);
-        uint32_t waited_ms = 0;
-        while (!gw_zigbee_bootstrap_ready() && waited_ms < kZigbeeBootstrapWaitMs) {
-            vTaskDelay(poll_ticks);
-            waited_ms += 100;
-        }
-        if (gw_zigbee_bootstrap_ready()) {
-            ESP_LOGI(TAG_APP, "Zigbee bootstrap ready before network startup (%u ms)", (unsigned)waited_ms);
+    ESP_LOGW(TAG_APP, "Legacy stores and legacy runtime are disabled for gw_model bringup");
+
+    if (kEnableZigbeeRuntime) {
+        esp_err_t zb_link_err = gw_zigbee_link_start();
+        if (zb_link_err != ESP_OK) {
+            ESP_LOGW(TAG_APP, "Zigbee UART link start failed (%s)", esp_err_to_name(zb_link_err));
         } else {
-            ESP_LOGW(TAG_APP, "Zigbee bootstrap wait timed out after %u ms", (unsigned)kZigbeeBootstrapWaitMs);
+            ESP_LOGI(TAG_APP, "Zigbee ingress path started: UART -> INGRESS -> gw_model");
         }
     }
 
-    ESP_ERROR_CHECK(gw_net_time_init(NULL));
-
-    // Network-facing services start only after Zigbee bootstrap window.
-    esp_err_t wifi_boot_err = gw_wifi_start();
-    if (wifi_boot_err != ESP_OK) {
-        ESP_LOGW(TAG_APP, "Wi-Fi service start failed (%s)", esp_err_to_name(wifi_boot_err));
+    if (kEnableWifiRuntime) {
+        ESP_ERROR_CHECK(gw_net_time_init(NULL));
+        esp_err_t wifi_boot_err = gw_wifi_start();
+        if (wifi_boot_err != ESP_OK) {
+            ESP_LOGW(TAG_APP, "Wi-Fi service start failed (%s)", esp_err_to_name(wifi_boot_err));
+        }
     }
-    ESP_ERROR_CHECK(s3_weather_service_start());
+
+    if (kEnableWeatherRuntime) {
+        ESP_ERROR_CHECK(s3_weather_service_start());
+    }
 
     // HTTP start may mount SPIFFS (flash operations). Stack must be internal RAM.
-    if (xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+    if (kEnableHttpServer &&
+        xTaskCreateWithCaps(http_start_task, "http_start", 4096, NULL, 3, NULL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGW(TAG_APP, "http_start task create failed");
     }
     if (kEnableHttpServer) {
         ESP_LOGI(TAG_APP, "HTTP start deferred until UI init completes");
-    }
-
-    if (!kEnableHttpServer) {
-        ESP_LOGW(TAG_APP, "HTTP/WS disabled for UI stability test");
+    } else {
+        ESP_LOGW(TAG_APP, "HTTP/WS disabled for model-first bringup");
     }
 
     // Bring up display/LVGL/UI at the end on a dedicated internal-RAM stack.

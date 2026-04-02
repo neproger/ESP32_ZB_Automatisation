@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "src/gw_model.c"
+        "src/gw_model_schema.c"
+        "src/gw_model_topology.c"
+        "src/gw_model_state.c"
+        "src/gw_model_groups.c"
+        "src/gw_model_sync.c"
+        "src/gw_model_notify.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        micro_db
+        esp_timer
+        gw_core
+        gw_proto
+)

@@ -2,8 +2,9 @@
 
 #include <stdint.h>
 
-#include "gw_core/device_registry.h"
-#include "gw_core/state_store.h"
+#include "gw_core/gw_proto.h"
+#include "gw_model/gw_model_state.h"
+#include "gw_model/gw_model_topology.h"
 #include "ui_mapper.hpp"
 #include "widget_endpoint_ref.hpp"
 
@@ -11,10 +12,10 @@ struct WidgetEndpointState {
     WidgetEndpointRef ref = {};
 
     bool has_device = false;
-    gw_device_t device = {};
+    gw_proto_device_v1_t device = {};
 
     bool has_endpoint = false;
-    gw_zb_endpoint_t endpoint = {};
+    gw_proto_endpoint_v1_t endpoint = {};
     ui_endpoint_caps_t caps = {};
 
     uint32_t topology_version = 0;

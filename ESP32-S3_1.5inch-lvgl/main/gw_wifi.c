@@ -1,5 +1,6 @@
 #include "gw_wifi.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,7 +18,6 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 
-#include "gw_core/state_store.h"
 #include "gw_http/gw_http.h"
 
 #if defined(__has_include) && __has_include("wifi_aps_config.h")
@@ -34,8 +34,6 @@ static const size_t GW_WIFI_APS_COUNT = 0;
 #endif
 
 static const char *TAG = "gw_wifi";
-static const char *kWifiUid = "0xWIFI000000000001";
-static const uint8_t kWifiEndpoint = 1;
 
 #define GW_WIFI_CONNECTED_BIT BIT0
 #define GW_WIFI_FAIL_BIT      BIT1
@@ -56,34 +54,6 @@ static TaskHandle_t s_service_task;
 static bool s_service_started;
 static char s_last_ssid[33];
 
-static uint64_t wifi_now_ms(void)
-{
-    return (uint64_t)(esp_timer_get_time() / 1000ULL);
-}
-
-static void wifi_state_uid(gw_device_uid_t *out_uid)
-{
-    if (!out_uid) {
-        return;
-    }
-    memset(out_uid, 0, sizeof(*out_uid));
-    strlcpy(out_uid->uid, kWifiUid, sizeof(out_uid->uid));
-}
-
-static void wifi_state_publish_text(const char *key, const char *value, uint64_t ts_ms)
-{
-    gw_device_uid_t uid = {0};
-    wifi_state_uid(&uid);
-    (void)gw_state_store_set_text(&uid, kWifiEndpoint, key, value ? value : "", ts_ms);
-}
-
-static void wifi_state_publish_bool(const char *key, bool value, uint64_t ts_ms)
-{
-    gw_device_uid_t uid = {0};
-    wifi_state_uid(&uid);
-    (void)gw_state_store_set_bool(&uid, kWifiEndpoint, key, value, ts_ms);
-}
-
 static void wifi_state_update(const char *status,
                               bool connected,
                               const char *ssid,
@@ -92,12 +62,13 @@ static void wifi_state_update(const char *status,
                               uint32_t retries)
 {
     (void)status;
-    (void)retries;
-    const uint64_t ts_ms = wifi_now_ms();
-    wifi_state_publish_bool("wifi_connected", connected, ts_ms);
-    wifi_state_publish_text("wifi_ssid", ssid ? ssid : "", ts_ms);
-    wifi_state_publish_text("wifi_ip", ip ? ip : "", ts_ms);
-    wifi_state_publish_text("wifi_error", last_error ? last_error : "", ts_ms);
+    ESP_LOGI(TAG,
+             "state: connected=%d ssid=%s ip=%s retries=%" PRIu32 " err=%s",
+             connected ? 1 : 0,
+             ssid ? ssid : "",
+             ip ? ip : "",
+             retries,
+             last_error ? last_error : "");
 }
 
 static bool wifi_is_connected_local(void)

@@ -14,11 +14,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include "gw_core/device_registry.h"
-#include "gw_core/device_storage.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/gw_proto_ingest.h"
-#include "gw_core/state_store.h"
 #include "gw_proto/gw_proto_uart.h"
 
 static const char *TAG = "gw_zigbee_uart";
@@ -44,7 +40,6 @@ static const char *TAG = "gw_zigbee_uart";
 #define GW_UART_TX_BUF_SIZE    2048
 #define GW_UART_DRIVER_Q_LEN   8
 #define GW_UART_RX_TASK_STACK  9216
-#define GW_INIT_STATE_TASK_STACK 10240
 #define GW_SNAPSHOT_IDLE_TIMEOUT_US  (3000000LL)
 #define GW_SNAPSHOT_RETRY_GAP_US     (1000000LL)
 #define GW_SNAPSHOT_RETRY_MAX        6
@@ -67,15 +62,11 @@ static int64_t s_snapshot_last_retry_us;
 static uint8_t s_snapshot_retry_count;
 static uint16_t s_snapshot_expected_records;
 static uint16_t s_snapshot_received_records;
-static uint16_t s_snapshot_received_state_items;
 static bool s_bootstrap_ready;
-static TaskHandle_t s_initial_state_sync_task;
 static bool s_initial_state_sync_done;
-static bool s_initial_state_sync_started;
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_proto_cmd_wait_result(uint8_t proto_type, const void *payload, uint16_t payload_len);
 static esp_err_t request_snapshot_sync(void);
-static void start_initial_state_sync_once(void);
 
 static bool uart_write_all(const uint8_t *data, size_t len)
 {
@@ -164,144 +155,6 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_LINK_ACK";
         default:
             return "UNKNOWN";
-    }
-}
-
-static bool endpoint_has_in_cluster(const gw_zb_endpoint_t *ep, uint16_t cluster_id)
-{
-    if (!ep || cluster_id == 0) {
-        return false;
-    }
-    size_t n = ep->in_cluster_count > GW_ZB_MAX_CLUSTERS ? GW_ZB_MAX_CLUSTERS : ep->in_cluster_count;
-    for (size_t i = 0; i < n; i++) {
-        if (ep->in_clusters[i] == cluster_id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool state_key_present_and_valid(const gw_device_uid_t *uid, uint8_t endpoint, const char *key)
-{
-    if (!uid || !key || key[0] == '\0') {
-        return false;
-    }
-
-    gw_state_item_t item = {0};
-    if (gw_state_store_get(uid, endpoint, key, &item) != ESP_OK) {
-        return false;
-    }
-
-    if (strcmp(key, "temperature_c") == 0 && item.value_type == GW_STATE_VALUE_F32) {
-        // Common Zigbee invalid marker (0x8000) converted to Celsius.
-        if (item.value_f32 > -327.69f && item.value_f32 < -327.67f) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static void queue_read_attr_if_missing(const gw_device_uid_t *uid,
-                                       const gw_zb_endpoint_t *ep,
-                                       uint16_t cluster_id,
-                                       uint16_t attr_id,
-                                       const char *state_key,
-                                       uint32_t *ok_count,
-                                       uint32_t *missing_count)
-{
-    if (!uid || !ep) {
-        return;
-    }
-    if (!endpoint_has_in_cluster(ep, cluster_id)) {
-        return;
-    }
-    if (state_key_present_and_valid(uid, ep->endpoint, state_key)) {
-        return;
-    }
-    if (missing_count) {
-        (*missing_count)++;
-    }
-    if (gw_zigbee_read_attr(uid, ep->endpoint, cluster_id, attr_id) == ESP_OK && ok_count) {
-        (*ok_count)++;
-    }
-    vTaskDelay(pdMS_TO_TICKS(10));
-}
-
-static void initial_state_sync_task(void *arg)
-{
-    (void)arg;
-    uint32_t ok_count = 0;
-    uint32_t missing_before = 0;
-    uint32_t missing_after = 0;
-
-    gw_device_t *devices = (gw_device_t *)calloc(GW_DEVICE_MAX_DEVICES, sizeof(gw_device_t));
-    if (!devices) {
-        ESP_LOGW(TAG, "initial state sync: no mem for device list");
-        s_initial_state_sync_started = false;
-        s_initial_state_sync_task = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    gw_zb_endpoint_t *eps = (gw_zb_endpoint_t *)calloc(GW_ZB_MAX_ENDPOINTS, sizeof(gw_zb_endpoint_t));
-    if (!eps) {
-        ESP_LOGW(TAG, "initial state sync: no mem for endpoint list");
-        free(devices);
-        s_initial_state_sync_started = false;
-        s_initial_state_sync_task = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    size_t dev_count = gw_device_registry_list(devices, GW_DEVICE_MAX_DEVICES);
-    for (int pass = 0; pass < 2; pass++) {
-        uint32_t *missing_ctr = (pass == 0) ? &missing_before : &missing_after;
-        for (size_t i = 0; i < dev_count; i++) {
-            size_t ep_count = gw_device_registry_list_endpoints(&devices[i].device_uid, eps, GW_ZB_MAX_ENDPOINTS);
-            for (size_t ei = 0; ei < ep_count; ei++) {
-                // Actuators
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0006, 0x0000, "onoff", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0008, 0x0000, "level", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0003, "color_x", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0004, "color_y", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0300, 0x0007, "color_temp_mireds", &ok_count, missing_ctr);
-                // Sensors and battery
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0402, 0x0000, "temperature_c", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0405, 0x0000, "humidity_pct", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0001, 0x0021, "battery_pct", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0001, 0x0020, "battery_mv", &ok_count, missing_ctr);
-                queue_read_attr_if_missing(&devices[i].device_uid, &eps[ei], 0x0406, 0x0000, "occupancy", &ok_count, missing_ctr);
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(900));
-        if (pass == 1 && missing_after == 0) {
-            break;
-        }
-    }
-
-    free(eps);
-    free(devices);
-
-    ESP_LOGI(TAG, "initial state sync done: queued=%u missing_after=%u",
-             (unsigned)ok_count,
-             (unsigned)missing_after);
-    s_initial_state_sync_done = true;
-    s_initial_state_sync_started = false;
-    s_initial_state_sync_task = NULL;
-    vTaskDelete(NULL);
-}
-
-static void start_initial_state_sync_once(void)
-{
-    if (s_initial_state_sync_done || s_initial_state_sync_started) {
-        return;
-    }
-    s_initial_state_sync_started = true;
-    if (xTaskCreate(initial_state_sync_task, "zb_init_state", GW_INIT_STATE_TASK_STACK, NULL, 5, &s_initial_state_sync_task) != pdPASS) {
-        s_initial_state_sync_started = false;
-        s_initial_state_sync_task = NULL;
-        ESP_LOGW(TAG, "initial state sync task create failed");
     }
 }
 
@@ -439,7 +292,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
                 s_snapshot_expected_records = 0;
             }
             s_snapshot_received_records = 0;
-            s_snapshot_received_state_items = 0;
             s_bootstrap_ready = false;
             ESP_LOGI(TAG, "Proto sync begin: expected=%u", (unsigned)s_snapshot_expected_records);
             break;
@@ -454,11 +306,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         case GW_PROTO_MSG_ENDPOINT_UPSERT:
         case GW_PROTO_MSG_DEVICE_REMOVE:
             s_snapshot_received_records++;
-            s_snapshot_last_chunk_us = esp_timer_get_time();
-            break;
-        case GW_PROTO_MSG_STATE_ITEM:
-            s_snapshot_received_records++;
-            s_snapshot_received_state_items++;
             s_snapshot_last_chunk_us = esp_timer_get_time();
             break;
         default:
@@ -476,14 +323,8 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             (void)request_snapshot_sync();
         } else {
             s_bootstrap_ready = true;
-            // Canonical snapshot only carries topology; states are warmed up immediately after sync.
-            if (s_snapshot_received_state_items == 0) {
-                start_initial_state_sync_once();
-            } else {
-                s_initial_state_sync_done = true;
-                s_initial_state_sync_started = false;
-                s_initial_state_sync_task = NULL;
-            }
+            s_initial_state_sync_done = true;
+            ESP_LOGI(TAG, "Topology snapshot applied; gw_model bootstrap ready");
         }
     }
 }

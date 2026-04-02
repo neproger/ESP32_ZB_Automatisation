@@ -6,8 +6,6 @@
 
 namespace
 {
-EXT_RAM_BSS_ATTR static gw_zb_endpoint_t s_endpoints_snapshot[GW_ZB_MAX_ENDPOINTS];
-
 void update_version(uint32_t *current, uint32_t value)
 {
     if (!current) {
@@ -28,8 +26,13 @@ void read_bool_key(const WidgetEndpointRef &ref,
     if (!key || !out_has_value || !out_value || !out_value_version || !out_state_version) {
         return;
     }
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref.uid, ref.endpoint, key, &item) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = ref.uid;
+    state_key.endpoint = ref.endpoint;
+    strlcpy(state_key.key, key, sizeof(state_key.key));
+
+    gw_proto_state_item_v1_t item = {};
+    if (gw_model_get_state(&state_key, &item) != ESP_OK) {
         *out_has_value = false;
         *out_value_version = 0;
         return;
@@ -55,8 +58,13 @@ void read_u32_key(const WidgetEndpointRef &ref,
     if (!key || !out_has_value || !out_value || !out_value_version || !out_state_version) {
         return;
     }
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref.uid, ref.endpoint, key, &item) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = ref.uid;
+    state_key.endpoint = ref.endpoint;
+    strlcpy(state_key.key, key, sizeof(state_key.key));
+
+    gw_proto_state_item_v1_t item = {};
+    if (gw_model_get_state(&state_key, &item) != ESP_OK) {
         *out_has_value = false;
         *out_value_version = 0;
         return;
@@ -82,8 +90,13 @@ void read_f32_key(const WidgetEndpointRef &ref,
     if (!key || !out_has_value || !out_value || !out_value_version || !out_state_version) {
         return;
     }
-    gw_state_item_t item = {};
-    if (gw_state_store_get(&ref.uid, ref.endpoint, key, &item) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = ref.uid;
+    state_key.endpoint = ref.endpoint;
+    strlcpy(state_key.key, key, sizeof(state_key.key));
+
+    gw_proto_state_item_v1_t item = {};
+    if (gw_model_get_state(&state_key, &item) != ESP_OK) {
         *out_has_value = false;
         *out_value_version = 0;
         return;
@@ -112,21 +125,19 @@ bool widget_endpoint_state_read(const WidgetEndpointRef &ref, WidgetEndpointStat
         return false;
     }
 
-    if (gw_device_registry_get(&ref.uid, &out_state->device) == ESP_OK) {
+    if (gw_model_get_device(&ref.uid, &out_state->device) == ESP_OK) {
         out_state->has_device = true;
         update_version(&out_state->topology_version, out_state->device.version);
     }
 
-    const size_t endpoint_count = gw_device_registry_list_endpoints(&ref.uid, s_endpoints_snapshot, GW_ZB_MAX_ENDPOINTS);
-    for (size_t i = 0; i < endpoint_count; ++i) {
-        if (s_endpoints_snapshot[i].endpoint != ref.endpoint) {
-            continue;
-        }
-        out_state->endpoint = s_endpoints_snapshot[i];
+    gw_model_endpoint_key_t endpoint_key = {
+        .uid = ref.uid,
+        .endpoint = ref.endpoint,
+    };
+    if (gw_model_get_endpoint(&endpoint_key, &out_state->endpoint) == ESP_OK) {
         out_state->has_endpoint = true;
-        ui_mapper_caps_from_endpoint(&out_state->endpoint, &out_state->caps);
+        ui_mapper_caps_from_proto_endpoint(&out_state->endpoint, &out_state->caps);
         update_version(&out_state->topology_version, out_state->endpoint.version);
-        break;
     }
 
     if (!out_state->has_endpoint) {

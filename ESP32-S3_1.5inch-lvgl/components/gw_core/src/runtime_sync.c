@@ -9,7 +9,6 @@
 #include "esp_log.h"
 
 #include "gw_core/device_registry.h"
-#include "gw_core/device_storage.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/state_store.h"

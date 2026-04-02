@@ -15,11 +15,12 @@
 #include "s3_weather_http.h"
 #include "gw_core/net_time.h"
 #include "gw_core/project_settings.h"
-#include "gw_core/state_store.h"
+#include "gw_model/gw_model_state.h"
+#include "gw_model/gw_model_topology.h"
 
 static const char *TAG = "s3_weather_svc";
 
-static const char *kWeatherUid = "0xWEATHER000000001";
+static const char *kWeatherUid = "0xweather000000001";
 static const uint8_t kWeatherEndpoint = 1;
 static const uint64_t kGeoRefreshPeriodMs = 6ULL * 60ULL * 60ULL * 1000ULL;
 
@@ -35,7 +36,85 @@ static char s_location[64] = "Locating...";
 static uint64_t s_last_geo_refresh_ms = 0;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static void persist_timezone_to_state_store(const char *tz_name);
+static void persist_timezone_to_model(const char *tz_name);
+static uint64_t now_ts_ms(void);
+
+static void ensure_weather_model(void)
+{
+    gw_device_uid_t uid = {0};
+    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
+
+    gw_proto_device_v1_t dev = {0};
+    dev.device_uid = uid;
+    dev.short_addr = 0;
+    strlcpy(dev.name, "Weather", sizeof(dev.name));
+    dev.version = 1;
+    dev.last_seen_ms = now_ts_ms();
+    dev.has_onoff = 0;
+    dev.has_button = 0;
+    (void)gw_model_upsert_device(&dev, NULL, NULL);
+
+    gw_proto_endpoint_v1_t ep = {0};
+    ep.uid = uid;
+    ep.short_addr = 0;
+    ep.endpoint = kWeatherEndpoint;
+    ep.version = 1;
+    ep.profile_id = 0x0104;
+    ep.device_id = 0x0302;
+    ep.in_cluster_count = 2;
+    ep.out_cluster_count = 0;
+    ep.in_clusters[0] = 0x0402;
+    ep.in_clusters[1] = 0x0405;
+    (void)gw_model_upsert_endpoint(&ep, NULL, NULL);
+}
+
+static void weather_state_upsert_text(const char *key, const char *value, uint64_t ts_ms)
+{
+    gw_proto_state_item_v1_t item = {0};
+    strlcpy(item.uid.uid, kWeatherUid, sizeof(item.uid.uid));
+    item.endpoint = kWeatherEndpoint;
+    item.value_type = GW_STATE_VALUE_TEXT;
+    strlcpy(item.key, key, sizeof(item.key));
+    strlcpy(item.value_text, value ? value : "", sizeof(item.value_text));
+    item.ts_ms = ts_ms;
+    (void)gw_model_upsert_state(&item, NULL, NULL);
+}
+
+static void weather_state_upsert_f32(const char *key, float value, uint64_t ts_ms)
+{
+    gw_proto_state_item_v1_t item = {0};
+    strlcpy(item.uid.uid, kWeatherUid, sizeof(item.uid.uid));
+    item.endpoint = kWeatherEndpoint;
+    item.value_type = GW_STATE_VALUE_F32;
+    strlcpy(item.key, key, sizeof(item.key));
+    item.value_f32 = value;
+    item.ts_ms = ts_ms;
+    (void)gw_model_upsert_state(&item, NULL, NULL);
+}
+
+static void weather_state_upsert_u32(const char *key, uint32_t value, uint64_t ts_ms)
+{
+    gw_proto_state_item_v1_t item = {0};
+    strlcpy(item.uid.uid, kWeatherUid, sizeof(item.uid.uid));
+    item.endpoint = kWeatherEndpoint;
+    item.value_type = GW_STATE_VALUE_U32;
+    strlcpy(item.key, key, sizeof(item.key));
+    item.value_u32 = value;
+    item.ts_ms = ts_ms;
+    (void)gw_model_upsert_state(&item, NULL, NULL);
+}
+
+static void weather_state_upsert_u64(const char *key, uint64_t value, uint64_t ts_ms)
+{
+    gw_proto_state_item_v1_t item = {0};
+    strlcpy(item.uid.uid, kWeatherUid, sizeof(item.uid.uid));
+    item.endpoint = kWeatherEndpoint;
+    item.value_type = GW_STATE_VALUE_U64;
+    strlcpy(item.key, key, sizeof(item.key));
+    item.value_u64 = value;
+    item.ts_ms = ts_ms;
+    (void)gw_model_upsert_state(&item, NULL, NULL);
+}
 
 static TickType_t ms_to_ticks_safe(uint32_t ms)
 {
@@ -203,7 +282,7 @@ static void apply_timezone_now_and_publish(const char *reason)
 
     char tz_name[48] = {0};
     timezone_label_for_state(tz_name, sizeof(tz_name), &geo);
-    persist_timezone_to_state_store(tz_name);
+    persist_timezone_to_model(tz_name);
 
     (void)reason;
 }
@@ -225,48 +304,38 @@ void s3_weather_service_get_location(char *out, size_t out_size)
     portEXIT_CRITICAL(&s_lock);
 }
 
-static void persist_geo_to_state_store(double lat, double lon)
+static void persist_geo_to_model(double lat, double lon)
 {
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
-    (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_lat", (float)lat, ts_ms);
-    (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_lon", (float)lon, ts_ms);
+    weather_state_upsert_f32("weather_lat", (float)lat, ts_ms);
+    weather_state_upsert_f32("weather_lon", (float)lon, ts_ms);
 }
 
-static void persist_location_to_state_store(const char *location)
+static void persist_location_to_model(const char *location)
 {
     if (!location || !location[0]) {
         return;
     }
-
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
-    (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_location", location, ts_ms);
+    weather_state_upsert_text("weather_location", location, ts_ms);
 }
 
-static void persist_weather_status_to_state_store(const char *status)
+static void persist_weather_status_to_model(const char *status)
 {
     if (!status) {
         return;
     }
-
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
-    (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_status", status, ts_ms);
+    weather_state_upsert_text("weather_status", status, ts_ms);
 }
 
-static void persist_timezone_to_state_store(const char *tz_name)
+static void persist_timezone_to_model(const char *tz_name)
 {
     if (!tz_name || !tz_name[0]) {
         return;
     }
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
-    (void)gw_state_store_set_text(&uid, kWeatherEndpoint, "weather_tz", tz_name, ts_ms);
+    weather_state_upsert_text("weather_tz", tz_name, ts_ms);
 }
 
 static esp_err_t ensure_geo_location(void)
@@ -285,10 +354,10 @@ static esp_err_t ensure_geo_location(void)
         ESP_LOGW(TAG, "geoip failed: err=%s detail=%s", esp_err_to_name(geo_err), err[0] ? err : "-");
         if (geo_err == ESP_ERR_INVALID_RESPONSE) {
             set_location_text("Location service error");
-            persist_location_to_state_store("Location service error");
+            persist_location_to_model("Location service error");
         } else {
             set_location_text("Location unavailable");
-            persist_location_to_state_store("Location unavailable");
+            persist_location_to_model("Location unavailable");
         }
         return ESP_FAIL;
     }
@@ -313,32 +382,30 @@ static esp_err_t ensure_geo_location(void)
         strlcpy(loc, "Unknown location", sizeof(loc));
     }
     set_location_text(loc);
-    persist_location_to_state_store(loc);
-    persist_weather_status_to_state_store("location_ready");
+    persist_location_to_model(loc);
+    persist_weather_status_to_model("location_ready");
     apply_timezone_from_settings_or_geo(&geo);
     char tz_name[48] = {0};
     timezone_label_for_state(tz_name, sizeof(tz_name), &geo);
-    persist_timezone_to_state_store(tz_name);
-    persist_geo_to_state_store(s_geo_lat, s_geo_lon);
+    persist_timezone_to_model(tz_name);
+    persist_geo_to_model(s_geo_lat, s_geo_lon);
     ESP_LOGI(TAG, "geoip resolved: %s (lat=%.6f lon=%.6f)", loc, s_geo_lat, s_geo_lon);
     return ESP_OK;
 }
 
-static void persist_weather_to_state_store(const s3_weather_result_t *res)
+static void persist_weather_to_model(const s3_weather_result_t *res)
 {
     if (!res || !res->valid) {
         return;
     }
 
-    gw_device_uid_t uid = {0};
-    strlcpy(uid.uid, kWeatherUid, sizeof(uid.uid));
     const uint64_t ts_ms = now_ts_ms();
 
-    (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_temp_c", res->temperature_c, ts_ms);
-    (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_humidity_pct", res->humidity_pct, ts_ms);
-    (void)gw_state_store_set_f32(&uid, kWeatherEndpoint, "weather_wind_kmh", res->wind_speed_kmh, ts_ms);
-    (void)gw_state_store_set_u32(&uid, kWeatherEndpoint, "weather_code", (uint32_t)res->weather_code, ts_ms);
-    (void)gw_state_store_set_u64(&uid, kWeatherEndpoint, "weather_updated_ms", ts_ms, ts_ms);
+    weather_state_upsert_f32("weather_temp_c", res->temperature_c, ts_ms);
+    weather_state_upsert_f32("weather_humidity_pct", res->humidity_pct, ts_ms);
+    weather_state_upsert_f32("weather_wind_kmh", res->wind_speed_kmh, ts_ms);
+    weather_state_upsert_u32("weather_code", (uint32_t)res->weather_code, ts_ms);
+    weather_state_upsert_u64("weather_updated_ms", ts_ms, ts_ms);
 
 }
 
@@ -363,16 +430,16 @@ static void weather_task(void *arg)
             ESP_LOGW(TAG, "weather fetch failed: err=%s detail=%s",
                      esp_err_to_name(fetch_err), err[0] ? err : "-");
             if (fetch_err == ESP_ERR_INVALID_RESPONSE) {
-                persist_weather_status_to_state_store("weather_service_error");
+                persist_weather_status_to_model("weather_service_error");
             } else {
-                persist_weather_status_to_state_store("weather_unavailable");
+                persist_weather_status_to_model("weather_unavailable");
             }
             vTaskDelay(weather_retry_ticks());
             continue;
         }
 
-        persist_weather_to_state_store(&res);
-        persist_weather_status_to_state_store("weather_ready");
+        persist_weather_to_model(&res);
+        persist_weather_status_to_model("weather_ready");
         ESP_LOGI(TAG,
                  "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d obs=%s",
                  (double)res.temperature_c,
@@ -404,8 +471,9 @@ esp_err_t s3_weather_service_start(void)
     }
 
     s_started = true;
-    persist_location_to_state_store("Locating...");
-    persist_weather_status_to_state_store("starting");
+    ensure_weather_model();
+    persist_location_to_model("Locating...");
+    persist_weather_status_to_model("starting");
     if (!s_listener_registered) {
         if (gw_project_settings_add_listener(settings_listener, NULL) == ESP_OK) {
             s_listener_registered = true;

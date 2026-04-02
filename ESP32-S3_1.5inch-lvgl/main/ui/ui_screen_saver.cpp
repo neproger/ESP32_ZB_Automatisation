@@ -6,7 +6,7 @@
 #include <time.h>
 
 #include "gw_core/net_time.h"
-#include "gw_core/state_store.h"
+#include "gw_model/gw_model_state.h"
 #include "icons.h"
 #include "s3_weather_service.h"
 #include "ui_style.hpp"
@@ -26,7 +26,7 @@ uint64_t s_last_rendered_second = UINT64_MAX;
 uint64_t s_last_weather_ts = UINT64_MAX;
 char s_last_location[64] = {};
 
-static const gw_device_uid_t kWeatherUid = {"0xWEATHER000000001"};
+static const gw_device_uid_t kWeatherUid = {"0xweather000000001"};
 static constexpr uint8_t kWeatherEndpoint = 1;
 
 const lv_image_dsc_t *icon_for_weather_code(uint32_t code)
@@ -84,8 +84,12 @@ bool load_weather_value_f32(const char *key, float *out)
     if (!key || !out) {
         return false;
     }
-    gw_state_item_t st = {};
-    if (gw_state_store_get(&kWeatherUid, kWeatherEndpoint, key, &st) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = kWeatherUid;
+    state_key.endpoint = kWeatherEndpoint;
+    std::snprintf(state_key.key, sizeof(state_key.key), "%s", key);
+    gw_proto_state_item_v1_t st = {};
+    if (gw_model_get_state(&state_key, &st) != ESP_OK) {
         return false;
     }
     if (st.value_type != GW_STATE_VALUE_F32) {
@@ -100,8 +104,12 @@ bool load_weather_value_u32(const char *key, uint32_t *out)
     if (!key || !out) {
         return false;
     }
-    gw_state_item_t st = {};
-    if (gw_state_store_get(&kWeatherUid, kWeatherEndpoint, key, &st) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = kWeatherUid;
+    state_key.endpoint = kWeatherEndpoint;
+    std::snprintf(state_key.key, sizeof(state_key.key), "%s", key);
+    gw_proto_state_item_v1_t st = {};
+    if (gw_model_get_state(&state_key, &st) != ESP_OK) {
         return false;
     }
     if (st.value_type != GW_STATE_VALUE_U32) {
@@ -116,8 +124,12 @@ bool load_weather_value_u64(const char *key, uint64_t *out)
     if (!key || !out) {
         return false;
     }
-    gw_state_item_t st = {};
-    if (gw_state_store_get(&kWeatherUid, kWeatherEndpoint, key, &st) != ESP_OK) {
+    gw_model_state_key_t state_key = {};
+    state_key.uid = kWeatherUid;
+    state_key.endpoint = kWeatherEndpoint;
+    std::snprintf(state_key.key, sizeof(state_key.key), "%s", key);
+    gw_proto_state_item_v1_t st = {};
+    if (gw_model_get_state(&state_key, &st) != ESP_OK) {
         return false;
     }
     if (st.value_type != GW_STATE_VALUE_U64) {

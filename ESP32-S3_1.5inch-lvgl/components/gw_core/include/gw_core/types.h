@@ -20,6 +20,7 @@ typedef struct {
     uint8_t endpoint;
 } gw_device_ref_t;
 
+#define GW_DEVICE_MAX_DEVICES 64
 #define GW_GROUP_ID_MAX   32
 #define GW_GROUP_NAME_MAX 48
 

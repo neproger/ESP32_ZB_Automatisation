@@ -3,7 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "gw_core/group_store.h"
+#include "gw_core/gw_proto.h"
+#include "gw_model/gw_model_groups.h"
 #include "widget_endpoint_ref.hpp"
 
 struct WidgetGroupItemState {
@@ -14,7 +15,7 @@ struct WidgetGroupItemState {
 
 struct WidgetGroupState {
     bool has_group = false;
-    gw_group_entry_t group = {};
+    gw_proto_group_v1_t group = {};
     size_t group_count = 0;
     size_t active_group_index = 0;
     size_t item_count = 0;

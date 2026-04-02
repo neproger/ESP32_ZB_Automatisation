@@ -14,14 +14,13 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "gw_core/device_storage.h"
 #include "gw_core/action_exec.h"
 #include "gw_core/automation_store.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/group_store.h"
 #include "gw_core/project_settings.h"
-#include "gw_core/state_store.h"
-#include "gw_core/zb_model.h"
+#include "gw_model/gw_model_groups.h"
+#include "gw_model/gw_model_state.h"
+#include "gw_model/gw_model_topology.h"
 #include "gw_proto/gw_proto_frame.h"
 #include "gw_proto/gw_proto_map.h"
 #include "gw_proto/gw_proto_snapshot.h"
@@ -45,7 +44,7 @@ static httpd_handle_t s_server;
 static portMUX_TYPE s_client_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t s_ws_seq = 1;
 
-#define GW_WS_MAX_CLIENTS 2
+#define GW_WS_MAX_CLIENTS 6
 #define GW_WS_TX_Q_CAP 32
 #define GW_WS_TX_TASK_PRIO 2
 #define GW_WS_TX_TASK_STACK 3072
@@ -59,6 +58,23 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds);
 static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
 static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
+
+static bool ws_fd_is_alive(int fd)
+{
+    if (!s_server || fd <= 0) {
+        return false;
+    }
+    return httpd_ws_get_fd_info(s_server, fd) == HTTPD_WS_CLIENT_WEBSOCKET;
+}
+
+static void ws_prune_stale_clients_locked(void)
+{
+    for (size_t i = 0; i < GW_WS_MAX_CLIENTS; i++) {
+        if (s_clients[i].fd != 0 && !ws_fd_is_alive(s_clients[i].fd)) {
+            s_clients[i] = (gw_ws_client_t){0};
+        }
+    }
+}
 
 static void ws_client_remove_fd(int fd)
 {
@@ -76,6 +92,7 @@ static bool ws_client_add_fd(int fd)
 {
     bool ok = false;
     portENTER_CRITICAL(&s_client_lock);
+    ws_prune_stale_clients_locked();
     for (size_t i = 0; i < GW_WS_MAX_CLIENTS; i++) {
         if (s_clients[i].fd == fd) {
             s_clients[i].subscribed_events = true;
@@ -205,36 +222,36 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_create_v1_t *msg = (const gw_proto_cmd_group_create_v1_t *)payload;
-            gw_group_entry_t created = {0};
-            return gw_group_store_create(msg->id[0] ? msg->id : NULL, msg->name, &created);
+            gw_proto_group_v1_t created = {0};
+            return gw_model_create_group(msg->id[0] ? msg->id : NULL, msg->name, &created);
         }
         case GW_PROTO_MSG_CMD_GROUP_RENAME: {
             if (payload_len < sizeof(gw_proto_cmd_group_rename_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_rename_v1_t *msg = (const gw_proto_cmd_group_rename_v1_t *)payload;
-            return gw_group_store_rename(msg->id, msg->name);
+            return gw_model_rename_group(msg->id, msg->name);
         }
         case GW_PROTO_MSG_CMD_GROUP_DELETE: {
             if (payload_len < sizeof(gw_proto_cmd_group_delete_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_delete_v1_t *msg = (const gw_proto_cmd_group_delete_v1_t *)payload;
-            return gw_group_store_remove(msg->id);
+            return gw_model_remove_group(msg->id, NULL);
         }
         case GW_PROTO_MSG_CMD_GROUP_ITEM_SET: {
             if (payload_len < sizeof(gw_proto_cmd_group_item_set_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_item_set_v1_t *msg = (const gw_proto_cmd_group_item_set_v1_t *)payload;
-            return gw_group_store_set_endpoint(msg->group_id, &msg->device_uid, msg->endpoint);
+            return gw_model_set_group_item(msg->group_id, &msg->device_uid, msg->endpoint);
         }
         case GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE: {
             if (payload_len < sizeof(gw_proto_cmd_group_item_remove_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_item_remove_v1_t *msg = (const gw_proto_cmd_group_item_remove_v1_t *)payload;
-            return gw_group_store_remove_endpoint(&msg->device_uid, msg->endpoint);
+            return gw_model_remove_group_item_by_endpoint(&msg->device_uid, msg->endpoint);
         }
         case GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER: {
             if (payload_len < sizeof(gw_proto_cmd_group_item_reorder_v1_t)) {
@@ -244,14 +261,14 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             if (msg->order == 0) {
                 return ESP_ERR_INVALID_ARG;
             }
-            return gw_group_store_reorder_endpoint(msg->group_id, &msg->device_uid, msg->endpoint, msg->order);
+            return gw_model_reorder_group_item(msg->group_id, &msg->device_uid, msg->endpoint, msg->order);
         }
         case GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL: {
             if (payload_len < sizeof(gw_proto_cmd_group_item_label_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_group_item_label_v1_t *msg = (const gw_proto_cmd_group_item_label_v1_t *)payload;
-            return gw_group_store_set_endpoint_label(&msg->device_uid, msg->endpoint, msg->label);
+            return gw_model_set_group_item_label(&msg->device_uid, msg->endpoint, msg->label);
         }
         case GW_PROTO_MSG_CMD_SETTINGS_SET: {
             if (payload_len < sizeof(gw_proto_settings_v1_t)) {
@@ -312,13 +329,11 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
 
 typedef struct {
     size_t group_count;
+    size_t group_item_count;
     size_t group_index;
     size_t item_index;
-    bool emit_group;
-    gw_group_entry_t group;
-    gw_group_item_t item;
-    gw_proto_group_v1_t group_msg;
-    gw_proto_group_item_v1_t item_msg;
+    gw_proto_group_v1_t group;
+    gw_proto_group_item_v1_t item;
 } ws_group_snapshot_iter_t;
 
 typedef struct {
@@ -336,20 +351,16 @@ typedef enum {
 
 typedef struct {
     size_t device_count;
+    size_t endpoint_count;
     size_t state_count;
     uint32_t total_records;
     size_t device_index;
     size_t endpoint_index;
-    size_t endpoint_count;
     size_t state_index;
     ws_device_snapshot_stage_t stage;
-    gw_device_full_t device;
-    gw_state_item_t state_item;
-    gw_device_t device_view;
-    gw_zb_endpoint_t endpoint_view;
-    gw_proto_device_v1_t device_msg;
-    gw_proto_endpoint_v1_t endpoint_msg;
-    gw_proto_state_item_v1_t state_msg;
+    gw_proto_device_v1_t device;
+    gw_proto_state_item_v1_t state_item;
+    gw_proto_endpoint_v1_t endpoint;
 } ws_device_snapshot_iter_t;
 
 static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
@@ -364,16 +375,7 @@ static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
 
 static uint32_t ws_group_snapshot_total_records(void)
 {
-    const size_t group_count = gw_group_store_count();
-    size_t group_item_count = 0;
-    for (size_t i = 0; i < group_count; i++) {
-        gw_group_entry_t group = {0};
-        if (gw_group_store_get_by_index(i, &group) != ESP_OK) {
-            continue;
-        }
-        group_item_count += gw_group_store_get_group_item_count(group.id);
-    }
-    return (uint32_t)(group_count + group_item_count);
+    return (uint32_t)(gw_model_count_groups() + gw_model_count_group_items());
 }
 
 static uint32_t ws_automation_snapshot_total_records(void)
@@ -383,19 +385,7 @@ static uint32_t ws_automation_snapshot_total_records(void)
 
 static uint32_t ws_device_snapshot_total_records(void)
 {
-    const size_t device_count = gw_device_storage_count();
-    const size_t state_count = gw_state_store_count();
-    size_t endpoint_count = 0;
-
-    for (size_t i = 0; i < device_count; i++) {
-        gw_device_full_t dev = {0};
-        if (gw_device_storage_get_by_index(i, &dev) != ESP_OK) {
-            continue;
-        }
-        endpoint_count += gw_zb_model_list_endpoints(&dev.device_uid, NULL, 0);
-    }
-
-    return (uint32_t)(device_count + endpoint_count + state_count);
+    return (uint32_t)(gw_model_count_devices() + gw_model_count_endpoints() + gw_model_count_state());
 }
 
 static esp_err_t ws_group_snapshot_rewind(void *source_ctx)
@@ -405,8 +395,8 @@ static esp_err_t ws_group_snapshot_rewind(void *source_ctx)
         return ESP_ERR_INVALID_ARG;
     }
     memset(it, 0, sizeof(*it));
-    it->group_count = gw_group_store_count();
-    it->emit_group = true;
+    it->group_count = gw_model_count_groups();
+    it->group_item_count = gw_model_count_group_items();
     return ESP_OK;
 }
 
@@ -428,8 +418,9 @@ static esp_err_t ws_device_snapshot_rewind(void *source_ctx)
         return ESP_ERR_INVALID_ARG;
     }
     memset(it, 0, sizeof(*it));
-    it->device_count = gw_device_storage_count();
-    it->state_count = gw_state_store_count();
+    it->device_count = gw_model_count_devices();
+    it->endpoint_count = gw_model_count_endpoints();
+    it->state_count = gw_model_count_state();
     it->total_records = ws_device_snapshot_total_records();
     it->stage = WS_DEVICE_SNAPSHOT_STAGE_DEVICE;
     return ESP_OK;
@@ -446,38 +437,23 @@ static esp_err_t ws_group_snapshot_next(void *source_ctx,
     }
 
     while (it->group_index < it->group_count) {
-        if (it->emit_group) {
-            if (gw_group_store_get_by_index(it->group_index, &it->group) != ESP_OK) {
-                it->group_index++;
-                it->item_index = 0;
-                it->emit_group = true;
+            if (gw_model_get_group_by_index(it->group_index++, &it->group) != ESP_OK) {
                 continue;
             }
-            gw_proto_fill_group(&it->group_msg, &it->group);
-            it->emit_group = false;
             *out_msg_type = GW_PROTO_MSG_GROUP_UPSERT;
-            *out_payload = &it->group_msg;
-            *out_payload_len = (uint16_t)sizeof(it->group_msg);
+            *out_payload = &it->group;
+            *out_payload_len = (uint16_t)sizeof(it->group);
             return ESP_OK;
-        }
+    }
 
-        const size_t item_count = gw_group_store_get_group_item_count(it->group.id);
-        while (it->item_index < item_count) {
-            if (gw_group_store_get_group_item_by_index(it->group.id, it->item_index, &it->item) != ESP_OK) {
-                it->item_index++;
-                continue;
-            }
-            it->item_index++;
-            gw_proto_fill_group_item(&it->item_msg, &it->item);
-            *out_msg_type = GW_PROTO_MSG_GROUP_ITEM_UPSERT;
-            *out_payload = &it->item_msg;
-            *out_payload_len = (uint16_t)sizeof(it->item_msg);
-            return ESP_OK;
+    while (it->item_index < it->group_item_count) {
+        if (gw_model_get_group_item_by_index(it->item_index++, &it->item) != ESP_OK) {
+            continue;
         }
-
-        it->group_index++;
-        it->item_index = 0;
-        it->emit_group = true;
+        *out_msg_type = GW_PROTO_MSG_GROUP_ITEM_UPSERT;
+        *out_payload = &it->item;
+        *out_payload_len = (uint16_t)sizeof(it->item);
+        return ESP_OK;
     }
 
     return ESP_ERR_NOT_FOUND;
@@ -519,71 +495,40 @@ static esp_err_t ws_device_snapshot_next(void *source_ctx,
     while (it->stage != WS_DEVICE_SNAPSHOT_STAGE_DONE) {
         if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_DEVICE) {
             while (it->device_index < it->device_count) {
-                if (gw_device_storage_get_by_index(it->device_index, &it->device) != ESP_OK) {
-                    it->device_index++;
+                if (gw_model_get_device_by_index(it->device_index++, &it->device) != ESP_OK) {
                     continue;
                 }
-
-                memset(&it->device_view, 0, sizeof(it->device_view));
-                it->device_view.device_uid = it->device.device_uid;
-                it->device_view.short_addr = it->device.short_addr;
-                it->device_view.version = it->device.version;
-                it->device_view.last_seen_ms = it->device.last_seen_ms;
-                it->device_view.has_onoff = it->device.has_onoff;
-                it->device_view.has_button = it->device.has_button;
-                strlcpy(it->device_view.name, it->device.name, sizeof(it->device_view.name));
-
-                gw_proto_fill_device(&it->device_msg, &it->device_view);
-                it->endpoint_count = gw_zb_model_list_endpoints(&it->device.device_uid, NULL, 0);
-                it->endpoint_index = 0;
-                it->stage = WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS;
-                it->device_index++;
                 *out_msg_type = GW_PROTO_MSG_DEVICE_UPSERT;
-                *out_payload = &it->device_msg;
-                *out_payload_len = (uint16_t)sizeof(it->device_msg);
+                *out_payload = &it->device;
+                *out_payload_len = (uint16_t)sizeof(it->device);
+                return ESP_OK;
+            }
+            it->stage = WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS;
+            continue;
+        }
+
+        if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS) {
+            while (it->endpoint_index < it->endpoint_count) {
+                if (gw_model_get_endpoint_by_index(it->endpoint_index++, &it->endpoint) != ESP_OK) {
+                    continue;
+                }
+                *out_msg_type = GW_PROTO_MSG_ENDPOINT_UPSERT;
+                *out_payload = &it->endpoint;
+                *out_payload_len = (uint16_t)sizeof(it->endpoint);
                 return ESP_OK;
             }
             it->stage = WS_DEVICE_SNAPSHOT_STAGE_STATE;
             continue;
         }
 
-        if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_ENDPOINTS) {
-            while (it->endpoint_index < it->endpoint_count && it->endpoint_index < GW_ZB_MAX_ENDPOINTS) {
-                if (gw_zb_model_get_endpoint_by_index(&it->device.device_uid,
-                                                      it->endpoint_index,
-                                                      &it->endpoint_view) != ESP_OK) {
-                    it->endpoint_index++;
-                    continue;
-                }
-                it->endpoint_index++;
-
-                if (it->endpoint_view.endpoint == 0 ||
-                    (it->endpoint_view.profile_id == 0 && it->endpoint_view.device_id == 0 &&
-                     it->endpoint_view.in_cluster_count == 0 && it->endpoint_view.out_cluster_count == 0)) {
-                    continue;
-                }
-
-                it->endpoint_view.version = it->device.version;
-
-                gw_proto_fill_endpoint(&it->endpoint_msg, &it->endpoint_view);
-                *out_msg_type = GW_PROTO_MSG_ENDPOINT_UPSERT;
-                *out_payload = &it->endpoint_msg;
-                *out_payload_len = (uint16_t)sizeof(it->endpoint_msg);
-                return ESP_OK;
-            }
-            it->stage = WS_DEVICE_SNAPSHOT_STAGE_DEVICE;
-            continue;
-        }
-
         if (it->stage == WS_DEVICE_SNAPSHOT_STAGE_STATE) {
             while (it->state_index < it->state_count) {
-                if (gw_state_store_get_by_index(it->state_index++, &it->state_item) != ESP_OK) {
+                if (gw_model_get_state_by_index(it->state_index++, &it->state_item) != ESP_OK) {
                     continue;
                 }
-                gw_proto_fill_state_item(&it->state_msg, &it->state_item);
                 *out_msg_type = GW_PROTO_MSG_STATE_ITEM;
-                *out_payload = &it->state_msg;
-                *out_payload_len = (uint16_t)sizeof(it->state_msg);
+                *out_payload = &it->state_item;
+                *out_payload_len = (uint16_t)sizeof(it->state_item);
                 return ESP_OK;
             }
             it->stage = WS_DEVICE_SNAPSHOT_STAGE_DONE;
@@ -703,6 +648,7 @@ static size_t ws_collect_client_fds(int *fds, size_t max_fds)
 {
     size_t fd_count = 0;
     portENTER_CRITICAL(&s_client_lock);
+    ws_prune_stale_clients_locked();
     for (size_t i = 0; i < GW_WS_MAX_CLIENTS && fd_count < max_fds; i++) {
         if (s_clients[i].fd != 0 && s_clients[i].subscribed_events) {
             fds[fd_count++] = s_clients[i].fd;

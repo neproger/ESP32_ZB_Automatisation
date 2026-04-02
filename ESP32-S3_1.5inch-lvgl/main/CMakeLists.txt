@@ -68,6 +68,7 @@ idf_component_register(
         esp_http_client
         json
         gw_core
+        gw_model
         gw_proto
         gw_http
         gw_zigbee

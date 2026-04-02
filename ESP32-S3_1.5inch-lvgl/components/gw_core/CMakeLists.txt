@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "src/storage.c"
-        "src/device_storage.c"
         "src/gw_proto_bus.c"
         "src/device_registry.c"
         "src/automation_store.c"

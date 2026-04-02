@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/micro_db_core.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_common
+        nvs_flash
+)
