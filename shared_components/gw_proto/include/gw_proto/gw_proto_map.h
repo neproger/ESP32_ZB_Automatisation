@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gw_core/model_types.h"
+#include "gw_proto/gw_proto_types.h"
 #include "gw_proto/gw_proto.h"
 
 #ifdef __cplusplus

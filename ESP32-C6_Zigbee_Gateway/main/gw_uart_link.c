@@ -18,8 +18,8 @@
 #include "esp_zigbee_gateway.h"
 #include "gw_core/deleted_devices.h"
 #include "gw_core/device_registry.h"
-#include "gw_core/gw_proto.h"
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto.h"
+#include "gw_proto/gw_proto_types.h"
 #include "gw_proto/gw_proto_uart.h"
 #include "gw_zigbee/gw_zigbee.h"
 #include "zcl/esp_zigbee_zcl_color_control.h"
@@ -564,8 +564,7 @@ static void remove_all_task(void *arg)
 
         // Purge local live/runtime state first so stale NVS-backed devices disappear immediately.
         for (size_t i = 0; i < remove_count; ++i) {
-            (void)gw_zb_model_remove_device(&remove_list[i].uid);
-            (void)gw_device_registry_remove(&remove_list[i].uid);
+            (void)gw_device_registry_remove_full(&remove_list[i].uid);
         }
         snapshot_request_async();
 

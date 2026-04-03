@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 
 typedef enum
 {

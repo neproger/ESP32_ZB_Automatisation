@@ -5,7 +5,7 @@
 
 #include "esp_err.h"
 #include "gw_core/storage.h"
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 #include "gw_core/zb_model.h"
 
 #ifdef __cplusplus
@@ -52,6 +52,7 @@ esp_err_t gw_device_registry_get_full(const gw_device_uid_t *uid, gw_device_full
 esp_err_t gw_device_registry_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device);
 esp_err_t gw_device_registry_get_full_by_index(size_t index, gw_device_full_t *out_device);
 esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *name);
+esp_err_t gw_device_registry_remove_full(const gw_device_uid_t *uid);
 esp_err_t gw_device_registry_remove(const gw_device_uid_t *uid);
 size_t gw_device_registry_count(void);
 size_t gw_device_registry_list(gw_device_t *out_devices, size_t max_devices);

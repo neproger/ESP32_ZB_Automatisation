@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gw_core/model_types.h"
 #include "gw_model_notify.h"
 
 static micro_db_table_t s_state_table;

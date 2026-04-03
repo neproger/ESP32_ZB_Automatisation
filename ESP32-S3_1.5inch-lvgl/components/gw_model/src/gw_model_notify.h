@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "gw_model/gw_model_schema.h"
 #include "esp_err.h"
 

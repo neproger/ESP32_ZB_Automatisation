@@ -7,13 +7,14 @@ idf_component_register(
         "src/net_time.c"
     INCLUDE_DIRS
         "include"
+    REQUIRES
+        gw_proto
     PRIV_REQUIRES
         esp_event
         esp_timer
         log
         esp_netif
         gw_model
-        gw_proto
         gw_zigbee
         json
 )

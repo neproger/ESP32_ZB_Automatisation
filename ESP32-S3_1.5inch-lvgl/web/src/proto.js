@@ -225,6 +225,12 @@ function ensureDevice(snapshot, uid) {
   return snapshot.devicesByUid[key]
 }
 
+function getDevice(snapshot, uid) {
+  const key = normalizeUid(uid)
+  if (!key) return null
+  return snapshot.devicesByUid[key] || null
+}
+
 function ensureEndpoint(device, endpointId) {
   const epNum = Number(endpointId || 0)
   if (!device || epNum <= 0) return null
@@ -1090,19 +1096,10 @@ export function protoApplyFrame(acc, frame, onCommit) {
 
 	if (frame.type === GW_PROTO_MSG_ENDPOINT_UPSERT) {
 		const uid = readFixedString(view, 0, DEVICE_UID_SIZE)
-    const device = ensureDevice(acc, uid)
+    const device = getDevice(acc, uid)
     if (!device) return
     device.short_addr = view.getUint16(ENDPOINT_SHORT_ADDR_OFF, true)
     const endpointId = view.getUint8(ENDPOINT_ID_OFF)
-    console.debug('[gw_proto] ENDPOINT_UPSERT', {
-      uid,
-      endpointId,
-      shortAddr: device.short_addr,
-      profileId: view.getUint16(ENDPOINT_PROFILE_ID_OFF, true),
-      deviceId: view.getUint16(ENDPOINT_DEVICE_ID_OFF, true),
-      inCount: view.getUint8(ENDPOINT_IN_CLUSTER_COUNT_OFF),
-      outCount: view.getUint8(ENDPOINT_OUT_CLUSTER_COUNT_OFF),
-    })
     const ep = ensureEndpoint(device, endpointId)
     if (!ep) return
     ep.profile_id = view.getUint16(ENDPOINT_PROFILE_ID_OFF, true)
@@ -1145,6 +1142,8 @@ export function protoApplyFrame(acc, frame, onCommit) {
 	if (frame.type === GW_PROTO_MSG_STATE_ITEM) {
 		const uid = normalizeUid(readFixedString(view, 0, DEVICE_UID_SIZE))
     if (!uid) return
+    const device = getDevice(acc, uid)
+    if (!device) return
     const endpointId = String(view.getUint8(STATE_ENDPOINT_OFF))
     const key = readFixedString(view, STATE_KEY_OFF, STATE_KEY_SIZE)
     if (!endpointId || !key) return
@@ -1156,7 +1155,6 @@ export function protoApplyFrame(acc, frame, onCommit) {
     nextUidState[endpointId] = nextEndpointState
     acc.deviceStates[uid] = nextUidState
 
-		const device = ensureDevice(acc, uid)
     const ep = ensureEndpoint(device, Number(endpointId))
     if (ep) {
       ep.live_state = nextEndpointState

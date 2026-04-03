@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "gw_model/gw_model_groups.h"
 #include "widget_endpoint_ref.hpp"
 

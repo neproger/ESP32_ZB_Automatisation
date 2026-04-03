@@ -5,7 +5,7 @@
 
 #include "esp_err.h"
 
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 
 #ifdef __cplusplus
 extern "C" {

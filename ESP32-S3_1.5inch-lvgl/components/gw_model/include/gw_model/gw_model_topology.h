@@ -19,6 +19,8 @@ esp_err_t gw_model_upsert_device(const gw_proto_device_v1_t *record,
                                  bool *out_inserted);
 esp_err_t gw_model_get_device(const gw_device_uid_t *uid,
                               gw_proto_device_v1_t *out_record);
+esp_err_t gw_model_remove_full_device(const gw_device_uid_t *uid,
+                                      bool *out_removed);
 esp_err_t gw_model_remove_device(const gw_device_uid_t *uid,
                                  bool *out_removed);
 size_t gw_model_count_devices(void);

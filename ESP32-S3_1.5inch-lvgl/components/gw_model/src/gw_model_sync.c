@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "gw_core/types.h"
+#include "gw_core/model_types.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_model/gw_model_groups.h"
 #include "gw_model/gw_model_state.h"
@@ -302,6 +304,23 @@ static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
     return memcmp(a, b, sizeof(*a)) == 0;
 }
 
+static void snapshot_stale_add_uid(const gw_device_uid_t *uid)
+{
+    if (!uid || uid->uid[0] == '\0') {
+        return;
+    }
+
+    for (size_t i = 0; i < s_snapshot_stale_count; ++i) {
+        if (uid_equals(&s_snapshot_stale[i], uid)) {
+            return;
+        }
+    }
+
+    if (s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES) {
+        s_snapshot_stale[s_snapshot_stale_count++] = *uid;
+    }
+}
+
 static void snapshot_stale_remove_uid(const gw_device_uid_t *uid)
 {
     if (!uid || uid->uid[0] == '\0') {
@@ -329,11 +348,27 @@ static void snapshot_begin(const gw_proto_sync_begin_v1_t *msg)
     }
 
     s_snapshot_stale_count = 0;
-    const size_t count = gw_model_count_devices();
-    for (size_t i = 0; i < count && s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES; ++i) {
+    const size_t device_count = gw_model_count_devices();
+    for (size_t i = 0; i < device_count && s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES; ++i) {
         gw_proto_device_v1_t record = {0};
         if (gw_model_get_device_by_index(i, &record) == ESP_OK) {
-            s_snapshot_stale[s_snapshot_stale_count++] = record.device_uid;
+            snapshot_stale_add_uid(&record.device_uid);
+        }
+    }
+
+    const size_t endpoint_count = gw_model_count_endpoints();
+    for (size_t i = 0; i < endpoint_count && s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES; ++i) {
+        gw_proto_endpoint_v1_t record = {0};
+        if (gw_model_get_endpoint_by_index(i, &record) == ESP_OK) {
+            snapshot_stale_add_uid(&record.uid);
+        }
+    }
+
+    const size_t state_count = gw_model_count_state();
+    for (size_t i = 0; i < state_count && s_snapshot_stale_count < GW_DEVICE_MAX_DEVICES; ++i) {
+        gw_proto_state_item_v1_t record = {0};
+        if (gw_model_get_state_by_index(i, &record) == ESP_OK) {
+            snapshot_stale_add_uid(&record.uid);
         }
     }
     s_snapshot_active = true;
@@ -351,7 +386,7 @@ static void snapshot_end(const gw_proto_sync_end_v1_t *msg)
 
     for (size_t i = 0; i < s_snapshot_stale_count; ++i) {
         bool removed = false;
-        (void)gw_model_remove_device(&s_snapshot_stale[i], &removed);
+        (void)gw_model_remove_full_device(&s_snapshot_stale[i], &removed);
     }
     s_snapshot_stale_count = 0;
     s_snapshot_active = false;
@@ -406,7 +441,7 @@ static void gw_model_bus_listener(gw_proto_bus_channel_t channel,
         case GW_PROTO_MSG_DEVICE_REMOVE:
             if (hdr->len >= sizeof(gw_proto_device_remove_v1_t)) {
                 const gw_proto_device_remove_v1_t *msg = (const gw_proto_device_remove_v1_t *)payload;
-                (void)gw_model_remove_device(&msg->device_uid, &removed);
+                (void)gw_model_remove_full_device(&msg->device_uid, &removed);
                 if (s_snapshot_active) {
                     snapshot_stale_remove_uid(&msg->device_uid);
                 }

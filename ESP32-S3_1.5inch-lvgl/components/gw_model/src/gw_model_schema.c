@@ -2,6 +2,9 @@
 
 #include <string.h>
 
+#include "gw_core/types.h"
+#include "gw_core/model_types.h"
+
 static void topology_device_key_of(const void *record, void *out_key)
 {
     const gw_proto_device_v1_t *r = (const gw_proto_device_v1_t *)record;

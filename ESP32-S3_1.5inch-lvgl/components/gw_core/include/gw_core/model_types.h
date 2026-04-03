@@ -3,14 +3,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define GW_ZB_MAX_ENDPOINTS 64
-#define GW_ZB_MAX_CLUSTERS  16
 
 typedef struct {
     gw_device_uid_t uid;
@@ -35,17 +34,7 @@ typedef struct {
     bool has_button;
 } gw_device_t;
 
-#define GW_STATE_KEY_MAX 24
 #define GW_STATE_MAX_ITEMS 1024
-#define GW_STATE_TEXT_MAX 64
-
-typedef enum {
-    GW_STATE_VALUE_BOOL = 1,
-    GW_STATE_VALUE_F32 = 2,
-    GW_STATE_VALUE_U32 = 3,
-    GW_STATE_VALUE_U64 = 4,
-    GW_STATE_VALUE_TEXT = 5,
-} gw_state_value_type_t;
 
 typedef struct {
     gw_device_uid_t uid;

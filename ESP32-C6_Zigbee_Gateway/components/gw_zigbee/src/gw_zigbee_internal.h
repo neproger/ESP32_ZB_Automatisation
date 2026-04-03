@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "gw_core/gw_proto.h"
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto.h"
+#include "gw_proto/gw_proto_types.h"
 #include "zdo/esp_zigbee_zdo_common.h"
 
 // Keep in sync with main/esp_zigbee_gateway.h (ESP_ZB_GATEWAY_ENDPOINT).

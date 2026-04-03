@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
 #include "ui_mapper.hpp"

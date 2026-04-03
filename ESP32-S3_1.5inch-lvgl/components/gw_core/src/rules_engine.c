@@ -18,7 +18,7 @@
 
 #include "gw_core/action_exec.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 #include "gw_model/gw_model_automation.h"
 #include "gw_model/gw_model_state.h"
 

@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 #include "gw_zigbee/gw_zigbee.h"
 
 static void set_err(char *err, size_t err_size, const char *msg)

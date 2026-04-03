@@ -163,8 +163,7 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
     if (gw_deleted_devices_contains(&duid)) {
         ESP_LOGW(TAG, "Quarantined device simple desc ignored: %s short=0x%04x ep=%u", uid, (unsigned)ctx->short_addr, (unsigned)simple_desc->endpoint);
         gw_zigbee_log_diag("quarantine_hit", uid, ctx->short_addr, "simple desc for quarantined device, scheduling leave");
-        (void)gw_zb_model_remove_device(&duid);
-        (void)gw_device_registry_remove(&duid);
+        (void)gw_device_registry_remove_full(&duid);
         gw_zigbee_request_snapshot_refresh();
         schedule_quarantine_leave(&duid, ctx->short_addr);
         free(ctx);
@@ -567,8 +566,7 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     if (gw_deleted_devices_contains(&duid)) {
         ESP_LOGW(TAG, "Quarantined device active ep ignored: %s short=0x%04x", uid, (unsigned)ctx->short_addr);
         gw_zigbee_log_diag("quarantine_hit", uid, ctx->short_addr, "active ep for quarantined device, scheduling leave");
-        (void)gw_zb_model_remove_device(&duid);
-        (void)gw_device_registry_remove(&duid);
+        (void)gw_device_registry_remove_full(&duid);
         gw_zigbee_request_snapshot_refresh();
         schedule_quarantine_leave(&duid, ctx->short_addr);
         free(ctx);
@@ -662,8 +660,7 @@ static void ieee_addr_cb(esp_zb_zdp_status_t zdo_status, esp_zb_zdo_ieee_addr_rs
     if (gw_deleted_devices_contains(&duid)) {
         ESP_LOGW(TAG, "Quarantined device resolved by short lookup: %s short=0x%04x", uid, (unsigned)resp->nwk_addr);
         gw_zigbee_log_diag("quarantine_hit", uid, resp->nwk_addr, "device resolved by short lookup, scheduling leave");
-        (void)gw_zb_model_remove_device(&duid);
-        (void)gw_device_registry_remove(&duid);
+        (void)gw_device_registry_remove_full(&duid);
         gw_zigbee_request_snapshot_refresh();
         schedule_quarantine_leave(&duid, resp->nwk_addr);
         free(ctx);
@@ -753,8 +750,7 @@ void gw_zigbee_on_device_annce(const uint8_t ieee_addr[8], uint16_t short_addr, 
     if (gw_deleted_devices_contains(&d.device_uid)) {
         ESP_LOGW(TAG, "Quarantined device re-announced: %s short=0x%04x cap=0x%02x", d.device_uid.uid, (unsigned)short_addr, (unsigned)capability);
         gw_zigbee_log_diag("quarantine_hit", d.device_uid.uid, short_addr, "device re-announced, scheduling leave");
-        (void)gw_zb_model_remove_device(&d.device_uid);
-        (void)gw_device_registry_remove(&d.device_uid);
+        (void)gw_device_registry_remove_full(&d.device_uid);
         gw_zigbee_request_snapshot_refresh();
         schedule_quarantine_leave(&d.device_uid, short_addr);
         return;

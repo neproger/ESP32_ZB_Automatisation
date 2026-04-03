@@ -33,7 +33,7 @@
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_core/deleted_devices.h"
 #include "gw_core/device_registry.h"
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "gw_core/zb_model.h"
 #include "gw_uart_link.h"
 
@@ -202,6 +202,7 @@ static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_ad
     d.last_seen_ms = ts_ms;
     (void)gw_device_registry_upsert(&d);
 }
+
 
 static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
 {

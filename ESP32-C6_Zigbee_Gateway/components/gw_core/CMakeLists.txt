@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/c6_store.c"
         "src/storage.c"
         "src/deleted_devices.c"
         "src/device_registry.c"
@@ -7,12 +8,15 @@ idf_component_register(
         "src/zb_classify.c"
     INCLUDE_DIRS
         "include"
+    REQUIRES
+        gw_proto
     PRIV_REQUIRES
         esp_event
         esp_timer
         log
         nvs_flash
         spiffs
+        micro_db
         gw_zigbee
         json
 )

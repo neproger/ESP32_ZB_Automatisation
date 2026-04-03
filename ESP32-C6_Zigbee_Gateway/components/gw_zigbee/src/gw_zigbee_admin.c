@@ -108,8 +108,7 @@ static void leave_finalize_success(gw_zb_leave_ctx_t *ctx, const char *msg)
         return;
     }
 
-    (void)gw_zb_model_remove_device(&ctx->uid);
-    (void)gw_device_registry_remove(&ctx->uid);
+    (void)gw_device_registry_remove_full(&ctx->uid);
     gw_zigbee_uart_send_event(GW_PROTO_EVENT_DEVICE_LEAVE,
                               ctx->uid.uid,
                               ctx->short_addr,
@@ -131,13 +130,11 @@ static void purge_local_device_state(const gw_device_uid_t *uid)
         return;
     }
 
-    esp_err_t model_err = gw_zb_model_remove_device(uid);
-    esp_err_t registry_err = gw_device_registry_remove(uid);
+    esp_err_t remove_err = gw_device_registry_remove_full(uid);
     ESP_LOGI(TAG,
-             "purge local state uid=%s model=%s registry=%s",
+             "purge local state uid=%s full_remove=%s",
              uid->uid,
-             esp_err_to_name(model_err),
-             esp_err_to_name(registry_err));
+             esp_err_to_name(remove_err));
     gw_zigbee_request_snapshot_refresh();
 }
 

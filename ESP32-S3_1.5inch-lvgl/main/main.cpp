@@ -7,7 +7,7 @@
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/rules_engine.h"
 #include "gw_core/net_time.h"
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_proto/gw_proto_frame.h"
 #include "gw_model/gw_model.h"

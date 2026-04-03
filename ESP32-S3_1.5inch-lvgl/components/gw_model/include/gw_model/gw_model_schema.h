@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 #include "micro_db/micro_db_types.h"
 
 #ifdef __cplusplus

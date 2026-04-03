@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 
 struct WidgetEndpointRef {
     gw_device_uid_t uid = {};

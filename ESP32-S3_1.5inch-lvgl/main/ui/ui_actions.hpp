@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
-#include "gw_core/types.h"
+#include "gw_proto/gw_proto_types.h"
 
 esp_err_t ui_actions_init(void);
 

@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gw_core/types.h"
+#include "gw_core/model_types.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model_notify.h"
 
@@ -295,8 +297,8 @@ esp_err_t gw_model_get_device(const gw_device_uid_t *uid,
     return micro_db_table_get(&s_device_table, uid, out_record);
 }
 
-esp_err_t gw_model_remove_device(const gw_device_uid_t *uid,
-                                 bool *out_removed)
+esp_err_t gw_model_remove_full_device(const gw_device_uid_t *uid,
+                                      bool *out_removed)
 {
     if (!uid) {
         return ESP_ERR_INVALID_ARG;
@@ -326,6 +328,12 @@ esp_err_t gw_model_remove_device(const gw_device_uid_t *uid,
         (void)gw_model_notify_device_remove(uid);
     }
     return err;
+}
+
+esp_err_t gw_model_remove_device(const gw_device_uid_t *uid,
+                                 bool *out_removed)
+{
+    return gw_model_remove_full_device(uid, out_removed);
 }
 
 size_t gw_model_count_devices(void)

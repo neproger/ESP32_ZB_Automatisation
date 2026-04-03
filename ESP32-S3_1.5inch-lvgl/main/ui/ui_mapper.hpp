@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "gw_core/gw_proto.h"
+#include "gw_proto/gw_proto.h"
 
 typedef struct
 {
