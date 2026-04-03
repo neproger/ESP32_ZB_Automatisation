@@ -2,8 +2,6 @@ idf_component_register(
     SRCS
         "src/storage.c"
         "src/gw_proto_bus.c"
-        "src/automation_store.c"
-        "src/project_settings.c"
         "src/zb_classify.c"
         "src/sensor_store.c"
         "src/rules_engine.c"

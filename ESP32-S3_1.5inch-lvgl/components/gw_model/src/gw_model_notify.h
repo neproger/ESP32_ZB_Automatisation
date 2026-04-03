@@ -20,3 +20,7 @@ esp_err_t gw_model_notify_group_remove(const char *group_id);
 
 esp_err_t gw_model_notify_group_item_upsert(const gw_proto_group_item_v1_t *record);
 esp_err_t gw_model_notify_group_item_remove(const gw_model_endpoint_key_t *key);
+
+esp_err_t gw_model_notify_settings(const gw_proto_settings_v1_t *record);
+esp_err_t gw_model_notify_automation_upsert(const gw_automation_entry_t *record);
+esp_err_t gw_model_notify_automation_remove(const char *id);

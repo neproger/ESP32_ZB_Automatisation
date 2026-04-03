@@ -16,7 +16,6 @@
 
 #include "gw_core/action_exec.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/project_settings.h"
 #include "gw_model/gw_model_automation.h"
 #include "gw_model/gw_model_groups.h"
 #include "gw_model/gw_model_settings.h"
@@ -277,14 +276,7 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_settings_v1_t *msg = (const gw_proto_settings_v1_t *)payload;
-            gw_project_settings_t next = {
-                .screensaver_timeout_ms = msg->screensaver_timeout_ms,
-                .weather_success_interval_ms = msg->weather_success_interval_ms,
-                .weather_retry_interval_ms = msg->weather_retry_interval_ms,
-                .timezone_auto = (msg->timezone_auto != 0),
-                .timezone_offset_min = msg->timezone_offset_min,
-            };
-            if (!gw_project_settings_validate(&next)) {
+            if (!gw_model_settings_validate(msg)) {
                 return ESP_ERR_INVALID_ARG;
             }
             return gw_model_set_settings(msg, NULL, NULL);

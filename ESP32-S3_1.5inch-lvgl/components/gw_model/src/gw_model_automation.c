@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "micro_db/micro_db_core.h"
+#include "gw_model_notify.h"
 #include "gw_model/gw_model_schema.h"
 
 static micro_db_table_t s_automation_table;
@@ -39,10 +40,14 @@ esp_err_t gw_model_upsert_automation(const gw_automation_entry_t *record,
 
     bool changed = false;
     bool inserted = false;
-    return micro_db_table_upsert(&s_automation_table,
-                                 record,
-                                 out_changed ? out_changed : &changed,
-                                 out_inserted ? out_inserted : &inserted);
+    esp_err_t err = micro_db_table_upsert(&s_automation_table,
+                                          record,
+                                          out_changed ? out_changed : &changed,
+                                          out_inserted ? out_inserted : &inserted);
+    if (err == ESP_OK && (changed || inserted)) {
+        (void)gw_model_notify_automation_upsert(record);
+    }
+    return err;
 }
 
 esp_err_t gw_model_get_automation(const char *id,
@@ -65,7 +70,11 @@ esp_err_t gw_model_remove_automation(const char *id,
     gw_model_automation_key_t key = {0};
     fill_automation_key(id, &key);
     bool removed = false;
-    return micro_db_table_remove(&s_automation_table, &key, out_removed ? out_removed : &removed);
+    esp_err_t err = micro_db_table_remove(&s_automation_table, &key, out_removed ? out_removed : &removed);
+    if (err == ESP_OK && removed) {
+        (void)gw_model_notify_automation_remove(id);
+    }
+    return err;
 }
 
 size_t gw_model_count_automations(void)

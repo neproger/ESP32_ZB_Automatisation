@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "gw_core/zb_model.h"
+#include "gw_core/model_types.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -118,3 +118,35 @@ esp_err_t gw_model_notify_group_item_remove(const gw_model_endpoint_key_t *key)
     gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_GROUP_ITEM_REMOVE, sizeof(msg), 0);
     return gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
 }
+
+esp_err_t gw_model_notify_settings(const gw_proto_settings_v1_t *record)
+{
+    if (!record) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_SETTINGS, sizeof(*record), 0);
+    return gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, record);
+}
+
+esp_err_t gw_model_notify_automation_upsert(const gw_automation_entry_t *record)
+{
+    if (!record) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_AUTOMATION_UPSERT, sizeof(*record), 0);
+    return gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, record);
+}
+
+esp_err_t gw_model_notify_automation_remove(const char *id)
+{
+    if (!id || !id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_cmd_automation_remove_v1_t msg = {0};
+    gw_proto_hdr_t hdr = {0};
+    strlcpy(msg.id, id, sizeof(msg.id));
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_AUTOMATION_REMOVE, sizeof(msg), 0);
+    return gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &msg);
+}

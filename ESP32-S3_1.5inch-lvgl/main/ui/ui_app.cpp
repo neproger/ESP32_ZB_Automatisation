@@ -17,7 +17,7 @@
 #include "ui_screen_devices.hpp"
 #include "ui_screen_saver.hpp"
 #include "ui_style.hpp"
-#include "gw_core/project_settings.h"
+#include "gw_model/gw_model_settings.h"
 
 namespace
 {
@@ -39,8 +39,8 @@ void log_ui_boot_stack_hwm(const char *stage)
 
 uint32_t screensaver_timeout_ms()
 {
-    gw_project_settings_t cfg = {};
-    if (gw_project_settings_get(&cfg) == ESP_OK) {
+    gw_proto_settings_v1_t cfg = {};
+    if (gw_model_get_settings(&cfg) == ESP_OK) {
         return cfg.screensaver_timeout_ms;
     }
     return 10000;

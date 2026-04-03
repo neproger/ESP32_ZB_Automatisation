@@ -14,7 +14,8 @@
 #include "s3_geoip_http.h"
 #include "s3_weather_http.h"
 #include "gw_core/net_time.h"
-#include "gw_core/project_settings.h"
+#include "gw_core/gw_proto_bus.h"
+#include "gw_model/gw_model_settings.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
 
@@ -38,6 +39,11 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void persist_timezone_to_model(const char *tz_name);
 static uint64_t now_ts_ms(void);
+static esp_err_t load_settings(gw_proto_settings_v1_t *out);
+static void settings_proto_listener(gw_proto_bus_channel_t channel,
+                                    const gw_proto_hdr_t *hdr,
+                                    const void *payload,
+                                    void *user_ctx);
 
 static void ensure_weather_model(void)
 {
@@ -189,8 +195,8 @@ static void apply_timezone_offset_if_present(int32_t offset_sec)
 
 static TickType_t weather_retry_ticks(void)
 {
-    gw_project_settings_t cfg = {0};
-    if (gw_project_settings_get(&cfg) == ESP_OK) {
+    gw_proto_settings_v1_t cfg = {0};
+    if (load_settings(&cfg) == ESP_OK) {
         return ms_to_ticks_safe(cfg.weather_retry_interval_ms);
     }
     return ms_to_ticks_safe(10 * 1000);
@@ -198,8 +204,8 @@ static TickType_t weather_retry_ticks(void)
 
 static TickType_t weather_success_ticks(void)
 {
-    gw_project_settings_t cfg = {0};
-    if (gw_project_settings_get(&cfg) == ESP_OK) {
+    gw_proto_settings_v1_t cfg = {0};
+    if (load_settings(&cfg) == ESP_OK) {
         return ms_to_ticks_safe(cfg.weather_success_interval_ms);
     }
     return ms_to_ticks_safe(60 * 60 * 1000);
@@ -207,8 +213,8 @@ static TickType_t weather_success_ticks(void)
 
 static void apply_timezone_from_settings_or_geo(const s3_geoip_result_t *geo)
 {
-    gw_project_settings_t cfg = {0};
-    if (gw_project_settings_get(&cfg) != ESP_OK) {
+    gw_proto_settings_v1_t cfg = {0};
+    if (load_settings(&cfg) != ESP_OK) {
         if (geo) {
             if (geo->timezone[0]) {
                 apply_timezone_if_present(geo->timezone);
@@ -219,7 +225,7 @@ static void apply_timezone_from_settings_or_geo(const s3_geoip_result_t *geo)
         return;
     }
 
-    if (cfg.timezone_auto) {
+    if (cfg.timezone_auto != 0) {
         if (geo) {
             if (geo->timezone[0]) {
                 apply_timezone_if_present(geo->timezone);
@@ -241,8 +247,8 @@ static void timezone_label_for_state(char *out, size_t out_size, const s3_geoip_
     }
     out[0] = '\0';
 
-    gw_project_settings_t cfg = {0};
-    if (gw_project_settings_get(&cfg) == ESP_OK && !cfg.timezone_auto) {
+    gw_proto_settings_v1_t cfg = {0};
+    if (load_settings(&cfg) == ESP_OK && cfg.timezone_auto == 0) {
         const int off = (int)cfg.timezone_offset_min;
         const int abs_off = (off >= 0) ? off : -off;
         const int hh = abs_off / 60;
@@ -287,10 +293,24 @@ static void apply_timezone_now_and_publish(const char *reason)
     (void)reason;
 }
 
-static void settings_listener(const gw_project_settings_t *settings, void *user_ctx)
+static esp_err_t load_settings(gw_proto_settings_v1_t *out)
 {
-    (void)settings;
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return gw_model_get_settings(out);
+}
+
+static void settings_proto_listener(gw_proto_bus_channel_t channel,
+                                    const gw_proto_hdr_t *hdr,
+                                    const void *payload,
+                                    void *user_ctx)
+{
+    (void)channel;
     (void)user_ctx;
+    if (!hdr || !payload || hdr->type != GW_PROTO_MSG_SETTINGS || hdr->len < sizeof(gw_proto_settings_v1_t)) {
+        return;
+    }
     apply_timezone_now_and_publish("settings.changed");
 }
 
@@ -475,7 +495,7 @@ esp_err_t s3_weather_service_start(void)
     persist_location_to_model("Locating...");
     persist_weather_status_to_model("starting");
     if (!s_listener_registered) {
-        if (gw_project_settings_add_listener(settings_listener, NULL) == ESP_OK) {
+        if (gw_proto_bus_add_listener(settings_proto_listener, GW_PROTO_BUS_CHANNEL_MODEL, NULL) == ESP_OK) {
             s_listener_registered = true;
         } else {
             ESP_LOGW(TAG, "failed to register settings listener");

@@ -4,9 +4,7 @@
 #include "gw_wifi.h"
 #include "gw_http/gw_http.h"
 #include "s3_weather_service.h"
-#include "gw_core/automation_store.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/project_settings.h"
 #include "gw_core/sensor_store.h"
 #include "gw_core/rules_engine.h"
 #include "gw_core/net_time.h"
@@ -105,16 +103,12 @@ extern "C" void app_main(void)
     // Temporary model-first bringup: boot UI on gw_model without legacy stores.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_INFO);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
-    esp_log_level_set("gw_runtime_sync", ESP_LOG_WARN);
-    esp_log_level_set("gw_state_store", ESP_LOG_WARN);
     esp_log_level_set("s3_weather_svc", ESP_LOG_WARN);
     esp_log_level_set("s3_weather_http", ESP_LOG_WARN);
     esp_log_level_set("gw_net_time", ESP_LOG_WARN);
 
     ESP_ERROR_CHECK(gw_sensor_store_init());
     ESP_ERROR_CHECK(gw_model_init());
-    ESP_ERROR_CHECK(gw_automation_store_init());
-    ESP_ERROR_CHECK(gw_project_settings_init());
     ESP_ERROR_CHECK(gw_rules_init());
 
     ESP_LOGW(TAG_APP, "Legacy stores and legacy runtime are disabled for gw_model bringup");

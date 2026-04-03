@@ -17,9 +17,9 @@
 #include "freertos/idf_additions.h"
 
 #include "gw_core/action_exec.h"
-#include "gw_core/automation_store.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_core/types.h"
+#include "gw_model/gw_model_automation.h"
 #include "gw_model/gw_model_state.h"
 
 static const char *TAG = "gw_rules";
@@ -462,7 +462,7 @@ static void reload_automation_cache(void)
 {
     rules_cache_t *dst = s_cache_use_a ? &s_cache_b : &s_cache_a;
     memset(dst, 0, sizeof(*dst));
-    dst->count = gw_automation_store_list(dst->autos, GW_AUTOMATION_CAP);
+    dst->count = gw_model_list_automations(dst->autos, GW_AUTOMATION_CAP);
     rebuild_trigger_index(dst);
 
     portENTER_CRITICAL(&s_cache_lock);
@@ -654,17 +654,21 @@ static void rules_task(void *arg)
     }
 }
 
-static void rules_automation_listener(void *user_ctx)
-{
-    (void)user_ctx;
-    reload_automation_cache();
-}
-
 static void rules_proto_listener(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx)
 {
-    (void)channel;
     (void)user_ctx;
-    if (!s_inited || !s_q || !hdr || hdr->type != GW_PROTO_MSG_EVENT_ZB || !payload || hdr->len == 0) {
+    if (!s_inited || !hdr || !payload || hdr->len == 0) {
+        return;
+    }
+
+    if (channel == GW_PROTO_BUS_CHANNEL_MODEL) {
+        if (hdr->type == GW_PROTO_MSG_AUTOMATION_UPSERT || hdr->type == GW_PROTO_MSG_AUTOMATION_REMOVE) {
+            reload_automation_cache();
+        }
+        return;
+    }
+
+    if (!s_q || channel != GW_PROTO_BUS_CHANNEL_INGRESS || hdr->type != GW_PROTO_MSG_EVENT_ZB) {
         return;
     }
     if (hdr->len < sizeof(gw_proto_event_v1_t)) {
@@ -730,8 +734,7 @@ esp_err_t gw_rules_init(void)
         return ESP_FAIL;
     }
 
-    (void)gw_proto_bus_add_listener(rules_proto_listener, GW_PROTO_BUS_CHANNEL_INGRESS, NULL);
-    (void)gw_automation_store_add_listener(rules_automation_listener, NULL);
+    (void)gw_proto_bus_add_listener(rules_proto_listener, GW_PROTO_BUS_CHANNEL_INGRESS | GW_PROTO_BUS_CHANNEL_MODEL, NULL);
     reload_automation_cache();
 
     s_inited = true;

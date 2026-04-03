@@ -1,7 +1,6 @@
 #pragma once
 
 #include "gw_core/model_types.h"
-#include "gw_core/project_settings.h"
 #include "gw_proto/gw_proto.h"
 
 #ifdef __cplusplus
@@ -14,7 +13,6 @@ void gw_proto_fill_endpoint_remove(gw_proto_endpoint_remove_v1_t *out, const gw_
 void gw_proto_fill_state_remove(gw_proto_state_remove_v1_t *out, const gw_device_uid_t *uid, uint8_t endpoint, const char *key);
 void gw_proto_fill_group_remove(gw_proto_group_remove_v1_t *out, const char *group_id);
 void gw_proto_fill_group_item_remove(gw_proto_group_item_remove_v1_t *out, const gw_device_uid_t *uid, uint8_t endpoint);
-void gw_proto_fill_settings(gw_proto_settings_v1_t *out, const gw_project_settings_t *src);
 void gw_proto_fill_automation_remove(gw_proto_automation_remove_v1_t *out, const char *automation_id);
 
 #ifdef __cplusplus

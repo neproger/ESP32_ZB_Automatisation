@@ -68,19 +68,6 @@ void gw_proto_fill_group_item_remove(gw_proto_group_item_remove_v1_t *out, const
     out->endpoint = endpoint;
 }
 
-void gw_proto_fill_settings(gw_proto_settings_v1_t *out, const gw_project_settings_t *src)
-{
-    if (!out || !src) {
-        return;
-    }
-    memset(out, 0, sizeof(*out));
-    out->screensaver_timeout_ms = src->screensaver_timeout_ms;
-    out->weather_success_interval_ms = src->weather_success_interval_ms;
-    out->weather_retry_interval_ms = src->weather_retry_interval_ms;
-    out->timezone_auto = src->timezone_auto ? 1u : 0u;
-    out->timezone_offset_min = src->timezone_offset_min;
-}
-
 void gw_proto_fill_automation_remove(gw_proto_automation_remove_v1_t *out, const char *automation_id)
 {
     if (!out) {
