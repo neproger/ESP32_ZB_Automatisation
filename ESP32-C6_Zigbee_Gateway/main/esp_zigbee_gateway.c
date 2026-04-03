@@ -28,8 +28,10 @@
 #include "esp_zigbee_gateway.h"
 #include "esp_zigbee_cluster.h"
 #include "zb_config_platform.h"
+#include "zboss_api.h"
 
 #include "gw_zigbee/gw_zigbee.h"
+#include "gw_core/deleted_devices.h"
 #include "gw_core/device_registry.h"
 #include "gw_core/gw_proto.h"
 #include "gw_core/zb_model.h"
@@ -103,6 +105,76 @@ static void uart_send_net_state_online(void)
     (void)gw_uart_link_send_event_zb(&evt);
 }
 static bool s_snapshot_runtime_ready_sent;
+static bool s_addr_table_dump_done;
+
+static void ieee_to_uid_string(const esp_zb_ieee_addr_t ieee, char *out, size_t out_len)
+{
+    if (out == NULL || out_len == 0) {
+        return;
+    }
+    if (ieee == NULL) {
+        out[0] = '\0';
+        return;
+    }
+    (void)snprintf(out,
+                   out_len,
+                   "0x%02x%02x%02x%02x%02x%02x%02x%02x",
+                   ieee[0], ieee[1], ieee[2], ieee[3],
+                   ieee[4], ieee[5], ieee[6], ieee[7]);
+}
+
+static void dump_address_table_once(void)
+{
+    if (s_addr_table_dump_done) {
+        return;
+    }
+    s_addr_table_dump_done = true;
+
+    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+        ESP_LOGW(TAG, "addr table dump skipped: zigbee lock unavailable");
+        return;
+    }
+
+    const zb_ushort_t max_scan = 256U;
+    ESP_LOGW(TAG, "=== [ZB ADDRESS TABLE DUMP] scan_max=%u ===", (unsigned)max_scan);
+    for (zb_ushort_t i = 0; i < max_scan; ++i) {
+        zb_address_ieee_ref_t ref = 0;
+        if (zb_address_by_sorted_table_index(i, &ref) != RET_OK) {
+            continue;
+        }
+        if (!zb_address_in_use(ref)) {
+            continue;
+        }
+
+        zb_ieee_addr_t ieee_addr = {0};
+        uint8_t raw_ieee[8] = {0};
+        zb_uint16_t short_addr = ZB_UNKNOWN_SHORT_ADDR;
+        zb_address_ieee_by_ref(ieee_addr, ref);
+        zb_address_short_by_ref(&short_addr, ref);
+        memcpy(raw_ieee, ieee_addr, sizeof(raw_ieee));
+
+        bool is_zero = true;
+        for (int b = 0; b < (int)sizeof(raw_ieee); ++b) {
+            if (raw_ieee[b] != 0) {
+                is_zero = false;
+                break;
+            }
+        }
+        if (is_zero) {
+            continue;
+        }
+
+        ESP_LOGW(TAG,
+                 "addr[%02u] ref=%u ieee=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x nwk=0x%04x",
+                 (unsigned)i,
+                 (unsigned)ref,
+                 raw_ieee[7], raw_ieee[6], raw_ieee[5], raw_ieee[4],
+                 raw_ieee[3], raw_ieee[2], raw_ieee[1], raw_ieee[0],
+                 (unsigned)short_addr);
+    }
+    ESP_LOGW(TAG, "=== [ZB ADDRESS TABLE DUMP END] ===");
+    esp_zb_lock_release();
+}
 
 static void announce_snapshot_runtime_ready_once(void)
 {
@@ -113,6 +185,7 @@ static void announce_snapshot_runtime_ready_once(void)
     gw_uart_link_set_snapshot_ready(true);
     uart_send_net_state_online();
     ESP_LOGI(TAG, "startup topology bootstrap ready");
+    dump_address_table_once();
 }
 
 static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_addr, uint64_t ts_ms)
@@ -175,6 +248,12 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
 
         gw_device_uid_t uid = {0};
         if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+            ESP_LOGW(TAG,
+                     "attr report from unknown short=0x%04x ep=%u cluster=0x%04x attr=0x%04x, scheduling discovery",
+                     (unsigned)src_short,
+                     (unsigned)m->src_endpoint,
+                     (unsigned)m->cluster,
+                     (unsigned)m->attribute.id);
             (void)gw_zigbee_discover_by_short(src_short);
         }
 
@@ -278,6 +357,11 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
 
         gw_device_uid_t uid = {0};
         if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+            ESP_LOGW(TAG,
+                     "read attr response from unknown short=0x%04x ep=%u cluster=0x%04x, scheduling discovery",
+                     (unsigned)src_short,
+                     (unsigned)m->info.src_endpoint,
+                     (unsigned)m->info.cluster);
             (void)gw_zigbee_discover_by_short(src_short);
         }
 
@@ -484,6 +568,17 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , TAG, "Failed to start Zigbee bdb commissioning");
 }
 
+static void bdb_close_network_cb(uint8_t unused)
+{
+    (void)unused;
+    esp_err_t err = esp_zb_bdb_close_network();
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "Closing permit join after device authorization");
+    } else {
+        ESP_LOGW(TAG, "esp_zb_bdb_close_network() failed after device authorization: %s", esp_err_to_name(err));
+    }
+}
+
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 {
     uint32_t *p_sg_p       = signal_struct->p_app_signal;
@@ -519,7 +614,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      ieee_address[7], ieee_address[6], ieee_address[5], ieee_address[4],
                      ieee_address[3], ieee_address[2], ieee_address[1], ieee_address[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
-            esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+            ESP_LOGI(TAG, "Network formed (join closed by default, open via Web UI permit_join)");
+            announce_snapshot_runtime_ready_once();
         } else {
             ESP_LOGI(TAG, "Restart network formation (status: %s)", esp_err_to_name(err_status));
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_FORMATION, 1000);
@@ -536,6 +632,49 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         ESP_LOGI(TAG, "New device commissioned or rejoined (short: 0x%04hx)", dev_annce_params->device_short_addr);
         gw_zigbee_on_device_annce(dev_annce_params->ieee_addr, dev_annce_params->device_short_addr, dev_annce_params->capability);
         break;
+    case ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION: {
+        esp_zb_zdo_signal_leave_indication_params_t *params =
+            (esp_zb_zdo_signal_leave_indication_params_t *)esp_zb_app_signal_get_params(p_sg_p);
+        char uid[32] = {0};
+        ieee_to_uid_string(params->device_addr, uid, sizeof(uid));
+        ESP_LOGW(TAG,
+                 "leave indication uid=%s short=0x%04hx rejoin=%u status=%s",
+                 uid,
+                 params->short_addr,
+                 (unsigned)params->rejoin,
+                 esp_err_to_name(err_status));
+        break;
+    }
+    case ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE: {
+        esp_zb_zdo_signal_device_update_params_t *params =
+            (esp_zb_zdo_signal_device_update_params_t *)esp_zb_app_signal_get_params(p_sg_p);
+        char uid[32] = {0};
+        ieee_to_uid_string(params->long_addr, uid, sizeof(uid));
+        ESP_LOGW(TAG,
+                 "device update uid=%s short=0x%04hx status=0x%02x tc_action=0x%02x parent=0x%04hx status_name=%s",
+                 uid,
+                 params->short_addr,
+                 (unsigned)params->status,
+                 (unsigned)params->tc_action,
+                 params->parent_short,
+                 esp_err_to_name(err_status));
+        break;
+    }
+    case ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED: {
+        esp_zb_zdo_signal_device_authorized_params_t *params =
+            (esp_zb_zdo_signal_device_authorized_params_t *)esp_zb_app_signal_get_params(p_sg_p);
+        char uid[32] = {0};
+        ieee_to_uid_string(params->long_addr, uid, sizeof(uid));
+        ESP_LOGW(TAG,
+                 "device authorized uid=%s short=0x%04hx auth_type=0x%02x auth_status=0x%02x",
+                 uid,
+                 params->short_addr,
+                 (unsigned)params->authorization_type,
+                 (unsigned)params->authorization_status);
+        ESP_LOGI(TAG, "Device authorized; closing permit join");
+        esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_close_network_cb, 0, 1);
+        break;
+    }
     case ESP_ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
         if (err_status == ESP_OK) {
             if (*(uint8_t *)esp_zb_app_signal_get_params(p_sg_p)) {
@@ -630,6 +769,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_zb_model_init());
+    ESP_ERROR_CHECK(gw_deleted_devices_init());
     ESP_ERROR_CHECK(gw_device_registry_init());
     ESP_ERROR_CHECK(gw_uart_link_start());
     ESP_LOGI(TAG, "c6 thin zigbee router started");

@@ -6,6 +6,8 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_zigbee_core.h"
 #include "zcl/esp_zigbee_zcl_color_control.h"
@@ -20,6 +22,7 @@
 #include "zdo/esp_zigbee_zdo_common.h"
 
 #include "gw_core/device_registry.h"
+#include "gw_core/deleted_devices.h"
 #include "gw_core/zb_classify.h"
 #include "gw_core/zb_model.h"
 #include "gw_zigbee_internal.h"
@@ -42,9 +45,47 @@ typedef struct {
     esp_zb_zdo_ieee_addr_req_param_t req;
 } gw_zb_ieee_lookup_ctx_t;
 
+typedef struct {
+    gw_device_uid_t uid;
+    uint16_t short_addr;
+} gw_zb_quarantine_leave_ctx_t;
+
 static gw_zb_ieee_lookup_ctx_t *s_ieee_ctx_by_token[256];
 static uint8_t s_ieee_token;
 static portMUX_TYPE s_ieee_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void quarantine_leave_task(void *arg)
+{
+    gw_zb_quarantine_leave_ctx_t *ctx = (gw_zb_quarantine_leave_ctx_t *)arg;
+    if (ctx != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        (void)gw_zigbee_device_leave(&ctx->uid, ctx->short_addr, false);
+        free(ctx);
+    }
+    vTaskDelete(NULL);
+}
+
+static void schedule_quarantine_leave(const gw_device_uid_t *uid, uint16_t short_addr)
+{
+    if (uid == NULL || uid->uid[0] == '\0') {
+        return;
+    }
+
+    gw_zb_quarantine_leave_ctx_t *ctx = (gw_zb_quarantine_leave_ctx_t *)calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
+        gw_zigbee_log_diag("quarantine_schedule_failed", uid->uid, short_addr, "no mem for quarantine leave ctx");
+        return;
+    }
+
+    ctx->uid = *uid;
+    ctx->short_addr = short_addr;
+
+    BaseType_t ok = xTaskCreate(quarantine_leave_task, "zb_q_leave", 3072, ctx, 5, NULL);
+    if (ok != pdPASS) {
+        gw_zigbee_log_diag("quarantine_schedule_failed", uid->uid, short_addr, "xTaskCreate failed");
+        free(ctx);
+    }
+}
 
 static void request_bind_to_gateway(const char *uid,
                                     const esp_zb_ieee_addr_t src_ieee,
@@ -117,6 +158,19 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ctx->ieee, uid);
 
+    gw_device_uid_t duid = {0};
+    strlcpy(duid.uid, uid, sizeof(duid.uid));
+    if (gw_deleted_devices_contains(&duid)) {
+        ESP_LOGW(TAG, "Quarantined device simple desc ignored: %s short=0x%04x ep=%u", uid, (unsigned)ctx->short_addr, (unsigned)simple_desc->endpoint);
+        gw_zigbee_log_diag("quarantine_hit", uid, ctx->short_addr, "simple desc for quarantined device, scheduling leave");
+        (void)gw_zb_model_remove_device(&duid);
+        (void)gw_device_registry_remove(&duid);
+        gw_zigbee_request_snapshot_refresh();
+        schedule_quarantine_leave(&duid, ctx->short_addr);
+        free(ctx);
+        return;
+    }
+
     gw_zb_endpoint_t ep = {0};
     strlcpy(ep.uid.uid, uid, sizeof(ep.uid.uid));
     ep.short_addr = ctx->short_addr;
@@ -148,9 +202,6 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
                    has_onoff_cli ? 1 : 0);
     ESP_LOGI(TAG, "simple desc: %s short=0x%04x %s", uid, (unsigned)ctx->short_addr, msg);
     gw_zigbee_request_snapshot_refresh();
-
-    gw_device_uid_t duid = {0};
-    strlcpy(duid.uid, uid, sizeof(duid.uid));
 
     gw_device_t d = {0};
     if (gw_device_registry_get(&duid, &d) == ESP_OK) {
@@ -511,6 +562,19 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ctx->ieee, uid);
 
+    gw_device_uid_t duid = {0};
+    strlcpy(duid.uid, uid, sizeof(duid.uid));
+    if (gw_deleted_devices_contains(&duid)) {
+        ESP_LOGW(TAG, "Quarantined device active ep ignored: %s short=0x%04x", uid, (unsigned)ctx->short_addr);
+        gw_zigbee_log_diag("quarantine_hit", uid, ctx->short_addr, "active ep for quarantined device, scheduling leave");
+        (void)gw_zb_model_remove_device(&duid);
+        (void)gw_device_registry_remove(&duid);
+        gw_zigbee_request_snapshot_refresh();
+        schedule_quarantine_leave(&duid, ctx->short_addr);
+        free(ctx);
+        return;
+    }
+
     char msg[64];
     (void)snprintf(msg, sizeof(msg), "ep_count=%u", (unsigned)ep_count);
     ESP_LOGI(TAG, "active ep: %s short=0x%04x %s", uid, (unsigned)ctx->short_addr, msg);
@@ -593,8 +657,21 @@ static void ieee_addr_cb(esp_zb_zdp_status_t zdo_status, esp_zb_zdo_ieee_addr_rs
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(resp->ieee_addr, uid);
 
+    gw_device_uid_t duid = {0};
+    strlcpy(duid.uid, uid, sizeof(duid.uid));
+    if (gw_deleted_devices_contains(&duid)) {
+        ESP_LOGW(TAG, "Quarantined device resolved by short lookup: %s short=0x%04x", uid, (unsigned)resp->nwk_addr);
+        gw_zigbee_log_diag("quarantine_hit", uid, resp->nwk_addr, "device resolved by short lookup, scheduling leave");
+        (void)gw_zb_model_remove_device(&duid);
+        (void)gw_device_registry_remove(&duid);
+        gw_zigbee_request_snapshot_refresh();
+        schedule_quarantine_leave(&duid, resp->nwk_addr);
+        free(ctx);
+        return;
+    }
+
     gw_device_t d = {0};
-    strlcpy(d.device_uid.uid, uid, sizeof(d.device_uid.uid));
+    d.device_uid = duid;
     d.short_addr = resp->nwk_addr;
     d.last_seen_ms = (uint64_t)(esp_timer_get_time() / 1000);
     (void)gw_device_registry_upsert(&d);
@@ -672,6 +749,16 @@ void gw_zigbee_on_device_annce(const uint8_t ieee_addr[8], uint16_t short_addr, 
 
     gw_device_t d = {0};
     gw_zigbee_ieee_to_uid_str(ieee_addr, d.device_uid.uid);
+
+    if (gw_deleted_devices_contains(&d.device_uid)) {
+        ESP_LOGW(TAG, "Quarantined device re-announced: %s short=0x%04x cap=0x%02x", d.device_uid.uid, (unsigned)short_addr, (unsigned)capability);
+        gw_zigbee_log_diag("quarantine_hit", d.device_uid.uid, short_addr, "device re-announced, scheduling leave");
+        (void)gw_zb_model_remove_device(&d.device_uid);
+        (void)gw_device_registry_remove(&d.device_uid);
+        gw_zigbee_request_snapshot_refresh();
+        schedule_quarantine_leave(&d.device_uid, short_addr);
+        return;
+    }
 
     {
         gw_device_t existing = {0};

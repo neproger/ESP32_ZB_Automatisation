@@ -7,12 +7,16 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 
 #include "esp_zigbee_core.h"
+#include "esp_zigbee_secur.h"
+#include "test/esp_zigbee_test_utils.h"
 #include "zdo/esp_zigbee_zdo_command.h"
 
 #include "gw_core/device_registry.h"
+#include "gw_core/deleted_devices.h"
 #include "gw_core/zb_model.h"
 #include "gw_zigbee_internal.h"
 
@@ -41,15 +45,122 @@ static bool uid_str_to_ieee(const char *uid, esp_zb_ieee_addr_t out_ieee)
 }
 
 typedef struct {
+    uint8_t token;
     gw_device_uid_t uid;
     uint16_t short_addr;
     bool rejoin;
+    bool was_quarantined_before;
     esp_zb_zdo_mgmt_leave_req_param_t req;
 } gw_zb_leave_ctx_t;
 
 static gw_zb_leave_ctx_t *s_leave_ctx_by_token[256];
 static uint8_t s_leave_token;
 static portMUX_TYPE s_leave_lock = portMUX_INITIALIZER_UNLOCKED;
+static const uint32_t GW_LEAVE_TIMEOUT_MS = 12000;
+
+static bool leave_ctx_exists_for_uid(const gw_device_uid_t *uid)
+{
+    if (uid == NULL || uid->uid[0] == '\0') {
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(s_leave_ctx_by_token) / sizeof(s_leave_ctx_by_token[0]); ++i) {
+        const gw_zb_leave_ctx_t *ctx = s_leave_ctx_by_token[i];
+        if (ctx != NULL && strncmp(ctx->uid.uid, uid->uid, sizeof(ctx->uid.uid)) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool leave_cleanup_stack_state(gw_zb_leave_ctx_t *ctx, const char *prefix)
+{
+    if (ctx == NULL) {
+        return false;
+    }
+
+    esp_zb_apsme_remove_device_req_t req = {0};
+    esp_zb_get_long_address(req.parent_address);
+    memcpy(req.child_address, ctx->req.device_address, sizeof(req.child_address));
+
+    esp_err_t apsme_err = esp_zb_apsme_remove_device_request(&req);
+    char apsme_msg[112];
+    (void)snprintf(apsme_msg, sizeof(apsme_msg), "%s apsme_remove=%s", prefix, esp_err_to_name(apsme_err));
+    gw_zigbee_log_diag((apsme_err == ESP_OK) ? "leave_cleanup_apsme_remove_ok" : "leave_cleanup_apsme_remove_failed",
+                       ctx->uid.uid,
+                       ctx->short_addr,
+                       apsme_msg);
+
+    esp_err_t map_err = esp_zb_address_delete_address_mapping_by_short(ctx->short_addr);
+    char map_msg[112];
+    (void)snprintf(map_msg, sizeof(map_msg), "%s address_delete_by_short=%s", prefix, esp_err_to_name(map_err));
+    gw_zigbee_log_diag((map_err == ESP_OK) ? "leave_cleanup_addrmap_delete_ok" : "leave_cleanup_addrmap_delete_failed",
+                       ctx->uid.uid,
+                       ctx->short_addr,
+                       map_msg);
+
+    return (apsme_err == ESP_OK && map_err == ESP_OK);
+}
+
+static void leave_finalize_success(gw_zb_leave_ctx_t *ctx, const char *msg)
+{
+    if (!ctx) {
+        return;
+    }
+
+    (void)gw_zb_model_remove_device(&ctx->uid);
+    (void)gw_device_registry_remove(&ctx->uid);
+    gw_zigbee_uart_send_event(GW_PROTO_EVENT_DEVICE_LEAVE,
+                              ctx->uid.uid,
+                              ctx->short_addr,
+                              0,
+                              0,
+                              0,
+                              GW_PROTO_EVENT_VALUE_TEXT,
+                              false,
+                              0,
+                              0.0f,
+                              NULL,
+                              msg);
+    gw_zigbee_request_snapshot_refresh();
+}
+
+static void purge_local_device_state(const gw_device_uid_t *uid)
+{
+    if (uid == NULL || uid->uid[0] == '\0') {
+        return;
+    }
+
+    esp_err_t model_err = gw_zb_model_remove_device(uid);
+    esp_err_t registry_err = gw_device_registry_remove(uid);
+    ESP_LOGI(TAG,
+             "purge local state uid=%s model=%s registry=%s",
+             uid->uid,
+             esp_err_to_name(model_err),
+             esp_err_to_name(registry_err));
+    gw_zigbee_request_snapshot_refresh();
+}
+
+static void leave_timeout_cb(uint8_t token)
+{
+    gw_zb_leave_ctx_t *ctx = NULL;
+
+    portENTER_CRITICAL(&s_leave_lock);
+    ctx = s_leave_ctx_by_token[token];
+    s_leave_ctx_by_token[token] = NULL;
+    portEXIT_CRITICAL(&s_leave_lock);
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    bool cleanup_ok = leave_cleanup_stack_state(ctx, "timeout");
+    if (cleanup_ok) {
+        gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "device remains quarantined after forced remove");
+        leave_finalize_success(ctx, "timeout forced remove");
+    }
+    free(ctx);
+}
 
 static void leave_resp_cb(esp_zb_zdp_status_t zdo_status, void *user_ctx)
 {
@@ -65,23 +176,34 @@ static void leave_resp_cb(esp_zb_zdp_status_t zdo_status, void *user_ctx)
                        ctx->short_addr,
                        msg);
     if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        (void)gw_zb_model_remove_device(&ctx->uid);
-        (void)gw_device_registry_remove(&ctx->uid);
-        gw_zigbee_uart_send_event(GW_PROTO_EVENT_DEVICE_LEAVE,
-                                  ctx->uid.uid,
-                                  ctx->short_addr,
-                                  0,
-                                  0,
-                                  0,
-                                  GW_PROTO_EVENT_VALUE_TEXT,
-                                  false,
-                                  0,
-                                  0.0f,
-                                  NULL,
-                                  msg);
-        gw_zigbee_request_snapshot_refresh();
+        gw_zigbee_lock();
+        esp_zb_scheduler_alarm_cancel(leave_timeout_cb, ctx->token);
+        gw_zigbee_unlock();
+
+        portENTER_CRITICAL(&s_leave_lock);
+        if (s_leave_ctx_by_token[ctx->token] == ctx) {
+            s_leave_ctx_by_token[ctx->token] = NULL;
+        }
+        portEXIT_CRITICAL(&s_leave_lock);
+
+        bool cleanup_ok = leave_cleanup_stack_state(ctx, "leave_ok");
+        if (cleanup_ok && ctx->was_quarantined_before) {
+            esp_err_t quarantine_err = gw_deleted_devices_remove(&ctx->uid);
+            if (quarantine_err == ESP_OK) {
+                gw_zigbee_log_diag("leave_unquarantined", ctx->uid.uid, ctx->short_addr, "removed from quarantine after leave_ok cleanup");
+            } else if (quarantine_err != ESP_ERR_NOT_FOUND) {
+                char qmsg[64];
+                (void)snprintf(qmsg, sizeof(qmsg), "quarantine remove failed: %s", esp_err_to_name(quarantine_err));
+                gw_zigbee_log_diag("leave_unquarantine_failed", ctx->uid.uid, ctx->short_addr, qmsg);
+            }
+        } else if (!cleanup_ok) {
+            gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "cleanup failed after leave_ok; device remains quarantined");
+        } else {
+            gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "initial delete path completed; device remains quarantined");
+        }
+        leave_finalize_success(ctx, msg);
+        free(ctx);
     }
-    free(ctx);
 }
 
 static void leave_send_cb(uint8_t token)
@@ -90,7 +212,6 @@ static void leave_send_cb(uint8_t token)
 
     portENTER_CRITICAL(&s_leave_lock);
     ctx = s_leave_ctx_by_token[token];
-    s_leave_ctx_by_token[token] = NULL;
     portEXIT_CRITICAL(&s_leave_lock);
 
     if (ctx == NULL) {
@@ -122,9 +243,16 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
     ctx->req.dst_nwk_addr = short_addr;
     ctx->req.remove_children = 0;
     ctx->req.rejoin = rejoin ? 1 : 0;
+    ctx->was_quarantined_before = gw_deleted_devices_contains(uid);
 
     uint8_t token = 0;
     portENTER_CRITICAL(&s_leave_lock);
+    if (leave_ctx_exists_for_uid(uid)) {
+        portEXIT_CRITICAL(&s_leave_lock);
+        gw_zigbee_log_diag("leave_already_pending", uid->uid, short_addr, rejoin ? "rejoin=1" : "rejoin=0");
+        free(ctx);
+        return ESP_OK;
+    }
     s_leave_token++;
     if (s_leave_token == 0) {
         s_leave_token++;
@@ -135,13 +263,29 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
         free(ctx);
         return ESP_FAIL;
     }
+    ctx->token = token;
     s_leave_ctx_by_token[token] = ctx;
     portEXIT_CRITICAL(&s_leave_lock);
+
+    {
+        const uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+        esp_err_t mark_err = gw_deleted_devices_add(uid, ts_ms);
+        if (mark_err != ESP_OK) {
+            char msg[64];
+            (void)snprintf(msg, sizeof(msg), "failed to quarantine uid: %s", esp_err_to_name(mark_err));
+            gw_zigbee_log_diag("leave_quarantine_failed", uid->uid, short_addr, msg);
+        } else {
+            gw_zigbee_log_diag("leave_quarantined", uid->uid, short_addr, "marked deleted");
+        }
+    }
+
+    purge_local_device_state(uid);
 
     gw_zigbee_log_diag("leave_requested", uid->uid, short_addr, rejoin ? "rejoin=1" : "rejoin=0");
 
     gw_zigbee_lock();
     esp_zb_scheduler_alarm(leave_send_cb, token, 0);
+    esp_zb_scheduler_alarm(leave_timeout_cb, token, GW_LEAVE_TIMEOUT_MS);
     gw_zigbee_unlock();
     return ESP_OK;
 }

@@ -373,6 +373,32 @@ static esp_err_t ws_snapshot_emit_sync_req(void *emit_ctx,
     return ws_send_proto_frame_sync(req, msg_type, seq, payload, payload_len);
 }
 
+static bool ws_is_command_type(uint8_t type)
+{
+    switch (type) {
+        case GW_PROTO_MSG_CMD_PERMIT_JOIN:
+        case GW_PROTO_MSG_CMD_DEVICE_RENAME:
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE:
+        case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL:
+        case GW_PROTO_MSG_CMD_GROUP_CREATE:
+        case GW_PROTO_MSG_CMD_GROUP_RENAME:
+        case GW_PROTO_MSG_CMD_GROUP_DELETE:
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_SET:
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE:
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER:
+        case GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL:
+        case GW_PROTO_MSG_CMD_SETTINGS_SET:
+        case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED:
+        case GW_PROTO_MSG_CMD_AUTOMATION_REMOVE:
+        case GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL:
+        case GW_PROTO_MSG_CMD_AUTOMATION_SAVE:
+        case GW_PROTO_MSG_CMD_ACTION_EXEC:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static esp_err_t ws_remove_all_automations(void)
 {
     const size_t count = gw_model_count_automations();
@@ -818,6 +844,14 @@ static esp_err_t ws_handler(httpd_req_t *req)
                     err = ws_send_proto_snapshot_sync(req, fd);
                 } else {
                     err = ws_handle_proto_command(hdr.type, payload, hdr.len);
+                    if (err != ESP_OK && ws_is_command_type(hdr.type)) {
+                        ESP_LOGW(TAG,
+                                 "WS command failed type=0x%02x fd=%d err=%s",
+                                 (unsigned)hdr.type,
+                                 fd,
+                                 esp_err_to_name(err));
+                        err = ESP_OK;
+                    }
                 }
             }
         }

@@ -95,7 +95,7 @@ void gw_zigbee_log_device_action(const char *stage,
                                  uint32_t arg0,
                                  uint32_t arg1)
 {
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "%s uid=%s short=0x%04x ep=%u cmd=%s cluster=%s arg0=%u arg1=%u",
              stage ? stage : "action",
              uid ? uid : "",
@@ -114,7 +114,7 @@ void gw_zigbee_log_group_action(const char *stage,
                                 uint32_t arg0,
                                 uint32_t arg1)
 {
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "%s group=0x%04x cmd=%s cluster=%s arg0=%u arg1=%u",
              stage ? stage : "action",
              (unsigned)group_id,
@@ -129,7 +129,7 @@ void gw_zigbee_log_diag(const char *kind,
                         uint16_t short_addr,
                         const char *msg)
 {
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "diag=%s uid=%s short=0x%04x %s",
              kind ? kind : "event",
              device_uid ? device_uid : "",
