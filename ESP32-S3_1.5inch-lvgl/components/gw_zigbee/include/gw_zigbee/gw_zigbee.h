@@ -37,8 +37,6 @@ typedef struct {
 esp_err_t gw_zigbee_link_start(void);
 // True after the first complete snapshot has been applied on S3.
 bool gw_zigbee_bootstrap_ready(void);
-// True when initial read_attr warmup task has queued all startup reads.
-bool gw_zigbee_state_warmup_ready(void);
 // Set user device name on C6 by UID.
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name);
 // Remove device from C6 device registry by UID.
@@ -84,6 +82,8 @@ esp_err_t gw_zigbee_group_color_move_to_temp(uint16_t group_id, gw_zigbee_color_
 esp_err_t gw_zigbee_read_onoff_state(const gw_device_uid_t *uid, uint8_t endpoint);
 // Request current value for any attribute from a specific endpoint.
 esp_err_t gw_zigbee_read_attr(const gw_device_uid_t *uid, uint8_t endpoint, uint16_t cluster_id, uint16_t attr_id);
+// Ask the C6 peer to poll all known stateful endpoint attributes and stream results back as normal attr reports.
+esp_err_t gw_zigbee_request_state_sync(void);
 
 // Scenes (group-based).
 esp_err_t gw_zigbee_scene_store(uint16_t group_id, uint8_t scene_id);

@@ -21,6 +21,13 @@
 #include "gw_core/types.h"
 #include "gw_proto/gw_proto_uart.h"
 #include "gw_zigbee/gw_zigbee.h"
+#include "zcl/esp_zigbee_zcl_color_control.h"
+#include "zcl/esp_zigbee_zcl_common.h"
+#include "zcl/esp_zigbee_zcl_humidity_meas.h"
+#include "zcl/esp_zigbee_zcl_level.h"
+#include "zcl/esp_zigbee_zcl_on_off.h"
+#include "zcl/esp_zigbee_zcl_power_config.h"
+#include "zcl/esp_zigbee_zcl_temperature_meas.h"
 
 #define GW_UART_PORT UART_NUM_1
 #define GW_UART_BAUD 230400
@@ -33,12 +40,14 @@ static TaskHandle_t s_rx_task;
 static TaskHandle_t s_snapshot_task;
 static TaskHandle_t s_tx_task;
 static TaskHandle_t s_remove_all_task;
+static TaskHandle_t s_state_sync_task;
 static SemaphoreHandle_t s_tx_lock;
 static uint16_t s_evt_seq = 1;
 static portMUX_TYPE s_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_snapshot_requested;
 static volatile bool s_snapshot_tx_active;
 static volatile bool s_snapshot_ready;
+static volatile bool s_state_sync_requested;
 static esp_timer_handle_t s_snapshot_debounce_timer;
 static QueueHandle_t s_tx_queue;
 static SemaphoreHandle_t s_ack_sem;
@@ -52,6 +61,13 @@ static const uint32_t GW_REMOVE_ALL_STEP_MS = 6000;
 static const size_t GW_UART_TX_QUEUE_LEN = 32;
 static const uint32_t GW_SNAPSHOT_ACK_TIMEOUT_MS = 350;
 static const uint8_t GW_SNAPSHOT_ACK_RETRIES = 6;
+
+#define GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT 0x0400
+#define GW_ZB_CLUSTER_PRESSURE_MEASUREMENT    0x0403
+#define GW_ZB_CLUSTER_OCCUPANCY_SENSING       0x0406
+#define GW_ZB_ATTR_MEASURED_VALUE             0x0000
+#define GW_ZB_ATTR_OCCUPANCY                  0x0000
+#define GW_ZB_ATTR_BATTERY_VOLTAGE            0x0020
 
 typedef struct {
     size_t len;
@@ -90,9 +106,11 @@ static esp_err_t uart_send_frame_sync(uint8_t msg_type, uint16_t seq, const void
 static void snapshot_request_async(void);
 static void snapshot_request_debounced(void);
 static void snapshot_debounce_timer_cb(void *arg);
+static void state_sync_request_async(void);
 static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame);
 static void uart_tx_task(void *arg);
 static void remove_all_task(void *arg);
+static void uart_state_sync_task(void *arg);
 
 #if defined(UART_SCLK_XTAL)
 #define GW_UART_SCLK_SRC UART_SCLK_XTAL
@@ -147,6 +165,8 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_CMD_COLOR_XY";
         case GW_PROTO_MSG_CMD_COLOR_TEMP:
             return "PROTO_CMD_COLOR_TEMP";
+        case GW_PROTO_MSG_CMD_STATE_SYNC:
+            return "PROTO_CMD_STATE_SYNC";
         case GW_PROTO_MSG_EVENT_ZB:
             return "PROTO_EVENT_ZB";
         case GW_PROTO_MSG_LINK_ACK:
@@ -293,6 +313,66 @@ static void snapshot_debounce_timer_cb(void *arg)
 {
     (void)arg;
     snapshot_request_async();
+}
+
+static bool endpoint_has_cluster(const gw_device_endpoint_t *ep, uint16_t cluster_id)
+{
+    if (!ep || cluster_id == 0) {
+        return false;
+    }
+    for (uint8_t i = 0; i < ep->in_cluster_count && i < GW_DEVICE_MAX_CLUSTERS; ++i) {
+        if (ep->in_clusters[i] == cluster_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t request_endpoint_state(const gw_device_uid_t *uid, uint8_t endpoint, const gw_device_endpoint_t *ep)
+{
+    if (!uid || !uid->uid[0] || endpoint == 0 || !ep) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t first_err = ESP_OK;
+    const struct {
+        uint16_t cluster_id;
+        uint16_t attr_id;
+    } reqs[] = {
+        { ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID },
+        { ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG, GW_ZB_ATTR_BATTERY_VOLTAGE },
+        { GW_ZB_CLUSTER_OCCUPANCY_SENSING, GW_ZB_ATTR_OCCUPANCY },
+        { GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT, GW_ZB_ATTR_MEASURED_VALUE },
+        { GW_ZB_CLUSTER_PRESSURE_MEASUREMENT, GW_ZB_ATTR_MEASURED_VALUE },
+    };
+
+    for (size_t i = 0; i < sizeof(reqs) / sizeof(reqs[0]); ++i) {
+        if (!endpoint_has_cluster(ep, reqs[i].cluster_id)) {
+            continue;
+        }
+        esp_err_t err = gw_zigbee_read_attr(uid, endpoint, reqs[i].cluster_id, reqs[i].attr_id);
+        if (err != ESP_OK && first_err == ESP_OK) {
+            first_err = err;
+        }
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+
+    return first_err;
+}
+
+static void state_sync_request_async(void)
+{
+    s_state_sync_requested = true;
+    if (s_state_sync_task) {
+        xTaskNotifyGive(s_state_sync_task);
+    }
 }
 
 static void snapshot_request_debounced(void)
@@ -496,6 +576,49 @@ static void remove_all_task(void *arg)
     }
 }
 
+static void uart_state_sync_task(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!s_state_sync_requested) {
+            continue;
+        }
+
+        while (s_state_sync_requested) {
+            s_state_sync_requested = false;
+
+            const size_t dev_count = gw_device_registry_count();
+            size_t endpoint_count = 0;
+            ESP_LOGI(TAG, "state sync begin: devices=%u", (unsigned)dev_count);
+
+            for (size_t di = 0; di < dev_count; ++di) {
+                gw_device_full_t device = {0};
+                if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
+                    continue;
+                }
+                if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
+                    continue;
+                }
+
+                for (uint8_t ep_idx = 0; ep_idx < device.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ++ep_idx) {
+                    const uint8_t endpoint = (uint8_t)(ep_idx + 1u);
+                    const gw_device_endpoint_t *ep = &device.endpoints[ep_idx];
+                    if (ep->profile_id == 0 && ep->device_id == 0 &&
+                        ep->in_cluster_count == 0 && ep->out_cluster_count == 0) {
+                        continue;
+                    }
+                    (void)request_endpoint_state(&device.device_uid, endpoint, ep);
+                    endpoint_count++;
+                }
+            }
+
+            ESP_LOGI(TAG, "state sync queued: endpoints=%u", (unsigned)endpoint_count);
+        }
+    }
+}
+
 static void uart_send_proto_cmd_result(uint16_t seq, esp_err_t err)
 {
     gw_proto_cmd_result_v1_t rsp = {
@@ -534,6 +657,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         case GW_PROTO_MSG_CMD_LEVEL:
         case GW_PROTO_MSG_CMD_COLOR_XY:
         case GW_PROTO_MSG_CMD_COLOR_TEMP:
+        case GW_PROTO_MSG_CMD_STATE_SYNC:
         case GW_PROTO_MSG_CMD_IDENTIFY:
         case GW_PROTO_MSG_CMD_BIND:
         case GW_PROTO_MSG_CMD_UNBIND:
@@ -693,6 +817,10 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             return gw_zigbee_color_move_to_temp(&msg->device_uid, msg->endpoint, ct);
         }
 
+        case GW_PROTO_MSG_CMD_STATE_SYNC:
+            state_sync_request_async();
+            return ESP_OK;
+
         case GW_PROTO_MSG_CMD_IDENTIFY:
         case GW_PROTO_MSG_CMD_BIND:
         case GW_PROTO_MSG_CMD_UNBIND:
@@ -788,6 +916,9 @@ esp_err_t gw_uart_link_start(void)
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(remove_all_task, "uart_rm_all", 4096, NULL, 5, &s_remove_all_task) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xTaskCreate(uart_state_sync_task, "uart_state", 4096, NULL, 5, &s_state_sync_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(uart_rx_task, "uart_rx", 4096, NULL, 6, &s_rx_task) != pdPASS) {

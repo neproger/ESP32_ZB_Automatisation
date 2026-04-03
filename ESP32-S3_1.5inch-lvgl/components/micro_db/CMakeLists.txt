@@ -1,9 +1,11 @@
 idf_component_register(
     SRCS
         "src/micro_db_core.c"
+        "src/micro_db_flash.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         esp_common
-        nvs_flash
+        esp_partition
+        spi_flash
 )

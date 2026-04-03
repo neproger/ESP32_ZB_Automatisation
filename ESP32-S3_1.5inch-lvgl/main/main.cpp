@@ -5,13 +5,11 @@
 #include "gw_http/gw_http.h"
 #include "s3_weather_service.h"
 #include "gw_core/gw_proto_bus.h"
-#include "gw_core/sensor_store.h"
 #include "gw_core/rules_engine.h"
 #include "gw_core/net_time.h"
 #include "gw_core/gw_proto.h"
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_proto/gw_proto_frame.h"
-#include "gw_proto/gw_proto_map.h"
 #include "gw_model/gw_model.h"
 
 #include "esp_log.h"
@@ -100,18 +98,14 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_proto_bus_init());
     log_struct_sizes_once();
-    // Temporary model-first bringup: boot UI on gw_model without legacy stores.
     esp_log_level_set("gw_zigbee_uart", ESP_LOG_INFO);
     esp_log_level_set("gw_event", ESP_LOG_WARN);
     esp_log_level_set("s3_weather_svc", ESP_LOG_WARN);
     esp_log_level_set("s3_weather_http", ESP_LOG_WARN);
     esp_log_level_set("gw_net_time", ESP_LOG_WARN);
 
-    ESP_ERROR_CHECK(gw_sensor_store_init());
     ESP_ERROR_CHECK(gw_model_init());
     ESP_ERROR_CHECK(gw_rules_init());
-
-    ESP_LOGW(TAG_APP, "Legacy stores and legacy runtime are disabled for gw_model bringup");
 
     if (kEnableZigbeeRuntime) {
         esp_err_t zb_link_err = gw_zigbee_link_start();
@@ -142,7 +136,7 @@ extern "C" void app_main(void)
     if (kEnableHttpServer) {
         ESP_LOGI(TAG_APP, "HTTP start deferred until UI init completes");
     } else {
-        ESP_LOGW(TAG_APP, "HTTP/WS disabled for model-first bringup");
+        ESP_LOGW(TAG_APP, "HTTP/WS disabled");
     }
 
     // Bring up display/LVGL/UI at the end on a dedicated internal-RAM stack.

@@ -17,7 +17,7 @@ extern "C" {
 
 typedef enum {
     MICRO_DB_BACKING_NONE = 0,
-    MICRO_DB_BACKING_NVS = 1 << 0,
+    MICRO_DB_BACKING_FLASH = 1 << 0,
     MICRO_DB_BACKING_RAM = 1 << 1,
 } micro_db_backing_t;
 

@@ -93,10 +93,11 @@ typedef enum {
     GW_PROTO_MSG_CMD_UNBIND = 0x6B,
     GW_PROTO_MSG_CMD_SCENE_STORE = 0x6C,
     GW_PROTO_MSG_CMD_SCENE_RECALL = 0x6D,
-    GW_PROTO_MSG_EVENT_ZB = 0x6E,
-    GW_PROTO_MSG_EVENT_TRACE = 0x6F,
+    GW_PROTO_MSG_CMD_STATE_SYNC = 0x6E,
+    GW_PROTO_MSG_EVENT_ZB = 0x6F,
+    GW_PROTO_MSG_EVENT_TRACE = 0x70,
     // Transport-level ACK used by the C6 topology snapshot stop-and-wait flow.
-    GW_PROTO_MSG_LINK_ACK = 0x70,
+    GW_PROTO_MSG_LINK_ACK = 0x71,
 } gw_proto_msg_type_t;
 
 typedef enum {

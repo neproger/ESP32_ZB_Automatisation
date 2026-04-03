@@ -4,8 +4,7 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "nvs.h"
-#include "nvs_flash.h"
+#include "micro_db/micro_db_flash.h"
 
 enum {
     INDEX_EMPTY = 0,
@@ -13,19 +12,7 @@ enum {
     INDEX_TOMBSTONE = 2,
 };
 
-typedef struct {
-    uint32_t magic;
-    uint16_t format_version;
-    uint16_t reserved0;
-    uint32_t record_size;
-    uint32_t capacity;
-    uint32_t live_count;
-} micro_db_persist_hdr_t;
-
 static const char *TAG = "micro_db";
-static const char *MICRO_DB_NVS_NS = "micro_db";
-static const uint32_t MICRO_DB_PERSIST_MAGIC = 0x4D444231u; /* MDB1 */
-static const uint16_t MICRO_DB_PERSIST_VERSION = 1u;
 
 static uint32_t hash_bytes(const void *data, size_t len)
 {
@@ -159,55 +146,35 @@ static esp_err_t rebuild_runtime_state(micro_db_table_t *table)
     return ESP_OK;
 }
 
-static esp_err_t persist_table_image(micro_db_table_t *table)
+static bool table_is_flash_backed(const micro_db_table_t *table)
 {
-    if (!table || !table->initialized || !table->schema) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if ((table->schema->backing & MICRO_DB_BACKING_NVS) == 0 || !table->schema->persist_key) {
+    return table && table->initialized && table->schema &&
+           ((table->schema->backing & MICRO_DB_BACKING_FLASH) != 0) &&
+           table->schema->persist_key != NULL;
+}
+
+static esp_err_t persist_slot(const micro_db_table_t *table, uint32_t slot)
+{
+    if (!table_is_flash_backed(table)) {
         return ESP_OK;
     }
+    return micro_db_flash_write_slot(table, slot);
+}
 
-    nvs_handle_t handle = 0;
-    esp_err_t err = nvs_open(MICRO_DB_NVS_NS, NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        return err;
+static esp_err_t persist_slot_used(const micro_db_table_t *table, uint32_t slot)
+{
+    if (!table_is_flash_backed(table)) {
+        return ESP_OK;
     }
+    return micro_db_flash_write_slot_used(table, slot);
+}
 
-    const micro_db_persist_hdr_t hdr = {
-        .magic = MICRO_DB_PERSIST_MAGIC,
-        .format_version = MICRO_DB_PERSIST_VERSION,
-        .reserved0 = 0,
-        .record_size = (uint32_t)table->schema->record_size,
-        .capacity = (uint32_t)table->capacity,
-        .live_count = (uint32_t)table->live_count,
-    };
-
-    const size_t slot_used_size = table->capacity * sizeof(uint8_t);
-    const size_t records_size = table->capacity * table->schema->record_size;
-    const size_t blob_size = sizeof(hdr) + slot_used_size + records_size;
-
-    uint8_t *blob = (uint8_t *)malloc(blob_size);
-    if (!blob) {
-        nvs_close(handle);
-        return ESP_ERR_NO_MEM;
+static esp_err_t persist_meta(const micro_db_table_t *table)
+{
+    if (!table_is_flash_backed(table)) {
+        return ESP_OK;
     }
-
-    size_t off = 0;
-    memcpy(blob + off, &hdr, sizeof(hdr));
-    off += sizeof(hdr);
-    memcpy(blob + off, table->slot_used, slot_used_size);
-    off += slot_used_size;
-    memcpy(blob + off, table->records, records_size);
-
-    err = nvs_set_blob(handle, table->schema->persist_key, blob, blob_size);
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-
-    free(blob);
-    nvs_close(handle);
-    return err;
+    return micro_db_flash_write_meta(table);
 }
 
 static esp_err_t load_table_image(micro_db_table_t *table)
@@ -215,61 +182,15 @@ static esp_err_t load_table_image(micro_db_table_t *table)
     if (!table || !table->initialized || !table->schema) {
         return ESP_ERR_INVALID_STATE;
     }
-    if ((table->schema->backing & MICRO_DB_BACKING_NVS) == 0 || !table->schema->persist_key) {
+    if ((table->schema->backing & MICRO_DB_BACKING_FLASH) == 0 || !table->schema->persist_key) {
         return ESP_OK;
     }
 
-    nvs_handle_t handle = 0;
-    esp_err_t err = nvs_open(MICRO_DB_NVS_NS, NVS_READONLY, &handle);
-    if (err != ESP_OK) {
-        return err;
+    esp_err_t err = micro_db_flash_load_table(table);
+    if (err == ESP_OK) {
+        err = rebuild_runtime_state(table);
     }
-
-    size_t blob_size = 0;
-    err = nvs_get_blob(handle, table->schema->persist_key, NULL, &blob_size);
-    if (err != ESP_OK) {
-        nvs_close(handle);
-        return err;
-    }
-
-    uint8_t *blob = (uint8_t *)malloc(blob_size);
-    if (!blob) {
-        nvs_close(handle);
-        return ESP_ERR_NO_MEM;
-    }
-
-    err = nvs_get_blob(handle, table->schema->persist_key, blob, &blob_size);
-    nvs_close(handle);
-    if (err != ESP_OK) {
-        free(blob);
-        return err;
-    }
-
-    const size_t slot_used_size = table->capacity * sizeof(uint8_t);
-    const size_t records_size = table->capacity * table->schema->record_size;
-    const size_t min_blob_size = sizeof(micro_db_persist_hdr_t) + slot_used_size + records_size;
-    if (blob_size < min_blob_size) {
-        free(blob);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    micro_db_persist_hdr_t hdr = {0};
-    memcpy(&hdr, blob, sizeof(hdr));
-    if (hdr.magic != MICRO_DB_PERSIST_MAGIC ||
-        hdr.format_version != MICRO_DB_PERSIST_VERSION ||
-        hdr.record_size != table->schema->record_size ||
-        hdr.capacity != table->capacity) {
-        free(blob);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    size_t off = sizeof(hdr);
-    memcpy(table->slot_used, blob + off, slot_used_size);
-    off += slot_used_size;
-    memcpy(table->records, blob + off, records_size);
-    free(blob);
-
-    return rebuild_runtime_state(table);
+    return err;
 }
 
 esp_err_t micro_db_table_init(micro_db_table_t *table, const micro_db_table_schema_t *schema)
@@ -308,7 +229,7 @@ esp_err_t micro_db_table_init(micro_db_table_t *table, const micro_db_table_sche
     table->free_count = schema->max_records;
     table->initialized = true;
 
-    if ((schema->backing & MICRO_DB_BACKING_NVS) != 0 && schema->persist_key) {
+    if ((schema->backing & MICRO_DB_BACKING_FLASH) != 0 && schema->persist_key) {
         esp_err_t load_err = load_table_image(table);
         if (load_err == ESP_OK) {
             ESP_LOGI(TAG,
@@ -316,7 +237,18 @@ esp_err_t micro_db_table_init(micro_db_table_t *table, const micro_db_table_sche
                      schema->name ? schema->name : "(unnamed)",
                      (unsigned)table->live_count,
                      (unsigned)table->capacity);
-        } else if (load_err != ESP_ERR_NVS_NOT_FOUND && load_err != ESP_ERR_NOT_FOUND) {
+        } else if (load_err == ESP_ERR_INVALID_RESPONSE || load_err == ESP_ERR_INVALID_SIZE) {
+            ESP_LOGW(TAG,
+                     "persist data corrupt for %s, clearing flash region",
+                     schema->name ? schema->name : "(unnamed)");
+            esp_err_t clear_err = micro_db_flash_clear_table(table);
+            if (clear_err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "failed to clear corrupt region for %s: %s",
+                         schema->name ? schema->name : "(unnamed)",
+                         esp_err_to_name(clear_err));
+            }
+        } else if (load_err != ESP_ERR_NOT_FOUND) {
             ESP_LOGW(TAG,
                      "persist load failed for %s: %s",
                      schema->name ? schema->name : "(unnamed)",
@@ -377,7 +309,10 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
             *out_changed = changed;
         }
         if (changed) {
-            return persist_table_image(table);
+            esp_err_t err = persist_slot(table, (uint32_t)slot_idx);
+            if (err != ESP_OK) {
+                return err;
+            }
         }
         return ESP_OK;
     }
@@ -399,7 +334,15 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     if (out_inserted) {
         *out_inserted = true;
     }
-    return persist_table_image(table);
+    esp_err_t err = persist_slot(table, slot);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = persist_slot_used(table, slot);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return persist_meta(table);
 }
 
 esp_err_t micro_db_table_get(const micro_db_table_t *table,
@@ -455,7 +398,11 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
     if (out_removed) {
         *out_removed = true;
     }
-    return persist_table_image(table);
+    esp_err_t err = persist_slot_used(table, slot);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return persist_meta(table);
 }
 
 size_t micro_db_table_count(const micro_db_table_t *table)

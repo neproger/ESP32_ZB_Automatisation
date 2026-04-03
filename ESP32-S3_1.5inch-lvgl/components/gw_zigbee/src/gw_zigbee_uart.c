@@ -63,7 +63,6 @@ static uint8_t s_snapshot_retry_count;
 static uint16_t s_snapshot_expected_records;
 static uint16_t s_snapshot_received_records;
 static bool s_bootstrap_ready;
-static bool s_initial_state_sync_done;
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_proto_cmd_wait_result(uint8_t proto_type, const void *payload, uint16_t payload_len);
 static esp_err_t request_snapshot_sync(void);
@@ -149,6 +148,8 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_CMD_COLOR_XY";
         case GW_PROTO_MSG_CMD_COLOR_TEMP:
             return "PROTO_CMD_COLOR_TEMP";
+        case GW_PROTO_MSG_CMD_STATE_SYNC:
+            return "PROTO_CMD_STATE_SYNC";
         case GW_PROTO_MSG_EVENT_ZB:
             return "PROTO_EVENT_ZB";
         case GW_PROTO_MSG_LINK_ACK:
@@ -272,7 +273,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
                      evt->value_text,
                      (unsigned long long)evt->ts_ms);
             s_bootstrap_ready = false;
-            s_initial_state_sync_done = false;
             if (!s_snapshot_stream_active) {
                 (void)request_proto_async(GW_PROTO_MSG_SNAPSHOT_REQUEST, NULL, 0, "peer-online snapshot sync");
             }
@@ -323,8 +323,8 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             (void)request_snapshot_sync();
         } else {
             s_bootstrap_ready = true;
-            s_initial_state_sync_done = true;
             ESP_LOGI(TAG, "Topology snapshot applied; gw_model bootstrap ready");
+            (void)request_proto_async(GW_PROTO_MSG_CMD_STATE_SYNC, NULL, 0, "state sync");
         }
     }
 }
@@ -545,11 +545,6 @@ bool gw_zigbee_bootstrap_ready(void)
     return s_bootstrap_ready;
 }
 
-bool gw_zigbee_state_warmup_ready(void)
-{
-    return s_initial_state_sync_done;
-}
-
 esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name)
 {
     if (!uid || !uid->uid[0] || !name) {
@@ -723,6 +718,11 @@ esp_err_t gw_zigbee_read_attr(const gw_device_uid_t *uid, uint8_t endpoint, uint
     req.cluster_id = cluster_id;
     req.attr_id = attr_id;
     return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_READ_ATTR, &req, sizeof(req));
+}
+
+esp_err_t gw_zigbee_request_state_sync(void)
+{
+    return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_STATE_SYNC, NULL, 0);
 }
 
 esp_err_t gw_zigbee_scene_store(uint16_t group_id, uint8_t scene_id)

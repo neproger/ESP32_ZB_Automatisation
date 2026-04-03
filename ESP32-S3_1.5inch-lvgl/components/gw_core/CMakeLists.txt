@@ -1,9 +1,7 @@
 idf_component_register(
     SRCS
-        "src/storage.c"
         "src/gw_proto_bus.c"
         "src/zb_classify.c"
-        "src/sensor_store.c"
         "src/rules_engine.c"
         "src/action_exec.c"
         "src/net_time.c"
@@ -13,8 +11,6 @@ idf_component_register(
         esp_event
         esp_timer
         log
-        nvs_flash
-        spiffs
         esp_netif
         gw_model
         gw_proto
