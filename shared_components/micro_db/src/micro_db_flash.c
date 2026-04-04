@@ -210,6 +210,42 @@ static int find_entry_index(const char *persist_key)
     return -1;
 }
 
+static esp_err_t drop_entry(int idx)
+{
+    if (idx < 0 || idx >= MICRO_DB_FLASH_MAX_TABLES) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_dir.entries[idx].used) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    memset(&s_dir.entries[idx], 0, sizeof(s_dir.entries[idx]));
+    if (s_dir.hdr.entry_count > 0) {
+        s_dir.hdr.entry_count--;
+    }
+    return persist_directory();
+}
+
+static bool entry_region_eraseable(const micro_db_flash_dir_entry_t *entry)
+{
+    if (entry == NULL || s_part == NULL) {
+        return false;
+    }
+    if (entry->region_offset < MICRO_DB_FLASH_DIR_SECTOR) {
+        return false;
+    }
+    if ((entry->region_offset % MICRO_DB_FLASH_SECTOR_SIZE) != 0u) {
+        return false;
+    }
+    if ((entry->region_size % MICRO_DB_FLASH_SECTOR_SIZE) != 0u) {
+        return false;
+    }
+    if ((entry->region_offset + entry->region_size) > s_part->size) {
+        return false;
+    }
+    return true;
+}
+
 static esp_err_t allocate_entry(const micro_db_table_t *table, int *out_index)
 {
     if (!table || !table->schema || !table->schema->persist_key || !out_index) {
@@ -253,6 +289,25 @@ static esp_err_t allocate_entry(const micro_db_table_t *table, int *out_index)
         }
 
         err = write_zeros(table_slot_used_offset(entry), table->capacity * sizeof(uint8_t));
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        err = write_zeros(table_records_offset(entry),
+                          (size_t)table->capacity * table->schema->record_size);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        const micro_db_flash_table_hdr_t hdr = {
+            .magic = MICRO_DB_FLASH_TABLE_MAGIC,
+            .version = MICRO_DB_FLASH_LAYOUT_VERSION,
+            .reserved0 = 0,
+            .record_size = (uint32_t)table->schema->record_size,
+            .capacity = (uint32_t)table->capacity,
+            .live_count = 0,
+        };
+        err = patch_partition(entry->region_offset, &hdr, sizeof(hdr));
         if (err != ESP_OK) {
             return err;
         }
@@ -375,8 +430,38 @@ esp_err_t micro_db_flash_persist_table(const micro_db_table_t *table)
 
 esp_err_t micro_db_flash_clear_table(const micro_db_table_t *table)
 {
+    if (!table || !table->schema || !table->schema->persist_key) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = ensure_ready();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    int idx = find_entry_index(table->schema->persist_key);
     micro_db_flash_dir_entry_t *entry = NULL;
-    esp_err_t err = get_or_create_entry(table, true, &entry);
+    if (idx >= 0) {
+        micro_db_flash_dir_entry_t *existing = &s_dir.entries[idx];
+        const bool schema_matches =
+            existing->record_size == table->schema->record_size &&
+            existing->capacity == table->capacity;
+
+        if (schema_matches && entry_region_eraseable(existing)) {
+            err = esp_partition_erase_range(s_part, existing->region_offset, existing->region_size);
+            if (err == ESP_OK) {
+                entry = existing;
+                goto write_fresh_image;
+            }
+        }
+
+        err = drop_entry(idx);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    err = get_or_create_entry(table, true, &entry);
     if (err != ESP_OK) {
         return err;
     }
@@ -386,6 +471,7 @@ esp_err_t micro_db_flash_clear_table(const micro_db_table_t *table)
         return err;
     }
 
+write_fresh_image:
     err = micro_db_flash_write_meta(table);
     if (err != ESP_OK) {
         return err;

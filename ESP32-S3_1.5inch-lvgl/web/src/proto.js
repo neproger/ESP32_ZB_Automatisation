@@ -40,6 +40,7 @@ export const GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL = 0x5e
 export const GW_PROTO_MSG_CMD_AUTOMATION_SAVE = 0x5f
 export const GW_PROTO_MSG_CMD_ACTION_EXEC = 0x60
 export const GW_PROTO_MSG_EVENT_TRACE = 0x70
+export const GW_PROTO_MSG_CMD_FACTORY_RESET = 0x72
 
 export const GW_PROTO_SYNC_SCOPE_FULL = 1
 export const GW_PROTO_SYNC_SCOPE_DEVICES = 2
@@ -444,6 +445,10 @@ export function protoEncodeSettingsSet(settings, seq = 1) {
   view.setUint8(HDR_SIZE + 12, settings?.timezone_auto ? 1 : 0)
   view.setInt16(HDR_SIZE + 14, Number(settings?.timezone_offset_min) || 0, true)
   return buf
+}
+
+export function protoEncodeFactoryReset(seq = 1) {
+  return encodeProtoFrame(GW_PROTO_MSG_CMD_FACTORY_RESET, 4, seq).buf
 }
 
 export function protoEncodeAutomationSetEnabled(id, enabled, seq = 1) {

@@ -42,6 +42,7 @@ esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name
 // Remove device from C6 device registry by UID.
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid);
 esp_err_t gw_zigbee_remove_all_devices(void);
+esp_err_t gw_zigbee_factory_reset_peer(void);
 // Push active S3 Wi-Fi credentials to C6 cloud client (ssid\0password).
 esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *password);
 // Ask C6 to (re)start internet-backed timers/services (time sync, weather updates).

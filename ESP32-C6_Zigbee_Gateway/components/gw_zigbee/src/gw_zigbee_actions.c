@@ -8,7 +8,7 @@
 #include "zcl/esp_zigbee_zcl_level.h"
 #include "zcl/esp_zigbee_zcl_on_off.h"
 
-#include "gw_core/device_registry.h"
+#include "gw_core/c6_store.h"
 #include "gw_zigbee_internal.h"
 
 typedef struct {
@@ -190,7 +190,7 @@ esp_err_t gw_zigbee_read_attr(const gw_device_uid_t *uid, uint8_t endpoint, uint
         return ESP_ERR_INVALID_ARG;
     }
     gw_device_t d = {0};
-    esp_err_t err = gw_device_registry_get(uid, &d);
+    esp_err_t err = gw_c6_store_device_get(uid, &d);
     if (err != ESP_OK) return err;
     if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
 
@@ -214,7 +214,7 @@ esp_err_t gw_zigbee_onoff_cmd(const gw_device_uid_t *uid, uint8_t endpoint, gw_z
 {
     if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0) return ESP_ERR_INVALID_ARG;
     gw_device_t d = {0};
-    esp_err_t err = gw_device_registry_get(uid, &d);
+    esp_err_t err = gw_c6_store_device_get(uid, &d);
     if (err != ESP_OK) return err;
     if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
 
@@ -253,7 +253,7 @@ esp_err_t gw_zigbee_level_move_to_level(const gw_device_uid_t *uid, uint8_t endp
 {
     if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0 || level.level > 254) return ESP_ERR_INVALID_ARG;
     gw_device_t d = {0};
-    esp_err_t err = gw_device_registry_get(uid, &d);
+    esp_err_t err = gw_c6_store_device_get(uid, &d);
     if (err != ESP_OK) return err;
     if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
     gw_zb_action_ctx_t *ctx = (gw_zb_action_ctx_t *)calloc(1, sizeof(*ctx));
@@ -268,7 +268,7 @@ esp_err_t gw_zigbee_level_move_to_level(const gw_device_uid_t *uid, uint8_t endp
 esp_err_t gw_zigbee_color_move_to_xy(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_xy_t color)
 {
     if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0) return ESP_ERR_INVALID_ARG;
-    gw_device_t d = {0}; esp_err_t err = gw_device_registry_get(uid, &d); if (err != ESP_OK) return err; if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
+    gw_device_t d = {0}; esp_err_t err = gw_c6_store_device_get(uid, &d); if (err != ESP_OK) return err; if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
     gw_zb_action_ctx_t *ctx = (gw_zb_action_ctx_t *)calloc(1, sizeof(*ctx)); if (!ctx) return ESP_ERR_NO_MEM;
     ctx->endpoint = endpoint; ctx->short_addr = d.short_addr; ctx->address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT; ctx->uid = *uid; ctx->type = GW_ZB_ACTION_COLOR_MOVE_TO_XY; ctx->u.color_xy.x = color.x; ctx->u.color_xy.y = color.y; ctx->u.color_xy.transition_ds = transition_ms_to_ds(color.transition_ms);
     uint8_t token = 0; portENTER_CRITICAL(&s_action_lock); s_action_token++; if (s_action_token == 0) s_action_token++; token = s_action_token; if (s_action_ctx_by_token[token] != NULL) { portEXIT_CRITICAL(&s_action_lock); free(ctx); return ESP_FAIL; } s_action_ctx_by_token[token] = ctx; portEXIT_CRITICAL(&s_action_lock);
@@ -279,7 +279,7 @@ esp_err_t gw_zigbee_color_move_to_xy(const gw_device_uid_t *uid, uint8_t endpoin
 esp_err_t gw_zigbee_color_move_to_temp(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_temp_t temp)
 {
     if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0) return ESP_ERR_INVALID_ARG;
-    gw_device_t d = {0}; esp_err_t err = gw_device_registry_get(uid, &d); if (err != ESP_OK) return err; if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
+    gw_device_t d = {0}; esp_err_t err = gw_c6_store_device_get(uid, &d); if (err != ESP_OK) return err; if (d.short_addr == 0 || d.short_addr == 0xFFFF) return ESP_ERR_INVALID_STATE;
     gw_zb_action_ctx_t *ctx = (gw_zb_action_ctx_t *)calloc(1, sizeof(*ctx)); if (!ctx) return ESP_ERR_NO_MEM;
     ctx->endpoint = endpoint; ctx->short_addr = d.short_addr; ctx->address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT; ctx->uid = *uid; ctx->type = GW_ZB_ACTION_COLOR_MOVE_TO_TEMP; ctx->u.color_temp.mireds = temp.mireds; ctx->u.color_temp.transition_ds = transition_ms_to_ds(temp.transition_ms);
     uint8_t token = 0; portENTER_CRITICAL(&s_action_lock); s_action_token++; if (s_action_token == 0) s_action_token++; token = s_action_token; if (s_action_ctx_by_token[token] != NULL) { portEXIT_CRITICAL(&s_action_lock); free(ctx); return ESP_FAIL; } s_action_ctx_by_token[token] = ctx; portEXIT_CRITICAL(&s_action_lock);

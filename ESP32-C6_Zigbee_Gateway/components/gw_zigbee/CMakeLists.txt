@@ -4,6 +4,7 @@ idf_component_register(
         "src/gw_zigbee_discovery.c"
         "src/gw_zigbee_actions.c"
         "src/gw_zigbee_admin.c"
+        "src/gw_zigbee_events.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES

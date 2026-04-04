@@ -15,9 +15,8 @@
 #include "test/esp_zigbee_test_utils.h"
 #include "zdo/esp_zigbee_zdo_command.h"
 
-#include "gw_core/device_registry.h"
+#include "gw_core/c6_store.h"
 #include "gw_core/deleted_devices.h"
-#include "gw_core/zb_model.h"
 #include "gw_zigbee_internal.h"
 
 static const char *TAG = "gw_zigbee";
@@ -108,7 +107,7 @@ static void leave_finalize_success(gw_zb_leave_ctx_t *ctx, const char *msg)
         return;
     }
 
-    (void)gw_device_registry_remove_full(&ctx->uid);
+    (void)gw_c6_store_device_remove(&ctx->uid);
     gw_zigbee_uart_send_event(GW_PROTO_EVENT_DEVICE_LEAVE,
                               ctx->uid.uid,
                               ctx->short_addr,
@@ -130,7 +129,7 @@ static void purge_local_device_state(const gw_device_uid_t *uid)
         return;
     }
 
-    esp_err_t remove_err = gw_device_registry_remove_full(uid);
+    esp_err_t remove_err = gw_c6_store_device_remove(uid);
     ESP_LOGI(TAG,
              "purge local state uid=%s full_remove=%s",
              uid->uid,
@@ -432,7 +431,7 @@ esp_err_t gw_zigbee_bind(const gw_device_uid_t *src_uid,
     }
 
     gw_device_t src = {0};
-    if (gw_device_registry_get(src_uid, &src) != ESP_OK || src.short_addr == 0 || src.short_addr == 0xFFFF) {
+    if (gw_c6_store_device_get(src_uid, &src) != ESP_OK || src.short_addr == 0 || src.short_addr == 0xFFFF) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -468,7 +467,7 @@ esp_err_t gw_zigbee_unbind(const gw_device_uid_t *src_uid,
     }
 
     gw_device_t src = {0};
-    if (gw_device_registry_get(src_uid, &src) != ESP_OK || src.short_addr == 0 || src.short_addr == 0xFFFF) {
+    if (gw_c6_store_device_get(src_uid, &src) != ESP_OK || src.short_addr == 0 || src.short_addr == 0xFFFF) {
         return ESP_ERR_INVALID_STATE;
     }
 

@@ -31,10 +31,10 @@
 #include "zboss_api.h"
 
 #include "gw_zigbee/gw_zigbee.h"
+#include "gw_zigbee/gw_zigbee_events.h"
+#include "gw_core/c6_store.h"
 #include "gw_core/deleted_devices.h"
-#include "gw_core/device_registry.h"
 #include "gw_proto/gw_proto.h"
-#include "gw_core/zb_model.h"
 #include "gw_uart_link.h"
 
 #include "zcl/esp_zigbee_zcl_command.h"
@@ -57,18 +57,18 @@ static const char *TAG = "ESP_ZB_GATEWAY";
 #define GW_ZB_ATTR_OCCUPANCY                  0x0000
 #define GW_ZB_ATTR_BATTERY_VOLTAGE            0x0020
 
-static void uart_send_zb_event(uint8_t event_kind,
-                               const gw_device_uid_t *uid,
-                               uint16_t short_addr,
-                               uint8_t endpoint,
-                               uint16_t cluster_id,
-                               uint16_t attr_id,
-                               uint8_t value_type,
-                               bool value_bool,
-                               int64_t value_i64,
-                               float value_f32,
-                               const char *cmd,
-                               const char *value_text)
+static void dispatch_runtime_event(uint8_t event_kind,
+                                   const gw_device_uid_t *uid,
+                                   uint16_t short_addr,
+                                   uint8_t endpoint,
+                                   uint16_t cluster_id,
+                                   uint16_t attr_id,
+                                   uint8_t value_type,
+                                   bool value_bool,
+                                   int64_t value_i64,
+                                   float value_f32,
+                                   const char *cmd,
+                                   const char *value_text)
 {
     gw_proto_event_v1_t evt = {0};
     evt.event_id = 0;
@@ -91,7 +91,7 @@ static void uart_send_zb_event(uint8_t event_kind,
     if (value_text) {
         strlcpy(evt.value_text, value_text, sizeof(evt.value_text));
     }
-    (void)gw_uart_link_send_event_zb(&evt);
+    (void)gw_zigbee_handle_event(&evt);
 }
 
 static void uart_send_net_state_online(void)
@@ -107,20 +107,18 @@ static void uart_send_net_state_online(void)
 static bool s_snapshot_runtime_ready_sent;
 static bool s_addr_table_dump_done;
 
-static void ieee_to_uid_string(const esp_zb_ieee_addr_t ieee, char *out, size_t out_len)
+static void dump_address_table_once(void);
+
+static void finish_snapshot_runtime_ready_once(void)
 {
-    if (out == NULL || out_len == 0) {
+    if (s_snapshot_runtime_ready_sent) {
         return;
     }
-    if (ieee == NULL) {
-        out[0] = '\0';
-        return;
-    }
-    (void)snprintf(out,
-                   out_len,
-                   "0x%02x%02x%02x%02x%02x%02x%02x%02x",
-                   ieee[0], ieee[1], ieee[2], ieee[3],
-                   ieee[4], ieee[5], ieee[6], ieee[7]);
+    s_snapshot_runtime_ready_sent = true;
+    gw_uart_link_set_snapshot_ready(true);
+    uart_send_net_state_online();
+    ESP_LOGI(TAG, "zigbee runtime ready");
+    dump_address_table_once();
 }
 
 static void dump_address_table_once(void)
@@ -181,11 +179,7 @@ static void announce_snapshot_runtime_ready_once(void)
     if (s_snapshot_runtime_ready_sent) {
         return;
     }
-    s_snapshot_runtime_ready_sent = true;
-    gw_uart_link_set_snapshot_ready(true);
-    uart_send_net_state_online();
-    ESP_LOGI(TAG, "startup topology bootstrap ready");
-    dump_address_table_once();
+    finish_snapshot_runtime_ready_once();
 }
 
 static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_addr, uint64_t ts_ms)
@@ -195,12 +189,12 @@ static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_ad
     }
 
     gw_device_t d = {0};
-    if (gw_device_registry_get(uid, &d) != ESP_OK) {
+    if (gw_c6_store_device_get(uid, &d) != ESP_OK) {
         return;
     }
     d.short_addr = short_addr;
     d.last_seen_ms = ts_ms;
-    (void)gw_device_registry_upsert(&d);
+    (void)gw_c6_store_device_upsert(&d);
 }
 
 
@@ -248,7 +242,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         gw_device_uid_t uid = {0};
-        if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+        if (!gw_c6_store_find_uid_by_short(src_short, &uid) && src_short != 0) {
             ESP_LOGW(TAG,
                      "attr report from unknown short=0x%04x ep=%u cluster=0x%04x attr=0x%04x, scheduling discovery",
                      (unsigned)src_short,
@@ -328,18 +322,18 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                     vi64 = (int64_t)(*((const uint16_t *)m->attribute.data.value));
                 }
             }
-            uart_send_zb_event(GW_PROTO_EVENT_ATTR_REPORT,
-                               &uid,
-                               src_short,
-                               m->src_endpoint,
-                               cluster_id,
-                               attr_id,
-                               (uint8_t)vtype,
-                               vbool,
-                               vi64,
-                               (float)vf64,
-                               NULL,
-                               vtext);
+            dispatch_runtime_event(GW_PROTO_EVENT_ATTR_REPORT,
+                                   &uid,
+                                   src_short,
+                                   m->src_endpoint,
+                                   cluster_id,
+                                   attr_id,
+                                   (uint8_t)vtype,
+                                   vbool,
+                                   vi64,
+                                   (float)vf64,
+                                   NULL,
+                                   vtext);
         }
 
         return ESP_OK;
@@ -357,7 +351,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         gw_device_uid_t uid = {0};
-        if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+        if (!gw_c6_store_find_uid_by_short(src_short, &uid) && src_short != 0) {
             ESP_LOGW(TAG,
                      "read attr response from unknown short=0x%04x ep=%u cluster=0x%04x, scheduling discovery",
                      (unsigned)src_short,
@@ -461,18 +455,18 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
 
                 if (has_state_update) {
                     touch_device_last_seen(&uid, src_short, ts_ms);
-                    uart_send_zb_event(GW_PROTO_EVENT_ATTR_REPORT,
-                                       &uid,
-                                       src_short,
-                                       m->info.src_endpoint,
-                                       cluster_id,
-                                       attr_id,
-                                       (uint8_t)vtype,
-                                       vbool,
-                                       vi64,
-                                       (float)vf64,
-                                       NULL,
-                                       NULL);
+                    dispatch_runtime_event(GW_PROTO_EVENT_ATTR_REPORT,
+                                           &uid,
+                                           src_short,
+                                           m->info.src_endpoint,
+                                           cluster_id,
+                                           attr_id,
+                                           (uint8_t)vtype,
+                                           vbool,
+                                           vi64,
+                                           (float)vf64,
+                                           NULL,
+                                           NULL);
                 }
             }
         }
@@ -517,23 +511,23 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         gw_device_uid_t uid = {0};
-        if (!gw_zb_model_find_uid_by_short(src_short, &uid) && src_short != 0) {
+        if (!gw_c6_store_find_uid_by_short(src_short, &uid) && src_short != 0) {
             (void)gw_zigbee_discover_by_short(src_short);
         }
 
         const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
-        uart_send_zb_event(GW_PROTO_EVENT_COMMAND,
-                           &uid,
-                           src_short,
-                           m->info.src_endpoint,
-                           m->info.cluster,
-                           0,
-                           GW_PROTO_EVENT_VALUE_NONE,
-                           false,
-                           0,
-                           0.0f,
-                           cmd_name,
-                           NULL);
+        dispatch_runtime_event(GW_PROTO_EVENT_COMMAND,
+                               &uid,
+                               src_short,
+                               m->info.src_endpoint,
+                               m->info.cluster,
+                               0,
+                               GW_PROTO_EVENT_VALUE_NONE,
+                               false,
+                               0,
+                               0.0f,
+                               cmd_name,
+                               NULL);
     }
 
     return ESP_OK;
@@ -569,15 +563,42 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , TAG, "Failed to start Zigbee bdb commissioning");
 }
 
-static void bdb_close_network_cb(uint8_t unused)
+static void ieee_to_uid(esp_zb_ieee_addr_t ieee, gw_device_uid_t *out_uid)
 {
-    (void)unused;
-    esp_err_t err = esp_zb_bdb_close_network();
-    if (err == ESP_OK) {
-        ESP_LOGW(TAG, "Closing permit join after device authorization");
-    } else {
-        ESP_LOGW(TAG, "esp_zb_bdb_close_network() failed after device authorization: %s", esp_err_to_name(err));
+    if (out_uid == NULL) {
+        return;
     }
+    memset(out_uid, 0, sizeof(*out_uid));
+    if (ieee == NULL) {
+        return;
+    }
+    (void)snprintf(out_uid->uid,
+                   sizeof(out_uid->uid),
+                   "0x%02x%02x%02x%02x%02x%02x%02x%02x",
+                   ieee[0], ieee[1], ieee[2], ieee[3],
+                   ieee[4], ieee[5], ieee[6], ieee[7]);
+}
+
+static void dispatch_app_signal_event(uint8_t kind,
+                                      const gw_device_uid_t *uid,
+                                      uint16_t short_addr,
+                                      uint16_t status_code,
+                                      uint16_t aux_u16,
+                                      uint16_t parent_short_addr,
+                                      uint8_t flags)
+{
+    gw_proto_event_v1_t evt = {0};
+    evt.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    evt.event_id_kind = kind;
+    if (uid != NULL) {
+        evt.device_uid = *uid;
+    }
+    evt.short_addr = short_addr;
+    evt.status_code = status_code;
+    evt.aux_u16 = aux_u16;
+    evt.parent_short_addr = parent_short_addr;
+    evt.flags = flags;
+    (void)gw_zigbee_handle_event(&evt);
 }
 
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
@@ -630,50 +651,58 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         break;
     case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:
         dev_annce_params = (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(p_sg_p);
-        ESP_LOGI(TAG, "New device commissioned or rejoined (short: 0x%04hx)", dev_annce_params->device_short_addr);
-        gw_zigbee_on_device_annce(dev_annce_params->ieee_addr, dev_annce_params->device_short_addr, dev_annce_params->capability);
+        {
+            gw_device_uid_t uid = {0};
+            ieee_to_uid(dev_annce_params->ieee_addr, &uid);
+            dispatch_app_signal_event(GW_PROTO_EVENT_DEVICE_ANNCE,
+                                      &uid,
+                                      dev_annce_params->device_short_addr,
+                                      0,
+                                      dev_annce_params->capability,
+                                      0,
+                                      0);
+        }
         break;
     case ESP_ZB_ZDO_SIGNAL_LEAVE_INDICATION: {
         esp_zb_zdo_signal_leave_indication_params_t *params =
             (esp_zb_zdo_signal_leave_indication_params_t *)esp_zb_app_signal_get_params(p_sg_p);
-        char uid[32] = {0};
-        ieee_to_uid_string(params->device_addr, uid, sizeof(uid));
-        ESP_LOGW(TAG,
-                 "leave indication uid=%s short=0x%04hx rejoin=%u status=%s",
-                 uid,
-                 params->short_addr,
-                 (unsigned)params->rejoin,
-                 esp_err_to_name(err_status));
+        gw_device_uid_t uid = {0};
+        ieee_to_uid(params->device_addr, &uid);
+        dispatch_app_signal_event(GW_PROTO_EVENT_LEAVE_INDICATION,
+                                  &uid,
+                                  params->short_addr,
+                                  (uint16_t)err_status,
+                                  0,
+                                  0,
+                                  params->rejoin ? GW_PROTO_EVENT_FLAG_REJOIN : 0);
         break;
     }
     case ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE: {
         esp_zb_zdo_signal_device_update_params_t *params =
             (esp_zb_zdo_signal_device_update_params_t *)esp_zb_app_signal_get_params(p_sg_p);
-        char uid[32] = {0};
-        ieee_to_uid_string(params->long_addr, uid, sizeof(uid));
-        ESP_LOGW(TAG,
-                 "device update uid=%s short=0x%04hx status=0x%02x tc_action=0x%02x parent=0x%04hx status_name=%s",
-                 uid,
-                 params->short_addr,
-                 (unsigned)params->status,
-                 (unsigned)params->tc_action,
-                 params->parent_short,
-                 esp_err_to_name(err_status));
+        gw_device_uid_t uid = {0};
+        ieee_to_uid(params->long_addr, &uid);
+        dispatch_app_signal_event(GW_PROTO_EVENT_DEVICE_UPDATE,
+                                  &uid,
+                                  params->short_addr,
+                                  params->status,
+                                  params->tc_action,
+                                  params->parent_short,
+                                  0);
         break;
     }
     case ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED: {
         esp_zb_zdo_signal_device_authorized_params_t *params =
             (esp_zb_zdo_signal_device_authorized_params_t *)esp_zb_app_signal_get_params(p_sg_p);
-        char uid[32] = {0};
-        ieee_to_uid_string(params->long_addr, uid, sizeof(uid));
-        ESP_LOGW(TAG,
-                 "device authorized uid=%s short=0x%04hx auth_type=0x%02x auth_status=0x%02x",
-                 uid,
-                 params->short_addr,
-                 (unsigned)params->authorization_type,
-                 (unsigned)params->authorization_status);
-        ESP_LOGI(TAG, "Device authorized; closing permit join");
-        esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_close_network_cb, 0, 1);
+        gw_device_uid_t uid = {0};
+        ieee_to_uid(params->long_addr, &uid);
+        dispatch_app_signal_event(GW_PROTO_EVENT_DEVICE_AUTHORIZED,
+                                  &uid,
+                                  params->short_addr,
+                                  params->authorization_status,
+                                  params->authorization_type,
+                                  0,
+                                  0);
         break;
     }
     case ESP_ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
@@ -769,9 +798,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(gw_zb_model_init());
+    ESP_ERROR_CHECK(gw_c6_store_init());
     ESP_ERROR_CHECK(gw_deleted_devices_init());
-    ESP_ERROR_CHECK(gw_device_registry_init());
     ESP_ERROR_CHECK(gw_uart_link_start());
     ESP_LOGI(TAG, "c6 thin zigbee router started");
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG

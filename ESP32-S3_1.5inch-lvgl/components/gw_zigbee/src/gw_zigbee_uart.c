@@ -136,6 +136,8 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_CMD_RESULT";
         case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:
             return "PROTO_CMD_WIFI_CONFIG_SET";
+        case GW_PROTO_MSG_CMD_FACTORY_RESET:
+            return "PROTO_CMD_FACTORY_RESET";
         case GW_PROTO_MSG_CMD_NET_SERVICES_START:
             return "PROTO_CMD_NET_SERVICES_START";
         case GW_PROTO_MSG_CMD_READ_ATTR:
@@ -570,6 +572,12 @@ esp_err_t gw_zigbee_remove_all_devices(void)
 {
     gw_proto_cmd_device_remove_all_v1_t req = {0};
     return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL, &req, sizeof(req));
+}
+
+esp_err_t gw_zigbee_factory_reset_peer(void)
+{
+    gw_proto_cmd_factory_reset_v1_t req = {0};
+    return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_FACTORY_RESET, &req, sizeof(req));
 }
 
 esp_err_t gw_zigbee_set_c6_wifi_credentials(const char *ssid, const char *password)

@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/gw_store_schema.c"
+        "src/gw_store_topology.c"
+        "src/gw_store_hooks_default.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        micro_db
+        gw_proto
+)

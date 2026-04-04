@@ -14,6 +14,7 @@ import {
 	protoEncodeDeviceRemove,
 	protoEncodeDeviceRemoveAll,
 	protoEncodeDeviceRename,
+	protoEncodeFactoryReset,
 	protoEncodePermitJoin,
 	protoEncodeSnapshotRequest,
 	protoFrameToEvent,
@@ -193,6 +194,10 @@ export function GatewayProvider({ children }) {
 		sendProtoCommand(protoEncodeDeviceRemoveAll(nextSeq()))
 	}, [nextSeq, sendProtoCommand])
 
+	const factoryReset = useCallback(async () => {
+		sendProtoCommand(protoEncodeFactoryReset(nextSeq()))
+	}, [nextSeq, sendProtoCommand])
+
 	const setAutomationEnabled = useCallback(async (id, enabled) => {
 		sendProtoCommand(protoEncodeAutomationSetEnabled(id, enabled, nextSeq()))
 	}, [nextSeq, sendProtoCommand])
@@ -227,13 +232,14 @@ export function GatewayProvider({ children }) {
 			renameDevice,
 			removeDevice,
 			removeAllDevices,
+			factoryReset,
 			setAutomationEnabled,
 			removeAutomation,
 			resetAllAutomations,
 			saveAutomation,
 			execActions,
 		}),
-		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations, permitJoin, renameDevice, removeDevice, removeAllDevices, setAutomationEnabled, removeAutomation, resetAllAutomations, saveAutomation, execActions],
+		[devices, automations, events, deviceStates, projectSettings, wsStatus, loadDevices, loadAutomations, permitJoin, renameDevice, removeDevice, removeAllDevices, factoryReset, setAutomationEnabled, removeAutomation, resetAllAutomations, saveAutomation, execActions],
 	)
 
 	return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>

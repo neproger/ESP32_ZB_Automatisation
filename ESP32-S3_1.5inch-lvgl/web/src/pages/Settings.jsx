@@ -10,7 +10,7 @@ function toInt(v, fallback = 0) {
 }
 
 export default function Settings() {
-  const { projectSettings } = useGateway()
+  const { projectSettings, factoryReset } = useGateway()
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -61,6 +61,18 @@ export default function Settings() {
       setStatus(String(e?.message ?? e))
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function onFactoryReset() {
+    const ok = window.confirm('Erase gw_data on S3 and C6, then reboot both devices?')
+    if (!ok) return
+    setStatus('')
+    try {
+      await factoryReset()
+      setStatus('Factory reset requested. Devices will reboot...')
+    } catch (e) {
+      setStatus(String(e?.message ?? e))
     }
   }
 
@@ -126,6 +138,11 @@ export default function Settings() {
         <div className="row">
           <button onClick={onSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save settings'}
+          </button>
+        </div>
+        <div className="row">
+          <button onClick={onFactoryReset}>
+            Factory reset
           </button>
         </div>
       </div>

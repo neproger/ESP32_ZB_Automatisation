@@ -10,6 +10,7 @@ idf_component_register(
         "include"
     REQUIRES
         gw_proto
+        gw_store
     PRIV_REQUIRES
         esp_event
         esp_timer

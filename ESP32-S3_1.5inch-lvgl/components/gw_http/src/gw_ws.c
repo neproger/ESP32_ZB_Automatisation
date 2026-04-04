@@ -9,6 +9,8 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_partition.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -59,6 +61,9 @@ static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
 static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
 static esp_err_t ws_remove_all_automations(void);
+static esp_err_t ws_schedule_factory_reset(void);
+
+static TaskHandle_t s_factory_reset_task;
 
 static bool ws_fd_is_alive(int fd)
 {
@@ -66,6 +71,45 @@ static bool ws_fd_is_alive(int fd)
         return false;
     }
     return httpd_ws_get_fd_info(s_server, fd) == HTTPD_WS_CLIENT_WEBSOCKET;
+}
+
+static void ws_factory_reset_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(700));
+
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "gw_data");
+    if (!part) {
+        ESP_LOGE(TAG, "factory reset failed: gw_data partition not found");
+        s_factory_reset_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGW(TAG, "factory reset: erasing gw_data size=%u", (unsigned)part->size);
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
+        s_factory_reset_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGW(TAG, "factory reset complete, restarting");
+    esp_restart();
+}
+
+static esp_err_t ws_schedule_factory_reset(void)
+{
+    if (s_factory_reset_task != NULL) {
+        return ESP_OK;
+    }
+    if (xTaskCreate(ws_factory_reset_task, "s3_factory_reset", 3072, NULL, 5, &s_factory_reset_task) != pdPASS) {
+        s_factory_reset_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 static void ws_prune_stale_clients_locked(void)
@@ -280,6 +324,16 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
                 return ESP_ERR_INVALID_ARG;
             }
             return gw_model_set_settings(msg, NULL, NULL);
+        }
+        case GW_PROTO_MSG_CMD_FACTORY_RESET: {
+            if (payload_len < sizeof(gw_proto_cmd_factory_reset_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            esp_err_t peer_err = gw_zigbee_factory_reset_peer();
+            if (peer_err != ESP_OK) {
+                ESP_LOGW(TAG, "peer factory reset request failed: %s", esp_err_to_name(peer_err));
+            }
+            return ws_schedule_factory_reset();
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED: {
             if (payload_len < sizeof(gw_proto_cmd_automation_set_enabled_v1_t)) {

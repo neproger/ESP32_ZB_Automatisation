@@ -9,6 +9,7 @@ idf_component_register(
         "src/gw_model_automation.c"
         "src/gw_model_sync.c"
         "src/gw_model_notify.c"
+        "src/gw_model_store_hooks.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -16,4 +17,5 @@ idf_component_register(
         esp_timer
         gw_core
         gw_proto
+        gw_store
 )

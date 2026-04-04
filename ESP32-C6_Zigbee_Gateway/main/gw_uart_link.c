@@ -12,12 +12,14 @@
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "esp_rom_sys.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 #include "esp_zigbee_gateway.h"
+#include "gw_core/c6_store.h"
 #include "gw_core/deleted_devices.h"
-#include "gw_core/device_registry.h"
 #include "gw_proto/gw_proto.h"
 #include "gw_proto/gw_proto_types.h"
 #include "gw_proto/gw_proto_uart.h"
@@ -42,6 +44,7 @@ static TaskHandle_t s_snapshot_task;
 static TaskHandle_t s_tx_task;
 static TaskHandle_t s_remove_all_task;
 static TaskHandle_t s_state_sync_task;
+static TaskHandle_t s_factory_reset_task;
 static SemaphoreHandle_t s_tx_lock;
 static uint16_t s_evt_seq = 1;
 static portMUX_TYPE s_seq_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -62,6 +65,7 @@ static const uint32_t GW_REMOVE_ALL_STEP_MS = 6000;
 static const size_t GW_UART_TX_QUEUE_LEN = 32;
 static const uint32_t GW_SNAPSHOT_ACK_TIMEOUT_MS = 350;
 static const uint8_t GW_SNAPSHOT_ACK_RETRIES = 6;
+static const uint32_t GW_FACTORY_RESET_DELAY_MS = 500;
 
 #define GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT 0x0400
 #define GW_ZB_CLUSTER_PRESSURE_MEASUREMENT    0x0403
@@ -101,6 +105,45 @@ static bool uart_write_all(const uint8_t *data, size_t len)
 
     (void)uart_wait_tx_done(GW_UART_PORT, pdMS_TO_TICKS(20));
     return true;
+}
+
+static void factory_reset_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(GW_FACTORY_RESET_DELAY_MS));
+
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "gw_data");
+    if (!part) {
+        ESP_LOGE(TAG, "factory reset failed: gw_data partition not found");
+        s_factory_reset_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGW(TAG, "factory reset: erasing gw_data size=%u", (unsigned)part->size);
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "factory reset failed: %s", esp_err_to_name(err));
+        s_factory_reset_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGW(TAG, "factory reset complete, restarting");
+    esp_restart();
+}
+
+static esp_err_t schedule_factory_reset(void)
+{
+    if (s_factory_reset_task != NULL) {
+        return ESP_OK;
+    }
+    if (xTaskCreate(factory_reset_task, "gw_factory_reset", 3072, NULL, 5, &s_factory_reset_task) != pdPASS) {
+        s_factory_reset_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 static void uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t uart_send_frame_sync(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
@@ -168,6 +211,8 @@ static const char *msg_type_name(uint8_t t)
             return "PROTO_CMD_COLOR_TEMP";
         case GW_PROTO_MSG_CMD_STATE_SYNC:
             return "PROTO_CMD_STATE_SYNC";
+        case GW_PROTO_MSG_CMD_FACTORY_RESET:
+            return "PROTO_CMD_FACTORY_RESET";
         case GW_PROTO_MSG_EVENT_ZB:
             return "PROTO_EVENT_ZB";
         case GW_PROTO_MSG_LINK_ACK:
@@ -179,13 +224,13 @@ static const char *msg_type_name(uint8_t t)
 
 static esp_err_t uart_send_snapshot(uint16_t base_seq)
 {
-    const size_t raw_dev_count = gw_device_registry_count();
+    const size_t raw_dev_count = gw_c6_store_device_count();
     size_t dev_count = 0;
     size_t endpoint_count = 0;
 
     for (size_t di = 0; di < raw_dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
+        if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         if (gw_deleted_devices_contains(&device.device_uid)) {
@@ -227,7 +272,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
     // Phase 1: send only device topology roots first.
     for (size_t di = 0; di < raw_dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
+        if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         if (gw_deleted_devices_contains(&device.device_uid)) {
@@ -250,7 +295,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
     // Phase 2: stream endpoint metadata for the same device.
     for (size_t di = 0; di < raw_dev_count; ++di) {
         gw_device_full_t device = {0};
-        if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
+        if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         if (gw_deleted_devices_contains(&device.device_uid)) {
@@ -547,11 +592,11 @@ static void remove_all_task(void *arg)
 
         remove_item_t remove_list[GW_DEVICE_MAX_DEVICES] = {0};
         size_t remove_count = 0;
-        const size_t dev_count = gw_device_registry_count();
+        const size_t dev_count = gw_c6_store_device_count();
 
         for (size_t i = 0; i < dev_count && remove_count < GW_DEVICE_MAX_DEVICES; ++i) {
             gw_device_full_t device = {0};
-            if (gw_device_registry_get_full_by_index(i, &device) != ESP_OK) {
+            if (gw_c6_store_device_get_full_by_index(i, &device) != ESP_OK) {
                 continue;
             }
             if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
@@ -564,7 +609,7 @@ static void remove_all_task(void *arg)
 
         // Purge local live/runtime state first so stale NVS-backed devices disappear immediately.
         for (size_t i = 0; i < remove_count; ++i) {
-            (void)gw_device_registry_remove_full(&remove_list[i].uid);
+            (void)gw_c6_store_device_remove(&remove_list[i].uid);
         }
         snapshot_request_async();
 
@@ -600,13 +645,13 @@ static void uart_state_sync_task(void *arg)
         while (s_state_sync_requested) {
             s_state_sync_requested = false;
 
-            const size_t dev_count = gw_device_registry_count();
+            const size_t dev_count = gw_c6_store_device_count();
             size_t endpoint_count = 0;
             ESP_LOGI(TAG, "state sync begin: devices=%u", (unsigned)dev_count);
 
             for (size_t di = 0; di < dev_count; ++di) {
                 gw_device_full_t device = {0};
-                if (gw_device_registry_get_full_by_index(di, &device) != ESP_OK) {
+                if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
                     continue;
                 }
                 if (gw_deleted_devices_contains(&device.device_uid)) {
@@ -676,7 +721,8 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         case GW_PROTO_MSG_CMD_BIND:
         case GW_PROTO_MSG_CMD_UNBIND:
         case GW_PROTO_MSG_CMD_SCENE_STORE:
-        case GW_PROTO_MSG_CMD_SCENE_RECALL: {
+        case GW_PROTO_MSG_CMD_SCENE_RECALL:
+        case GW_PROTO_MSG_CMD_FACTORY_RESET: {
             esp_err_t err = exec_proto_command(frame);
             uart_send_proto_cmd_result(frame->hdr.seq, err);
             break;
@@ -730,7 +776,7 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)frame->payload;
-            return gw_device_registry_set_name(&msg->device_uid, msg->name);
+            return gw_c6_store_device_set_name(&msg->device_uid, msg->name);
         }
 
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
@@ -740,7 +786,7 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)frame->payload;
             ESP_LOGI(TAG, "cmd device_remove uid=%s", msg->device_uid.uid);
             gw_device_full_t device = {0};
-            esp_err_t err = gw_device_registry_get_full(&msg->device_uid, &device);
+            esp_err_t err = gw_c6_store_device_get_full(&msg->device_uid, &device);
             if (err != ESP_OK) {
                 const bool quarantined = gw_deleted_devices_contains(&msg->device_uid);
                 ESP_LOGW(TAG,
@@ -768,6 +814,14 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             }
             xTaskNotifyGive(s_remove_all_task);
             return ESP_OK;
+        }
+
+        case GW_PROTO_MSG_CMD_FACTORY_RESET: {
+            if (frame->hdr.len < sizeof(gw_proto_cmd_factory_reset_v1_t)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            ESP_LOGW(TAG, "cmd factory_reset requested");
+            return schedule_factory_reset();
         }
 
         case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:

@@ -94,6 +94,7 @@ typedef enum {
     GW_PROTO_MSG_EVENT_ZB = 0x6F,
     GW_PROTO_MSG_EVENT_TRACE = 0x70,
     GW_PROTO_MSG_LINK_ACK = 0x71,
+    GW_PROTO_MSG_CMD_FACTORY_RESET = 0x72,
 } gw_proto_msg_type_t;
 
 typedef enum {
@@ -444,6 +445,10 @@ typedef struct GW_PROTO_PACKED {
 typedef struct GW_PROTO_PACKED {
     uint8_t reserved[4];
 } gw_proto_cmd_automation_reset_all_v1_t;
+
+typedef struct GW_PROTO_PACKED {
+    uint8_t reserved[4];
+} gw_proto_cmd_factory_reset_v1_t;
 
 typedef struct GW_PROTO_PACKED {
     uint16_t request_seq;
