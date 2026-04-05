@@ -52,6 +52,15 @@ typedef enum {
     GW_STATE_VALUE_TEXT = 5,
 } gw_state_value_type_t;
 
+typedef enum {
+    GW_DEVICE_STATUS_NONE = 0,
+    GW_DEVICE_STATUS_NEW = 1,
+    GW_DEVICE_STATUS_DISCOVERING = 2,
+    GW_DEVICE_STATUS_READY = 3,
+    GW_DEVICE_STATUS_REMOVING = 4,
+    GW_DEVICE_STATUS_REMOVED = 5,
+} gw_device_status_t;
+
 #ifdef __cplusplus
 }
 #endif

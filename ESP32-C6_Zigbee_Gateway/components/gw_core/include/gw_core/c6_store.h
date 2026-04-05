@@ -6,7 +6,6 @@
 
 #include "esp_err.h"
 
-#include "gw_core/deleted_devices.h"
 #include "gw_core/device_registry.h"
 #include "gw_proto/gw_proto.h"
 
@@ -26,6 +25,7 @@ esp_err_t gw_c6_store_device_get(const gw_device_uid_t *uid, gw_device_t *out_de
 esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full_t *out_device);
 esp_err_t gw_c6_store_device_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device);
 esp_err_t gw_c6_store_device_get_full_by_index(size_t index, gw_device_full_t *out_device);
+esp_err_t gw_c6_store_device_set_status(const gw_device_uid_t *uid, gw_device_status_t status);
 esp_err_t gw_c6_store_device_set_name(const gw_device_uid_t *uid, const char *name);
 esp_err_t gw_c6_store_device_remove(const gw_device_uid_t *uid);
 size_t gw_c6_store_device_count(void);
@@ -38,11 +38,6 @@ esp_err_t gw_c6_store_endpoint_remove_device(const gw_device_uid_t *uid);
 size_t gw_c6_store_endpoint_list(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps);
 size_t gw_c6_store_endpoint_list_all(gw_zb_endpoint_t *out_eps, size_t max_eps);
 bool gw_c6_store_find_uid_by_short(uint16_t short_addr, gw_device_uid_t *out_uid);
-
-esp_err_t gw_c6_store_deleted_add(const gw_device_uid_t *uid, uint64_t removed_at_ms);
-esp_err_t gw_c6_store_deleted_remove(const gw_device_uid_t *uid);
-bool gw_c6_store_deleted_contains(const gw_device_uid_t *uid);
-size_t gw_c6_store_deleted_count(void);
 
 #ifdef __cplusplus
 }

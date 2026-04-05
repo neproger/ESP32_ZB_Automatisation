@@ -48,6 +48,14 @@ typedef struct {
     } u;
 } gw_zb_action_ctx_t;
 
+typedef struct {
+    gw_device_uid_t uid;
+    uint8_t endpoint;
+    uint16_t cluster_id;
+    uint16_t attr_id;
+    TickType_t delay_ticks;
+} gw_zb_followup_read_ctx_t;
+
 static gw_zb_action_ctx_t *s_action_ctx_by_token[256];
 static uint8_t s_action_token;
 static portMUX_TYPE s_action_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -59,6 +67,43 @@ static uint16_t transition_ms_to_ds(uint16_t ms)
         ds = 0xFFFFu;
     }
     return (uint16_t)ds;
+}
+
+static void followup_read_task(void *arg)
+{
+    gw_zb_followup_read_ctx_t *ctx = (gw_zb_followup_read_ctx_t *)arg;
+    if (ctx != NULL) {
+        vTaskDelay(ctx->delay_ticks);
+        (void)gw_zigbee_read_attr(&ctx->uid, ctx->endpoint, ctx->cluster_id, ctx->attr_id);
+        free(ctx);
+    }
+    vTaskDelete(NULL);
+}
+
+static void schedule_followup_read(const gw_device_uid_t *uid,
+                                   uint8_t endpoint,
+                                   uint16_t cluster_id,
+                                   uint16_t attr_id,
+                                   uint32_t delay_ms)
+{
+    if (uid == NULL || uid->uid[0] == '\0' || endpoint == 0 || cluster_id == 0) {
+        return;
+    }
+
+    gw_zb_followup_read_ctx_t *ctx = (gw_zb_followup_read_ctx_t *)calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
+        return;
+    }
+
+    ctx->uid = *uid;
+    ctx->endpoint = endpoint;
+    ctx->cluster_id = cluster_id;
+    ctx->attr_id = attr_id;
+    ctx->delay_ticks = pdMS_TO_TICKS(delay_ms);
+
+    if (xTaskCreate(followup_read_task, "zb_read_back", 3072, ctx, 5, NULL) != pdPASS) {
+        free(ctx);
+    }
 }
 
 static void action_send_cb(uint8_t token)
@@ -95,6 +140,7 @@ static void action_send_cb(uint8_t token)
         gw_zigbee_log_device_action("sent", ctx->uid.uid, ctx->short_addr, ctx->endpoint,
             (ctx->u.onoff.cmd == GW_ZIGBEE_ONOFF_CMD_OFF) ? "off" : (ctx->u.onoff.cmd == GW_ZIGBEE_ONOFF_CMD_ON) ? "on" : "toggle",
             "0x0006", token, tsn);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, 350);
     } else if (ctx->type == GW_ZB_ACTION_LEVEL_MOVE_TO_LEVEL) {
         esp_zb_zcl_move_to_level_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -105,6 +151,8 @@ static void action_send_cb(uint8_t token)
         cmd.transition_time = ctx->u.level.transition_ds;
         tsn = esp_zb_zcl_level_move_to_level_cmd_req(&cmd);
         gw_zigbee_log_device_action("sent", ctx->uid.uid, ctx->short_addr, ctx->endpoint, "move_to_level", "0x0008", ctx->u.level.level, ctx->u.level.transition_ds);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, 350);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, 350);
     } else if (ctx->type == GW_ZB_ACTION_COLOR_MOVE_TO_XY) {
         esp_zb_zcl_color_move_to_color_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -116,6 +164,9 @@ static void action_send_cb(uint8_t token)
         cmd.transition_time = ctx->u.color_xy.transition_ds;
         tsn = esp_zb_zcl_color_move_to_color_cmd_req(&cmd);
         gw_zigbee_log_device_action("sent", ctx->uid.uid, ctx->short_addr, ctx->endpoint, "move_to_color_xy", "0x0300", ctx->u.color_xy.x, ctx->u.color_xy.y);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID, 400);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID, 400);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, 400);
     } else if (ctx->type == GW_ZB_ACTION_COLOR_MOVE_TO_TEMP) {
         esp_zb_zcl_color_move_to_color_temperature_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;
@@ -126,6 +177,8 @@ static void action_send_cb(uint8_t token)
         cmd.transition_time = ctx->u.color_temp.transition_ds;
         tsn = esp_zb_zcl_color_move_to_color_temperature_cmd_req(&cmd);
         gw_zigbee_log_device_action("sent", ctx->uid.uid, ctx->short_addr, ctx->endpoint, "move_to_color_temperature", "0x0300", ctx->u.color_temp.mireds, ctx->u.color_temp.transition_ds);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, 450);
+        schedule_followup_read(&ctx->uid, ctx->endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, 450);
     } else if (ctx->type == GW_ZB_ACTION_SCENE_STORE) {
         esp_zb_zcl_scenes_store_scene_cmd_t cmd = {0};
         cmd.zcl_basic_cmd.dst_addr_u.addr_short = ctx->short_addr;

@@ -33,7 +33,6 @@
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_zigbee/gw_zigbee_events.h"
 #include "gw_core/c6_store.h"
-#include "gw_core/deleted_devices.h"
 #include "gw_proto/gw_proto.h"
 #include "gw_uart_link.h"
 
@@ -799,7 +798,6 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(gw_c6_store_init());
-    ESP_ERROR_CHECK(gw_deleted_devices_init());
     ESP_ERROR_CHECK(gw_uart_link_start());
     ESP_LOGI(TAG, "c6 thin zigbee router started");
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG

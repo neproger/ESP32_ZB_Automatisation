@@ -16,13 +16,21 @@ esp_err_t gw_zigbee_handle_event(const gw_proto_event_v1_t *evt);
 esp_err_t gw_zigbee_handle_device_announced(const uint8_t ieee_addr[8], uint16_t short_addr, uint8_t capability);
 esp_err_t gw_zigbee_handle_ieee_resolved(const uint8_t ieee_addr[8], uint16_t short_addr);
 bool gw_zigbee_handle_quarantine_hit(const gw_device_uid_t *uid, uint16_t short_addr, const char *reason);
-bool gw_zigbee_handle_active_ep_discovered(const uint8_t ieee_addr[8], uint16_t short_addr, uint8_t ep_count);
+void gw_zigbee_handle_discovery_failed(uint16_t short_addr, const char *stage);
+bool gw_zigbee_handle_active_ep_discovered(const uint8_t ieee_addr[8],
+                                           uint16_t short_addr,
+                                           const uint8_t *ep_ids,
+                                           uint8_t ep_count);
 esp_err_t gw_zigbee_handle_simple_desc_discovered(const uint8_t ieee_addr[8],
                                                   uint16_t short_addr,
                                                   const gw_zb_endpoint_t *ep,
                                                   bool is_switch,
                                                   bool is_light,
                                                   const char *kind);
+void gw_zigbee_handle_simple_desc_failed(const uint8_t ieee_addr[8],
+                                         uint16_t short_addr,
+                                         uint8_t endpoint,
+                                         uint8_t zdo_status);
 void gw_zigbee_handle_simple_desc_bindings(const uint8_t ieee_addr[8],
                                            uint16_t short_addr,
                                            const gw_zb_endpoint_t *ep,

@@ -48,7 +48,7 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || simple_desc == NULL || simple_desc->app_cluster_list == NULL) {
         ESP_LOGW(TAG, "simple desc failed: short=0x%04x status=0x%02x", (unsigned)ctx->short_addr, (unsigned)zdo_status);
-        gw_zigbee_request_snapshot_refresh();
+        gw_zigbee_handle_simple_desc_failed(ctx->ieee, ctx->short_addr, ctx->endpoint, (uint8_t)zdo_status);
         free(ctx);
         return;
     }
@@ -100,7 +100,7 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || ep_count == 0 || ep_id_list == NULL) {
         ESP_LOGW(TAG, "active ep failed: short=0x%04x status=0x%02x ep_count=%u", (unsigned)ctx->short_addr, (unsigned)zdo_status, (unsigned)ep_count);
-        gw_zigbee_request_snapshot_refresh();
+        gw_zigbee_handle_discovery_failed(ctx->short_addr, "active_ep");
         free(ctx);
         return;
     }
@@ -108,7 +108,7 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ctx->ieee, uid);
 
-    if (!gw_zigbee_handle_active_ep_discovered(ctx->ieee, ctx->short_addr, ep_count)) {
+    if (!gw_zigbee_handle_active_ep_discovered(ctx->ieee, ctx->short_addr, ep_id_list, ep_count)) {
         free(ctx);
         return;
     }
@@ -117,7 +117,7 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
         gw_zb_simple_ctx_t *sctx = (gw_zb_simple_ctx_t *)calloc(1, sizeof(*sctx));
         if (sctx == NULL) {
             ESP_LOGW(TAG, "simple desc ctx alloc failed: %s short=0x%04x", uid, (unsigned)ctx->short_addr);
-            gw_zigbee_request_snapshot_refresh();
+            gw_zigbee_handle_simple_desc_failed(ctx->ieee, ctx->short_addr, ep_id_list[i], 0xFF);
             continue;
         }
         memcpy(sctx->ieee, ctx->ieee, sizeof(sctx->ieee));
@@ -184,6 +184,7 @@ static void ieee_addr_cb(esp_zb_zdp_status_t zdo_status, esp_zb_zdo_ieee_addr_rs
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || resp == NULL) {
         gw_zigbee_log_diag("ieee_lookup_failed", "", ctx->short_addr, "ieee_addr_req failed");
+        gw_zigbee_handle_discovery_failed(ctx->short_addr, "ieee_lookup");
         free(ctx);
         return;
     }

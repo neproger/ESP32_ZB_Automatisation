@@ -11,87 +11,136 @@
 #include "micro_db/micro_db_flash.h"
 
 static const char *TAG = "gw_c6_store";
-
-typedef struct {
-    uint64_t uid_num;
-} gw_c6_uid_key_t;
-
-static micro_db_table_t s_deleted_table;
 static bool s_initialized;
 
-static bool uid_to_u64(const char *uid, uint64_t *out)
+static size_t collect_endpoints_for_uid(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps);
+
+static const char *status_name(gw_device_status_t status)
 {
-    if (!uid || !out) {
+    switch (status) {
+        case GW_DEVICE_STATUS_NONE:
+            return "none";
+        case GW_DEVICE_STATUS_NEW:
+            return "new";
+        case GW_DEVICE_STATUS_DISCOVERING:
+            return "discovering";
+        case GW_DEVICE_STATUS_READY:
+            return "ready";
+        case GW_DEVICE_STATUS_REMOVING:
+            return "removing";
+        case GW_DEVICE_STATUS_REMOVED:
+            return "removed";
+        default:
+            return "unknown";
+    }
+}
+
+static bool uid_is_valid_topology_uid(const gw_device_uid_t *uid)
+{
+    if (!uid || uid->uid[0] == '\0') {
         return false;
     }
-    const char *p = uid;
-    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
-        p += 2;
-    }
-    if (*p == '\0') {
+
+    const char *s = uid->uid;
+    if (!(s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))) {
         return false;
     }
-    char *end = NULL;
-    unsigned long long value = strtoull(p, &end, 16);
-    if (!end || *end != '\0') {
+    s += 2;
+    if (*s == '\0') {
         return false;
     }
-    *out = (uint64_t)value;
+
+    for (; *s != '\0'; ++s) {
+        const char c = *s;
+        const bool is_hex =
+            (c >= '0' && c <= '9') ||
+            (c >= 'a' && c <= 'f') ||
+            (c >= 'A' && c <= 'F');
+        if (!is_hex) {
+            return false;
+        }
+    }
     return true;
 }
 
-static uint64_t uid_fallback_hash(const char *uid)
+static void log_store_dump(const char *phase)
 {
-    const uint8_t *p = (const uint8_t *)uid;
-    uint64_t h = 1469598103934665603ull;
-    while (p && *p) {
-        h ^= (uint64_t)(*p++);
-        h *= 1099511628211ull;
+    const size_t count = gw_store_count_devices();
+    ESP_LOGW(TAG, "store dump phase=%s devices=%u endpoints=%u", phase ? phase : "?", (unsigned)count, (unsigned)gw_store_count_endpoints());
+    for (size_t i = 0; i < count; ++i) {
+        gw_proto_device_v1_t record = {0};
+        if (gw_store_get_device_by_index(i, &record) != ESP_OK) {
+            continue;
+        }
+
+        gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
+        const size_t ep_count = collect_endpoints_for_uid(&record.device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
+        ESP_LOGW(TAG,
+                 "store[%u] uid=%s short=0x%04x status=%s live_eps=%u name=%s",
+                 (unsigned)i,
+                 record.device_uid.uid,
+                 (unsigned)record.short_addr,
+                 status_name((gw_device_status_t)record.status),
+                 (unsigned)ep_count,
+                 record.name);
     }
-    return h ? h : 1ull;
 }
 
-static uint64_t uid_to_key_num(const gw_device_uid_t *uid)
+static void normalize_persisted_device_statuses(void)
 {
-    uint64_t num = 0;
-    if (!uid || uid->uid[0] == '\0') {
-        return 0;
+    gw_device_uid_t remove_list[GW_DEVICE_MAX_DEVICES] = {0};
+    size_t remove_count = 0;
+
+    const size_t count = gw_store_count_devices();
+    for (size_t i = 0; i < count; ++i) {
+        gw_proto_device_v1_t record = {0};
+        if (gw_store_get_device_by_index(i, &record) != ESP_OK) {
+            continue;
+        }
+
+        gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
+        const size_t ep_count = collect_endpoints_for_uid(&record.device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
+        const bool has_real_endpoints = (ep_count > 0);
+        const gw_device_status_t status = (gw_device_status_t)record.status;
+
+        const bool invalid_uid = !uid_is_valid_topology_uid(&record.device_uid);
+        const bool invalid_status = (status < GW_DEVICE_STATUS_NONE || status > GW_DEVICE_STATUS_REMOVED);
+        const bool invalid_short = (record.short_addr == 0xFFFFu);
+
+        if (invalid_uid || invalid_status || (invalid_short && !has_real_endpoints)) {
+            if (remove_count < GW_DEVICE_MAX_DEVICES) {
+                remove_list[remove_count++] = record.device_uid;
+            }
+            ESP_LOGW(TAG,
+                     "scrub persisted corrupt device uid=%s short=0x%04x status=%u endpoints=%u",
+                     record.device_uid.uid,
+                     (unsigned)record.short_addr,
+                     (unsigned)record.status,
+                     (unsigned)ep_count);
+            continue;
+        }
+
+        if (!has_real_endpoints) {
+            continue;
+        }
+
+        if (status == GW_DEVICE_STATUS_DISCOVERING || status == GW_DEVICE_STATUS_NEW) {
+            record.status = (uint8_t)GW_DEVICE_STATUS_READY;
+            (void)gw_store_upsert_device(&record, NULL, NULL);
+            ESP_LOGW(TAG,
+                     "normalized persisted status uid=%s short=0x%04x %s->ready endpoints=%u",
+                     record.device_uid.uid,
+                     (unsigned)record.short_addr,
+                     status_name(status),
+                     (unsigned)ep_count);
+        }
     }
-    if (uid_to_u64(uid->uid, &num)) {
-        return num;
+
+    for (size_t i = 0; i < remove_count; ++i) {
+        bool removed = false;
+        (void)gw_store_remove_full_device(&remove_list[i], &removed);
     }
-    return uid_fallback_hash(uid->uid);
 }
-
-static bool uid_key_equals(const void *lhs_key, const void *rhs_key)
-{
-    return ((const gw_c6_uid_key_t *)lhs_key)->uid_num == ((const gw_c6_uid_key_t *)rhs_key)->uid_num;
-}
-
-static bool deleted_record_equals(const void *lhs_record, const void *rhs_record)
-{
-    return memcmp(lhs_record, rhs_record, sizeof(gw_deleted_device_t)) == 0;
-}
-
-static void deleted_key_of(const void *record, void *out_key)
-{
-    const gw_deleted_device_t *r = (const gw_deleted_device_t *)record;
-    gw_c6_uid_key_t *key = (gw_c6_uid_key_t *)out_key;
-    key->uid_num = uid_to_key_num(&r->device_uid);
-}
-
-static const micro_db_table_schema_t s_deleted_schema = {
-    .name = "c6_deleted",
-    .record_size = sizeof(gw_deleted_device_t),
-    .key_size = sizeof(gw_c6_uid_key_t),
-    .max_records = GW_DEVICE_MAX_DEVICES,
-    .backing = MICRO_DB_BACKING_RAM | MICRO_DB_BACKING_FLASH,
-    .flags = MICRO_DB_TABLE_F_VERSIONED,
-    .persist_key = "deleted_devices",
-    .key_of = deleted_key_of,
-    .key_equals = uid_key_equals,
-    .record_equals = deleted_record_equals,
-};
 
 static void proto_device_to_public(const gw_proto_device_v1_t *src, gw_device_t *dst)
 {
@@ -102,6 +151,7 @@ static void proto_device_to_public(const gw_proto_device_v1_t *src, gw_device_t 
     dst->last_seen_ms = src->last_seen_ms;
     dst->has_onoff = (src->has_onoff != 0);
     dst->has_button = (src->has_button != 0);
+    dst->status = (gw_device_status_t)src->status;
 }
 
 static void public_device_to_proto(const gw_device_t *src, gw_proto_device_v1_t *dst)
@@ -113,6 +163,7 @@ static void public_device_to_proto(const gw_device_t *src, gw_proto_device_v1_t 
     dst->last_seen_ms = src->last_seen_ms;
     dst->has_onoff = src->has_onoff ? 1u : 0u;
     dst->has_button = src->has_button ? 1u : 0u;
+    dst->status = (uint8_t)(src->status != GW_DEVICE_STATUS_NONE ? src->status : GW_DEVICE_STATUS_NEW);
 }
 
 static void endpoint_record_to_public(const gw_proto_endpoint_v1_t *src, gw_zb_endpoint_t *dst)
@@ -225,13 +276,13 @@ esp_err_t gw_c6_store_init(void)
 
     ESP_RETURN_ON_ERROR(micro_db_flash_init(), TAG, "micro_db_flash_init failed");
     ESP_RETURN_ON_ERROR(gw_store_init_topology(), TAG, "topology init failed");
-    ESP_RETURN_ON_ERROR(micro_db_table_init(&s_deleted_table, &s_deleted_schema), TAG, "deleted table init failed");
+    normalize_persisted_device_statuses();
     s_initialized = true;
     ESP_LOGI(TAG,
-             "store ready: devices=%u endpoints=%u deleted=%u",
+             "store ready: devices=%u endpoints=%u",
              (unsigned)gw_store_count_devices(),
-             (unsigned)gw_store_count_endpoints(),
-             (unsigned)micro_db_table_count(&s_deleted_table));
+             (unsigned)gw_store_count_endpoints());
+    log_store_dump("post_init");
     return ESP_OK;
 }
 
@@ -259,6 +310,9 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
         }
         if (device->has_button) {
             record.has_button = 1u;
+        }
+        if (device->status != GW_DEVICE_STATUS_NONE) {
+            record.status = (uint8_t)device->status;
         }
     }
 
@@ -293,6 +347,7 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
     out_device->last_seen_ms = record.last_seen_ms;
     out_device->has_onoff = (record.has_onoff != 0);
     out_device->has_button = (record.has_button != 0);
+    out_device->status = (gw_device_status_t)record.status;
 
     gw_zb_endpoint_t live_eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
     size_t count = collect_endpoints_for_uid(uid, live_eps, GW_DEVICE_MAX_ENDPOINTS);
@@ -318,6 +373,18 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
     }
 
     return ESP_OK;
+}
+
+esp_err_t gw_c6_store_device_set_status(const gw_device_uid_t *uid, gw_device_status_t status)
+{
+    if (!s_initialized || !uid || !uid->uid[0] || status == GW_DEVICE_STATUS_NONE) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    gw_proto_device_v1_t record = {0};
+    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
+    record.status = (uint8_t)status;
+    return gw_store_upsert_device(&record, NULL, NULL);
 }
 
 esp_err_t gw_c6_store_device_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device)
@@ -533,35 +600,4 @@ bool gw_c6_store_find_uid_by_short(uint16_t short_addr, gw_device_uid_t *out_uid
         return false;
     }
     return gw_store_find_device_uid_by_short(short_addr, out_uid);
-}
-
-esp_err_t gw_c6_store_deleted_add(const gw_device_uid_t *uid, uint64_t removed_at_ms)
-{
-    if (!s_initialized || !uid || uid->uid[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-    gw_deleted_device_t item = {.device_uid = *uid, .removed_at_ms = removed_at_ms};
-    return micro_db_table_upsert(&s_deleted_table, &item, NULL, NULL);
-}
-
-esp_err_t gw_c6_store_deleted_remove(const gw_device_uid_t *uid)
-{
-    if (!s_initialized || !uid || uid->uid[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return micro_db_table_remove(&s_deleted_table, &(gw_c6_uid_key_t){.uid_num = uid_to_key_num(uid)}, NULL);
-}
-
-bool gw_c6_store_deleted_contains(const gw_device_uid_t *uid)
-{
-    if (!s_initialized || !uid || uid->uid[0] == '\0') {
-        return false;
-    }
-    gw_deleted_device_t item = {0};
-    return micro_db_table_get(&s_deleted_table, &(gw_c6_uid_key_t){.uid_num = uid_to_key_num(uid)}, &item) == ESP_OK;
-}
-
-size_t gw_c6_store_deleted_count(void)
-{
-    return s_initialized ? micro_db_table_count(&s_deleted_table) : 0;
 }

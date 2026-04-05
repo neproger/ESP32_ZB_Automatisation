@@ -2,7 +2,6 @@ idf_component_register(
     SRCS
         "src/c6_store.c"
         "src/storage.c"
-        "src/deleted_devices.c"
         "src/device_registry.c"
         "src/zb_model.c"
         "src/zb_classify.c"

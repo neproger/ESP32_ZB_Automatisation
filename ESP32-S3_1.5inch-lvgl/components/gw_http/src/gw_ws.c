@@ -804,6 +804,8 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
 
     if (channel == GW_PROTO_BUS_CHANNEL_MODEL) {
         switch (hdr->type) {
+            case GW_PROTO_MSG_SYNC_BEGIN:
+            case GW_PROTO_MSG_SYNC_END:
             case GW_PROTO_MSG_STATE_ITEM:
             case GW_PROTO_MSG_DEVICE_UPSERT:
             case GW_PROTO_MSG_DEVICE_REMOVE:

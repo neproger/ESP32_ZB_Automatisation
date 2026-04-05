@@ -16,10 +16,52 @@
 #include "zdo/esp_zigbee_zdo_command.h"
 
 #include "gw_core/c6_store.h"
-#include "gw_core/deleted_devices.h"
 #include "gw_zigbee_internal.h"
 
 static const char *TAG = "gw_zigbee";
+
+static const char *device_status_name(gw_device_status_t status)
+{
+    switch (status) {
+        case GW_DEVICE_STATUS_NONE:
+            return "none";
+        case GW_DEVICE_STATUS_NEW:
+            return "new";
+        case GW_DEVICE_STATUS_DISCOVERING:
+            return "discovering";
+        case GW_DEVICE_STATUS_READY:
+            return "ready";
+        case GW_DEVICE_STATUS_REMOVING:
+            return "removing";
+        case GW_DEVICE_STATUS_REMOVED:
+            return "removed";
+        default:
+            return "unknown";
+    }
+}
+
+static void log_store_devices_snapshot(const char *phase)
+{
+    const size_t count = gw_c6_store_device_count();
+    ESP_LOGW(TAG, "permit_join store dump phase=%s devices=%u", phase ? phase : "?", (unsigned)count);
+    if (count == 0) {
+        return;
+    }
+
+    gw_device_full_t devices[GW_DEVICE_MAX_DEVICES] = {0};
+    const size_t listed = gw_c6_store_device_list_full(devices, GW_DEVICE_MAX_DEVICES);
+    for (size_t i = 0; i < listed; ++i) {
+        const gw_device_full_t *device = &devices[i];
+        ESP_LOGW(TAG,
+                 "permit_join store[%u] uid=%s short=0x%04x status=%s endpoints=%u name=%s",
+                 (unsigned)i,
+                 device->device_uid.uid,
+                 (unsigned)device->short_addr,
+                 device_status_name((gw_device_status_t)device->status),
+                 (unsigned)device->endpoint_count,
+                 device->name);
+    }
+}
 
 static bool uid_str_to_ieee(const char *uid, esp_zb_ieee_addr_t out_ieee)
 {
@@ -48,7 +90,6 @@ typedef struct {
     gw_device_uid_t uid;
     uint16_t short_addr;
     bool rejoin;
-    bool was_quarantined_before;
     esp_zb_zdo_mgmt_leave_req_param_t req;
 } gw_zb_leave_ctx_t;
 
@@ -129,9 +170,9 @@ static void purge_local_device_state(const gw_device_uid_t *uid)
         return;
     }
 
-    esp_err_t remove_err = gw_c6_store_device_remove(uid);
+    esp_err_t remove_err = gw_c6_store_device_set_status(uid, GW_DEVICE_STATUS_REMOVING);
     ESP_LOGI(TAG,
-             "purge local state uid=%s full_remove=%s",
+             "mark device removing uid=%s status=%s",
              uid->uid,
              esp_err_to_name(remove_err));
     gw_zigbee_request_snapshot_refresh();
@@ -152,7 +193,7 @@ static void leave_timeout_cb(uint8_t token)
 
     bool cleanup_ok = leave_cleanup_stack_state(ctx, "timeout");
     if (cleanup_ok) {
-        gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "device remains quarantined after forced remove");
+        gw_zigbee_log_diag("leave_removed", ctx->uid.uid, ctx->short_addr, "device removed after forced leave cleanup");
         leave_finalize_success(ctx, "timeout forced remove");
     }
     free(ctx);
@@ -183,19 +224,11 @@ static void leave_resp_cb(esp_zb_zdp_status_t zdo_status, void *user_ctx)
         portEXIT_CRITICAL(&s_leave_lock);
 
         bool cleanup_ok = leave_cleanup_stack_state(ctx, "leave_ok");
-        if (cleanup_ok && ctx->was_quarantined_before) {
-            esp_err_t quarantine_err = gw_deleted_devices_remove(&ctx->uid);
-            if (quarantine_err == ESP_OK) {
-                gw_zigbee_log_diag("leave_unquarantined", ctx->uid.uid, ctx->short_addr, "removed from quarantine after leave_ok cleanup");
-            } else if (quarantine_err != ESP_ERR_NOT_FOUND) {
-                char qmsg[64];
-                (void)snprintf(qmsg, sizeof(qmsg), "quarantine remove failed: %s", esp_err_to_name(quarantine_err));
-                gw_zigbee_log_diag("leave_unquarantine_failed", ctx->uid.uid, ctx->short_addr, qmsg);
-            }
-        } else if (!cleanup_ok) {
-            gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "cleanup failed after leave_ok; device remains quarantined");
+        if (!cleanup_ok) {
+            gw_zigbee_log_diag("leave_removing_kept", ctx->uid.uid, ctx->short_addr, "cleanup failed after leave_ok; device remains removing");
+            (void)gw_c6_store_device_set_status(&ctx->uid, GW_DEVICE_STATUS_REMOVING);
         } else {
-            gw_zigbee_log_diag("leave_quarantine_kept", ctx->uid.uid, ctx->short_addr, "initial delete path completed; device remains quarantined");
+            gw_zigbee_log_diag("leave_removed", ctx->uid.uid, ctx->short_addr, "initial delete path completed; device removed");
         }
         leave_finalize_success(ctx, msg);
         free(ctx);
@@ -239,8 +272,6 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
     ctx->req.dst_nwk_addr = short_addr;
     ctx->req.remove_children = 0;
     ctx->req.rejoin = rejoin ? 1 : 0;
-    ctx->was_quarantined_before = gw_deleted_devices_contains(uid);
-
     uint8_t token = 0;
     portENTER_CRITICAL(&s_leave_lock);
     if (leave_ctx_exists_for_uid(uid)) {
@@ -263,17 +294,8 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
     s_leave_ctx_by_token[token] = ctx;
     portEXIT_CRITICAL(&s_leave_lock);
 
-    {
-        const uint64_t ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        esp_err_t mark_err = gw_deleted_devices_add(uid, ts_ms);
-        if (mark_err != ESP_OK) {
-            char msg[64];
-            (void)snprintf(msg, sizeof(msg), "failed to quarantine uid: %s", esp_err_to_name(mark_err));
-            gw_zigbee_log_diag("leave_quarantine_failed", uid->uid, short_addr, msg);
-        } else {
-            gw_zigbee_log_diag("leave_quarantined", uid->uid, short_addr, "marked deleted");
-        }
-    }
+    (void)gw_c6_store_device_set_status(uid, GW_DEVICE_STATUS_REMOVING);
+    gw_zigbee_log_diag("leave_mark_removing", uid->uid, short_addr, "marked removing");
 
     purge_local_device_state(uid);
 
@@ -288,12 +310,17 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
 
 static void permit_join_cb(uint8_t seconds)
 {
+    log_store_devices_snapshot("before_open");
+
     esp_err_t err = esp_zb_bdb_open_network(seconds);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_zb_bdb_open_network(%u) failed: %s", (unsigned)seconds, esp_err_to_name(err));
         gw_zigbee_log_diag("permit_join_failed", "", 0, "esp_zb_bdb_open_network failed");
         return;
     }
+
+    log_store_devices_snapshot("after_open");
+
     ESP_LOGI(TAG, "permit_join enabled for %u seconds", (unsigned)seconds);
 
     char msg[48];

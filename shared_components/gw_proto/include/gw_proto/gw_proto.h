@@ -285,7 +285,8 @@ typedef struct GW_PROTO_PACKED {
     uint64_t last_seen_ms;
     uint8_t has_onoff;
     uint8_t has_button;
-    uint8_t reserved[6];
+    uint8_t status;
+    uint8_t reserved[5];
 } gw_proto_device_v1_t;
 
 typedef struct GW_PROTO_PACKED {

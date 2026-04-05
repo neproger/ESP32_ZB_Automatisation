@@ -8,11 +8,65 @@
 #include "gw_model/gw_model_groups.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
+#include "gw_proto/gw_proto_map.h"
 
 static bool s_inited;
 static bool s_snapshot_active;
 static gw_device_uid_t s_snapshot_stale[GW_DEVICE_MAX_DEVICES];
 static size_t s_snapshot_stale_count;
+
+static void publish_model_devices_snapshot(void)
+{
+    const uint32_t total_records = (uint32_t)(gw_model_count_devices() +
+                                              gw_model_count_endpoints() +
+                                              gw_model_count_state());
+
+    gw_proto_sync_begin_v1_t begin = {
+        .scope = GW_PROTO_SYNC_SCOPE_DEVICES,
+        .reserved0 = 0,
+        .reserved1 = 0,
+        .total_records = total_records,
+    };
+    gw_proto_hdr_t hdr = {0};
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_SYNC_BEGIN, sizeof(begin), 0);
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &begin);
+
+    for (size_t i = 0; i < gw_model_count_devices(); ++i) {
+        gw_proto_device_v1_t record = {0};
+        if (gw_model_get_device_by_index(i, &record) != ESP_OK) {
+            continue;
+        }
+        gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_DEVICE_UPSERT, sizeof(record), 0);
+        (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &record);
+    }
+
+    for (size_t i = 0; i < gw_model_count_endpoints(); ++i) {
+        gw_proto_endpoint_v1_t record = {0};
+        if (gw_model_get_endpoint_by_index(i, &record) != ESP_OK) {
+            continue;
+        }
+        gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_ENDPOINT_UPSERT, sizeof(record), 0);
+        (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &record);
+    }
+
+    for (size_t i = 0; i < gw_model_count_state(); ++i) {
+        gw_proto_state_item_v1_t record = {0};
+        if (gw_model_get_state_by_index(i, &record) != ESP_OK) {
+            continue;
+        }
+        gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_STATE_ITEM, sizeof(record), 0);
+        (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &record);
+    }
+
+    gw_proto_sync_end_v1_t end = {
+        .scope = GW_PROTO_SYNC_SCOPE_DEVICES,
+        .status = 0,
+        .reserved0 = 0,
+        .total_records = total_records,
+    };
+    gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_SYNC_END, sizeof(end), 0);
+    (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, &end);
+}
 
 static bool resolve_uid(const gw_proto_event_v1_t *e, gw_device_uid_t *out_uid)
 {
@@ -304,9 +358,37 @@ static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
     return memcmp(a, b, sizeof(*a)) == 0;
 }
 
-static void snapshot_stale_add_uid(const gw_device_uid_t *uid)
+static bool uid_is_c6_topology_device(const gw_device_uid_t *uid)
 {
     if (!uid || uid->uid[0] == '\0') {
+        return false;
+    }
+
+    const char *s = uid->uid;
+    if (!(s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))) {
+        return false;
+    }
+    s += 2;
+    if (*s == '\0') {
+        return false;
+    }
+
+    for (; *s != '\0'; ++s) {
+        const char c = *s;
+        const bool is_hex =
+            (c >= '0' && c <= '9') ||
+            (c >= 'a' && c <= 'f') ||
+            (c >= 'A' && c <= 'F');
+        if (!is_hex) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void snapshot_stale_add_uid(const gw_device_uid_t *uid)
+{
+    if (!uid || uid->uid[0] == '\0' || !uid_is_c6_topology_device(uid)) {
         return;
     }
 
@@ -390,6 +472,7 @@ static void snapshot_end(const gw_proto_sync_end_v1_t *msg)
     }
     s_snapshot_stale_count = 0;
     s_snapshot_active = false;
+    publish_model_devices_snapshot();
 }
 
 static void gw_model_bus_listener(gw_proto_bus_channel_t channel,

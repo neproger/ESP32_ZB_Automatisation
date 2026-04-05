@@ -19,7 +19,6 @@
 
 #include "esp_zigbee_gateway.h"
 #include "gw_core/c6_store.h"
-#include "gw_core/deleted_devices.h"
 #include "gw_proto/gw_proto.h"
 #include "gw_proto/gw_proto_types.h"
 #include "gw_proto/gw_proto_uart.h"
@@ -228,22 +227,52 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
     size_t dev_count = 0;
     size_t endpoint_count = 0;
 
+    ESP_LOGW(TAG, "snapshot candidate dump: raw_devices=%u", (unsigned)raw_dev_count);
+
     for (size_t di = 0; di < raw_dev_count; ++di) {
         gw_device_full_t device = {0};
         if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
-        if (gw_deleted_devices_contains(&device.device_uid)) {
+        if (device.status != GW_DEVICE_STATUS_READY) {
+            ESP_LOGW(TAG,
+                     "snapshot skip[%u] uid=%s short=0x%04x reason=status=%u endpoints=%u",
+                     (unsigned)di,
+                     device.device_uid.uid,
+                     (unsigned)device.short_addr,
+                     (unsigned)device.status,
+                     (unsigned)device.endpoint_count);
             continue;
         }
-        dev_count++;
+
+        size_t device_endpoint_count = 0;
         for (uint8_t ep_idx = 0; ep_idx < device.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ++ep_idx) {
             const gw_device_endpoint_t *ep = &device.endpoints[ep_idx];
             if (ep->profile_id == 0 && ep->device_id == 0 && ep->in_cluster_count == 0 && ep->out_cluster_count == 0) {
                 continue;
             }
-            endpoint_count++;
+            device_endpoint_count++;
         }
+        if (device_endpoint_count == 0) {
+            ESP_LOGW(TAG,
+                     "snapshot skip[%u] uid=%s short=0x%04x reason=no_real_endpoints endpoints=%u",
+                     (unsigned)di,
+                     device.device_uid.uid,
+                     (unsigned)device.short_addr,
+                     (unsigned)device.endpoint_count);
+            continue;
+        }
+
+        ESP_LOGW(TAG,
+                 "snapshot include[%u] uid=%s short=0x%04x status=%u endpoints=%u real_eps=%u",
+                 (unsigned)di,
+                 device.device_uid.uid,
+                 (unsigned)device.short_addr,
+                 (unsigned)device.status,
+                 (unsigned)device.endpoint_count,
+                 (unsigned)device_endpoint_count);
+        dev_count++;
+        endpoint_count += device_endpoint_count;
     }
 
     ESP_LOGI(TAG,
@@ -275,7 +304,20 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
         if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
-        if (gw_deleted_devices_contains(&device.device_uid)) {
+        if (device.status != GW_DEVICE_STATUS_READY) {
+            continue;
+        }
+
+        bool has_endpoint = false;
+        for (uint8_t ep_idx = 0; ep_idx < device.endpoint_count && ep_idx < GW_DEVICE_MAX_ENDPOINTS; ++ep_idx) {
+            const gw_device_endpoint_t *ep = &device.endpoints[ep_idx];
+            if (ep->profile_id == 0 && ep->device_id == 0 && ep->in_cluster_count == 0 && ep->out_cluster_count == 0) {
+                continue;
+            }
+            has_endpoint = true;
+            break;
+        }
+        if (!has_endpoint) {
             continue;
         }
         gw_proto_device_v1_t msg = {0};
@@ -286,6 +328,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
         msg.last_seen_ms = device.last_seen_ms;
         msg.has_onoff = device.has_onoff ? 1u : 0u;
         msg.has_button = device.has_button ? 1u : 0u;
+        msg.status = (uint8_t)device.status;
         err = uart_send_frame_sync(GW_PROTO_MSG_DEVICE_UPSERT, seq++, &msg, sizeof(msg));
         if (err != ESP_OK) {
             goto fail_device;
@@ -298,7 +341,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
         if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
-        if (gw_deleted_devices_contains(&device.device_uid)) {
+        if (device.status != GW_DEVICE_STATUS_READY) {
             continue;
         }
 
@@ -654,10 +697,10 @@ static void uart_state_sync_task(void *arg)
                 if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
                     continue;
                 }
-                if (gw_deleted_devices_contains(&device.device_uid)) {
+                if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
                     continue;
                 }
-                if (device.device_uid.uid[0] == '\0' || device.short_addr == 0 || device.short_addr == 0xFFFF) {
+                if (device.status != GW_DEVICE_STATUS_READY) {
                     continue;
                 }
 
@@ -788,23 +831,21 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             gw_device_full_t device = {0};
             esp_err_t err = gw_c6_store_device_get_full(&msg->device_uid, &device);
             if (err != ESP_OK) {
-                const bool quarantined = gw_deleted_devices_contains(&msg->device_uid);
                 ESP_LOGW(TAG,
-                         "cmd device_remove uid=%s registry=%s quarantined=%u",
+                         "cmd device_remove uid=%s registry=%s",
                          msg->device_uid.uid,
-                         esp_err_to_name(err),
-                         quarantined ? 1u : 0u);
-                return quarantined ? ESP_OK : err;
+                         esp_err_to_name(err));
+                return err;
             }
             if (device.short_addr == 0) {
                 ESP_LOGW(TAG, "cmd device_remove uid=%s invalid short=0x%04x", msg->device_uid.uid, (unsigned)device.short_addr);
                 return ESP_ERR_INVALID_STATE;
             }
             ESP_LOGI(TAG,
-                     "cmd device_remove uid=%s short=0x%04x quarantined=%u",
+                     "cmd device_remove uid=%s short=0x%04x status=%u",
                      msg->device_uid.uid,
                      (unsigned)device.short_addr,
-                     gw_deleted_devices_contains(&msg->device_uid) ? 1u : 0u);
+                     (unsigned)device.status);
             return gw_zigbee_device_leave(&msg->device_uid, device.short_addr, false);
         }
 
