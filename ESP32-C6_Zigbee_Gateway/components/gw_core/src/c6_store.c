@@ -63,29 +63,6 @@ static bool uid_is_valid_topology_uid(const gw_device_uid_t *uid)
     return true;
 }
 
-static void log_store_dump(const char *phase)
-{
-    const size_t count = gw_store_count_devices();
-    ESP_LOGW(TAG, "store dump phase=%s devices=%u endpoints=%u", phase ? phase : "?", (unsigned)count, (unsigned)gw_store_count_endpoints());
-    for (size_t i = 0; i < count; ++i) {
-        gw_proto_device_v1_t record = {0};
-        if (gw_store_get_device_by_index(i, &record) != ESP_OK) {
-            continue;
-        }
-
-        gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
-        const size_t ep_count = collect_endpoints_for_uid(&record.device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
-        ESP_LOGW(TAG,
-                 "store[%u] uid=%s short=0x%04x status=%s live_eps=%u name=%s",
-                 (unsigned)i,
-                 record.device_uid.uid,
-                 (unsigned)record.short_addr,
-                 status_name((gw_device_status_t)record.status),
-                 (unsigned)ep_count,
-                 record.name);
-    }
-}
-
 static void normalize_persisted_device_statuses(void)
 {
     gw_device_uid_t remove_list[GW_DEVICE_MAX_DEVICES] = {0};
@@ -282,7 +259,6 @@ esp_err_t gw_c6_store_init(void)
              "store ready: devices=%u endpoints=%u",
              (unsigned)gw_store_count_devices(),
              (unsigned)gw_store_count_endpoints());
-    log_store_dump("post_init");
     return ESP_OK;
 }
 

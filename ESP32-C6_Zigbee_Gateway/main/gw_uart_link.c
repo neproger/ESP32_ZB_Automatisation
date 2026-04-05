@@ -227,21 +227,12 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
     size_t dev_count = 0;
     size_t endpoint_count = 0;
 
-    ESP_LOGW(TAG, "snapshot candidate dump: raw_devices=%u", (unsigned)raw_dev_count);
-
     for (size_t di = 0; di < raw_dev_count; ++di) {
         gw_device_full_t device = {0};
         if (gw_c6_store_device_get_full_by_index(di, &device) != ESP_OK) {
             continue;
         }
         if (device.status != GW_DEVICE_STATUS_READY) {
-            ESP_LOGW(TAG,
-                     "snapshot skip[%u] uid=%s short=0x%04x reason=status=%u endpoints=%u",
-                     (unsigned)di,
-                     device.device_uid.uid,
-                     (unsigned)device.short_addr,
-                     (unsigned)device.status,
-                     (unsigned)device.endpoint_count);
             continue;
         }
 
@@ -254,23 +245,9 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
             device_endpoint_count++;
         }
         if (device_endpoint_count == 0) {
-            ESP_LOGW(TAG,
-                     "snapshot skip[%u] uid=%s short=0x%04x reason=no_real_endpoints endpoints=%u",
-                     (unsigned)di,
-                     device.device_uid.uid,
-                     (unsigned)device.short_addr,
-                     (unsigned)device.endpoint_count);
             continue;
         }
 
-        ESP_LOGW(TAG,
-                 "snapshot include[%u] uid=%s short=0x%04x status=%u endpoints=%u real_eps=%u",
-                 (unsigned)di,
-                 device.device_uid.uid,
-                 (unsigned)device.short_addr,
-                 (unsigned)device.status,
-                 (unsigned)device.endpoint_count,
-                 (unsigned)device_endpoint_count);
         dev_count++;
         endpoint_count += device_endpoint_count;
     }

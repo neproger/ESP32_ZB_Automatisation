@@ -385,6 +385,12 @@ static void start_join_discovery(const gw_device_uid_t *uid,
         char msg[80];
         (void)snprintf(msg, sizeof(msg), "discover_by_short 0x%04x (%s)", (unsigned)short_addr, reason ? reason : "join");
         gw_zigbee_log_diag("join_discovery", uid->uid, short_addr, msg);
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        clear_session(find_session_by_uid(uid));
+        char msg[96];
+        (void)snprintf(msg, sizeof(msg), "discover_by_short suppressed 0x%04x (%s, throttled)",
+                       (unsigned)short_addr, reason ? reason : "join");
+        gw_zigbee_log_diag("join_discovery_suppressed", uid->uid, short_addr, msg);
     } else {
         clear_session(find_session_by_uid(uid));
         char msg[80];

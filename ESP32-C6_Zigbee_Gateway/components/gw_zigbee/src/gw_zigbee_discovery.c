@@ -19,6 +19,64 @@
 
 static const char *TAG = "gw_zigbee";
 
+static void format_cluster_list(const uint16_t *clusters, uint8_t count, char *out, size_t out_len)
+{
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!clusters || count == 0) {
+        strlcpy(out, "-", out_len);
+        return;
+    }
+
+    size_t used = 0;
+    for (uint8_t i = 0; i < count; ++i) {
+        const int written = snprintf(out + used,
+                                     (used < out_len) ? (out_len - used) : 0,
+                                     "%s0x%04x",
+                                     (i == 0) ? "" : ",",
+                                     (unsigned)clusters[i]);
+        if (written < 0) {
+            break;
+        }
+        if ((size_t)written >= out_len - used) {
+            used = out_len - 1;
+            break;
+        }
+        used += (size_t)written;
+    }
+}
+
+static void format_endpoint_list(const uint8_t *eps, uint8_t count, char *out, size_t out_len)
+{
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!eps || count == 0) {
+        strlcpy(out, "-", out_len);
+        return;
+    }
+
+    size_t used = 0;
+    for (uint8_t i = 0; i < count; ++i) {
+        const int written = snprintf(out + used,
+                                     (used < out_len) ? (out_len - used) : 0,
+                                     "%s%u",
+                                     (i == 0) ? "" : ",",
+                                     (unsigned)eps[i]);
+        if (written < 0) {
+            break;
+        }
+        if ((size_t)written >= out_len - used) {
+            used = out_len - 1;
+            break;
+        }
+        used += (size_t)written;
+    }
+}
+
 typedef struct {
     esp_zb_ieee_addr_t ieee;
     uint16_t short_addr;
@@ -55,6 +113,21 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
 
     const uint16_t *in_clusters = &simple_desc->app_cluster_list[0];
     const uint16_t *out_clusters = &simple_desc->app_cluster_list[simple_desc->app_input_cluster_count];
+
+    char in_buf[128];
+    char out_buf[128];
+    format_cluster_list(in_clusters, simple_desc->app_input_cluster_count, in_buf, sizeof(in_buf));
+    format_cluster_list(out_clusters, simple_desc->app_output_cluster_count, out_buf, sizeof(out_buf));
+    ESP_LOGI(TAG,
+             "simple desc raw: short=0x%04x ep=%u profile=0x%04x dev=0x%04x in[%u]=%s out[%u]=%s",
+             (unsigned)ctx->short_addr,
+             (unsigned)simple_desc->endpoint,
+             (unsigned)simple_desc->app_profile_id,
+             (unsigned)simple_desc->app_device_id,
+             (unsigned)simple_desc->app_input_cluster_count,
+             in_buf,
+             (unsigned)simple_desc->app_output_cluster_count,
+             out_buf);
 
     const bool has_onoff_srv =
         gw_zigbee_cluster_list_has(in_clusters, simple_desc->app_input_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
@@ -108,6 +181,15 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ctx->ieee, uid);
 
+    char ep_buf[64];
+    format_endpoint_list(ep_id_list, ep_count, ep_buf, sizeof(ep_buf));
+    ESP_LOGI(TAG,
+             "active ep raw: uid=%s short=0x%04x ep_count=%u eps=%s",
+             uid,
+             (unsigned)ctx->short_addr,
+             (unsigned)ep_count,
+             ep_buf);
+
     if (!gw_zigbee_handle_active_ep_discovered(ctx->ieee, ctx->short_addr, ep_id_list, ep_count)) {
         free(ctx);
         return;
@@ -143,6 +225,9 @@ static void gw_zigbee_start_discovery(const uint8_t ieee_addr[8], uint16_t short
     }
     memcpy(ctx->ieee, ieee_addr, sizeof(ctx->ieee));
     ctx->short_addr = short_addr;
+    char uid[GW_DEVICE_UID_STRLEN];
+    gw_zigbee_ieee_to_uid_str(ieee_addr, uid);
+    ESP_LOGI(TAG, "discovery start: uid=%s short=0x%04x", uid, (unsigned)short_addr);
     esp_zb_zdo_active_ep_req_param_t req = {.addr_of_interest = short_addr};
     esp_zb_zdo_active_ep_req(&req, active_ep_cb, ctx);
 }
@@ -223,8 +308,7 @@ esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr)
     }
 
     if (should_throttle_discovery(short_addr)) {
-        ESP_LOGI(TAG, "discover_by_short throttled: short=0x%04x", (unsigned)short_addr);
-        return ESP_OK;
+        return ESP_ERR_INVALID_STATE;
     }
 
     gw_zb_ieee_lookup_ctx_t *ctx = (gw_zb_ieee_lookup_ctx_t *)calloc(1, sizeof(*ctx));
