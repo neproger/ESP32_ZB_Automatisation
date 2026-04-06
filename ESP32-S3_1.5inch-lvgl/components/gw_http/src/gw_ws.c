@@ -243,22 +243,55 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             return gw_zigbee_permit_join(seconds);
         }
         case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
+            ESP_LOGI(TAG, "CMD_DEVICE_RENAME received");
             if (payload_len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)payload;
-            return gw_zigbee_set_device_name(&msg->device_uid, msg->name);
+            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: uid=%s name=%s", msg->device_uid.uid, msg->name);
+            gw_proto_device_v1_t device = {0};
+            if (gw_model_get_device(&msg->device_uid, &device) != ESP_OK) {
+                return ESP_ERR_NOT_FOUND;
+            }
+            strlcpy(device.name, msg->name, sizeof(device.name));
+            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: calling upsert_device");
+            bool changed = false;
+            bool inserted = false;
+            esp_err_t err = gw_model_upsert_device(&device, &changed, &inserted);
+            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: upsert_device result=%d changed=%d inserted=%d", err, changed, inserted);
+            if (err != ESP_OK) {
+                return err;
+            }
+            return ESP_OK;
         }
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
             if (payload_len < sizeof(gw_proto_cmd_device_remove_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)payload;
-            return gw_zigbee_remove_device(&msg->device_uid);
+            bool removed = false;
+            esp_err_t err = gw_model_remove_full_device(&msg->device_uid, &removed);
+            if (err != ESP_OK) {
+                return err;
+            }
+            if (removed) {
+                (void)gw_zigbee_remove_device(&msg->device_uid);
+            }
+            return ESP_OK;
         }
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL: {
             if (payload_len < sizeof(gw_proto_cmd_device_remove_all_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
+            }
+            const size_t count = gw_model_count_devices();
+            for (size_t i = 0; i < count; ++i) {
+                gw_proto_device_v1_t device = {0};
+                if (gw_model_get_device_by_index(0, &device) != ESP_OK) {
+                    break;
+                }
+                if (device.device_uid.uid[0]) {
+                    (void)gw_model_remove_full_device(&device.device_uid, NULL);
+                }
             }
             return gw_zigbee_remove_all_devices();
         }
@@ -777,6 +810,7 @@ static void ws_send_proto_model_to_fds(uint8_t type, const void *payload, uint16
     if (!payload || !fds || fd_count == 0 || payload_len == 0) {
         return;
     }
+    ESP_LOGI(TAG, "ws_send_proto_model_to_fds: type=0x%02x len=%d", type, payload_len);
     for (size_t i = 0; i < fd_count; i++) {
         (void)ws_send_proto_frame_async(fds[i], type, s_ws_seq++, payload, payload_len);
     }
@@ -788,6 +822,9 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
     if (!hdr || !payload || hdr->len == 0) {
         return;
     }
+
+    ESP_LOGI(TAG, "ws_on_proto_bus_message: channel=%d type=0x%02x len=%d", channel, hdr->type, hdr->len);
+
     int fds[GW_WS_MAX_CLIENTS];
     size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
     if (fd_count == 0) {
@@ -802,28 +839,7 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
         return;
     }
 
-    if (channel == GW_PROTO_BUS_CHANNEL_MODEL) {
-        switch (hdr->type) {
-            case GW_PROTO_MSG_SYNC_BEGIN:
-            case GW_PROTO_MSG_SYNC_END:
-            case GW_PROTO_MSG_STATE_ITEM:
-            case GW_PROTO_MSG_DEVICE_UPSERT:
-            case GW_PROTO_MSG_DEVICE_REMOVE:
-            case GW_PROTO_MSG_ENDPOINT_UPSERT:
-            case GW_PROTO_MSG_ENDPOINT_REMOVE:
-            case GW_PROTO_MSG_SETTINGS:
-            case GW_PROTO_MSG_GROUP_UPSERT:
-            case GW_PROTO_MSG_GROUP_REMOVE:
-            case GW_PROTO_MSG_GROUP_ITEM_UPSERT:
-            case GW_PROTO_MSG_GROUP_ITEM_REMOVE:
-            case GW_PROTO_MSG_AUTOMATION_UPSERT:
-            case GW_PROTO_MSG_AUTOMATION_REMOVE:
-                ws_send_proto_model_to_fds(hdr->type, payload, hdr->len, fds, fd_count);
-                return;
-            default:
-                return;
-        }
-    }
+    ws_send_proto_model_to_fds(hdr->type, payload, hdr->len, fds, fd_count);
 }
 
 static void ws_tx_task_fn(void *arg)

@@ -121,19 +121,18 @@ export function GatewayProvider({ children }) {
 								return next.length > 30 ? next.slice(next.length - 30) : next
 							})
 						}
-						protoApplyFrame(protoSnapshotRef.current, protoFrame, ({
-							devices: nextDevices,
-							deviceStates: nextStates,
-							automations: nextAutomations,
-						}) => {
-							if (Array.isArray(nextDevices)) {
-								applyDeviceList(nextDevices)
+						protoApplyFrame(protoSnapshotRef.current, protoFrame, (data) => {
+							if (Array.isArray(data?.devices)) {
+								applyDeviceList(data.devices)
 							}
-							if (nextStates && typeof nextStates === 'object') {
-								setDeviceStates(nextStates)
+							if (data?.deviceStates && typeof data.deviceStates === 'object') {
+								setDeviceStates(data.deviceStates)
 							}
-							if (Array.isArray(nextAutomations)) {
-								setAutomations(nextAutomations)
+							if (Array.isArray(data?.automations)) {
+								setAutomations(data.automations)
+							}
+							if (Array.isArray(data?.groups)) {
+								setGroups(data.groups)
 							}
 						})
 						return

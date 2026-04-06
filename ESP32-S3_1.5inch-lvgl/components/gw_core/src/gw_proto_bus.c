@@ -2,8 +2,10 @@
 
 #include <string.h>
 
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 
+static const char *TAG = "gw_proto_bus";
 static bool s_inited;
 
 #define GW_PROTO_BUS_LISTENER_CAP 6
@@ -89,6 +91,8 @@ esp_err_t gw_proto_bus_publish(gw_proto_bus_channel_t channel, const gw_proto_hd
         return ESP_ERR_INVALID_ARG;
     }
 
+    ESP_LOGI(TAG, "proto_bus_publish: channel=%d type=0x%02x len=%d", channel, hdr->type, hdr->len);
+
     gw_proto_bus_listener_slot_t listeners[GW_PROTO_BUS_LISTENER_CAP];
     size_t listener_count = 0;
 
@@ -99,6 +103,8 @@ esp_err_t gw_proto_bus_publish(gw_proto_bus_channel_t channel, const gw_proto_hd
         }
     }
     portEXIT_CRITICAL(&s_listener_lock);
+
+    ESP_LOGI(TAG, "proto_bus_publish: found %d listeners", listener_count);
 
     for (size_t i = 0; i < listener_count; i++) {
         listeners[i].cb(channel, hdr, payload, listeners[i].user_ctx);

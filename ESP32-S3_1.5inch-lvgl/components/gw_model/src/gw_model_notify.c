@@ -2,14 +2,18 @@
 
 #include <string.h>
 
+#include "esp_log.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_proto/gw_proto_map.h"
+
+static const char *TAG = "gw_model_notify";
 
 esp_err_t gw_model_notify_device_upsert(const gw_proto_device_v1_t *record)
 {
     if (!record) {
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_LOGI(TAG, "publishing DEVICE_UPSERT: name=%s", record->name);
     gw_proto_hdr_t hdr = {0};
     gw_proto_fill_hdr(&hdr, GW_PROTO_MSG_DEVICE_UPSERT, sizeof(*record), 0);
     return gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_MODEL, &hdr, record);

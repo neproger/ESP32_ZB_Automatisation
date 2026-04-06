@@ -18,6 +18,10 @@ export const GW_PROTO_MSG_ENDPOINT_UPSERT = 0x44
 export const GW_PROTO_MSG_ENDPOINT_REMOVE = 0x45
 export const GW_PROTO_MSG_STATE_ITEM = 0x46
 export const GW_PROTO_MSG_STATE_REMOVE = 0x47
+export const GW_PROTO_MSG_GROUP_UPSERT = 0x48
+export const GW_PROTO_MSG_GROUP_REMOVE = 0x49
+export const GW_PROTO_MSG_GROUP_ITEM_UPSERT = 0x4A
+export const GW_PROTO_MSG_GROUP_ITEM_REMOVE = 0x4B
 export const GW_PROTO_MSG_SETTINGS = 0x4c
 export const GW_PROTO_MSG_SNAPSHOT_REQUEST = 0x4d
 export const GW_PROTO_MSG_AUTOMATION_UPSERT = 0x4e
@@ -678,6 +682,7 @@ export function protoCreateSnapshotAccumulator() {
     devicesByUid: {},
     deviceStates: {},
     automationsById: {},
+    groupsById: {},
     inSync: false,
     currentScope: 0,
     seq: 0,
@@ -871,6 +876,12 @@ function sortSnapshotAutomations(acc) {
 	return items
 }
 
+function sortSnapshotGroups(acc) {
+	const items = Object.values(acc.groupsById)
+	items.sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? '')))
+	return items
+}
+
 export function protoFrameToEvent(frame) {
   if (!frame?.payload) return null
   const payload = frame.payload
@@ -1045,6 +1056,8 @@ export function protoApplyFrame(acc, frame, onCommit) {
       acc.deviceStates = {}
     } else if (acc.currentScope === GW_PROTO_SYNC_SCOPE_AUTOMATIONS) {
       acc.automationsById = {}
+    } else if (acc.currentScope === GW_PROTO_SYNC_SCOPE_GROUPS) {
+      acc.groupsById = {}
     }
     return
   }
@@ -1062,6 +1075,10 @@ export function protoApplyFrame(acc, frame, onCommit) {
       onCommit({
         automations: sortSnapshotAutomations(acc),
       })
+    } else if (scope === GW_PROTO_SYNC_SCOPE_GROUPS && typeof onCommit === 'function') {
+      onCommit({
+        groups: sortSnapshotGroups(acc),
+      })
     }
     return
   }
@@ -1076,7 +1093,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
 		device.last_seen_ms = Number(view.getBigUint64(DEVICE_LAST_SEEN_OFF, true))
 		device.has_onoff = view.getUint8(DEVICE_HAS_ONOFF_OFF) !== 0
 		device.has_button = view.getUint8(DEVICE_HAS_BUTTON_OFF) !== 0
-		if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
+    if (typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -1090,7 +1107,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
     if (!uid) return
     delete acc.devicesByUid[uid]
     delete acc.deviceStates[uid]
-    if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
+    if (typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -1116,7 +1133,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
 		ep.accepts = meta.accepts
 		ep.emits = meta.emits
 		ep.reports = meta.reports
-		if (!acc.inSync && typeof onCommit === 'function') {
+		if (typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -1134,7 +1151,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
       if (acc.deviceStates[uid]) {
         delete acc.deviceStates[uid][String(endpointId)]
       }
-      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
+      if (typeof onCommit === 'function') {
         onCommit({
           devices: sortSnapshotDevices(acc),
           deviceStates: { ...acc.deviceStates },
@@ -1165,7 +1182,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
       ep.live_state = nextEndpointState
     }
 
-    if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
+    if (typeof onCommit === 'function') {
       onCommit({
         devices: sortSnapshotDevices(acc),
         deviceStates: { ...acc.deviceStates },
@@ -1192,7 +1209,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
       if (ep) {
         ep.live_state = nextEndpointState
       }
-      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_DEVICES) && typeof onCommit === 'function') {
+      if (typeof onCommit === 'function') {
         onCommit({
           devices: sortSnapshotDevices(acc),
           deviceStates: { ...acc.deviceStates },
@@ -1202,11 +1219,45 @@ export function protoApplyFrame(acc, frame, onCommit) {
     return
   }
 
+  if (frame.type === GW_PROTO_MSG_GROUP_UPSERT) {
+    const id = readFixedString(view, 0, GROUP_ID_SIZE)
+    if (id) {
+      acc.groupsById[id] = { id, name: readFixedString(view, GROUP_ID_SIZE, GROUP_NAME_SIZE) }
+      if (typeof onCommit === 'function') {
+        onCommit({
+          groups: sortSnapshotGroups(acc),
+        })
+      }
+    }
+    return
+  }
+
+  if (frame.type === GW_PROTO_MSG_GROUP_REMOVE) {
+    const id = readFixedString(view, 0, GROUP_ID_SIZE)
+    if (id && acc.groupsById[id]) {
+      delete acc.groupsById[id]
+      if (typeof onCommit === 'function') {
+        onCommit({
+          groups: sortSnapshotGroups(acc),
+        })
+      }
+    }
+    return
+  }
+
+  if (frame.type === GW_PROTO_MSG_GROUP_ITEM_UPSERT) {
+    return
+  }
+
+  if (frame.type === GW_PROTO_MSG_GROUP_ITEM_REMOVE) {
+    return
+  }
+
   if (frame.type === GW_PROTO_MSG_AUTOMATION_UPSERT) {
     const item = decodeAutomationEntry(payload)
     if (item?.id) {
       acc.automationsById[item.id] = item
-      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_AUTOMATIONS) && typeof onCommit === 'function') {
+      if (typeof onCommit === 'function') {
         onCommit({
           automations: sortSnapshotAutomations(acc),
         })
@@ -1219,7 +1270,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
     const id = readFixedString(view, 0, AUTO_ID_SIZE)
     if (id && acc.automationsById[id]) {
       delete acc.automationsById[id]
-      if ((!acc.inSync || acc.currentScope !== GW_PROTO_SYNC_SCOPE_AUTOMATIONS) && typeof onCommit === 'function') {
+      if (typeof onCommit === 'function') {
         onCommit({
           automations: sortSnapshotAutomations(acc),
         })

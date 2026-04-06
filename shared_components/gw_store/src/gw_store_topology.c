@@ -3,8 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_log.h"
+#include "micro_db/micro_db_core.h"
 #include "gw_proto/gw_proto_validate.h"
 #include "gw_store/gw_store_hooks.h"
+
+static const char *TAG = "gw_store_topology";
 
 static micro_db_table_t s_device_table;
 static micro_db_table_t s_endpoint_table;
@@ -235,9 +239,8 @@ esp_err_t gw_store_upsert_device(const gw_proto_device_v1_t *record,
         return err;
     }
 
-    if ((out_changed ? *out_changed : changed) || (out_inserted ? *out_inserted : inserted)) {
-        (void)gw_store_hook_notify_device_upsert(record);
-    }
+    (void)gw_store_hook_notify_device_upsert(record);
+    ESP_LOGI(TAG, "gw_store_upsert_device: called hook, name=%s", record->name);
     return ESP_OK;
 }
 
@@ -274,7 +277,7 @@ esp_err_t gw_store_remove_full_device(const gw_device_uid_t *uid,
 
     bool removed = false;
     esp_err_t err = micro_db_table_remove(&s_device_table, uid, out_removed ? out_removed : &removed);
-    if (err == ESP_OK && (out_removed ? *out_removed : removed)) {
+    if (err == ESP_OK) {
         (void)gw_store_hook_notify_device_remove(uid);
     }
     return err;
@@ -328,9 +331,7 @@ esp_err_t gw_store_upsert_endpoint(const gw_proto_endpoint_v1_t *record,
             endpoint_owner_attach(&record->uid, slot);
         }
     }
-    if ((out_changed ? *out_changed : changed) || (out_inserted ? *out_inserted : inserted)) {
-        (void)gw_store_hook_notify_endpoint_upsert(record);
-    }
+    (void)gw_store_hook_notify_endpoint_upsert(record);
     return ESP_OK;
 }
 
@@ -357,7 +358,7 @@ esp_err_t gw_store_remove_endpoint(const gw_store_endpoint_key_t *key,
     }
     bool removed = false;
     esp_err_t err = micro_db_table_remove(&s_endpoint_table, key, out_removed ? out_removed : &removed);
-    if (err == ESP_OK && have_slot && (out_removed ? *out_removed : removed)) {
+    if (err == ESP_OK && have_slot) {
         endpoint_owner_detach(&record.uid, slot);
         (void)gw_store_hook_notify_endpoint_remove(key, record.short_addr);
     }
