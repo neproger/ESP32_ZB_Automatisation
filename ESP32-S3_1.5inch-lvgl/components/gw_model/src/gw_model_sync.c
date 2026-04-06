@@ -9,6 +9,7 @@
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
 #include "gw_proto/gw_proto_map.h"
+#include "gw_proto/gw_proto_validate.h"
 
 static bool s_inited;
 static bool s_snapshot_active;
@@ -573,7 +574,11 @@ static void gw_model_bus_listener(gw_proto_bus_channel_t channel,
             break;
         case GW_PROTO_MSG_GROUP_ITEM_UPSERT:
             if (hdr->len >= sizeof(gw_proto_group_item_v1_t)) {
-                (void)gw_model_upsert_group_item((const gw_proto_group_item_v1_t *)payload, &changed, &inserted);
+                gw_proto_group_item_v1_t record = {0};
+                memcpy(&record, payload, sizeof(record));
+                gw_proto_group_item_v1_t trimmed = {0};
+                gw_proto_trim_group_item_v1(&trimmed, &record);
+                (void)gw_model_upsert_group_item(&trimmed, &changed, &inserted);
             }
             break;
         case GW_PROTO_MSG_GROUP_ITEM_REMOVE:

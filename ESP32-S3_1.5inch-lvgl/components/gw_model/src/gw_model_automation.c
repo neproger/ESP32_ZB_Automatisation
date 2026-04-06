@@ -5,6 +5,7 @@
 #include "micro_db/micro_db_core.h"
 #include "gw_model_notify.h"
 #include "gw_model/gw_model_schema.h"
+#include "gw_proto/gw_proto_validate.h"
 
 static micro_db_table_t s_automation_table;
 
@@ -37,6 +38,10 @@ esp_err_t gw_model_upsert_automation(const gw_automation_entry_t *record,
     if (!record) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    gw_automation_entry_t trimmed = {0};
+    gw_proto_trim_automation_entry(&trimmed, record);
+    record = &trimmed;
 
     bool changed = false;
     bool inserted = false;

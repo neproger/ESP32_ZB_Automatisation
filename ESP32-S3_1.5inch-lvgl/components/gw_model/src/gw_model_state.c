@@ -5,6 +5,7 @@
 
 #include "gw_core/model_types.h"
 #include "gw_model_notify.h"
+#include "gw_proto/gw_proto_validate.h"
 
 static micro_db_table_t s_state_table;
 
@@ -191,6 +192,12 @@ esp_err_t gw_model_upsert_state(const gw_proto_state_item_v1_t *record,
                                 bool *out_changed,
                                 bool *out_inserted)
 {
+    gw_proto_state_item_v1_t trimmed = {0};
+    if (record) {
+        gw_proto_trim_state_item_v1(&trimmed, record);
+        record = &trimmed;
+    }
+
     bool changed = false;
     bool inserted = false;
     esp_err_t err = micro_db_table_upsert(&s_state_table,

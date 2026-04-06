@@ -7,6 +7,7 @@
 
 #include "esp_timer.h"
 #include "gw_model_notify.h"
+#include "gw_proto/gw_proto_validate.h"
 
 static micro_db_table_t s_group_table;
 static micro_db_table_t s_group_item_table;
@@ -247,6 +248,12 @@ esp_err_t gw_model_upsert_group(const gw_proto_group_v1_t *record,
                                 bool *out_changed,
                                 bool *out_inserted)
 {
+    gw_proto_group_v1_t trimmed = {0};
+    if (record) {
+        gw_proto_trim_group_v1(&trimmed, record);
+        record = &trimmed;
+    }
+
     bool changed = false;
     bool inserted = false;
     esp_err_t err = micro_db_table_upsert(&s_group_table,
@@ -323,6 +330,12 @@ esp_err_t gw_model_upsert_group_item(const gw_proto_group_item_v1_t *record,
                                      bool *out_changed,
                                      bool *out_inserted)
 {
+    gw_proto_group_item_v1_t trimmed = {0};
+    if (record) {
+        gw_proto_trim_group_item_v1(&trimmed, record);
+        record = &trimmed;
+    }
+
     gw_model_endpoint_key_t key = {0};
     key.uid = record->device_uid;
     key.endpoint = record->endpoint;

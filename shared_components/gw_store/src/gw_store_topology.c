@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "gw_proto/gw_proto_validate.h"
 #include "gw_store/gw_store_hooks.h"
 
 static micro_db_table_t s_device_table;
@@ -218,6 +219,12 @@ esp_err_t gw_store_upsert_device(const gw_proto_device_v1_t *record,
                                  bool *out_changed,
                                  bool *out_inserted)
 {
+    gw_proto_device_v1_t trimmed = {0};
+    if (record) {
+        gw_proto_trim_device_v1(&trimmed, record);
+        record = &trimmed;
+    }
+
     bool changed = false;
     bool inserted = false;
     esp_err_t err = micro_db_table_upsert(&s_device_table,
@@ -299,6 +306,12 @@ esp_err_t gw_store_upsert_endpoint(const gw_proto_endpoint_v1_t *record,
                                    bool *out_changed,
                                    bool *out_inserted)
 {
+    gw_proto_endpoint_v1_t trimmed = {0};
+    if (record) {
+        gw_proto_trim_endpoint_v1(&trimmed, record);
+        record = &trimmed;
+    }
+
     bool changed = false;
     bool inserted = false;
     esp_err_t err = micro_db_table_upsert(&s_endpoint_table,
