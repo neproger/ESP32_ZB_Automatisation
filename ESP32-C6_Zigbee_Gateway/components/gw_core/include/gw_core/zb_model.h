@@ -28,6 +28,7 @@ typedef struct {
     uint8_t out_cluster_count;
     uint16_t in_clusters[GW_ZB_MAX_CLUSTERS];
     uint16_t out_clusters[GW_ZB_MAX_CLUSTERS];
+    char kind[16];
 } gw_zb_endpoint_t;
 
 esp_err_t gw_zb_model_init(void);

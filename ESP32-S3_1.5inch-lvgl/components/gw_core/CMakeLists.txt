@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "src/gw_proto_bus.c"
-        "src/zb_classify.c"
         "src/rules_engine.c"
         "src/action_exec.c"
         "src/net_time.c"

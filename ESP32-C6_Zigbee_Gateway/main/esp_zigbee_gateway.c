@@ -207,6 +207,8 @@ static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
         case ESP_ZB_ZCL_CMD_ON_OFF_OFF_WITH_EFFECT_ID: return "off_effect";
         case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_RECALL_GLOBAL_SCENE_ID: return "on_recall";
         case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_TIMED_OFF_ID: return "on_timed";
+        case 0xFD: return "button_press";
+        case 0xFE: return "button_release";
         default: return "onoff_unknown";
         }
     }
@@ -480,15 +482,6 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
             return ESP_OK;
         }
 
-        if (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && m->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
-            uint8_t onoff = 0;
-            if (m->attribute.data.value != NULL && m->attribute.data.size >= 1) {
-                onoff = *((const uint8_t *)m->attribute.data.value);
-            }
-
-            ESP_LOGI(TAG, "onoff attr dst_ep=%u value=%u", (unsigned)m->info.dst_endpoint, (unsigned)onoff);
-        }
-
         return ESP_OK;
     }
 
@@ -500,9 +493,6 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         const bool known_cluster =
             (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) ||
             (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL);
-        if (!known_cluster) {
-            return ESP_OK;
-        }
 
         uint16_t src_short = 0;
         if (m->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
@@ -511,6 +501,9 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
 
         gw_device_uid_t uid = {0};
         if (!gw_c6_store_find_uid_by_short(src_short, &uid) && src_short != 0) {
+            ESP_LOGW(TAG, "cmd from unknown short=0x%04x ep=%u cluster=0x%04x cmd=0x%02x, scheduling discovery",
+                     (unsigned)src_short, (unsigned)m->info.src_endpoint,
+                     (unsigned)m->info.cluster, (unsigned)m->info.command.id);
             (void)gw_zigbee_discover_by_short(src_short);
         }
 
@@ -764,9 +757,17 @@ static void esp_zb_task(void *pvParameters)
 
     // Allow the application to observe controller commands as "privilege command" callbacks.
     esp_zb_core_action_handler_register(zb_core_action_handler);
+
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_ON_ID);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID);
+    // Tuya-specific onoff commands
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, 0xFD);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, 0xFE);
+    // Additional onoff commands
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, 0x40);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, 0x41);
+    (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, 0x42);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_TO_LEVEL);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP);

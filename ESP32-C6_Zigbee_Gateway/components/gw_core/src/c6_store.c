@@ -170,6 +170,7 @@ static void endpoint_record_to_public(const gw_proto_endpoint_v1_t *src, gw_zb_e
     if (dst->out_cluster_count > 0) {
         memcpy(dst->out_clusters, src->out_clusters, dst->out_cluster_count * sizeof(uint16_t));
     }
+    strlcpy(dst->kind, src->kind, sizeof(dst->kind));
 }
 
 static void public_endpoint_to_proto(const gw_zb_endpoint_t *src, gw_proto_endpoint_v1_t *dst)
@@ -188,6 +189,7 @@ static void public_endpoint_to_proto(const gw_zb_endpoint_t *src, gw_proto_endpo
     if (dst->out_cluster_count > 0) {
         memcpy(dst->out_clusters, src->out_clusters, dst->out_cluster_count * sizeof(uint16_t));
     }
+    strlcpy(dst->kind, src->kind, sizeof(dst->kind));
 }
 
 typedef struct {
@@ -325,6 +327,7 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
         if (dst->out_cluster_count > 0) {
             memcpy(dst->out_clusters, live_eps[i].out_clusters, dst->out_cluster_count * sizeof(uint16_t));
         }
+        strlcpy(dst->kind, live_eps[i].kind, sizeof(dst->kind));
         if (live_eps[i].endpoint > out_device->endpoint_count) {
             out_device->endpoint_count = live_eps[i].endpoint;
         }

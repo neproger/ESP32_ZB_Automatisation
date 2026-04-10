@@ -67,6 +67,8 @@ void gw_proto_trim_endpoint_v1(gw_proto_endpoint_v1_t *dst, const gw_proto_endpo
 
     n = (src->out_cluster_count > GW_ZB_MAX_CLUSTERS) ? GW_ZB_MAX_CLUSTERS : src->out_cluster_count;
     memcpy(dst->out_clusters, src->out_clusters, n * sizeof(dst->out_clusters[0]));
+
+    trim_fixed_string(dst->kind, sizeof(dst->kind), src->kind);
 }
 
 void gw_proto_trim_state_item_v1(gw_proto_state_item_v1_t *dst, const gw_proto_state_item_v1_t *src)

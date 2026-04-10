@@ -343,6 +343,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
             if (msg.out_cluster_count > 0) {
                 memcpy(msg.out_clusters, ep->out_clusters, msg.out_cluster_count * sizeof(uint16_t));
             }
+            strlcpy(msg.kind, ep->kind, sizeof(msg.kind));
             err = uart_send_frame_sync(GW_PROTO_MSG_ENDPOINT_UPSERT, seq++, &msg, sizeof(msg));
             if (err != ESP_OK) {
                 goto fail_endpoint;

@@ -158,6 +158,7 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
     memcpy(ep.in_clusters, in_clusters, ep.in_cluster_count * sizeof(ep.in_clusters[0]));
     memcpy(ep.out_clusters, out_clusters, ep.out_cluster_count * sizeof(ep.out_clusters[0]));
     const char *kind = gw_zb_endpoint_kind(&ep);
+    strlcpy(ep.kind, kind, sizeof(ep.kind));
     if (gw_zigbee_handle_simple_desc_discovered(ctx->ieee, ctx->short_addr, &ep, is_switch, is_light, kind) != ESP_OK) {
         free(ctx);
         return;

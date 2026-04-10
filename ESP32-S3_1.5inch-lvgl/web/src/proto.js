@@ -69,6 +69,7 @@ const ENDPOINT_IN_CLUSTER_COUNT_OFF = ENDPOINT_DEVICE_ID_OFF + 2
 const ENDPOINT_OUT_CLUSTER_COUNT_OFF = ENDPOINT_IN_CLUSTER_COUNT_OFF + 1
 const ENDPOINT_IN_CLUSTERS_OFF = ENDPOINT_OUT_CLUSTER_COUNT_OFF + 1
 const ENDPOINT_OUT_CLUSTERS_OFF = ENDPOINT_IN_CLUSTERS_OFF + 32
+const ENDPOINT_KIND_OFF = ENDPOINT_OUT_CLUSTERS_OFF + 32
 const STATE_ENDPOINT_OFF = DEVICE_UID_SIZE
 const STATE_VALUE_TYPE_OFF = STATE_ENDPOINT_OFF + 1
 const STATE_KEY_OFF = STATE_VALUE_TYPE_OFF + 3
@@ -204,7 +205,7 @@ function deriveEndpointMeta(ep) {
     kind = 'switch'
   }
 
-  return { kind, accepts, emits, reports }
+  return { kind: ep.kind && ep.kind !== 'unknown' ? ep.kind : kind, accepts, emits, reports }
 }
 
 function ensureDevice(snapshot, uid) {
@@ -1136,8 +1137,9 @@ export function protoApplyFrame(acc, frame, onCommit) {
     ep.device_id = view.getUint16(ENDPOINT_DEVICE_ID_OFF, true)
 		ep.in_clusters = clusterList(view, ENDPOINT_IN_CLUSTERS_OFF, view.getUint8(ENDPOINT_IN_CLUSTER_COUNT_OFF), 16)
 		ep.out_clusters = clusterList(view, ENDPOINT_OUT_CLUSTERS_OFF, view.getUint8(ENDPOINT_OUT_CLUSTER_COUNT_OFF), 16)
+		ep.kind = readFixedString(view, ENDPOINT_KIND_OFF, 16)
+		if (!ep.kind) ep.kind = 'unknown'
 		const meta = deriveEndpointMeta(ep)
-		ep.kind = meta.kind
 		ep.accepts = meta.accepts
 		ep.emits = meta.emits
 		ep.reports = meta.reports

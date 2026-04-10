@@ -33,6 +33,7 @@ typedef struct {
     uint8_t out_cluster_count;
     uint16_t in_clusters[GW_DEVICE_MAX_CLUSTERS];
     uint16_t out_clusters[GW_DEVICE_MAX_CLUSTERS];
+    char kind[16];
 } gw_device_endpoint_t;
 
 typedef struct {
