@@ -53,7 +53,6 @@ esp_err_t gw_device_registry_get(const gw_device_uid_t *uid, gw_device_t *out_de
 esp_err_t gw_device_registry_get_full(const gw_device_uid_t *uid, gw_device_full_t *out_device);
 esp_err_t gw_device_registry_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device);
 esp_err_t gw_device_registry_get_full_by_index(size_t index, gw_device_full_t *out_device);
-esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *name);
 esp_err_t gw_device_registry_remove_full(const gw_device_uid_t *uid);
 esp_err_t gw_device_registry_remove(const gw_device_uid_t *uid);
 size_t gw_device_registry_count(void);

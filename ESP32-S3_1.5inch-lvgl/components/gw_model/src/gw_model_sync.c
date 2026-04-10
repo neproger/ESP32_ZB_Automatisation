@@ -359,6 +359,26 @@ static bool uid_equals(const gw_device_uid_t *a, const gw_device_uid_t *b)
     return memcmp(a, b, sizeof(*a)) == 0;
 }
 
+static void merge_device_upsert_preserve_local_name(gw_proto_device_v1_t *record)
+{
+    if (!record || record->device_uid.uid[0] == '\0') {
+        return;
+    }
+
+    if (record->name[0] != '\0') {
+        return;
+    }
+
+    gw_proto_device_v1_t existing = {0};
+    if (gw_model_get_device(&record->device_uid, &existing) != ESP_OK) {
+        return;
+    }
+
+    if (existing.name[0] != '\0') {
+        strlcpy(record->name, existing.name, sizeof(record->name));
+    }
+}
+
 static bool uid_is_c6_topology_device(const gw_device_uid_t *uid)
 {
     if (!uid || uid->uid[0] == '\0') {
@@ -515,10 +535,12 @@ static void gw_model_bus_listener(gw_proto_bus_channel_t channel,
             break;
         case GW_PROTO_MSG_DEVICE_UPSERT:
             if (hdr->len >= sizeof(gw_proto_device_v1_t)) {
-                (void)gw_model_upsert_device((const gw_proto_device_v1_t *)payload, &changed, &inserted);
+                gw_proto_device_v1_t merged = {0};
+                memcpy(&merged, payload, sizeof(merged));
+                merge_device_upsert_preserve_local_name(&merged);
+                (void)gw_model_upsert_device(&merged, &changed, &inserted);
                 if (s_snapshot_active) {
-                    const gw_proto_device_v1_t *msg = (const gw_proto_device_v1_t *)payload;
-                    snapshot_stale_remove_uid(&msg->device_uid);
+                    snapshot_stale_remove_uid(&merged.device_uid);
                 }
             }
             break;

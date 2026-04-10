@@ -1,13 +1,13 @@
 //UTF-8
 //groupsStore.js
 import {
+	protoEncodeGroupChange,
 	protoEncodeGroupCreate,
 	protoEncodeGroupDelete,
 	protoEncodeGroupItemLabel,
 	protoEncodeGroupItemRemove,
 	protoEncodeGroupItemReorder,
 	protoEncodeGroupItemSet,
-	protoEncodeGroupRename,
 } from './proto.js'
 import { sendWsCommand } from './wsCommandBus.js'
 
@@ -126,7 +126,7 @@ export async function groupsRename(id, name) {
 	const gid = String(id ?? '')
 	const n = String(name ?? '').trim()
 	if (!gid || !n) return false
-	sendWsCommand(protoEncodeGroupRename(gid, n, Date.now() & 0xffff))
+	sendWsCommand(protoEncodeGroupChange({ id: gid, name: n }, Date.now() & 0xffff))
 	return true
 }
 

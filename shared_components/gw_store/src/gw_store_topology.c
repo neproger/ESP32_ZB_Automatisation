@@ -239,8 +239,11 @@ esp_err_t gw_store_upsert_device(const gw_proto_device_v1_t *record,
         return err;
     }
 
-    (void)gw_store_hook_notify_device_upsert(record);
-    ESP_LOGI(TAG, "gw_store_upsert_device: called hook, name=%s", record->name);
+    const bool notify = (out_changed ? *out_changed : changed) || (out_inserted ? *out_inserted : inserted);
+    if (notify) {
+        (void)gw_store_hook_notify_device_upsert(record);
+        ESP_LOGI(TAG, "gw_store_upsert_device: called hook, name=%s", record->name);
+    }
     return ESP_OK;
 }
 

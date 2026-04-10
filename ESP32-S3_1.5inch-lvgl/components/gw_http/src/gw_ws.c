@@ -59,9 +59,16 @@ static uint8_t s_tx_q_storage[GW_WS_TX_Q_CAP * sizeof(ws_tx_msg_t)];
 static size_t ws_collect_client_fds(int *fds, size_t max_fds);
 static esp_err_t ws_send_binary_async(int fd, const void *buf, size_t len);
 static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, uint16_t payload_len);
+static esp_err_t ws_route_proto_frame(httpd_req_t *req, int fd, const uint8_t *frame_buf, size_t frame_len);
+static esp_err_t ws_send_proto_snapshot_sync(httpd_req_t *req, int fd);
 static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_proto_hdr_t *hdr, const void *payload, void *user_ctx);
 static esp_err_t ws_remove_all_automations(void);
 static esp_err_t ws_schedule_factory_reset(void);
+static esp_err_t ws_handle_device_change(const gw_proto_cmd_device_change_v1_t *msg);
+static esp_err_t ws_handle_group_change(const gw_proto_cmd_group_change_v1_t *msg);
+static esp_err_t ws_handle_automation_change(const gw_proto_cmd_automation_change_v1_t *msg);
+static esp_err_t ws_handle_settings_change(const gw_proto_cmd_settings_change_v1_t *msg);
+static esp_err_t ws_handle_group_items_change(const gw_proto_cmd_group_items_change_v1_t *msg);
 
 static TaskHandle_t s_factory_reset_task;
 
@@ -110,6 +117,98 @@ static esp_err_t ws_schedule_factory_reset(void)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+static esp_err_t ws_handle_device_change(const gw_proto_cmd_device_change_v1_t *msg)
+{
+    if (!msg || !msg->device_uid.uid[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    gw_proto_device_v1_t device = {0};
+    esp_err_t err = gw_model_get_device(&msg->device_uid, &device);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "CMD_DEVICE_CHANGE: device not found uid=%s err=%s",
+                 msg->device_uid.uid,
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    if (msg->fields & GW_PROTO_DEVICE_CHANGE_F_NAME) {
+        strlcpy(device.name, msg->name, sizeof(device.name));
+    }
+
+    bool changed = false;
+    bool inserted = false;
+    err = gw_model_upsert_device(&device, &changed, &inserted);
+    return err;
+}
+
+static esp_err_t ws_handle_group_change(const gw_proto_cmd_group_change_v1_t *msg)
+{
+    if (!msg || !msg->id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (msg->fields & GW_PROTO_GROUP_CHANGE_F_NAME) {
+        return gw_model_rename_group(msg->id, msg->name);
+    }
+
+    return ESP_ERR_INVALID_ARG;
+}
+
+static esp_err_t ws_handle_automation_change(const gw_proto_cmd_automation_change_v1_t *msg)
+{
+    if (!msg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((msg->fields & GW_PROTO_AUTOMATION_CHANGE_F_ENTRY) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!msg->entry.id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return gw_model_upsert_automation(&msg->entry, NULL, NULL);
+}
+
+static esp_err_t ws_handle_settings_change(const gw_proto_cmd_settings_change_v1_t *msg)
+{
+    if (!msg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((msg->fields & GW_PROTO_SETTINGS_CHANGE_F_ALL) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!gw_model_settings_validate(&msg->settings)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return gw_model_set_settings(&msg->settings, NULL, NULL);
+}
+
+static esp_err_t ws_handle_group_items_change(const gw_proto_cmd_group_items_change_v1_t *msg)
+{
+    if (!msg || !msg->device_uid.uid[0] || msg->endpoint == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (msg->op) {
+        case GW_PROTO_GROUP_ITEMS_OP_SET:
+            if (!msg->group_id[0]) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_model_set_group_item(msg->group_id, &msg->device_uid, msg->endpoint);
+        case GW_PROTO_GROUP_ITEMS_OP_REMOVE:
+            return gw_model_remove_group_item_by_endpoint(&msg->device_uid, msg->endpoint);
+        case GW_PROTO_GROUP_ITEMS_OP_REORDER:
+            if (!msg->group_id[0] || msg->order == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            return gw_model_reorder_group_item(msg->group_id, &msg->device_uid, msg->endpoint, msg->order);
+        case GW_PROTO_GROUP_ITEMS_OP_LABEL:
+            return gw_model_set_group_item_label(&msg->device_uid, msg->endpoint, msg->label);
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
 }
 
 static void ws_prune_stale_clients_locked(void)
@@ -242,27 +341,11 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             const uint8_t seconds = msg->seconds > 0 ? msg->seconds : 180;
             return gw_zigbee_permit_join(seconds);
         }
-        case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
-            ESP_LOGI(TAG, "CMD_DEVICE_RENAME received");
-            if (payload_len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
+        case GW_PROTO_MSG_CMD_DEVICE_CHANGE: {
+            if (payload_len < sizeof(gw_proto_cmd_device_change_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)payload;
-            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: uid=%s name=%s", msg->device_uid.uid, msg->name);
-            gw_proto_device_v1_t device = {0};
-            if (gw_model_get_device(&msg->device_uid, &device) != ESP_OK) {
-                return ESP_ERR_NOT_FOUND;
-            }
-            strlcpy(device.name, msg->name, sizeof(device.name));
-            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: calling upsert_device");
-            bool changed = false;
-            bool inserted = false;
-            esp_err_t err = gw_model_upsert_device(&device, &changed, &inserted);
-            ESP_LOGI(TAG, "CMD_DEVICE_RENAME: upsert_device result=%d changed=%d inserted=%d", err, changed, inserted);
-            if (err != ESP_OK) {
-                return err;
-            }
-            return ESP_OK;
+            return ws_handle_device_change((const gw_proto_cmd_device_change_v1_t *)payload);
         }
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
             if (payload_len < sizeof(gw_proto_cmd_device_remove_v1_t)) {
@@ -303,12 +386,11 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             gw_proto_group_v1_t created = {0};
             return gw_model_create_group(msg->id[0] ? msg->id : NULL, msg->name, &created);
         }
-        case GW_PROTO_MSG_CMD_GROUP_RENAME: {
-            if (payload_len < sizeof(gw_proto_cmd_group_rename_v1_t)) {
+        case GW_PROTO_MSG_CMD_GROUP_CHANGE: {
+            if (payload_len < sizeof(gw_proto_cmd_group_change_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            const gw_proto_cmd_group_rename_v1_t *msg = (const gw_proto_cmd_group_rename_v1_t *)payload;
-            return gw_model_rename_group(msg->id, msg->name);
+            return ws_handle_group_change((const gw_proto_cmd_group_change_v1_t *)payload);
         }
         case GW_PROTO_MSG_CMD_GROUP_DELETE: {
             if (payload_len < sizeof(gw_proto_cmd_group_delete_v1_t)) {
@@ -317,46 +399,17 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             const gw_proto_cmd_group_delete_v1_t *msg = (const gw_proto_cmd_group_delete_v1_t *)payload;
             return gw_model_remove_group(msg->id, NULL);
         }
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_SET: {
-            if (payload_len < sizeof(gw_proto_cmd_group_item_set_v1_t)) {
+        case GW_PROTO_MSG_CMD_GROUP_ITEMS_CHANGE: {
+            if (payload_len < sizeof(gw_proto_cmd_group_items_change_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            const gw_proto_cmd_group_item_set_v1_t *msg = (const gw_proto_cmd_group_item_set_v1_t *)payload;
-            return gw_model_set_group_item(msg->group_id, &msg->device_uid, msg->endpoint);
+            return ws_handle_group_items_change((const gw_proto_cmd_group_items_change_v1_t *)payload);
         }
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE: {
-            if (payload_len < sizeof(gw_proto_cmd_group_item_remove_v1_t)) {
+        case GW_PROTO_MSG_CMD_SETTINGS_CHANGE: {
+            if (payload_len < sizeof(gw_proto_cmd_settings_change_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            const gw_proto_cmd_group_item_remove_v1_t *msg = (const gw_proto_cmd_group_item_remove_v1_t *)payload;
-            return gw_model_remove_group_item_by_endpoint(&msg->device_uid, msg->endpoint);
-        }
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER: {
-            if (payload_len < sizeof(gw_proto_cmd_group_item_reorder_v1_t)) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-            const gw_proto_cmd_group_item_reorder_v1_t *msg = (const gw_proto_cmd_group_item_reorder_v1_t *)payload;
-            if (msg->order == 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_model_reorder_group_item(msg->group_id, &msg->device_uid, msg->endpoint, msg->order);
-        }
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL: {
-            if (payload_len < sizeof(gw_proto_cmd_group_item_label_v1_t)) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-            const gw_proto_cmd_group_item_label_v1_t *msg = (const gw_proto_cmd_group_item_label_v1_t *)payload;
-            return gw_model_set_group_item_label(&msg->device_uid, msg->endpoint, msg->label);
-        }
-        case GW_PROTO_MSG_CMD_SETTINGS_SET: {
-            if (payload_len < sizeof(gw_proto_settings_v1_t)) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-            const gw_proto_settings_v1_t *msg = (const gw_proto_settings_v1_t *)payload;
-            if (!gw_model_settings_validate(msg)) {
-                return ESP_ERR_INVALID_ARG;
-            }
-            return gw_model_set_settings(msg, NULL, NULL);
+            return ws_handle_settings_change((const gw_proto_cmd_settings_change_v1_t *)payload);
         }
         case GW_PROTO_MSG_CMD_FACTORY_RESET: {
             if (payload_len < sizeof(gw_proto_cmd_factory_reset_v1_t)) {
@@ -367,19 +420,6 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
                 ESP_LOGW(TAG, "peer factory reset request failed: %s", esp_err_to_name(peer_err));
             }
             return ws_schedule_factory_reset();
-        }
-        case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED: {
-            if (payload_len < sizeof(gw_proto_cmd_automation_set_enabled_v1_t)) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-            const gw_proto_cmd_automation_set_enabled_v1_t *msg = (const gw_proto_cmd_automation_set_enabled_v1_t *)payload;
-            gw_automation_entry_t entry = {0};
-            esp_err_t err = gw_model_get_automation(msg->id, &entry);
-            if (err != ESP_OK) {
-                return err;
-            }
-            entry.enabled = msg->enabled != 0;
-            return gw_model_upsert_automation(&entry, NULL, NULL);
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_REMOVE: {
             if (payload_len < sizeof(gw_proto_cmd_automation_remove_v1_t)) {
@@ -394,12 +434,11 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             }
             return ws_remove_all_automations();
         }
-        case GW_PROTO_MSG_CMD_AUTOMATION_SAVE: {
-            if (payload_len < sizeof(gw_automation_entry_t)) {
+        case GW_PROTO_MSG_CMD_AUTOMATION_CHANGE: {
+            if (payload_len < sizeof(gw_proto_cmd_automation_change_v1_t)) {
                 return ESP_ERR_INVALID_SIZE;
             }
-            const gw_automation_entry_t *msg = (const gw_automation_entry_t *)payload;
-            return gw_model_upsert_automation(msg, NULL, NULL);
+            return ws_handle_automation_change((const gw_proto_cmd_automation_change_v1_t *)payload);
         }
         case GW_PROTO_MSG_CMD_ACTION_EXEC: {
             if (payload_len < sizeof(gw_automation_entry_t)) {
@@ -464,26 +503,52 @@ static bool ws_is_command_type(uint8_t type)
 {
     switch (type) {
         case GW_PROTO_MSG_CMD_PERMIT_JOIN:
-        case GW_PROTO_MSG_CMD_DEVICE_RENAME:
+        case GW_PROTO_MSG_CMD_DEVICE_CHANGE:
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE:
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL:
         case GW_PROTO_MSG_CMD_GROUP_CREATE:
-        case GW_PROTO_MSG_CMD_GROUP_RENAME:
+        case GW_PROTO_MSG_CMD_GROUP_CHANGE:
         case GW_PROTO_MSG_CMD_GROUP_DELETE:
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_SET:
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE:
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER:
-        case GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL:
-        case GW_PROTO_MSG_CMD_SETTINGS_SET:
-        case GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED:
+        case GW_PROTO_MSG_CMD_GROUP_ITEMS_CHANGE:
+        case GW_PROTO_MSG_CMD_SETTINGS_CHANGE:
         case GW_PROTO_MSG_CMD_AUTOMATION_REMOVE:
         case GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL:
-        case GW_PROTO_MSG_CMD_AUTOMATION_SAVE:
+        case GW_PROTO_MSG_CMD_AUTOMATION_CHANGE:
         case GW_PROTO_MSG_CMD_ACTION_EXEC:
             return true;
         default:
             return false;
     }
+}
+
+static esp_err_t ws_route_proto_frame(httpd_req_t *req, int fd, const uint8_t *frame_buf, size_t frame_len)
+{
+    if (!req || fd <= 0 || !frame_buf || frame_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    gw_proto_hdr_t hdr = {0};
+    const uint8_t *payload = NULL;
+    esp_err_t err = gw_proto_frame_parse(frame_buf, frame_len, &hdr, &payload);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
+        return ws_send_proto_snapshot_sync(req, fd);
+    }
+
+    err = ws_handle_proto_command(hdr.type, payload, hdr.len);
+    if (err != ESP_OK && ws_is_command_type(hdr.type)) {
+        ESP_LOGW(TAG,
+                 "WS command failed type=0x%02x fd=%d err=%s",
+                 (unsigned)hdr.type,
+                 fd,
+                 esp_err_to_name(err));
+        return ESP_OK;
+    }
+
+    return err;
 }
 
 static esp_err_t ws_remove_all_automations(void)
@@ -810,7 +875,6 @@ static void ws_send_proto_model_to_fds(uint8_t type, const void *payload, uint16
     if (!payload || !fds || fd_count == 0 || payload_len == 0) {
         return;
     }
-    ESP_LOGI(TAG, "ws_send_proto_model_to_fds: type=0x%02x len=%d", type, payload_len);
     for (size_t i = 0; i < fd_count; i++) {
         (void)ws_send_proto_frame_async(fds[i], type, s_ws_seq++, payload, payload_len);
     }
@@ -822,8 +886,6 @@ static void ws_on_proto_bus_message(gw_proto_bus_channel_t channel, const gw_pro
     if (!hdr || !payload || hdr->len == 0) {
         return;
     }
-
-    ESP_LOGI(TAG, "ws_on_proto_bus_message: channel=%d type=0x%02x len=%d", channel, hdr->type, hdr->len);
 
     int fds[GW_WS_MAX_CLIENTS];
     size_t fd_count = ws_collect_client_fds(fds, GW_WS_MAX_CLIENTS);
@@ -908,24 +970,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
             return err;
         }
         if (frame.type == HTTPD_WS_TYPE_BINARY) {
-            gw_proto_hdr_t hdr = {0};
-            const uint8_t *payload = NULL;
-            err = gw_proto_frame_parse(buf, frame.len, &hdr, &payload);
-            if (err == ESP_OK) {
-                if (hdr.type == GW_PROTO_MSG_SNAPSHOT_REQUEST) {
-                    err = ws_send_proto_snapshot_sync(req, fd);
-                } else {
-                    err = ws_handle_proto_command(hdr.type, payload, hdr.len);
-                    if (err != ESP_OK && ws_is_command_type(hdr.type)) {
-                        ESP_LOGW(TAG,
-                                 "WS command failed type=0x%02x fd=%d err=%s",
-                                 (unsigned)hdr.type,
-                                 fd,
-                                 esp_err_to_name(err));
-                        err = ESP_OK;
-                    }
-                }
-            }
+            err = ws_route_proto_frame(req, fd, buf, frame.len);
         }
         free(buf);
         if (err != ESP_OK) return err;

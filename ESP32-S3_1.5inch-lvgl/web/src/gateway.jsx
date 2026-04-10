@@ -6,14 +6,13 @@ import { setWsCommandSender } from './wsCommandBus.js'
 import {
 	protoApplyFrame,
 	protoEncodeActionExec,
-	protoEncodeAutomationSave,
+	protoEncodeAutomationChange,
 	protoEncodeAutomationRemove,
 	protoEncodeAutomationResetAll,
-	protoEncodeAutomationSetEnabled,
+	protoEncodeDeviceChange,
 	protoCreateSnapshotAccumulator,
 	protoEncodeDeviceRemove,
 	protoEncodeDeviceRemoveAll,
-	protoEncodeDeviceRename,
 	protoEncodeFactoryReset,
 	protoEncodePermitJoin,
 	protoEncodeSnapshotRequest,
@@ -25,6 +24,52 @@ import {
 function wsUrl(path) {
 	const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
 	return `${proto}://${window.location.host}${path}`
+}
+
+function protoTypeName(type) {
+	const names = {
+		0x40: 'SYNC_BEGIN',
+		0x41: 'SYNC_END',
+		0x42: 'DEVICE_UPSERT',
+		0x43: 'DEVICE_REMOVE',
+		0x44: 'ENDPOINT_UPSERT',
+		0x45: 'ENDPOINT_REMOVE',
+		0x46: 'STATE_ITEM',
+		0x47: 'STATE_REMOVE',
+		0x48: 'GROUP_UPSERT',
+		0x49: 'GROUP_REMOVE',
+		0x4a: 'GROUP_ITEM_UPSERT',
+		0x4b: 'GROUP_ITEM_REMOVE',
+		0x4c: 'SETTINGS',
+		0x4d: 'SNAPSHOT_REQUEST',
+		0x4e: 'AUTOMATION_UPSERT',
+		0x4f: 'AUTOMATION_REMOVE',
+		0x50: 'CMD_PERMIT_JOIN',
+		0x52: 'CMD_DEVICE_REMOVE',
+		0x53: 'CMD_DEVICE_REMOVE_ALL',
+		0x54: 'CMD_GROUP_CREATE',
+		0x56: 'CMD_GROUP_DELETE',
+		0x5d: 'CMD_AUTOMATION_REMOVE',
+		0x5e: 'CMD_AUTOMATION_RESET_ALL',
+		0x60: 'CMD_ACTION_EXEC',
+		0x70: 'EVENT_TRACE',
+		0x72: 'CMD_FACTORY_RESET',
+		0x73: 'CMD_DEVICE_CHANGE',
+		0x74: 'CMD_GROUP_CHANGE',
+		0x75: 'CMD_AUTOMATION_CHANGE',
+		0x76: 'CMD_SETTINGS_CHANGE',
+		0x77: 'CMD_GROUP_ITEMS_CHANGE',
+	}
+	return names[type] ?? `0x${Number(type ?? 0).toString(16).padStart(2, '0')}`
+}
+
+function logProtoFrame(direction, frame) {
+	if (!frame) return
+	console.debug(`[ws ${direction}] ${protoTypeName(frame.type)}`, {
+		type: frame.type,
+		seq: frame.seq,
+		len: frame.len,
+	})
 }
 
 const GatewayContext = createContext(null)
@@ -53,6 +98,7 @@ export function GatewayProvider({ children }) {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			throw new Error('ws not connected')
 		}
+		logProtoFrame('tx', protoTryParseFrame(buffer))
 		ws.send(buffer)
 	}, [])
 
@@ -68,7 +114,9 @@ export function GatewayProvider({ children }) {
 			throw new Error('ws not connected')
 		}
 		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
-		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+		const frame = protoEncodeSnapshotRequest(Date.now() & 0xffff)
+		logProtoFrame('tx', protoTryParseFrame(frame))
+		ws.send(frame)
 		return devices
 	}, [devices])
 
@@ -100,7 +148,9 @@ export function GatewayProvider({ children }) {
 				setWsStatus('connected')
 				setWsCommandSender(sendProtoCommand)
 				protoSnapshotRef.current = protoCreateSnapshotAccumulator()
-				ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+				const frame = protoEncodeSnapshotRequest(Date.now() & 0xffff)
+				logProtoFrame('tx', protoTryParseFrame(frame))
+				ws.send(frame)
 			}
 
 			ws.onmessage = (ev) => {
@@ -109,6 +159,7 @@ export function GatewayProvider({ children }) {
 					if (!(ev?.data instanceof ArrayBuffer)) return
 					const protoFrame = protoTryParseFrame(ev.data)
 					if (protoFrame) {
+						logProtoFrame('rx', protoFrame)
 						const protoSettings = protoParseSettingsFrame(protoFrame)
 						if (protoSettings) {
 							setProjectSettings(protoSettings)
@@ -173,7 +224,9 @@ export function GatewayProvider({ children }) {
 			throw new Error('ws not connected')
 		}
 		protoSnapshotRef.current = protoCreateSnapshotAccumulator()
-		ws.send(protoEncodeSnapshotRequest(Date.now() & 0xffff))
+		const frame = protoEncodeSnapshotRequest(Date.now() & 0xffff)
+		logProtoFrame('tx', protoTryParseFrame(frame))
+		ws.send(frame)
 		return automations
 	}, [automations])
 
@@ -182,7 +235,7 @@ export function GatewayProvider({ children }) {
 	}, [nextSeq, sendProtoCommand])
 
 	const renameDevice = useCallback(async (deviceUid, name) => {
-		sendProtoCommand(protoEncodeDeviceRename(deviceUid, name, nextSeq()))
+		sendProtoCommand(protoEncodeDeviceChange({ device_uid: deviceUid, name }, nextSeq()))
 	}, [nextSeq, sendProtoCommand])
 
 	const removeDevice = useCallback(async (deviceUid) => {
@@ -198,8 +251,12 @@ export function GatewayProvider({ children }) {
 	}, [nextSeq, sendProtoCommand])
 
 	const setAutomationEnabled = useCallback(async (id, enabled) => {
-		sendProtoCommand(protoEncodeAutomationSetEnabled(id, enabled, nextSeq()))
-	}, [nextSeq, sendProtoCommand])
+		const current = Array.isArray(automations) ? automations.find((it) => String(it?.id ?? '') === String(id ?? '')) : null
+		if (!current) {
+			throw new Error(`automation not found: ${String(id ?? '')}`)
+		}
+		sendProtoCommand(protoEncodeAutomationChange({ ...current, enabled: Boolean(enabled) }, nextSeq()))
+	}, [automations, nextSeq, sendProtoCommand])
 
 	const removeAutomation = useCallback(async (id) => {
 		sendProtoCommand(protoEncodeAutomationRemove(id, nextSeq()))
@@ -210,7 +267,7 @@ export function GatewayProvider({ children }) {
 	}, [nextSeq, sendProtoCommand])
 
 	const saveAutomation = useCallback(async (draft) => {
-		sendProtoCommand(protoEncodeAutomationSave(draft, nextSeq()))
+		sendProtoCommand(protoEncodeAutomationChange(draft, nextSeq()))
 	}, [nextSeq, sendProtoCommand])
 
 	const execActions = useCallback(async (actions) => {

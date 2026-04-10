@@ -236,27 +236,7 @@ void gw_proto_trim_trace_v1(gw_proto_trace_v1_t *dst, const gw_proto_trace_v1_t 
     trim_fixed_string(dst->error_text, sizeof(dst->error_text), src->error_text);
 }
 
-void gw_proto_trim_cmd_device_rename_v1(gw_proto_cmd_device_rename_v1_t *dst, const gw_proto_cmd_device_rename_v1_t *src)
-{
-    if (!dst || !src) {
-        return;
-    }
-
-    trim_fixed_string(dst->device_uid.uid, sizeof(dst->device_uid.uid), src->device_uid.uid);
-    trim_fixed_string(dst->name, sizeof(dst->name), src->name);
-}
-
 void gw_proto_trim_cmd_group_create_v1(gw_proto_cmd_group_create_v1_t *dst, const gw_proto_cmd_group_create_v1_t *src)
-{
-    if (!dst || !src) {
-        return;
-    }
-
-    trim_fixed_string(dst->id, sizeof(dst->id), src->id);
-    trim_fixed_string(dst->name, sizeof(dst->name), src->name);
-}
-
-void gw_proto_trim_cmd_group_rename_v1(gw_proto_cmd_group_rename_v1_t *dst, const gw_proto_cmd_group_rename_v1_t *src)
 {
     if (!dst || !src) {
         return;
@@ -273,27 +253,6 @@ void gw_proto_trim_cmd_group_delete_v1(gw_proto_cmd_group_delete_v1_t *dst, cons
     }
 
     trim_fixed_string(dst->id, sizeof(dst->id), src->id);
-}
-
-void gw_proto_trim_cmd_group_item_label_v1(gw_proto_cmd_group_item_label_v1_t *dst, const gw_proto_cmd_group_item_label_v1_t *src)
-{
-    if (!dst || !src) {
-        return;
-    }
-
-    trim_fixed_string(dst->device_uid.uid, sizeof(dst->device_uid.uid), src->device_uid.uid);
-    dst->endpoint = src->endpoint;
-    trim_fixed_string(dst->label, sizeof(dst->label), src->label);
-}
-
-void gw_proto_trim_cmd_automation_set_enabled_v1(gw_proto_cmd_automation_set_enabled_v1_t *dst, const gw_proto_cmd_automation_set_enabled_v1_t *src)
-{
-    if (!dst || !src) {
-        return;
-    }
-
-    trim_fixed_string(dst->id, sizeof(dst->id), src->id);
-    dst->enabled = src->enabled ? 1 : 0;
 }
 
 void gw_proto_trim_cmd_automation_remove_v1(gw_proto_cmd_automation_remove_v1_t *dst, const gw_proto_cmd_automation_remove_v1_t *src)

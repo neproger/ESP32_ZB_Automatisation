@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "micro_db/micro_db_flash.h"
 
 enum {
@@ -13,6 +15,31 @@ enum {
 };
 
 static const char *TAG = "micro_db";
+
+static SemaphoreHandle_t table_mutex(const micro_db_table_t *table)
+{
+    return table ? (SemaphoreHandle_t)table->lock : NULL;
+}
+
+static esp_err_t table_lock(const micro_db_table_t *table)
+{
+    SemaphoreHandle_t m = table_mutex(table);
+    if (m == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTakeRecursive(m, portMAX_DELAY) != pdTRUE) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static void table_unlock(const micro_db_table_t *table)
+{
+    SemaphoreHandle_t m = table_mutex(table);
+    if (m != NULL) {
+        (void)xSemaphoreGiveRecursive(m);
+    }
+}
 
 static uint32_t hash_bytes(const void *data, size_t len)
 {
@@ -204,8 +231,14 @@ esp_err_t micro_db_table_init(micro_db_table_t *table, const micro_db_table_sche
     table->schema = schema;
     table->capacity = schema->max_records;
     table->primary_capacity = next_index_capacity(schema->max_records);
+    table->lock = xSemaphoreCreateRecursiveMutex();
+    if (table->lock == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
 
     if ((schema->backing & MICRO_DB_BACKING_RAM) == 0) {
+        vSemaphoreDelete((SemaphoreHandle_t)table->lock);
+        table->lock = NULL;
         return ESP_ERR_NOT_SUPPORTED;
     }
 
@@ -265,12 +298,21 @@ esp_err_t micro_db_table_deinit(micro_db_table_t *table)
         return ESP_ERR_INVALID_ARG;
     }
 
+    SemaphoreHandle_t m = table_mutex(table);
+    if (m) {
+        (void)xSemaphoreTakeRecursive(m, portMAX_DELAY);
+    }
+
     free(table->primary_keys);
     free(table->primary_states);
     free(table->primary_slots);
     free(table->free_slots);
     free(table->slot_used);
     free(table->records);
+    if (m) {
+        (void)xSemaphoreGiveRecursive(m);
+        vSemaphoreDelete(m);
+    }
     memset(table, 0, sizeof(*table));
     return ESP_OK;
 }
@@ -283,6 +325,10 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     if (!table || !table->initialized || !record) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
 
     if (out_changed) {
         *out_changed = false;
@@ -293,6 +339,7 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
 
     uint8_t key_buf[128];
     if (table->schema->key_size > sizeof(key_buf)) {
+        table_unlock(table);
         return ESP_ERR_NOT_SUPPORTED;
     }
     memset(key_buf, 0, sizeof(key_buf));
@@ -311,13 +358,16 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
         if (changed) {
             esp_err_t err = persist_slot(table, (uint32_t)slot_idx);
             if (err != ESP_OK) {
+                table_unlock(table);
                 return err;
             }
         }
+        table_unlock(table);
         return ESP_OK;
     }
 
     if (table->free_count == 0) {
+        table_unlock(table);
         return ESP_ERR_NO_MEM;
     }
 
@@ -336,13 +386,17 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     }
     esp_err_t err = persist_slot(table, slot);
     if (err != ESP_OK) {
+        table_unlock(table);
         return err;
     }
     err = persist_slot_used(table, slot);
     if (err != ESP_OK) {
+        table_unlock(table);
         return err;
     }
-    return persist_meta(table);
+    err = persist_meta(table);
+    table_unlock(table);
+    return err;
 }
 
 esp_err_t micro_db_table_get(const micro_db_table_t *table,
@@ -352,15 +406,21 @@ esp_err_t micro_db_table_get(const micro_db_table_t *table,
     if (!table || !table->initialized || !key || !out_record) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
 
     const int slot = find_record_slot(table, key);
     if (slot < 0) {
+        table_unlock(table);
         return ESP_ERR_NOT_FOUND;
     }
 
     const uint8_t *base = (const uint8_t *)table->records;
     const void *record = base + ((size_t)slot * table->schema->record_size);
     memcpy(out_record, record, table->schema->record_size);
+    table_unlock(table);
     return ESP_OK;
 }
 
@@ -371,6 +431,10 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
     if (!table || !table->initialized || !key) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
 
     if (out_removed) {
         *out_removed = false;
@@ -378,6 +442,7 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
 
     const int slot_idx = find_record_slot(table, key);
     if (slot_idx < 0) {
+        table_unlock(table);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -400,9 +465,12 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
     }
     esp_err_t err = persist_slot_used(table, slot);
     if (err != ESP_OK) {
+        table_unlock(table);
         return err;
     }
-    return persist_meta(table);
+    err = persist_meta(table);
+    table_unlock(table);
+    return err;
 }
 
 size_t micro_db_table_count(const micro_db_table_t *table)
@@ -410,7 +478,12 @@ size_t micro_db_table_count(const micro_db_table_t *table)
     if (!table || !table->initialized) {
         return 0;
     }
-    return table->live_count;
+    if (table_lock(table) != ESP_OK) {
+        return 0;
+    }
+    const size_t count = table->live_count;
+    table_unlock(table);
+    return count;
 }
 
 esp_err_t micro_db_table_get_slot(const micro_db_table_t *table,
@@ -420,13 +493,19 @@ esp_err_t micro_db_table_get_slot(const micro_db_table_t *table,
     if (!table || !table->initialized || !key || !out_slot) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
 
     const int slot = find_record_slot(table, key);
     if (slot < 0) {
+        table_unlock(table);
         return ESP_ERR_NOT_FOUND;
     }
 
     *out_slot = (uint32_t)slot;
+    table_unlock(table);
     return ESP_OK;
 }
 
@@ -437,13 +516,19 @@ esp_err_t micro_db_table_get_by_slot(const micro_db_table_t *table,
     if (!table || !table->initialized || !out_record) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
     if (slot >= table->capacity || !table->slot_used[slot]) {
+        table_unlock(table);
         return ESP_ERR_NOT_FOUND;
     }
 
     const uint8_t *base = (const uint8_t *)table->records;
     const void *record = base + ((size_t)slot * table->schema->record_size);
     memcpy(out_record, record, table->schema->record_size);
+    table_unlock(table);
     return ESP_OK;
 }
 
@@ -454,7 +539,12 @@ esp_err_t micro_db_table_get_by_index(const micro_db_table_t *table,
     if (!table || !table->initialized || !out_record) {
         return ESP_ERR_INVALID_ARG;
     }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
     if (index >= table->live_count) {
+        table_unlock(table);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -467,11 +557,13 @@ esp_err_t micro_db_table_get_by_index(const micro_db_table_t *table,
         if (seen == index) {
             const void *record = base + (slot * table->schema->record_size);
             memcpy(out_record, record, table->schema->record_size);
+            table_unlock(table);
             return ESP_OK;
         }
         seen++;
     }
 
+    table_unlock(table);
     return ESP_ERR_NOT_FOUND;
 }
 
@@ -480,6 +572,9 @@ size_t micro_db_table_iter(const micro_db_table_t *table,
                            void *user_ctx)
 {
     if (!table || !table->initialized || !cb) {
+        return 0;
+    }
+    if (table_lock(table) != ESP_OK) {
         return 0;
     }
 
@@ -495,6 +590,7 @@ size_t micro_db_table_iter(const micro_db_table_t *table,
             break;
         }
     }
+    table_unlock(table);
     return visited;
 }
 
@@ -503,6 +599,9 @@ size_t micro_db_table_iter_slots(const micro_db_table_t *table,
                                  void *user_ctx)
 {
     if (!table || !table->initialized || !cb) {
+        return 0;
+    }
+    if (table_lock(table) != ESP_OK) {
         return 0;
     }
 
@@ -518,5 +617,6 @@ size_t micro_db_table_iter_slots(const micro_db_table_t *table,
             break;
         }
     }
+    table_unlock(table);
     return visited;
 }

@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -9,7 +10,7 @@
 
 enum {
     MICRO_DB_FLASH_MAX_TABLES = 16,
-    MICRO_DB_FLASH_LAYOUT_VERSION = 1,
+    MICRO_DB_FLASH_LAYOUT_VERSION = 2,
     MICRO_DB_FLASH_SECTOR_SIZE = 0x1000,
     MICRO_DB_FLASH_DIR_SECTOR = 0x1000,
     MICRO_DB_FLASH_ALIGN = 0x1000,
@@ -69,6 +70,11 @@ static size_t table_slot_used_size(const micro_db_table_t *table)
     return table->capacity * sizeof(uint8_t);
 }
 
+static size_t table_slot_crc_size(const micro_db_table_t *table)
+{
+    return table->capacity * sizeof(uint32_t);
+}
+
 static size_t table_records_size(const micro_db_table_t *table)
 {
     return table->capacity * table->schema->record_size;
@@ -78,6 +84,7 @@ static size_t table_region_size(const micro_db_table_t *table)
 {
     const size_t raw = sizeof(micro_db_flash_table_hdr_t) +
                        table_slot_used_size(table) +
+                       table_slot_crc_size(table) +
                        table_records_size(table);
     return align_up(raw, MICRO_DB_FLASH_ALIGN);
 }
@@ -87,9 +94,24 @@ static uint32_t table_slot_used_offset(const micro_db_flash_dir_entry_t *entry)
     return entry->region_offset + (uint32_t)sizeof(micro_db_flash_table_hdr_t);
 }
 
-static uint32_t table_records_offset(const micro_db_flash_dir_entry_t *entry)
+static uint32_t table_slot_crc_offset(const micro_db_flash_dir_entry_t *entry)
 {
     return table_slot_used_offset(entry) + entry->capacity;
+}
+
+static uint32_t table_records_offset(const micro_db_flash_dir_entry_t *entry)
+{
+    return table_slot_crc_offset(entry) + (entry->capacity * sizeof(uint32_t));
+}
+
+static uint32_t record_checksum32(const uint8_t *data, size_t len)
+{
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; ++i) {
+        h ^= data[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1u;
 }
 
 static esp_err_t patch_partition(uint32_t offset, const void *data, size_t len)
@@ -293,6 +315,11 @@ static esp_err_t allocate_entry(const micro_db_table_t *table, int *out_index)
             return err;
         }
 
+        err = write_zeros(table_slot_crc_offset(entry), table->capacity * sizeof(uint32_t));
+        if (err != ESP_OK) {
+            return err;
+        }
+
         err = write_zeros(table_records_offset(entry),
                           (size_t)table->capacity * table->schema->record_size);
         if (err != ESP_OK) {
@@ -402,9 +429,18 @@ esp_err_t micro_db_flash_write_slot(const micro_db_table_t *table, uint32_t slot
     }
 
     const uint8_t *base = (const uint8_t *)table->records;
-    return patch_partition(table_records_offset(entry) + (slot * table->schema->record_size),
-                           base + (slot * table->schema->record_size),
-                           table->schema->record_size);
+    const uint8_t *record = base + (slot * table->schema->record_size);
+    err = patch_partition(table_records_offset(entry) + (slot * table->schema->record_size),
+                          record,
+                          table->schema->record_size);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    const uint32_t checksum = record_checksum32(record, table->schema->record_size);
+    return patch_partition(table_slot_crc_offset(entry) + (slot * sizeof(uint32_t)),
+                           &checksum,
+                           sizeof(checksum));
 }
 
 esp_err_t micro_db_flash_persist_table(const micro_db_table_t *table)
@@ -421,6 +457,27 @@ esp_err_t micro_db_flash_persist_table(const micro_db_table_t *table)
     }
 
     err = patch_partition(table_slot_used_offset(entry), table->slot_used, table_slot_used_size(table));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint32_t *crc_buf = (uint32_t *)calloc(table->capacity, sizeof(uint32_t));
+    if (!crc_buf) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const uint8_t *base = (const uint8_t *)table->records;
+    for (size_t i = 0; i < table->capacity; ++i) {
+        if (!table->slot_used[i]) {
+            crc_buf[i] = 0u;
+            continue;
+        }
+        const uint8_t *record = base + (i * table->schema->record_size);
+        crc_buf[i] = record_checksum32(record, table->schema->record_size);
+    }
+
+    err = patch_partition(table_slot_crc_offset(entry), crc_buf, table_slot_crc_size(table));
+    free(crc_buf);
     if (err != ESP_OK) {
         return err;
     }
@@ -482,6 +539,11 @@ write_fresh_image:
         return err;
     }
 
+    err = write_zeros(table_slot_crc_offset(entry), table->capacity * sizeof(uint32_t));
+    if (err != ESP_OK) {
+        return err;
+    }
+
     return write_zeros(table_records_offset(entry), (size_t)table->capacity * table->schema->record_size);
 }
 
@@ -532,6 +594,17 @@ esp_err_t micro_db_flash_load_table(micro_db_table_t *table)
         return err;
     }
 
+    uint32_t *slot_crc = (uint32_t *)calloc(table->capacity, sizeof(uint32_t));
+    if (!slot_crc) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = esp_partition_read(s_part, table_slot_crc_offset(entry), slot_crc, table_slot_crc_size(table));
+    if (err != ESP_OK) {
+        free(slot_crc);
+        return err;
+    }
+
     size_t live_slots = 0;
     size_t invalid_slots = 0;
     for (size_t i = 0; i < table->capacity; ++i) {
@@ -555,8 +628,37 @@ esp_err_t micro_db_flash_load_table(micro_db_table_t *table)
                  (unsigned)invalid_slots,
                  (unsigned)live_slots,
                  (unsigned)hdr.live_count);
+        free(slot_crc);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    return esp_partition_read(s_part, table_records_offset(entry), table->records, table_records_size(table));
+    err = esp_partition_read(s_part, table_records_offset(entry), table->records, table_records_size(table));
+    if (err != ESP_OK) {
+        free(slot_crc);
+        return err;
+    }
+
+    const uint8_t *base = (const uint8_t *)table->records;
+    for (size_t i = 0; i < table->capacity; ++i) {
+        if (!table->slot_used[i]) {
+            continue;
+        }
+        const uint8_t *record = base + (i * table->schema->record_size);
+        const uint32_t expected = slot_crc[i];
+        const uint32_t actual = record_checksum32(record, table->schema->record_size);
+        if (expected == 0u || expected != actual) {
+            ESP_LOGW(TAG,
+                     "corrupt record checksum table=%s key=%s slot=%u expected=0x%08" PRIX32 " actual=0x%08" PRIX32,
+                     table->schema->name ? table->schema->name : "(unnamed)",
+                     table->schema->persist_key ? table->schema->persist_key : "(none)",
+                     (unsigned)i,
+                     expected,
+                     actual);
+            free(slot_crc);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+
+    free(slot_crc);
+    return ESP_OK;
 }

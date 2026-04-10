@@ -45,6 +45,8 @@ esp_err_t gw_zigbee_device_leave(const gw_device_uid_t *uid, uint16_t short_addr
 // If we receive messages from an unknown short address, trigger discovery (IEEE -> endpoints/clusters).
 // Safe to call from any context; request is scheduled into Zigbee context.
 esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr);
+// Same as gw_zigbee_discover_by_short(), but bypasses short-lived anti-stampede throttle.
+esp_err_t gw_zigbee_discover_by_short_force(uint16_t short_addr);
 
 // Send On/Off/Toggle to a device endpoint (action executor primitive for automations).
 // Safe to call from any context; request is scheduled into Zigbee context.

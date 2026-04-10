@@ -27,24 +27,20 @@ export const GW_PROTO_MSG_SNAPSHOT_REQUEST = 0x4d
 export const GW_PROTO_MSG_AUTOMATION_UPSERT = 0x4e
 export const GW_PROTO_MSG_AUTOMATION_REMOVE = 0x4f
 export const GW_PROTO_MSG_CMD_PERMIT_JOIN = 0x50
-export const GW_PROTO_MSG_CMD_DEVICE_RENAME = 0x51
 export const GW_PROTO_MSG_CMD_DEVICE_REMOVE = 0x52
 export const GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL = 0x53
 export const GW_PROTO_MSG_CMD_GROUP_CREATE = 0x54
-export const GW_PROTO_MSG_CMD_GROUP_RENAME = 0x55
 export const GW_PROTO_MSG_CMD_GROUP_DELETE = 0x56
-export const GW_PROTO_MSG_CMD_GROUP_ITEM_SET = 0x57
-export const GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE = 0x58
-export const GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER = 0x59
-export const GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL = 0x5a
-export const GW_PROTO_MSG_CMD_SETTINGS_SET = 0x5b
-export const GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED = 0x5c
 export const GW_PROTO_MSG_CMD_AUTOMATION_REMOVE = 0x5d
 export const GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL = 0x5e
-export const GW_PROTO_MSG_CMD_AUTOMATION_SAVE = 0x5f
 export const GW_PROTO_MSG_CMD_ACTION_EXEC = 0x60
 export const GW_PROTO_MSG_EVENT_TRACE = 0x70
 export const GW_PROTO_MSG_CMD_FACTORY_RESET = 0x72
+export const GW_PROTO_MSG_CMD_DEVICE_CHANGE = 0x73
+export const GW_PROTO_MSG_CMD_GROUP_CHANGE = 0x74
+export const GW_PROTO_MSG_CMD_AUTOMATION_CHANGE = 0x75
+export const GW_PROTO_MSG_CMD_SETTINGS_CHANGE = 0x76
+export const GW_PROTO_MSG_CMD_GROUP_ITEMS_CHANGE = 0x77
 
 export const GW_PROTO_SYNC_SCOPE_FULL = 1
 export const GW_PROTO_SYNC_SCOPE_DEVICES = 2
@@ -372,10 +368,11 @@ export function protoEncodePermitJoin(seconds = 180, seq = 1) {
   return buf
 }
 
-export function protoEncodeDeviceRename(deviceUid, name, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_DEVICE_RENAME, DEVICE_UID_SIZE + DEVICE_NAME_SIZE, seq)
-  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
-  writeFixedString(view, HDR_SIZE + DEVICE_UID_SIZE, DEVICE_NAME_SIZE, name)
+export function protoEncodeDeviceChange(device, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_DEVICE_CHANGE, DEVICE_UID_SIZE + 4 + DEVICE_NAME_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, device?.device_uid)
+  view.setUint32(HDR_SIZE + DEVICE_UID_SIZE, 1, true)
+  writeFixedString(view, HDR_SIZE + DEVICE_UID_SIZE + 4, DEVICE_NAME_SIZE, device?.name)
   return buf
 }
 
@@ -396,10 +393,11 @@ export function protoEncodeGroupCreate(id, name, seq = 1) {
   return buf
 }
 
-export function protoEncodeGroupRename(id, name, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_RENAME, GROUP_ID_SIZE + GROUP_NAME_SIZE, seq)
-  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, id)
-  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, GROUP_NAME_SIZE, name)
+export function protoEncodeGroupChange(group, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_CHANGE, GROUP_ID_SIZE + 4 + GROUP_NAME_SIZE, seq)
+  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, group?.id)
+  view.setUint32(HDR_SIZE + GROUP_ID_SIZE, 1, true)
+  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE + 4, GROUP_NAME_SIZE, group?.name)
   return buf
 }
 
@@ -410,56 +408,65 @@ export function protoEncodeGroupDelete(id, seq = 1) {
 }
 
 export function protoEncodeGroupItemSet(groupId, deviceUid, endpointId, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_SET, GROUP_ID_SIZE + DEVICE_UID_SIZE + 4, seq)
-  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, groupId)
-  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, DEVICE_UID_SIZE, deviceUid)
-  view.setUint8(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
-  return buf
+  return protoEncodeGroupItemsChange({
+    op: 1,
+    group_id: groupId,
+    device_uid: deviceUid,
+    endpoint: endpointId,
+  }, seq)
 }
 
 export function protoEncodeGroupItemRemove(deviceUid, endpointId, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE, DEVICE_UID_SIZE + 4, seq)
-  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
-  view.setUint8(HDR_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
-  return buf
+  return protoEncodeGroupItemsChange({
+    op: 2,
+    device_uid: deviceUid,
+    endpoint: endpointId,
+  }, seq)
 }
 
 export function protoEncodeGroupItemReorder(groupId, deviceUid, endpointId, order, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER, GROUP_ID_SIZE + DEVICE_UID_SIZE + 8, seq)
-  writeFixedString(view, HDR_SIZE + 0, GROUP_ID_SIZE, groupId)
-  writeFixedString(view, HDR_SIZE + GROUP_ID_SIZE, DEVICE_UID_SIZE, deviceUid)
-  view.setUint8(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
-  view.setUint32(HDR_SIZE + GROUP_ID_SIZE + DEVICE_UID_SIZE + 4, Number(order) || 0, true)
-  return buf
+  return protoEncodeGroupItemsChange({
+    op: 3,
+    group_id: groupId,
+    device_uid: deviceUid,
+    endpoint: endpointId,
+    order,
+  }, seq)
 }
 
 export function protoEncodeGroupItemLabel(deviceUid, endpointId, label, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL, DEVICE_UID_SIZE + 4 + GROUP_LABEL_SIZE, seq)
-  writeFixedString(view, HDR_SIZE + 0, DEVICE_UID_SIZE, deviceUid)
-  view.setUint8(HDR_SIZE + DEVICE_UID_SIZE, Number(endpointId) || 0)
-  writeFixedString(view, HDR_SIZE + DEVICE_UID_SIZE + 4, GROUP_LABEL_SIZE, label)
+  return protoEncodeGroupItemsChange({
+    op: 4,
+    device_uid: deviceUid,
+    endpoint: endpointId,
+    label,
+  }, seq)
+}
+
+export function protoEncodeGroupItemsChange(change, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_GROUP_ITEMS_CHANGE, 4 + GROUP_ID_SIZE + DEVICE_UID_SIZE + 4 + 4 + GROUP_LABEL_SIZE, seq)
+  view.setUint32(HDR_SIZE + 0, Number(change?.op) || 0, true)
+  writeFixedString(view, HDR_SIZE + 4, GROUP_ID_SIZE, change?.group_id)
+  writeFixedString(view, HDR_SIZE + 4 + GROUP_ID_SIZE, DEVICE_UID_SIZE, change?.device_uid)
+  view.setUint8(HDR_SIZE + 4 + GROUP_ID_SIZE + DEVICE_UID_SIZE, Number(change?.endpoint) || 0)
+  view.setUint32(HDR_SIZE + 4 + GROUP_ID_SIZE + DEVICE_UID_SIZE + 4, Number(change?.order) || 0, true)
+  writeFixedString(view, HDR_SIZE + 4 + GROUP_ID_SIZE + DEVICE_UID_SIZE + 8, GROUP_LABEL_SIZE, change?.label)
   return buf
 }
 
-export function protoEncodeSettingsSet(settings, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_SET, 16, seq)
-  view.setUint32(HDR_SIZE + 0, Number(settings?.screensaver_timeout_ms) || 0, true)
-  view.setUint32(HDR_SIZE + 4, Number(settings?.weather_success_interval_ms) || 0, true)
-  view.setUint32(HDR_SIZE + 8, Number(settings?.weather_retry_interval_ms) || 0, true)
-  view.setUint8(HDR_SIZE + 12, settings?.timezone_auto ? 1 : 0)
-  view.setInt16(HDR_SIZE + 14, Number(settings?.timezone_offset_min) || 0, true)
+export function protoEncodeSettingsChange(settings, seq = 1) {
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_CHANGE, 4 + 16, seq)
+  view.setUint32(HDR_SIZE + 0, 1, true)
+  view.setUint32(HDR_SIZE + 4, Number(settings?.screensaver_timeout_ms) || 0, true)
+  view.setUint32(HDR_SIZE + 8, Number(settings?.weather_success_interval_ms) || 0, true)
+  view.setUint32(HDR_SIZE + 12, Number(settings?.weather_retry_interval_ms) || 0, true)
+  view.setUint8(HDR_SIZE + 16, settings?.timezone_auto ? 1 : 0)
+  view.setInt16(HDR_SIZE + 18, Number(settings?.timezone_offset_min) || 0, true)
   return buf
 }
 
 export function protoEncodeFactoryReset(seq = 1) {
   return encodeProtoFrame(GW_PROTO_MSG_CMD_FACTORY_RESET, 4, seq).buf
-}
-
-export function protoEncodeAutomationSetEnabled(id, enabled, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED, AUTO_ID_SIZE + 4, seq)
-  writeFixedString(view, HDR_SIZE + 0, AUTO_ID_SIZE, id)
-  view.setUint8(HDR_SIZE + AUTO_ID_SIZE, enabled ? 1 : 0)
-  return buf
 }
 
 export function protoEncodeAutomationRemove(id, seq = 1) {
@@ -641,10 +648,11 @@ function encodeAutomationEntryPayload(draft) {
   return new Uint8Array(payload)
 }
 
-export function protoEncodeAutomationSave(draft, seq = 1) {
+export function protoEncodeAutomationChange(draft, seq = 1) {
   const payload = encodeAutomationEntryPayload(draft)
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_SAVE, payload.length, seq)
-  new Uint8Array(buf, HDR_SIZE).set(payload)
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_CHANGE, 4 + payload.length, seq)
+  view.setUint32(HDR_SIZE + 0, 1, true)
+  new Uint8Array(buf, HDR_SIZE + 4).set(payload)
   return buf
 }
 

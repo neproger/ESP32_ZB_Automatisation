@@ -14,6 +14,14 @@ typedef struct {
     size_t cap;
 } state_key_list_t;
 
+void gw_model_store_hooks_force_link(void)
+{
+    /* Intentionally empty.
+     * Called from gw_model_init() to force this TU into link and override
+     * weak default hooks from shared gw_store_hooks_default.c.
+     */
+}
+
 static bool collect_state_key_cb(const void *record, void *user_ctx)
 {
     const gw_proto_state_item_v1_t *state = (const gw_proto_state_item_v1_t *)record;

@@ -726,7 +726,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
     switch (frame->hdr.type) {
         case GW_PROTO_MSG_SNAPSHOT_REQUEST:
         case GW_PROTO_MSG_CMD_PERMIT_JOIN:
-        case GW_PROTO_MSG_CMD_DEVICE_RENAME:
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE:
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL:
         case GW_PROTO_MSG_CMD_WIFI_CONFIG_SET:
@@ -737,11 +736,6 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
         case GW_PROTO_MSG_CMD_COLOR_XY:
         case GW_PROTO_MSG_CMD_COLOR_TEMP:
         case GW_PROTO_MSG_CMD_STATE_SYNC:
-        case GW_PROTO_MSG_CMD_IDENTIFY:
-        case GW_PROTO_MSG_CMD_BIND:
-        case GW_PROTO_MSG_CMD_UNBIND:
-        case GW_PROTO_MSG_CMD_SCENE_STORE:
-        case GW_PROTO_MSG_CMD_SCENE_RECALL:
         case GW_PROTO_MSG_CMD_FACTORY_RESET: {
             esp_err_t err = exec_proto_command(frame);
             uart_send_proto_cmd_result(frame->hdr.seq, err);
@@ -789,14 +783,6 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             }
             const gw_proto_cmd_permit_join_v1_t *msg = (const gw_proto_cmd_permit_join_v1_t *)frame->payload;
             return gw_zigbee_permit_join(msg->seconds);
-        }
-
-        case GW_PROTO_MSG_CMD_DEVICE_RENAME: {
-            if (frame->hdr.len < sizeof(gw_proto_cmd_device_rename_v1_t)) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-            const gw_proto_cmd_device_rename_v1_t *msg = (const gw_proto_cmd_device_rename_v1_t *)frame->payload;
-            return gw_c6_store_device_set_name(&msg->device_uid, msg->name);
         }
 
         case GW_PROTO_MSG_CMD_DEVICE_REMOVE: {
@@ -919,13 +905,6 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
         case GW_PROTO_MSG_CMD_STATE_SYNC:
             state_sync_request_async();
             return ESP_OK;
-
-        case GW_PROTO_MSG_CMD_IDENTIFY:
-        case GW_PROTO_MSG_CMD_BIND:
-        case GW_PROTO_MSG_CMD_UNBIND:
-        case GW_PROTO_MSG_CMD_SCENE_STORE:
-        case GW_PROTO_MSG_CMD_SCENE_RECALL:
-            return ESP_ERR_NOT_SUPPORTED;
 
         default:
             return ESP_ERR_NOT_SUPPORTED;

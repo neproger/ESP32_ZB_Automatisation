@@ -26,7 +26,6 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
 esp_err_t gw_c6_store_device_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device);
 esp_err_t gw_c6_store_device_get_full_by_index(size_t index, gw_device_full_t *out_device);
 esp_err_t gw_c6_store_device_set_status(const gw_device_uid_t *uid, gw_device_status_t status);
-esp_err_t gw_c6_store_device_set_name(const gw_device_uid_t *uid, const char *name);
 esp_err_t gw_c6_store_device_remove(const gw_device_uid_t *uid);
 size_t gw_c6_store_device_count(void);
 size_t gw_c6_store_device_list(gw_device_t *out_devices, size_t max_devices);

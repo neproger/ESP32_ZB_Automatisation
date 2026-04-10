@@ -32,11 +32,6 @@ esp_err_t gw_device_registry_get_full_by_index(size_t index, gw_device_full_t *o
     return gw_c6_store_device_get_full_by_index(index, out_device);
 }
 
-esp_err_t gw_device_registry_set_name(const gw_device_uid_t *uid, const char *name)
-{
-    return gw_c6_store_device_set_name(uid, name);
-}
-
 esp_err_t gw_device_registry_remove_full(const gw_device_uid_t *uid)
 {
     return gw_c6_store_device_remove(uid);

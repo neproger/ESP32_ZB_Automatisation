@@ -41,6 +41,12 @@ typedef struct {
 } gw_zb_discovery_session_t;
 
 static gw_zb_discovery_session_t s_sessions[GW_DEVICE_MAX_DEVICES];
+static struct {
+    gw_device_uid_t uid;
+    uint16_t short_addr;
+    char stage[16];
+    uint64_t ts_ms;
+} s_last_discovery_fail;
 
 // Runtime events that survive policy checks are forwarded to S3 unchanged.
 static esp_err_t handle_forward_event(const gw_proto_event_v1_t *evt);
@@ -337,7 +343,25 @@ static void upsert_runtime_device(const gw_device_uid_t *uid,
 
 static bool device_status_is_quarantined(gw_device_status_t status)
 {
-    return status == GW_DEVICE_STATUS_REMOVING || status == GW_DEVICE_STATUS_REMOVED;
+    return status == GW_DEVICE_STATUS_QUARANTINED || status == GW_DEVICE_STATUS_LEAVE_REQUESTED;
+}
+
+static bool recently_failed_active_ep(const gw_device_uid_t *uid, uint16_t short_addr)
+{
+    if (uid == NULL || uid->uid[0] == '\0') {
+        return false;
+    }
+    if (strcmp(s_last_discovery_fail.uid.uid, uid->uid) != 0) {
+        return false;
+    }
+    if (s_last_discovery_fail.short_addr != short_addr) {
+        return false;
+    }
+    if (strcmp(s_last_discovery_fail.stage, "active_ep") != 0) {
+        return false;
+    }
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    return (now_ms >= s_last_discovery_fail.ts_ms) && ((now_ms - s_last_discovery_fail.ts_ms) <= 15000);
 }
 
 static bool is_device_quarantined(const gw_device_uid_t *uid)
@@ -386,6 +410,24 @@ static void start_join_discovery(const gw_device_uid_t *uid,
         (void)snprintf(msg, sizeof(msg), "discover_by_short 0x%04x (%s)", (unsigned)short_addr, reason ? reason : "join");
         gw_zigbee_log_diag("join_discovery", uid->uid, short_addr, msg);
     } else if (err == ESP_ERR_INVALID_STATE) {
+        const bool allow_recovery =
+            (reason != NULL) &&
+            (strcmp(reason, "device_authorized") == 0) &&
+            recently_failed_active_ep(uid, short_addr);
+        if (allow_recovery) {
+            esp_err_t forced = gw_zigbee_discover_by_short_force(short_addr);
+            if (forced == ESP_OK) {
+                char msg[112];
+                (void)snprintf(msg,
+                               sizeof(msg),
+                               "discover_by_short forced 0x%04x (%s, recovery after active_ep fail)",
+                               (unsigned)short_addr,
+                               reason);
+                gw_zigbee_log_diag("join_discovery_recovery", uid->uid, short_addr, msg);
+                return;
+            }
+        }
+
         clear_session(find_session_by_uid(uid));
         char msg[96];
         (void)snprintf(msg, sizeof(msg), "discover_by_short suppressed 0x%04x (%s, throttled)",
@@ -452,6 +494,9 @@ static esp_err_t handle_device_annce(const gw_proto_event_v1_t *evt)
 static esp_err_t handle_leave_indication(const gw_proto_event_v1_t *evt)
 {
     log_device_event("leave indication", evt);
+    if (gw_zigbee_leave_observe_indication(&evt->device_uid, evt->short_addr)) {
+        return ESP_OK;
+    }
     purge_local_device_model(&evt->device_uid, evt->short_addr, "leave_indication");
     return ESP_OK;
 }
@@ -715,6 +760,10 @@ void gw_zigbee_handle_discovery_failed(uint16_t short_addr, const char *stage)
              session->uid.uid,
              (unsigned)short_addr,
              stage != NULL ? stage : "");
+    s_last_discovery_fail.uid = session->uid;
+    s_last_discovery_fail.short_addr = short_addr;
+    strlcpy(s_last_discovery_fail.stage, stage != NULL ? stage : "", sizeof(s_last_discovery_fail.stage));
+    s_last_discovery_fail.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
     (void)gw_c6_store_device_set_status(&session->uid, GW_DEVICE_STATUS_NEW);
     clear_session(session);
 }

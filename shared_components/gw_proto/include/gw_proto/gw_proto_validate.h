@@ -32,17 +32,9 @@ void gw_proto_trim_event_v1(gw_proto_event_v1_t *dst, const gw_proto_event_v1_t 
 
 void gw_proto_trim_trace_v1(gw_proto_trace_v1_t *dst, const gw_proto_trace_v1_t *src);
 
-void gw_proto_trim_cmd_device_rename_v1(gw_proto_cmd_device_rename_v1_t *dst, const gw_proto_cmd_device_rename_v1_t *src);
-
 void gw_proto_trim_cmd_group_create_v1(gw_proto_cmd_group_create_v1_t *dst, const gw_proto_cmd_group_create_v1_t *src);
 
-void gw_proto_trim_cmd_group_rename_v1(gw_proto_cmd_group_rename_v1_t *dst, const gw_proto_cmd_group_rename_v1_t *src);
-
 void gw_proto_trim_cmd_group_delete_v1(gw_proto_cmd_group_delete_v1_t *dst, const gw_proto_cmd_group_delete_v1_t *src);
-
-void gw_proto_trim_cmd_group_item_label_v1(gw_proto_cmd_group_item_label_v1_t *dst, const gw_proto_cmd_group_item_label_v1_t *src);
-
-void gw_proto_trim_cmd_automation_set_enabled_v1(gw_proto_cmd_automation_set_enabled_v1_t *dst, const gw_proto_cmd_automation_set_enabled_v1_t *src);
 
 void gw_proto_trim_cmd_automation_remove_v1(gw_proto_cmd_automation_remove_v1_t *dst, const gw_proto_cmd_automation_remove_v1_t *src);
 

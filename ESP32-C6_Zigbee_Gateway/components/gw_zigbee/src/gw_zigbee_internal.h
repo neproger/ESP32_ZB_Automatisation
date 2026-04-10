@@ -72,3 +72,5 @@ void gw_zigbee_lock(void);
 void gw_zigbee_unlock(void);
 void gw_zigbee_ieee_to_uid_str(const uint8_t ieee_addr[8], char out[GW_DEVICE_UID_STRLEN]);
 bool gw_zigbee_cluster_list_has(const uint16_t *list, uint8_t count, uint16_t cluster_id);
+
+bool gw_zigbee_leave_observe_indication(const gw_device_uid_t *uid, uint16_t short_addr);

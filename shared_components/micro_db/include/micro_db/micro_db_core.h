@@ -24,6 +24,7 @@ typedef struct {
     size_t live_count;
     size_t free_count;
     size_t capacity;
+    void *lock;
     bool initialized;
 } micro_db_table_t;
 

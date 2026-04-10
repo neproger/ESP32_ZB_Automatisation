@@ -80,6 +80,7 @@ static void format_endpoint_list(const uint8_t *eps, uint8_t count, char *out, s
 typedef struct {
     esp_zb_ieee_addr_t ieee;
     uint16_t short_addr;
+    uint8_t active_ep_retry_count;
 } gw_zb_discover_ctx_t;
 
 typedef struct {
@@ -96,6 +97,10 @@ typedef struct {
 static gw_zb_ieee_lookup_ctx_t *s_ieee_ctx_by_token[256];
 static uint8_t s_ieee_token;
 static portMUX_TYPE s_ieee_lock = portMUX_INITIALIZER_UNLOCKED;
+static gw_zb_discover_ctx_t *s_pending_active_ep_retry;
+static const uint32_t GW_ACTIVE_EP_RETRY_DELAY_MS = 1200;
+
+static void active_ep_retry_cb(uint8_t token);
 
 static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc_1_1_t *simple_desc, void *user_ctx)
 {
@@ -172,7 +177,26 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     }
 
     if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS || ep_count == 0 || ep_id_list == NULL) {
-        ESP_LOGW(TAG, "active ep failed: short=0x%04x status=0x%02x ep_count=%u", (unsigned)ctx->short_addr, (unsigned)zdo_status, (unsigned)ep_count);
+        if (ctx->active_ep_retry_count < 1) {
+            ctx->active_ep_retry_count++;
+            if (s_pending_active_ep_retry != NULL) {
+                free(ctx);
+                return;
+            }
+            s_pending_active_ep_retry = ctx;
+            ESP_LOGW(TAG,
+                     "active ep failed: short=0x%04x status=0x%02x; scheduling retry %u/%u",
+                     (unsigned)ctx->short_addr,
+                     (unsigned)zdo_status,
+                     (unsigned)ctx->active_ep_retry_count,
+                     1u);
+            gw_zigbee_lock();
+            esp_zb_scheduler_alarm(active_ep_retry_cb, 0, GW_ACTIVE_EP_RETRY_DELAY_MS);
+            gw_zigbee_unlock();
+            return;
+        }
+
+        ESP_LOGW(TAG, "active ep failed: short=0x%04x status=0x%02x", (unsigned)ctx->short_addr, (unsigned)zdo_status);
         gw_zigbee_handle_discovery_failed(ctx->short_addr, "active_ep");
         free(ctx);
         return;
@@ -214,6 +238,18 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
     }
 
     free(ctx);
+}
+
+static void active_ep_retry_cb(uint8_t token)
+{
+    (void)token;
+    gw_zb_discover_ctx_t *ctx = s_pending_active_ep_retry;
+    s_pending_active_ep_retry = NULL;
+    if (ctx == NULL) {
+        return;
+    }
+    esp_zb_zdo_active_ep_req_param_t req = {.addr_of_interest = ctx->short_addr};
+    esp_zb_zdo_active_ep_req(&req, active_ep_cb, ctx);
 }
 
 static void gw_zigbee_start_discovery(const uint8_t ieee_addr[8], uint16_t short_addr)
@@ -301,13 +337,13 @@ static void ieee_lookup_send_cb(uint8_t token)
     esp_zb_zdo_ieee_addr_req(&ctx->req, ieee_addr_cb, ctx);
 }
 
-esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr)
+static esp_err_t gw_zigbee_discover_by_short_impl(uint16_t short_addr, bool force)
 {
     if (short_addr == 0 || short_addr == 0xFFFF) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (should_throttle_discovery(short_addr)) {
+    if (!force && should_throttle_discovery(short_addr)) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -341,6 +377,16 @@ esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr)
     esp_zb_scheduler_alarm(ieee_lookup_send_cb, token, 0);
     gw_zigbee_unlock();
     return ESP_OK;
+}
+
+esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr)
+{
+    return gw_zigbee_discover_by_short_impl(short_addr, false);
+}
+
+esp_err_t gw_zigbee_discover_by_short_force(uint16_t short_addr)
+{
+    return gw_zigbee_discover_by_short_impl(short_addr, true);
 }
 
 void gw_zigbee_on_device_annce(const uint8_t ieee_addr[8], uint16_t short_addr, uint8_t capability)

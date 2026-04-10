@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { sendWsCommand } from '../wsCommandBus.js'
-import { protoEncodeSettingsSet } from '../proto.js'
+import { protoEncodeSettingsChange } from '../proto.js'
 import { useGateway } from '../gateway.jsx'
 
 function toInt(v, fallback = 0) {
@@ -49,7 +49,7 @@ export default function Settings() {
     const tzAuto = form.timezone === 'auto'
     const tzHour = toInt(form.timezone, 0)
     try {
-      sendWsCommand(protoEncodeSettingsSet({
+      sendWsCommand(protoEncodeSettingsChange({
         screensaver_timeout_ms: toInt(form.screensaver_timeout_sec, 4) * 1000,
         weather_success_interval_ms: toInt(form.weather_success_interval_min, 60) * 60 * 1000,
         weather_retry_interval_ms: toInt(form.weather_retry_interval_sec, 10) * 1000,

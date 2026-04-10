@@ -552,10 +552,7 @@ esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name
     if (!uid || !uid->uid[0] || !name) {
         return ESP_ERR_INVALID_ARG;
     }
-    gw_proto_cmd_device_rename_v1_t req = {0};
-    req.device_uid = *uid;
-    strlcpy(req.name, name, sizeof(req.name));
-    return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_DEVICE_RENAME, &req, sizeof(req));
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid)

@@ -7,8 +7,12 @@
 #include "gw_model/gw_model_sync.h"
 #include "gw_model/gw_model_topology.h"
 
+void gw_model_store_hooks_force_link(void);
+
 esp_err_t gw_model_init(void)
 {
+    gw_model_store_hooks_force_link();
+
     esp_err_t err = gw_model_init_topology();
     if (err != ESP_OK) {
         return err;

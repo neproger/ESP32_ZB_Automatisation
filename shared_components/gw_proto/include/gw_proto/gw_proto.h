@@ -61,21 +61,18 @@ typedef enum {
     GW_PROTO_MSG_AUTOMATION_REMOVE = 0x4F,
 
     GW_PROTO_MSG_CMD_PERMIT_JOIN = 0x50,
-    GW_PROTO_MSG_CMD_DEVICE_RENAME = 0x51,
+    /* 0x51 reserved. */
     GW_PROTO_MSG_CMD_DEVICE_REMOVE = 0x52,
     GW_PROTO_MSG_CMD_DEVICE_REMOVE_ALL = 0x53,
     GW_PROTO_MSG_CMD_GROUP_CREATE = 0x54,
-    GW_PROTO_MSG_CMD_GROUP_RENAME = 0x55,
+    /* 0x55 reserved. */
     GW_PROTO_MSG_CMD_GROUP_DELETE = 0x56,
-    GW_PROTO_MSG_CMD_GROUP_ITEM_SET = 0x57,
-    GW_PROTO_MSG_CMD_GROUP_ITEM_REMOVE = 0x58,
-    GW_PROTO_MSG_CMD_GROUP_ITEM_REORDER = 0x59,
-    GW_PROTO_MSG_CMD_GROUP_ITEM_LABEL = 0x5A,
-    GW_PROTO_MSG_CMD_SETTINGS_SET = 0x5B,
-    GW_PROTO_MSG_CMD_AUTOMATION_SET_ENABLED = 0x5C,
+    /* 0x57..0x5A reserved. */
+    /* 0x5B reserved. */
+    /* 0x5C reserved. */
     GW_PROTO_MSG_CMD_AUTOMATION_REMOVE = 0x5D,
     GW_PROTO_MSG_CMD_AUTOMATION_RESET_ALL = 0x5E,
-    GW_PROTO_MSG_CMD_AUTOMATION_SAVE = 0x5F,
+    /* 0x5F reserved. */
     GW_PROTO_MSG_CMD_ACTION_EXEC = 0x60,
     GW_PROTO_MSG_CMD_RESULT = 0x61,
     GW_PROTO_MSG_CMD_WIFI_CONFIG_SET = 0x62,
@@ -85,16 +82,18 @@ typedef enum {
     GW_PROTO_MSG_CMD_LEVEL = 0x66,
     GW_PROTO_MSG_CMD_COLOR_XY = 0x67,
     GW_PROTO_MSG_CMD_COLOR_TEMP = 0x68,
-    GW_PROTO_MSG_CMD_IDENTIFY = 0x69,
-    GW_PROTO_MSG_CMD_BIND = 0x6A,
-    GW_PROTO_MSG_CMD_UNBIND = 0x6B,
-    GW_PROTO_MSG_CMD_SCENE_STORE = 0x6C,
-    GW_PROTO_MSG_CMD_SCENE_RECALL = 0x6D,
+    /* 0x69..0x6D reserved. */
     GW_PROTO_MSG_CMD_STATE_SYNC = 0x6E,
     GW_PROTO_MSG_EVENT_ZB = 0x6F,
     GW_PROTO_MSG_EVENT_TRACE = 0x70,
     GW_PROTO_MSG_LINK_ACK = 0x71,
     GW_PROTO_MSG_CMD_FACTORY_RESET = 0x72,
+    /* Canonical resource change commands for Browser <-> S3 model mutations. */
+    GW_PROTO_MSG_CMD_DEVICE_CHANGE = 0x73,
+    GW_PROTO_MSG_CMD_GROUP_CHANGE = 0x74,
+    GW_PROTO_MSG_CMD_AUTOMATION_CHANGE = 0x75,
+    GW_PROTO_MSG_CMD_SETTINGS_CHANGE = 0x76,
+    GW_PROTO_MSG_CMD_GROUP_ITEMS_CHANGE = 0x77,
 } gw_proto_msg_type_t;
 
 typedef enum {
@@ -378,10 +377,15 @@ typedef struct GW_PROTO_PACKED {
     uint8_t reserved[3];
 } gw_proto_cmd_permit_join_v1_t;
 
+typedef enum {
+    GW_PROTO_DEVICE_CHANGE_F_NAME = 1u << 0,
+} gw_proto_device_change_field_t;
+
 typedef struct GW_PROTO_PACKED {
     gw_device_uid_t device_uid;
+    uint32_t fields;
     char name[32];
-} gw_proto_cmd_device_rename_v1_t;
+} gw_proto_cmd_device_change_v1_t;
 
 typedef struct GW_PROTO_PACKED {
     gw_device_uid_t device_uid;
@@ -396,48 +400,45 @@ typedef struct GW_PROTO_PACKED {
     char name[GW_GROUP_NAME_MAX];
 } gw_proto_cmd_group_create_v1_t;
 
+typedef enum {
+    GW_PROTO_GROUP_CHANGE_F_NAME = 1u << 0,
+} gw_proto_group_change_field_t;
+
 typedef struct GW_PROTO_PACKED {
     char id[GW_GROUP_ID_MAX];
+    uint32_t fields;
     char name[GW_GROUP_NAME_MAX];
-} gw_proto_cmd_group_rename_v1_t;
+} gw_proto_cmd_group_change_v1_t;
 
 typedef struct GW_PROTO_PACKED {
     char id[GW_GROUP_ID_MAX];
 } gw_proto_cmd_group_delete_v1_t;
 
-typedef struct GW_PROTO_PACKED {
-    char group_id[GW_GROUP_ID_MAX];
-    gw_device_uid_t device_uid;
-    uint8_t endpoint;
-    uint8_t reserved[3];
-} gw_proto_cmd_group_item_set_v1_t;
+typedef enum {
+    GW_PROTO_GROUP_ITEMS_OP_SET = 1,
+    GW_PROTO_GROUP_ITEMS_OP_REMOVE = 2,
+    GW_PROTO_GROUP_ITEMS_OP_REORDER = 3,
+    GW_PROTO_GROUP_ITEMS_OP_LABEL = 4,
+} gw_proto_group_items_op_t;
 
 typedef struct GW_PROTO_PACKED {
-    gw_device_uid_t device_uid;
-    uint8_t endpoint;
-    uint8_t reserved[3];
-} gw_proto_cmd_group_item_remove_v1_t;
-
-typedef struct GW_PROTO_PACKED {
+    uint32_t op;
     char group_id[GW_GROUP_ID_MAX];
     gw_device_uid_t device_uid;
     uint8_t endpoint;
     uint8_t reserved0[3];
     uint32_t order;
-} gw_proto_cmd_group_item_reorder_v1_t;
-
-typedef struct GW_PROTO_PACKED {
-    gw_device_uid_t device_uid;
-    uint8_t endpoint;
-    uint8_t reserved[3];
     char label[32];
-} gw_proto_cmd_group_item_label_v1_t;
+} gw_proto_cmd_group_items_change_v1_t;
+
+typedef enum {
+    GW_PROTO_AUTOMATION_CHANGE_F_ENTRY = 1u << 0,
+} gw_proto_automation_change_field_t;
 
 typedef struct GW_PROTO_PACKED {
-    char id[GW_AUTOMATION_ID_MAX];
-    uint8_t enabled;
-    uint8_t reserved[3];
-} gw_proto_cmd_automation_set_enabled_v1_t;
+    uint32_t fields;
+    gw_automation_entry_t entry;
+} gw_proto_cmd_automation_change_v1_t;
 
 typedef struct GW_PROTO_PACKED {
     char id[GW_AUTOMATION_ID_MAX];
@@ -450,6 +451,15 @@ typedef struct GW_PROTO_PACKED {
 typedef struct GW_PROTO_PACKED {
     uint8_t reserved[4];
 } gw_proto_cmd_factory_reset_v1_t;
+
+typedef enum {
+    GW_PROTO_SETTINGS_CHANGE_F_ALL = 1u << 0,
+} gw_proto_settings_change_field_t;
+
+typedef struct GW_PROTO_PACKED {
+    uint32_t fields;
+    gw_proto_settings_v1_t settings;
+} gw_proto_cmd_settings_change_v1_t;
 
 typedef struct GW_PROTO_PACKED {
     uint16_t request_seq;
@@ -542,35 +552,6 @@ typedef struct GW_PROTO_PACKED {
     uint16_t transition_ds;
     uint16_t reserved1;
 } gw_proto_cmd_color_temp_v1_t;
-
-typedef struct GW_PROTO_PACKED {
-    gw_device_uid_t device_uid;
-    uint8_t endpoint;
-    uint8_t identify_seconds;
-    uint16_t reserved0;
-} gw_proto_cmd_identify_v1_t;
-
-typedef struct GW_PROTO_PACKED {
-    gw_device_uid_t src_uid;
-    uint8_t src_endpoint;
-    uint8_t dst_endpoint;
-    uint16_t cluster_id;
-    gw_device_uid_t dst_uid;
-} gw_proto_cmd_bind_v1_t;
-
-typedef gw_proto_cmd_bind_v1_t gw_proto_cmd_unbind_v1_t;
-
-typedef struct GW_PROTO_PACKED {
-    uint16_t group_id;
-    uint8_t scene_id;
-    uint8_t reserved0;
-} gw_proto_cmd_scene_store_v1_t;
-
-typedef struct GW_PROTO_PACKED {
-    uint16_t group_id;
-    uint8_t scene_id;
-    uint8_t reserved0;
-} gw_proto_cmd_scene_recall_v1_t;
 
 #ifdef __cplusplus
 }

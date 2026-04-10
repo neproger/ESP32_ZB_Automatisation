@@ -26,10 +26,10 @@ static const char *status_name(gw_device_status_t status)
             return "discovering";
         case GW_DEVICE_STATUS_READY:
             return "ready";
-        case GW_DEVICE_STATUS_REMOVING:
-            return "removing";
-        case GW_DEVICE_STATUS_REMOVED:
-            return "removed";
+        case GW_DEVICE_STATUS_QUARANTINED:
+            return "quarantined";
+        case GW_DEVICE_STATUS_LEAVE_REQUESTED:
+            return "leave_requested";
         default:
             return "unknown";
     }
@@ -81,7 +81,7 @@ static void normalize_persisted_device_statuses(void)
         const gw_device_status_t status = (gw_device_status_t)record.status;
 
         const bool invalid_uid = !uid_is_valid_topology_uid(&record.device_uid);
-        const bool invalid_status = (status < GW_DEVICE_STATUS_NONE || status > GW_DEVICE_STATUS_REMOVED);
+        const bool invalid_status = (status < GW_DEVICE_STATUS_NONE || status > GW_DEVICE_STATUS_LEAVE_REQUESTED);
         const bool invalid_short = (record.short_addr == 0xFFFFu);
 
         if (invalid_uid || invalid_status || (invalid_short && !has_real_endpoints)) {
@@ -95,6 +95,17 @@ static void normalize_persisted_device_statuses(void)
                      (unsigned)record.status,
                      (unsigned)ep_count);
             continue;
+        }
+
+        if (status == GW_DEVICE_STATUS_LEAVE_REQUESTED) {
+            record.status = (uint8_t)GW_DEVICE_STATUS_QUARANTINED;
+            (void)gw_store_upsert_device(&record, NULL, NULL);
+            ESP_LOGW(TAG,
+                     "normalized persisted status uid=%s short=0x%04x %s->quarantined endpoints=%u",
+                     record.device_uid.uid,
+                     (unsigned)record.short_addr,
+                     status_name(status),
+                     (unsigned)ep_count);
         }
 
         if (!has_real_endpoints) {
@@ -179,40 +190,6 @@ static void public_endpoint_to_proto(const gw_zb_endpoint_t *src, gw_proto_endpo
     }
 }
 
-static void assign_default_name_if_needed(gw_proto_device_v1_t *record)
-{
-    if (!record || record->name[0] != '\0') {
-        return;
-    }
-
-    const char *prefix = "device";
-    if (record->has_button) {
-        prefix = "switch";
-    } else if (record->has_onoff) {
-        prefix = "relay";
-    }
-
-    uint32_t max_num = 0;
-    const size_t count = gw_store_count_devices();
-    for (size_t i = 0; i < count; ++i) {
-        gw_proto_device_v1_t item = {0};
-        if (gw_store_get_device_by_index(i, &item) != ESP_OK) {
-            continue;
-        }
-        if (strncmp(item.name, prefix, strlen(prefix)) != 0) {
-            continue;
-        }
-        const char *num_str = item.name + strlen(prefix);
-        char *end = NULL;
-        long num = strtol(num_str, &end, 10);
-        if (end > num_str && num > 0 && num <= 999 && (uint32_t)num > max_num) {
-            max_num = (uint32_t)num;
-        }
-    }
-
-    snprintf(record->name, sizeof(record->name), "%s%u", prefix, (unsigned)(max_num + 1));
-}
-
 typedef struct {
     gw_zb_endpoint_t *out_eps;
     size_t max_eps;
@@ -292,7 +269,6 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
         }
     }
 
-    assign_default_name_if_needed(&record);
     return gw_store_upsert_device(&record, NULL, NULL);
 }
 
@@ -302,7 +278,10 @@ esp_err_t gw_c6_store_device_get(const gw_device_uid_t *uid, gw_device_t *out_de
         return ESP_ERR_INVALID_ARG;
     }
     gw_proto_device_v1_t record = {0};
-    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
+    esp_err_t err = gw_store_get_device(uid, &record);
+    if (err != ESP_OK) {
+        return err;
+    }
     proto_device_to_public(&record, out_device);
     return ESP_OK;
 }
@@ -314,7 +293,10 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
     }
 
     gw_proto_device_v1_t record = {0};
-    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
+    esp_err_t err = gw_store_get_device(uid, &record);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     memset(out_device, 0, sizeof(*out_device));
     out_device->device_uid = record.device_uid;
@@ -358,7 +340,10 @@ esp_err_t gw_c6_store_device_set_status(const gw_device_uid_t *uid, gw_device_st
     }
 
     gw_proto_device_v1_t record = {0};
-    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
+    esp_err_t err = gw_store_get_device(uid, &record);
+    if (err != ESP_OK) {
+        return err;
+    }
     record.status = (uint8_t)status;
     return gw_store_upsert_device(&record, NULL, NULL);
 }
@@ -396,17 +381,6 @@ esp_err_t gw_c6_store_device_get_full_by_index(size_t index, gw_device_full_t *o
     gw_proto_device_v1_t record = {0};
     ESP_RETURN_ON_ERROR(gw_store_get_device_by_index(index, &record), TAG, "device index not found");
     return gw_c6_store_device_get_full(&record.device_uid, out_device);
-}
-
-esp_err_t gw_c6_store_device_set_name(const gw_device_uid_t *uid, const char *name)
-{
-    if (!s_initialized || !uid || !name || uid->uid[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-    gw_proto_device_v1_t record = {0};
-    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
-    strlcpy(record.name, name, sizeof(record.name));
-    return gw_store_upsert_device(&record, NULL, NULL);
 }
 
 typedef struct {
@@ -518,7 +492,10 @@ esp_err_t gw_c6_store_device_sync_endpoints(const gw_device_uid_t *uid)
     }
 
     gw_proto_device_v1_t record = {0};
-    ESP_RETURN_ON_ERROR(gw_store_get_device(uid, &record), TAG, "device not found");
+    esp_err_t err = gw_store_get_device(uid, &record);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
     size_t count = collect_endpoints_for_uid(uid, eps, GW_DEVICE_MAX_ENDPOINTS);
@@ -534,7 +511,6 @@ esp_err_t gw_c6_store_device_sync_endpoints(const gw_device_uid_t *uid)
             break;
         }
     }
-    assign_default_name_if_needed(&record);
     return gw_store_upsert_device(&record, NULL, NULL);
 }
 
