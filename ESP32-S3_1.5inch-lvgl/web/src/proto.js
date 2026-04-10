@@ -161,7 +161,6 @@ function deriveEndpointMeta(ep) {
   const accepts = []
   const emits = []
   const reports = []
-  let kind = 'unknown'
 
   if (hasCluster(inClusters, 0x0006)) {
     accepts.push('onoff.on', 'onoff.off', 'onoff.toggle')
@@ -191,21 +190,7 @@ function deriveEndpointMeta(ep) {
     emits.push('level')
   }
 
-  if (hasCluster(inClusters, 0x0402) || hasCluster(inClusters, 0x0405)) {
-    kind = 'temp_humidity_sensor'
-  } else if (hasCluster(inClusters, 0x0006) && hasCluster(inClusters, 0x0008) && hasCluster(inClusters, 0x0300)) {
-    kind = 'color_light'
-  } else if (hasCluster(inClusters, 0x0006) && hasCluster(inClusters, 0x0008)) {
-    kind = 'dimmable_light'
-  } else if (hasCluster(inClusters, 0x0006)) {
-    kind = 'relay'
-  } else if (hasCluster(outClusters, 0x0006) && hasCluster(outClusters, 0x0008)) {
-    kind = 'dimmer_switch'
-  } else if (hasCluster(outClusters, 0x0006)) {
-    kind = 'switch'
-  }
-
-  return { kind: ep.kind && ep.kind !== 'unknown' ? ep.kind : kind, accepts, emits, reports }
+  return { accepts, emits, reports }
 }
 
 function ensureDevice(snapshot, uid) {
