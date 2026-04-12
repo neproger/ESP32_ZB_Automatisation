@@ -4,17 +4,15 @@ import { Link } from 'react-router-dom'
 import { useCallback, useMemo, useState } from 'react'
 import { useGateway } from '../gateway.jsx'
 
-function capsToText(device) {
-	const caps = []
-	if (device?.has_onoff) caps.push('onoff')
-	if (device?.has_button) caps.push('button')
-	return caps.join(', ')
-}
-
 function shortToHex(shortAddr) {
 	const v = Number(shortAddr ?? 0)
 	if (!Number.isFinite(v)) return '0x0'
 	return `0x${v.toString(16)}`
+}
+
+function endpointCountText(device) {
+	const count = Array.isArray(device?.endpoints) ? device.endpoints.length : 0
+	return `${count} endpoint${count === 1 ? '' : 's'}`
 }
 
 export default function Devices() {
@@ -124,14 +122,15 @@ export default function Devices() {
 								<th>UID</th>
 								<th>Name</th>
 								<th>Short</th>
-								<th>Caps</th>
+								<th>Type</th>
+								<th>Endpoints</th>
 								<th>Actions</th>
 							</tr>
 						</thead>
 						<tbody>
 							{sortedDevices.length === 0 ? (
 								<tr>
-									<td colSpan={5} className="muted">
+									<td colSpan={6} className="muted">
 										No devices yet. Click "Scan new devices (permit join)", then pair a Zigbee device.
 									</td>
 								</tr>
@@ -147,7 +146,8 @@ export default function Devices() {
 										<td>
 											<code>{shortToHex(d?.short_addr)}</code>
 										</td>
-										<td>{capsToText(d)}</td>
+										<td>Zigbee device</td>
+										<td>{endpointCountText(d)}</td>
 										<td>
 											<div className="row">
 												<button onClick={() => renameDeviceRequest(d?.device_uid, d?.name)}>Rename</button>

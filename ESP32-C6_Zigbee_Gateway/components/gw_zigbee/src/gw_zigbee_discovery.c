@@ -13,7 +13,6 @@
 #include "zdo/esp_zigbee_zdo_command.h"
 #include "zdo/esp_zigbee_zdo_common.h"
 
-#include "gw_core/zb_classify.h"
 #include "gw_zigbee/gw_zigbee_events.h"
 #include "gw_zigbee_internal.h"
 
@@ -134,14 +133,6 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
              (unsigned)simple_desc->app_output_cluster_count,
              out_buf);
 
-    const bool has_onoff_srv =
-        gw_zigbee_cluster_list_has(in_clusters, simple_desc->app_input_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
-    const bool has_onoff_cli =
-        gw_zigbee_cluster_list_has(out_clusters, simple_desc->app_output_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
-
-    const bool is_switch = has_onoff_cli;
-    const bool is_light = (!is_switch && has_onoff_srv);
-
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ctx->ieee, uid);
 
@@ -157,14 +148,13 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
         (simple_desc->app_output_cluster_count > GW_ZB_MAX_CLUSTERS) ? GW_ZB_MAX_CLUSTERS : simple_desc->app_output_cluster_count;
     memcpy(ep.in_clusters, in_clusters, ep.in_cluster_count * sizeof(ep.in_clusters[0]));
     memcpy(ep.out_clusters, out_clusters, ep.out_cluster_count * sizeof(ep.out_clusters[0]));
-    const char *kind = gw_zb_endpoint_kind(&ep);
-    strlcpy(ep.kind, kind, sizeof(ep.kind));
-    if (gw_zigbee_handle_simple_desc_discovered(ctx->ieee, ctx->short_addr, &ep, is_switch, is_light, kind) != ESP_OK) {
+    strlcpy(ep.kind, "zigbee device", sizeof(ep.kind));
+    if (gw_zigbee_handle_simple_desc_discovered(ctx->ieee, ctx->short_addr, &ep) != ESP_OK) {
         free(ctx);
         return;
     }
 
-    gw_zigbee_handle_simple_desc_bindings(ctx->ieee, ctx->short_addr, &ep, is_switch, is_light);
+    gw_zigbee_handle_simple_desc_bindings(ctx->ieee, ctx->short_addr, &ep);
     gw_zigbee_handle_simple_desc_reporting(ctx->short_addr, &ep);
 
     free(ctx);

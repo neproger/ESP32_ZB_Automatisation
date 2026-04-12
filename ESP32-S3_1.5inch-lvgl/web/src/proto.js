@@ -184,7 +184,7 @@ function deriveEndpointMeta(ep) {
     reports.push('occupancy')
   }
   if (hasCluster(outClusters, 0x0006)) {
-    emits.push('onoff')
+    emits.push('onoff.off', 'onoff.on', 'onoff.toggle', 'button.single', 'button.release')
   }
   if (hasCluster(outClusters, 0x0008)) {
     emits.push('level')
@@ -1123,7 +1123,7 @@ export function protoApplyFrame(acc, frame, onCommit) {
 		ep.in_clusters = clusterList(view, ENDPOINT_IN_CLUSTERS_OFF, view.getUint8(ENDPOINT_IN_CLUSTER_COUNT_OFF), 16)
 		ep.out_clusters = clusterList(view, ENDPOINT_OUT_CLUSTERS_OFF, view.getUint8(ENDPOINT_OUT_CLUSTER_COUNT_OFF), 16)
 		ep.kind = readFixedString(view, ENDPOINT_KIND_OFF, 16)
-		if (!ep.kind) ep.kind = 'unknown'
+		if (!ep.kind || ep.kind === 'unknown') ep.kind = 'zigbee device'
 		const meta = deriveEndpointMeta(ep)
 		ep.accepts = meta.accepts
 		ep.emits = meta.emits

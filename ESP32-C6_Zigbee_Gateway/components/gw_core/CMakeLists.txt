@@ -4,7 +4,6 @@ idf_component_register(
         "src/storage.c"
         "src/device_registry.c"
         "src/zb_model.c"
-        "src/zb_classify.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

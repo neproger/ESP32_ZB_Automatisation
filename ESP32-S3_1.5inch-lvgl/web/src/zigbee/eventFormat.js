@@ -4,23 +4,6 @@
 import { EVT_AUTOMATION_CHANGED, EVT_DEVICE_STATE } from '../eventNames.js'
 import { formatDeviceStateValue, getDeviceStateKeyLabel } from './stateFormat.js'
 
-const ENDPOINT_KIND_LABELS = {
-  color_light: 'цветная лампа',
-  dimmable_light: 'диммируемый свет',
-  relay: 'реле',
-  dimmer_switch: 'диммер',
-  switch: 'кнопка/выключатель',
-  temp_humidity_sensor: 'датчик температуры и влажности',
-  temperature_sensor: 'датчик температуры',
-  humidity_sensor: 'датчик влажности',
-  occupancy_sensor: 'датчик присутствия',
-  illuminance_sensor: 'датчик освещенности',
-  pressure_sensor: 'датчик давления',
-  flow_sensor: 'датчик потока',
-  sensor: 'сенсор',
-  unknown: 'endpoint',
-}
-
 const GATEWAY_EVENT_LABELS = {
   'zigbee.read_attr_resp': 'ответ на чтение атрибута',
   'zigbee.cmd_queue': 'отправка команды',
@@ -71,7 +54,7 @@ function collectCommandDetails(data) {
 
 function endpointKindLabel(kind) {
   const k = String(kind ?? '').trim()
-  return ENDPOINT_KIND_LABELS[k] || k || 'endpoint'
+  return k || 'zigbee device'
 }
 
 function formatEndpointLabel(device, endpointId) {

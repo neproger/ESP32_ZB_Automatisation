@@ -10,10 +10,6 @@
 // Keep in sync with main/esp_zigbee_gateway.h (ESP_ZB_GATEWAY_ENDPOINT).
 #define GW_ZIGBEE_GATEWAY_ENDPOINT 1
 
-// Fixed groups by device type.
-#define GW_ZIGBEE_GROUP_SWITCHES 0x0002
-#define GW_ZIGBEE_GROUP_LIGHTS   0x0003
-
 extern const int16_t gw_zigbee_report_change_temp_01c;
 extern const uint16_t gw_zigbee_report_change_hum_01pct;
 extern const uint8_t gw_zigbee_report_change_batt_halfpct;

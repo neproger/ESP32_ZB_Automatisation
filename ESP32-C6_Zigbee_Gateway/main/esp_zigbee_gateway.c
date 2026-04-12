@@ -93,6 +93,104 @@ static void dispatch_runtime_event(uint8_t event_kind,
     (void)gw_zigbee_handle_event(&evt);
 }
 
+static const char *runtime_value_type_name(uint8_t value_type)
+{
+    switch ((gw_proto_event_value_type_t)value_type) {
+    case GW_PROTO_EVENT_VALUE_NONE:
+        return "none";
+    case GW_PROTO_EVENT_VALUE_BOOL:
+        return "bool";
+    case GW_PROTO_EVENT_VALUE_I64:
+        return "i64";
+    case GW_PROTO_EVENT_VALUE_F32:
+        return "f32";
+    case GW_PROTO_EVENT_VALUE_TEXT:
+        return "text";
+    default:
+        return "unknown";
+    }
+}
+
+static void log_zb_rx_value(const char *source,
+                            const gw_device_uid_t *uid,
+                            uint16_t short_addr,
+                            uint8_t endpoint,
+                            uint16_t cluster_id,
+                            uint16_t attr_id,
+                            uint8_t zcl_type,
+                            uint16_t zcl_size,
+                            uint8_t value_type,
+                            bool value_bool,
+                            int64_t value_i64,
+                            float value_f32,
+                            const char *cmd)
+{
+    const char *uid_str = (uid != NULL && uid->uid[0] != '\0') ? uid->uid : "-";
+    const char *type_name = runtime_value_type_name(value_type);
+    if (cmd != NULL && cmd[0] != '\0') {
+        ESP_LOGI(TAG,
+                 "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x cmd_id=0x%02x cmd=%s",
+                 source,
+                 uid_str,
+                 (unsigned)short_addr,
+                 (unsigned)endpoint,
+                 (unsigned)cluster_id,
+                 (unsigned)(attr_id & 0xFFu),
+                 cmd);
+        return;
+    }
+
+    if (value_type == GW_PROTO_EVENT_VALUE_BOOL) {
+        ESP_LOGI(TAG,
+                 "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%s",
+                 source,
+                 uid_str,
+                 (unsigned)short_addr,
+                 (unsigned)endpoint,
+                 (unsigned)cluster_id,
+                 (unsigned)attr_id,
+                 (unsigned)zcl_type,
+                 (unsigned)zcl_size,
+                 value_bool ? "true" : "false");
+    } else if (value_type == GW_PROTO_EVENT_VALUE_I64) {
+        ESP_LOGI(TAG,
+                 "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%lld",
+                 source,
+                 uid_str,
+                 (unsigned)short_addr,
+                 (unsigned)endpoint,
+                 (unsigned)cluster_id,
+                 (unsigned)attr_id,
+                 (unsigned)zcl_type,
+                 (unsigned)zcl_size,
+                 (long long)value_i64);
+    } else if (value_type == GW_PROTO_EVENT_VALUE_F32) {
+        ESP_LOGI(TAG,
+                 "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%.3f",
+                 source,
+                 uid_str,
+                 (unsigned)short_addr,
+                 (unsigned)endpoint,
+                 (unsigned)cluster_id,
+                 (unsigned)attr_id,
+                 (unsigned)zcl_type,
+                 (unsigned)zcl_size,
+                 (double)value_f32);
+    } else {
+        ESP_LOGI(TAG,
+                 "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value_type=%s",
+                 source,
+                 uid_str,
+                 (unsigned)short_addr,
+                 (unsigned)endpoint,
+                 (unsigned)cluster_id,
+                 (unsigned)attr_id,
+                 (unsigned)zcl_type,
+                 (unsigned)zcl_size,
+                 type_name);
+    }
+}
+
 static void uart_send_net_state_online(void)
 {
     gw_proto_event_v1_t evt = {0};
@@ -207,8 +305,8 @@ static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
         case ESP_ZB_ZCL_CMD_ON_OFF_OFF_WITH_EFFECT_ID: return "off_effect";
         case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_RECALL_GLOBAL_SCENE_ID: return "on_recall";
         case ESP_ZB_ZCL_CMD_ON_OFF_ON_WITH_TIMED_OFF_ID: return "on_timed";
-        case 0xFD: return "button_press";
-        case 0xFE: return "button_release";
+        case 0xFD: return "button.single";
+        case 0xFE: return "button.release";
         default: return "onoff_unknown";
         }
     }
@@ -323,6 +421,19 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                     vi64 = (int64_t)(*((const uint16_t *)m->attribute.data.value));
                 }
             }
+            log_zb_rx_value("attr_report",
+                            &uid,
+                            src_short,
+                            m->src_endpoint,
+                            cluster_id,
+                            attr_id,
+                            (uint8_t)m->attribute.data.type,
+                            (uint16_t)m->attribute.data.size,
+                            (uint8_t)vtype,
+                            vbool,
+                            vi64,
+                            (float)vf64,
+                            NULL);
             dispatch_runtime_event(GW_PROTO_EVENT_ATTR_REPORT,
                                    &uid,
                                    src_short,
@@ -456,6 +567,19 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
 
                 if (has_state_update) {
                     touch_device_last_seen(&uid, src_short, ts_ms);
+                    log_zb_rx_value("read_attr",
+                                    &uid,
+                                    src_short,
+                                    m->info.src_endpoint,
+                                    cluster_id,
+                                    attr_id,
+                                    (uint8_t)it->attribute.data.type,
+                                    (uint16_t)it->attribute.data.size,
+                                    (uint8_t)vtype,
+                                    vbool,
+                                    vi64,
+                                    (float)vf64,
+                                    NULL);
                     dispatch_runtime_event(GW_PROTO_EVENT_ATTR_REPORT,
                                            &uid,
                                            src_short,
@@ -490,10 +614,6 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         if (m == NULL) {
             return ESP_OK;
         }
-        const bool known_cluster =
-            (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) ||
-            (m->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL);
-
         uint16_t src_short = 0;
         if (m->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
             src_short = m->info.src_address.u.short_addr;
@@ -508,6 +628,19 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
+        log_zb_rx_value("command",
+                        &uid,
+                        src_short,
+                        m->info.src_endpoint,
+                        m->info.cluster,
+                        m->info.command.id,
+                        0,
+                        0,
+                        GW_PROTO_EVENT_VALUE_NONE,
+                        false,
+                        0,
+                        0.0f,
+                        cmd_name);
         dispatch_runtime_event(GW_PROTO_EVENT_COMMAND,
                                &uid,
                                src_short,

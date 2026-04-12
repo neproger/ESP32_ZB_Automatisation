@@ -52,7 +52,7 @@ async function copyTextToClipboard(text) {
 
 const ENDPOINT_COLUMNS = [
 	{ id: 'endpoint', label: 'Endpoint' },
-	{ id: 'kind', label: 'Kind' },
+	{ id: 'kind', label: 'Type' },
 	{ id: 'profile', label: 'Profile' },
 	{ id: 'device', label: 'Device' },
 	{ id: 'controls', label: 'Controls' },
@@ -271,7 +271,7 @@ export default function Device() {
 						<thead>
 							<tr>
 								{showCol('endpoint') ? <th>Endpoint</th> : null}
-								{showCol('kind') ? <th>Kind</th> : null}
+								{showCol('kind') ? <th>Type</th> : null}
 								{showCol('profile') ? <th>Profile</th> : null}
 								{showCol('device') ? <th>Device</th> : null}
 								{showCol('controls') ? <th>Controls</th> : null}

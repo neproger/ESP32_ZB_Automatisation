@@ -167,8 +167,6 @@ function readOnlyRows(endpoint, state, sensors) {
 }
 
 function isTempHumidityEndpoint(endpoint) {
-  const kind = String(endpoint?.kind ?? '')
-  if (kind === 'temp_humidity_sensor') return true
   const reports = Array.isArray(endpoint?.reports) ? endpoint.reports.map((x) => String(x)) : []
   return reports.includes('temperature_c') || reports.includes('humidity_pct')
 }

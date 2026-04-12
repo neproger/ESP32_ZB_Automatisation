@@ -91,8 +91,11 @@ export default function TriggersSection({
 								>
 									{(() => {
 										const uid = String(t?.match?.device_uid ?? '')
-										const items = getEmitsByPrefix(endpointsByUid, uid, 'onoff.')
-										const list = items.length ? items : ['toggle', 'on', 'off']
+										const onoffItems = getEmitsByPrefix(endpointsByUid, uid, 'onoff.')
+										const buttonItems = getEmitsByPrefix(endpointsByUid, uid, 'button.')
+											.map((x) => `button.${x}`)
+										const items = [...onoffItems, ...buttonItems]
+										const list = items.length ? items : ['toggle', 'on', 'off', 'button.single']
 										return list.map((c) => (
 											<option key={c} value={c}>{c}</option>
 										))

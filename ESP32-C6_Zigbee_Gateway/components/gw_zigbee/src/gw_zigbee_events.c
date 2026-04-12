@@ -664,10 +664,7 @@ bool gw_zigbee_handle_active_ep_discovered(const uint8_t ieee_addr[8],
 
 esp_err_t gw_zigbee_handle_simple_desc_discovered(const uint8_t ieee_addr[8],
                                                   uint16_t short_addr,
-                                                  const gw_zb_endpoint_t *ep,
-                                                  bool is_switch,
-                                                  bool is_light,
-                                                  const char *kind)
+                                                  const gw_zb_endpoint_t *ep)
 {
     if (ieee_addr == NULL || ep == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -698,27 +695,23 @@ esp_err_t gw_zigbee_handle_simple_desc_discovered(const uint8_t ieee_addr[8],
                    (unsigned)ep->device_id,
                    (unsigned)ep->in_cluster_count,
                    (unsigned)ep->out_cluster_count,
-                   (kind != NULL) ? kind : "unknown");
+                   ep->kind);
     ESP_LOGI(TAG, "simple desc: %s short=0x%04x %s", duid.uid, (unsigned)short_addr, msg);
 
     gw_device_t d = {0};
     if (gw_c6_store_device_get(&duid, &d) == ESP_OK) {
         d.short_addr = short_addr;
         d.last_seen_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        if (is_switch) {
-            d.has_button = true;
-        }
-        if (is_light) {
-            d.has_onoff = true;
-        }
+        d.has_button = false;
+        d.has_onoff = false;
         d.status = GW_DEVICE_STATUS_DISCOVERING;
         (void)gw_c6_store_device_upsert(&d);
     } else {
         d.device_uid = duid;
         d.short_addr = short_addr;
         d.last_seen_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        d.has_button = is_switch;
-        d.has_onoff = is_light;
+        d.has_button = false;
+        d.has_onoff = false;
         d.status = GW_DEVICE_STATUS_DISCOVERING;
         (void)gw_c6_store_device_upsert(&d);
     }
@@ -770,16 +763,13 @@ void gw_zigbee_handle_discovery_failed(uint16_t short_addr, const char *stage)
 
 void gw_zigbee_handle_simple_desc_bindings(const uint8_t ieee_addr[8],
                                            uint16_t short_addr,
-                                           const gw_zb_endpoint_t *ep,
-                                           bool is_switch,
-                                           bool is_light)
+                                           const gw_zb_endpoint_t *ep)
 {
     if (ieee_addr == NULL || ep == NULL) {
         return;
     }
 
     const char *uid = ep->uid.uid;
-    const bool has_groups_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_GROUPS);
     const bool has_onoff_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
     const bool has_temp_meas_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT);
     const bool has_hum_meas_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT);
@@ -790,20 +780,6 @@ void gw_zigbee_handle_simple_desc_bindings(const uint8_t ieee_addr[8],
     const bool has_illum_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, 0x0400);
     const bool has_pressure_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, 0x0403);
     const bool has_onoff_cli = gw_zigbee_cluster_list_has(ep->out_clusters, ep->out_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
-
-    char msg[96];
-    if (has_groups_srv && (is_switch || is_light)) {
-        const uint16_t group_id = is_switch ? GW_ZIGBEE_GROUP_SWITCHES : GW_ZIGBEE_GROUP_LIGHTS;
-        esp_zb_zcl_groups_add_group_cmd_t cmd = {0};
-        cmd.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
-        cmd.zcl_basic_cmd.dst_endpoint = ep->endpoint;
-        cmd.zcl_basic_cmd.src_endpoint = GW_ZIGBEE_GATEWAY_ENDPOINT;
-        cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-        cmd.group_id = group_id;
-        uint8_t tsn = esp_zb_zcl_groups_add_group_cmd_req(&cmd);
-        (void)snprintf(msg, sizeof(msg), "add_group 0x%04x ep=%u tsn=%u", (unsigned)group_id, (unsigned)ep->endpoint, (unsigned)tsn);
-        gw_zigbee_log_diag("group_add", uid, short_addr, msg);
-    }
 
     if (has_temp_meas_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, GW_ZIGBEE_GATEWAY_ENDPOINT);
     if (has_hum_meas_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, GW_ZIGBEE_GATEWAY_ENDPOINT);

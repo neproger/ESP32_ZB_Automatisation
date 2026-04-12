@@ -3,12 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "esp_log.h"
 #include "micro_db/micro_db_core.h"
 #include "gw_proto/gw_proto_validate.h"
 #include "gw_store/gw_store_hooks.h"
-
-static const char *TAG = "gw_store_topology";
 
 static micro_db_table_t s_device_table;
 static micro_db_table_t s_endpoint_table;
@@ -242,7 +239,6 @@ esp_err_t gw_store_upsert_device(const gw_proto_device_v1_t *record,
     const bool notify = (out_changed ? *out_changed : changed) || (out_inserted ? *out_inserted : inserted);
     if (notify) {
         (void)gw_store_hook_notify_device_upsert(record);
-        ESP_LOGI(TAG, "gw_store_upsert_device: called hook, name=%s", record->name);
     }
     return ESP_OK;
 }

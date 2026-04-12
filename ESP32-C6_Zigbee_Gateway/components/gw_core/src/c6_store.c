@@ -65,9 +65,6 @@ static bool uid_is_valid_topology_uid(const gw_device_uid_t *uid)
 
 static void normalize_persisted_device_statuses(void)
 {
-    gw_device_uid_t remove_list[GW_DEVICE_MAX_DEVICES] = {0};
-    size_t remove_count = 0;
-
     const size_t count = gw_store_count_devices();
     for (size_t i = 0; i < count; ++i) {
         gw_proto_device_v1_t record = {0};
@@ -85,16 +82,23 @@ static void normalize_persisted_device_statuses(void)
         const bool invalid_short = (record.short_addr == 0xFFFFu);
 
         if (invalid_uid || invalid_status || (invalid_short && !has_real_endpoints)) {
-            if (remove_count < GW_DEVICE_MAX_DEVICES) {
-                remove_list[remove_count++] = record.device_uid;
-            }
             ESP_LOGW(TAG,
-                     "scrub persisted corrupt device uid=%s short=0x%04x status=%u endpoints=%u",
+                     "skip persisted invalid device uid=%s short=0x%04x status=%u endpoints=%u",
                      record.device_uid.uid,
                      (unsigned)record.short_addr,
                      (unsigned)record.status,
                      (unsigned)ep_count);
             continue;
+        }
+
+        if (record.has_onoff != 0 || record.has_button != 0) {
+            record.has_onoff = 0u;
+            record.has_button = 0u;
+            (void)gw_store_upsert_device(&record, NULL, NULL);
+            ESP_LOGI(TAG,
+                     "normalized persisted caps uid=%s short=0x%04x caps->raw_topology",
+                     record.device_uid.uid,
+                     (unsigned)record.short_addr);
         }
 
         if (status == GW_DEVICE_STATUS_LEAVE_REQUESTED) {
@@ -122,11 +126,6 @@ static void normalize_persisted_device_statuses(void)
                      status_name(status),
                      (unsigned)ep_count);
         }
-    }
-
-    for (size_t i = 0; i < remove_count; ++i) {
-        bool removed = false;
-        (void)gw_store_remove_full_device(&remove_list[i], &removed);
     }
 }
 
@@ -260,12 +259,8 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
         if (device->last_seen_ms != 0) {
             record.last_seen_ms = device->last_seen_ms;
         }
-        if (device->has_onoff) {
-            record.has_onoff = 1u;
-        }
-        if (device->has_button) {
-            record.has_button = 1u;
-        }
+        record.has_onoff = device->has_onoff ? 1u : 0u;
+        record.has_button = device->has_button ? 1u : 0u;
         if (device->status != GW_DEVICE_STATUS_NONE) {
             record.status = (uint8_t)device->status;
         }
@@ -500,20 +495,8 @@ esp_err_t gw_c6_store_device_sync_endpoints(const gw_device_uid_t *uid)
         return err;
     }
 
-    gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
-    size_t count = collect_endpoints_for_uid(uid, eps, GW_DEVICE_MAX_ENDPOINTS);
     record.has_onoff = 0u;
-    for (size_t i = 0; i < count; ++i) {
-        for (size_t ci = 0; ci < eps[i].in_cluster_count; ++ci) {
-            if (eps[i].in_clusters[ci] == 0x0006) {
-                record.has_onoff = 1u;
-                break;
-            }
-        }
-        if (record.has_onoff) {
-            break;
-        }
-    }
+    record.has_button = 0u;
     return gw_store_upsert_device(&record, NULL, NULL);
 }
 
