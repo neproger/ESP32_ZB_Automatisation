@@ -3,9 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_log.h"
 #include "micro_db/micro_db_core.h"
 #include "gw_proto/gw_proto_validate.h"
 #include "gw_store/gw_store_hooks.h"
+
+static const char *TAG = "gw_store_topology";
 
 static micro_db_table_t s_device_table;
 static micro_db_table_t s_endpoint_table;
@@ -257,6 +260,8 @@ esp_err_t gw_store_remove_full_device(const gw_device_uid_t *uid,
     }
 
     const size_t cap = gw_store_count_endpoints();
+    size_t matched_eps = 0;
+    size_t removed_eps = 0;
     if (cap > 0) {
         gw_store_endpoint_key_t *keys = (gw_store_endpoint_key_t *)calloc(cap, sizeof(gw_store_endpoint_key_t));
         if (keys) {
@@ -266,16 +271,32 @@ esp_err_t gw_store_remove_full_device(const gw_device_uid_t *uid,
                 .cap = cap,
             };
             (void)gw_store_iter_endpoints_for_device(uid, collect_endpoint_key_cb, &list);
+            matched_eps = list.count;
             for (size_t i = 0; i < list.count; ++i) {
                 bool removed = false;
                 (void)gw_store_remove_endpoint(&list.keys[i], &removed);
+                if (removed) {
+                    removed_eps++;
+                }
             }
             free(keys);
+        } else {
+            ESP_LOGW(TAG, "remove_full_device uid=%s endpoint key alloc failed cap=%u", uid->uid, (unsigned)cap);
         }
     }
 
     bool removed = false;
     esp_err_t err = micro_db_table_remove(&s_device_table, uid, out_removed ? out_removed : &removed);
+    ESP_LOGW(TAG,
+             "remove_full_device uid=%s result=%s device_removed=%u endpoints_matched=%u endpoints_removed=%u cap_before=%u devices_now=%u endpoints_now=%u",
+             uid->uid,
+             esp_err_to_name(err),
+             (out_removed ? *out_removed : removed) ? 1U : 0U,
+             (unsigned)matched_eps,
+             (unsigned)removed_eps,
+             (unsigned)cap,
+             (unsigned)gw_store_count_devices(),
+             (unsigned)gw_store_count_endpoints());
     if (err == ESP_OK) {
         (void)gw_store_hook_notify_device_remove(uid);
     }

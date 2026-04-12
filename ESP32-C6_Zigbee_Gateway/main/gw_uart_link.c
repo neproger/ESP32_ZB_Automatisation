@@ -817,6 +817,9 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
             if (s_remove_all_task == NULL) {
                 return ESP_ERR_INVALID_STATE;
             }
+            ESP_LOGW(TAG,
+                     "cmd device_remove_all requested devices=%u",
+                     (unsigned)gw_c6_store_device_count());
             xTaskNotifyGive(s_remove_all_task);
             return ESP_OK;
         }

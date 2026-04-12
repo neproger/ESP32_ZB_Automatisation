@@ -780,6 +780,8 @@ void gw_zigbee_handle_simple_desc_bindings(const uint8_t ieee_addr[8],
     const bool has_illum_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, 0x0400);
     const bool has_pressure_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, 0x0403);
     const bool has_onoff_cli = gw_zigbee_cluster_list_has(ep->out_clusters, ep->out_cluster_count, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
+    const bool has_tuya_private_srv = gw_zigbee_cluster_list_has(ep->in_clusters, ep->in_cluster_count, 0xE000);
+    const bool has_tuya_private_cli = gw_zigbee_cluster_list_has(ep->out_clusters, ep->out_cluster_count, 0xE000);
 
     if (has_temp_meas_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, GW_ZIGBEE_GATEWAY_ENDPOINT);
     if (has_hum_meas_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, GW_ZIGBEE_GATEWAY_ENDPOINT);
@@ -791,6 +793,7 @@ void gw_zigbee_handle_simple_desc_bindings(const uint8_t ieee_addr[8],
     if (has_illum_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, 0x0400, GW_ZIGBEE_GATEWAY_ENDPOINT);
     if (has_pressure_srv) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, 0x0403, GW_ZIGBEE_GATEWAY_ENDPOINT);
     if (has_onoff_cli) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, GW_ZIGBEE_GATEWAY_ENDPOINT);
+    if (has_tuya_private_srv || has_tuya_private_cli) request_bind_to_gateway(uid, ieee_addr, short_addr, ep->endpoint, 0xE000, GW_ZIGBEE_GATEWAY_ENDPOINT);
 }
 
 void gw_zigbee_handle_simple_desc_reporting(uint16_t short_addr, const gw_zb_endpoint_t *ep)

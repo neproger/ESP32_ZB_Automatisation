@@ -26,6 +26,7 @@
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "esp_zigbee_gateway.h"
+#include "esp_zigbee_attribute.h"
 #include "esp_zigbee_cluster.h"
 #include "zb_config_platform.h"
 #include "zboss_api.h"
@@ -52,9 +53,11 @@ static const char *TAG = "ESP_ZB_GATEWAY";
 #define GW_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT 0x0400
 #define GW_ZB_CLUSTER_PRESSURE_MEASUREMENT    0x0403
 #define GW_ZB_CLUSTER_OCCUPANCY_SENSING       0x0406
+#define GW_ZB_CLUSTER_TUYA_PRIVATE            0xE000
 #define GW_ZB_ATTR_MEASURED_VALUE             0x0000
 #define GW_ZB_ATTR_OCCUPANCY                  0x0000
 #define GW_ZB_ATTR_BATTERY_VOLTAGE            0x0020
+#define GW_ZB_TUYA_PRIVATE_DUMMY_ATTR         0x0000
 
 static void dispatch_runtime_event(uint8_t event_kind,
                                    const gw_device_uid_t *uid,
@@ -297,6 +300,14 @@ static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_ad
 
 static const char *zb_cmd_name(uint16_t cluster_id, uint8_t cmd_id)
 {
+    if (cluster_id == GW_ZB_CLUSTER_TUYA_PRIVATE) {
+        switch (cmd_id) {
+        case 0x00: return "button.single";
+        case 0x01: return "button.double";
+        case 0x02: return "button.hold";
+        default: return "tuya.button";
+        }
+    }
     if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
         switch (cmd_id) {
         case ESP_ZB_ZCL_CMD_ON_OFF_OFF_ID: return "off";
@@ -655,6 +666,61 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                                NULL);
     }
 
+    if (callback_id == ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_REQ_CB_ID) {
+        const esp_zb_zcl_custom_cluster_command_message_t *m = (const esp_zb_zcl_custom_cluster_command_message_t *)message;
+        if (m == NULL) {
+            return ESP_OK;
+        }
+        uint16_t src_short = 0;
+        if (m->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
+            src_short = m->info.src_address.u.short_addr;
+        }
+
+        gw_device_uid_t uid = {0};
+        if (!gw_c6_store_find_uid_by_short(src_short, &uid) && src_short != 0) {
+            ESP_LOGW(TAG,
+                     "custom cmd from unknown short=0x%04x ep=%u cluster=0x%04x cmd=0x%02x, scheduling discovery",
+                     (unsigned)src_short,
+                     (unsigned)m->info.src_endpoint,
+                     (unsigned)m->info.cluster,
+                     (unsigned)m->info.command.id);
+            (void)gw_zigbee_discover_by_short(src_short);
+        }
+
+        char cmd_buf[32] = {0};
+        const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
+        if (cmd_name == NULL || strcmp(cmd_name, "unknown") == 0) {
+            (void)snprintf(cmd_buf, sizeof(cmd_buf), "custom.0x%02x", (unsigned)m->info.command.id);
+            cmd_name = cmd_buf;
+        }
+
+        log_zb_rx_value("custom_command",
+                        &uid,
+                        src_short,
+                        m->info.src_endpoint,
+                        m->info.cluster,
+                        m->info.command.id,
+                        0,
+                        m->data.size,
+                        GW_PROTO_EVENT_VALUE_NONE,
+                        false,
+                        0,
+                        0.0f,
+                        cmd_name);
+        dispatch_runtime_event(GW_PROTO_EVENT_COMMAND,
+                               &uid,
+                               src_short,
+                               m->info.src_endpoint,
+                               m->info.cluster,
+                               0,
+                               GW_PROTO_EVENT_VALUE_NONE,
+                               false,
+                               0,
+                               0.0f,
+                               cmd_name,
+                               NULL);
+    }
+
     return ESP_OK;
 }
 
@@ -885,6 +951,16 @@ static void esp_zb_task(void *pvParameters)
     // Expose a Level server to receive dimmer commands from remotes.
     esp_zb_level_cluster_cfg_t level_cfg = {.current_level = ESP_ZB_ZCL_LEVEL_CONTROL_CURRENT_LEVEL_DEFAULT_VALUE};
     esp_zb_cluster_list_add_level_cluster(cluster_list, esp_zb_level_cluster_create(&level_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    static uint8_t tuya_private_dummy_attr = 0;
+    esp_zb_attribute_list_t *tuya_private_cluster = esp_zb_zcl_attr_list_create(GW_ZB_CLUSTER_TUYA_PRIVATE);
+    if (tuya_private_cluster != NULL) {
+        (void)esp_zb_custom_cluster_add_custom_attr(tuya_private_cluster,
+                                                    GW_ZB_TUYA_PRIVATE_DUMMY_ATTR,
+                                                    ESP_ZB_ZCL_ATTR_TYPE_U8,
+                                                    ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE,
+                                                    &tuya_private_dummy_attr);
+        (void)esp_zb_cluster_list_add_custom_cluster(cluster_list, tuya_private_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    }
     esp_zb_ep_list_add_gateway_ep(ep_list, cluster_list, endpoint_config);
     esp_zb_device_register(ep_list);
 
@@ -909,7 +985,7 @@ static void esp_zb_task(void *pvParameters)
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_MOVE_WITH_ON_OFF);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STEP_WITH_ON_OFF);
     (void)esp_zb_zcl_add_privilege_command(ESP_ZB_GATEWAY_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CMD_LEVEL_CONTROL_STOP_WITH_ON_OFF);
-    ESP_LOGI(TAG, "registered privilege handlers for onoff+level");
+    ESP_LOGI(TAG, "registered privilege handlers for onoff+level and custom cluster 0x%04x", GW_ZB_CLUSTER_TUYA_PRIVATE);
 
     ESP_ERROR_CHECK(esp_zb_start(false));
     esp_zb_stack_main_loop();

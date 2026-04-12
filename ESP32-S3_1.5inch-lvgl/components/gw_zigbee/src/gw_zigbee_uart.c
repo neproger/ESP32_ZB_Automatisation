@@ -278,6 +278,14 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             if (!s_snapshot_stream_active) {
                 (void)request_proto_async(GW_PROTO_MSG_SNAPSHOT_REQUEST, NULL, 0, "peer-online snapshot sync");
             }
+        } else if (evt->event_id_kind == GW_PROTO_EVENT_COMMAND) {
+            ESP_LOGI(TAG,
+                     "UART RX event command uid=%s short=0x%04x ep=%u cluster=0x%04x cmd=%s",
+                     evt->device_uid.uid,
+                     evt->short_addr,
+                     evt->endpoint,
+                     evt->cluster_id,
+                     evt->cmd);
         }
     }
 

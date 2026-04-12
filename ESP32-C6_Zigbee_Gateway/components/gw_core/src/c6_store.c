@@ -129,6 +129,76 @@ static void normalize_persisted_device_statuses(void)
     }
 }
 
+static void dump_persisted_topology(void)
+{
+    const size_t device_count = gw_store_count_devices();
+    const size_t endpoint_count = gw_store_count_endpoints();
+    ESP_LOGI(TAG,
+             "persisted topology dump: devices=%u endpoints=%u",
+             (unsigned)device_count,
+             (unsigned)endpoint_count);
+
+    for (size_t i = 0; i < device_count; ++i) {
+        gw_proto_device_v1_t record = {0};
+        if (gw_store_get_device_by_index(i, &record) != ESP_OK) {
+            ESP_LOGW(TAG, "persisted device[%u]: read failed", (unsigned)i);
+            continue;
+        }
+
+        gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
+        const size_t ep_count = collect_endpoints_for_uid(&record.device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
+        ESP_LOGI(TAG,
+                 "persisted device[%u]: uid=%s short=0x%04x status=%u/%s endpoints=%u name=%s has_onoff=%u has_button=%u",
+                 (unsigned)i,
+                 record.device_uid.uid,
+                 (unsigned)record.short_addr,
+                 (unsigned)record.status,
+                 status_name((gw_device_status_t)record.status),
+                 (unsigned)ep_count,
+                 record.name,
+                 (unsigned)record.has_onoff,
+                 (unsigned)record.has_button);
+
+        for (size_t ep_i = 0; ep_i < ep_count; ++ep_i) {
+            const gw_zb_endpoint_t *ep = &eps[ep_i];
+            ESP_LOGI(TAG,
+                     "persisted endpoint[%u.%u]: uid=%s short=0x%04x ep=%u profile=0x%04x dev=0x%04x in=%u out=%u kind=%s",
+                     (unsigned)i,
+                     (unsigned)ep_i,
+                     ep->uid.uid,
+                     (unsigned)ep->short_addr,
+                     (unsigned)ep->endpoint,
+                     (unsigned)ep->profile_id,
+                     (unsigned)ep->device_id,
+                     (unsigned)ep->in_cluster_count,
+                     (unsigned)ep->out_cluster_count,
+                     ep->kind);
+        }
+    }
+
+    for (size_t i = 0; i < endpoint_count; ++i) {
+        gw_proto_endpoint_v1_t ep = {0};
+        if (gw_store_get_endpoint_by_index(i, &ep) != ESP_OK) {
+            ESP_LOGW(TAG, "persisted raw_endpoint[%u]: read failed", (unsigned)i);
+            continue;
+        }
+        gw_proto_device_v1_t owner = {0};
+        const bool has_owner = (gw_store_get_device(&ep.uid, &owner) == ESP_OK);
+        ESP_LOGI(TAG,
+                 "persisted raw_endpoint[%u]: uid=%s short=0x%04x ep=%u owner=%s profile=0x%04x dev=0x%04x in=%u out=%u kind=%s",
+                 (unsigned)i,
+                 ep.uid.uid,
+                 (unsigned)ep.short_addr,
+                 (unsigned)ep.endpoint,
+                 has_owner ? "yes" : "missing",
+                 (unsigned)ep.profile_id,
+                 (unsigned)ep.device_id,
+                 (unsigned)ep.in_cluster_count,
+                 (unsigned)ep.out_cluster_count,
+                 ep.kind);
+    }
+}
+
 static void proto_device_to_public(const gw_proto_device_v1_t *src, gw_device_t *dst)
 {
     memset(dst, 0, sizeof(*dst));
@@ -232,6 +302,7 @@ esp_err_t gw_c6_store_init(void)
     ESP_RETURN_ON_ERROR(micro_db_flash_init(), TAG, "micro_db_flash_init failed");
     ESP_RETURN_ON_ERROR(gw_store_init_topology(), TAG, "topology init failed");
     normalize_persisted_device_statuses();
+    dump_persisted_topology();
     s_initialized = true;
     ESP_LOGI(TAG,
              "store ready: devices=%u endpoints=%u",
@@ -247,7 +318,8 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
     }
 
     gw_proto_device_v1_t record = {0};
-    if (gw_store_get_device(&device->device_uid, &record) != ESP_OK) {
+    const esp_err_t get_err = gw_store_get_device(&device->device_uid, &record);
+    if (get_err != ESP_OK) {
         public_device_to_proto(device, &record);
     } else {
         if (device->short_addr != 0) {
@@ -266,7 +338,24 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
         }
     }
 
-    return gw_store_upsert_device(&record, NULL, NULL);
+    bool changed = false;
+    bool inserted = false;
+    const size_t before = gw_store_count_devices();
+    esp_err_t err = gw_store_upsert_device(&record, &changed, &inserted);
+    const size_t after = gw_store_count_devices();
+    ESP_LOGI(TAG,
+             "device_upsert uid=%s short=0x%04x status=%u/%s get=%s result=%s changed=%u inserted=%u count=%u->%u",
+             record.device_uid.uid,
+             (unsigned)record.short_addr,
+             (unsigned)record.status,
+             status_name((gw_device_status_t)record.status),
+             esp_err_to_name(get_err),
+             esp_err_to_name(err),
+             changed ? 1U : 0U,
+             inserted ? 1U : 0U,
+             (unsigned)before,
+             (unsigned)after);
+    return err;
 }
 
 esp_err_t gw_c6_store_device_get(const gw_device_uid_t *uid, gw_device_t *out_device)
@@ -342,8 +431,23 @@ esp_err_t gw_c6_store_device_set_status(const gw_device_uid_t *uid, gw_device_st
     if (err != ESP_OK) {
         return err;
     }
+    const uint8_t old_status = record.status;
     record.status = (uint8_t)status;
-    return gw_store_upsert_device(&record, NULL, NULL);
+    bool changed = false;
+    bool inserted = false;
+    err = gw_store_upsert_device(&record, &changed, &inserted);
+    ESP_LOGI(TAG,
+             "device_status uid=%s short=0x%04x %u/%s->%u/%s result=%s changed=%u inserted=%u",
+             record.device_uid.uid,
+             (unsigned)record.short_addr,
+             (unsigned)old_status,
+             status_name((gw_device_status_t)old_status),
+             (unsigned)record.status,
+             status_name((gw_device_status_t)record.status),
+             esp_err_to_name(err),
+             changed ? 1U : 0U,
+             inserted ? 1U : 0U);
+    return err;
 }
 
 esp_err_t gw_c6_store_device_get_full_by_short(uint16_t short_addr, gw_device_full_t *out_device)
@@ -430,6 +534,11 @@ esp_err_t gw_c6_store_endpoint_remove_device(const gw_device_uid_t *uid)
         removed_any = removed_any || removed;
     }
 
+    ESP_LOGW(TAG,
+             "endpoint_remove_device uid=%s matched=%u removed_any=%u",
+             uid->uid,
+             (unsigned)ctx.count,
+             removed_any ? 1U : 0U);
     free(keys);
     return removed_any ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
@@ -439,7 +548,20 @@ esp_err_t gw_c6_store_device_remove(const gw_device_uid_t *uid)
     if (!s_initialized || !uid || uid->uid[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    return gw_store_remove_full_device(uid, NULL);
+    const size_t dev_before = gw_store_count_devices();
+    const size_t ep_before = gw_store_count_endpoints();
+    bool removed = false;
+    esp_err_t err = gw_store_remove_full_device(uid, &removed);
+    ESP_LOGW(TAG,
+             "device_remove uid=%s result=%s removed=%u devices=%u->%u endpoints=%u->%u",
+             uid->uid,
+             esp_err_to_name(err),
+             removed ? 1U : 0U,
+             (unsigned)dev_before,
+             (unsigned)gw_store_count_devices(),
+             (unsigned)ep_before,
+             (unsigned)gw_store_count_endpoints());
+    return err;
 }
 
 size_t gw_c6_store_device_count(void)
@@ -507,7 +629,19 @@ esp_err_t gw_c6_store_endpoint_upsert(const gw_zb_endpoint_t *endpoint)
     }
     gw_proto_endpoint_v1_t record = {0};
     public_endpoint_to_proto(endpoint, &record);
-    return gw_store_upsert_endpoint(&record, NULL, NULL);
+    bool changed = false;
+    bool inserted = false;
+    esp_err_t err = gw_store_upsert_endpoint(&record, &changed, &inserted);
+    ESP_LOGI(TAG,
+             "endpoint_upsert uid=%s short=0x%04x ep=%u result=%s changed=%u inserted=%u endpoints=%u",
+             record.uid.uid,
+             (unsigned)record.short_addr,
+             (unsigned)record.endpoint,
+             esp_err_to_name(err),
+             changed ? 1U : 0U,
+             inserted ? 1U : 0U,
+             (unsigned)gw_store_count_endpoints());
+    return err;
 }
 
 size_t gw_c6_store_endpoint_list(const gw_device_uid_t *uid, gw_zb_endpoint_t *out_eps, size_t max_eps)

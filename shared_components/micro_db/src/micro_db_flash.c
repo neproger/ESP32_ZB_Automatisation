@@ -7,6 +7,8 @@
 
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 enum {
     MICRO_DB_FLASH_MAX_TABLES = 16,
@@ -58,7 +60,29 @@ static const esp_partition_t *s_part = NULL;
 static micro_db_flash_dir_page_t s_dir;
 static uint8_t s_sector_buf[MICRO_DB_FLASH_SECTOR_SIZE];
 static const uint8_t s_zero_buf[MICRO_DB_FLASH_SECTOR_SIZE] = {0};
+static SemaphoreHandle_t s_flash_lock;
 static bool s_ready = false;
+
+static esp_err_t flash_lock(void)
+{
+    if (s_flash_lock == NULL) {
+        s_flash_lock = xSemaphoreCreateRecursiveMutex();
+        if (s_flash_lock == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (xSemaphoreTakeRecursive(s_flash_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static void flash_unlock(void)
+{
+    if (s_flash_lock != NULL) {
+        (void)xSemaphoreGiveRecursive(s_flash_lock);
+    }
+}
 
 static size_t align_up(size_t value, size_t align)
 {
@@ -122,6 +146,10 @@ static esp_err_t patch_partition(uint32_t offset, const void *data, size_t len)
     if ((offset + len) > s_part->size) {
         return ESP_ERR_INVALID_SIZE;
     }
+    esp_err_t lock_err = flash_lock();
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
 
     const uint8_t *src = (const uint8_t *)data;
     size_t remaining = len;
@@ -136,6 +164,7 @@ static esp_err_t patch_partition(uint32_t offset, const void *data, size_t len)
 
         esp_err_t err = esp_partition_read(s_part, sector_base, s_sector_buf, sizeof(s_sector_buf));
         if (err != ESP_OK) {
+            flash_unlock();
             return err;
         }
 
@@ -143,11 +172,13 @@ static esp_err_t patch_partition(uint32_t offset, const void *data, size_t len)
 
         err = esp_partition_erase_range(s_part, sector_base, MICRO_DB_FLASH_SECTOR_SIZE);
         if (err != ESP_OK) {
+            flash_unlock();
             return err;
         }
 
         err = esp_partition_write(s_part, sector_base, s_sector_buf, sizeof(s_sector_buf));
         if (err != ESP_OK) {
+            flash_unlock();
             return err;
         }
 
@@ -156,6 +187,7 @@ static esp_err_t patch_partition(uint32_t offset, const void *data, size_t len)
         remaining -= chunk;
     }
 
+    flash_unlock();
     return ESP_OK;
 }
 
@@ -354,8 +386,14 @@ static esp_err_t get_or_create_entry(const micro_db_table_t *table,
         return ESP_ERR_INVALID_ARG;
     }
 
+    esp_err_t lock_err = flash_lock();
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
+
     esp_err_t err = ensure_ready();
     if (err != ESP_OK) {
+        flash_unlock();
         return err;
     }
 
@@ -363,19 +401,23 @@ static esp_err_t get_or_create_entry(const micro_db_table_t *table,
     if (idx < 0 && create) {
         err = allocate_entry(table, &idx);
         if (err != ESP_OK) {
+            flash_unlock();
             return err;
         }
     }
     if (idx < 0) {
+        flash_unlock();
         return ESP_ERR_NOT_FOUND;
     }
 
     micro_db_flash_dir_entry_t *entry = &s_dir.entries[idx];
     if (entry->record_size != table->schema->record_size || entry->capacity != table->capacity) {
+        flash_unlock();
         return ESP_ERR_INVALID_SIZE;
     }
 
     *out_entry = entry;
+    flash_unlock();
     return ESP_OK;
 }
 
