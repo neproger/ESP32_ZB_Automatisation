@@ -34,8 +34,8 @@
 #include "gw_zigbee/gw_zigbee.h"
 #include "gw_zigbee/gw_zigbee_events.h"
 #include "gw_core/c6_store.h"
-#include "gw_proto/gw_proto.h"
 #include "gw_uart_link.h"
+#include "gw_proto/gw_proto.h"
 
 #include "zcl/esp_zigbee_zcl_command.h"
 #include "zcl/esp_zigbee_zcl_core.h"
@@ -76,7 +76,7 @@ static void dispatch_runtime_event(uint8_t event_kind,
     evt.event_id = 0;
     evt.ts_ms = (uint64_t)(esp_timer_get_time() / 1000);
     evt.event_id_kind = event_kind;
-    if (uid) {
+    if (uid && uid->uid[0]) {
         evt.device_uid = *uid;
     }
     evt.short_addr = short_addr;
@@ -93,7 +93,7 @@ static void dispatch_runtime_event(uint8_t event_kind,
     if (value_text) {
         strlcpy(evt.value_text, value_text, sizeof(evt.value_text));
     }
-    (void)gw_zigbee_handle_event(&evt);
+    (void)gw_uart_link_send_event_zb(&evt);
 }
 
 static const char *runtime_value_type_name(uint8_t value_type)
@@ -284,17 +284,9 @@ static void announce_snapshot_runtime_ready_once(void)
 
 static void touch_device_last_seen(const gw_device_uid_t *uid, uint16_t short_addr, uint64_t ts_ms)
 {
-    if (!uid || uid->uid[0] == '\0') {
-        return;
-    }
-
-    gw_device_t d = {0};
-    if (gw_c6_store_device_get(uid, &d) != ESP_OK) {
-        return;
-    }
-    d.short_addr = short_addr;
-    d.last_seen_ms = ts_ms;
-    (void)gw_c6_store_device_upsert(&d);
+    (void)uid;
+    (void)short_addr;
+    (void)ts_ms;
 }
 
 

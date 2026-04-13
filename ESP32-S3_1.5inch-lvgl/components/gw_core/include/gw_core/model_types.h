@@ -30,8 +30,6 @@ typedef struct {
     char name[32];
     uint32_t version;
     uint64_t last_seen_ms;
-    bool has_onoff;
-    bool has_button;
 } gw_device_t;
 
 #define GW_STATE_MAX_ITEMS 1024

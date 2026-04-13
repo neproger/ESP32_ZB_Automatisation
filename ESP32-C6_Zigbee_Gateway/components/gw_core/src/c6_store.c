@@ -91,16 +91,6 @@ static void normalize_persisted_device_statuses(void)
             continue;
         }
 
-        if (record.has_onoff != 0 || record.has_button != 0) {
-            record.has_onoff = 0u;
-            record.has_button = 0u;
-            (void)gw_store_upsert_device(&record, NULL, NULL);
-            ESP_LOGI(TAG,
-                     "normalized persisted caps uid=%s short=0x%04x caps->raw_topology",
-                     record.device_uid.uid,
-                     (unsigned)record.short_addr);
-        }
-
         if (status == GW_DEVICE_STATUS_LEAVE_REQUESTED) {
             record.status = (uint8_t)GW_DEVICE_STATUS_QUARANTINED;
             (void)gw_store_upsert_device(&record, NULL, NULL);
@@ -148,16 +138,14 @@ static void dump_persisted_topology(void)
         gw_zb_endpoint_t eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
         const size_t ep_count = collect_endpoints_for_uid(&record.device_uid, eps, GW_DEVICE_MAX_ENDPOINTS);
         ESP_LOGI(TAG,
-                 "persisted device[%u]: uid=%s short=0x%04x status=%u/%s endpoints=%u name=%s has_onoff=%u has_button=%u",
+                 "persisted device[%u]: uid=%s short=0x%04x status=%u/%s endpoints=%u name=%s",
                  (unsigned)i,
                  record.device_uid.uid,
                  (unsigned)record.short_addr,
                  (unsigned)record.status,
                  status_name((gw_device_status_t)record.status),
                  (unsigned)ep_count,
-                 record.name,
-                 (unsigned)record.has_onoff,
-                 (unsigned)record.has_button);
+                 record.name);
 
         for (size_t ep_i = 0; ep_i < ep_count; ++ep_i) {
             const gw_zb_endpoint_t *ep = &eps[ep_i];
@@ -206,8 +194,6 @@ static void proto_device_to_public(const gw_proto_device_v1_t *src, gw_device_t 
     dst->short_addr = src->short_addr;
     strlcpy(dst->name, src->name, sizeof(dst->name));
     dst->last_seen_ms = src->last_seen_ms;
-    dst->has_onoff = (src->has_onoff != 0);
-    dst->has_button = (src->has_button != 0);
     dst->status = (gw_device_status_t)src->status;
 }
 
@@ -218,8 +204,6 @@ static void public_device_to_proto(const gw_device_t *src, gw_proto_device_v1_t 
     dst->short_addr = src->short_addr;
     strlcpy(dst->name, src->name, sizeof(dst->name));
     dst->last_seen_ms = src->last_seen_ms;
-    dst->has_onoff = src->has_onoff ? 1u : 0u;
-    dst->has_button = src->has_button ? 1u : 0u;
     dst->status = (uint8_t)(src->status != GW_DEVICE_STATUS_NONE ? src->status : GW_DEVICE_STATUS_NEW);
 }
 
@@ -331,8 +315,6 @@ esp_err_t gw_c6_store_device_upsert(const gw_device_t *device)
         if (device->last_seen_ms != 0) {
             record.last_seen_ms = device->last_seen_ms;
         }
-        record.has_onoff = device->has_onoff ? 1u : 0u;
-        record.has_button = device->has_button ? 1u : 0u;
         if (device->status != GW_DEVICE_STATUS_NONE) {
             record.status = (uint8_t)device->status;
         }
@@ -389,8 +371,6 @@ esp_err_t gw_c6_store_device_get_full(const gw_device_uid_t *uid, gw_device_full
     out_device->short_addr = record.short_addr;
     strlcpy(out_device->name, record.name, sizeof(out_device->name));
     out_device->last_seen_ms = record.last_seen_ms;
-    out_device->has_onoff = (record.has_onoff != 0);
-    out_device->has_button = (record.has_button != 0);
     out_device->status = (gw_device_status_t)record.status;
 
     gw_zb_endpoint_t live_eps[GW_DEVICE_MAX_ENDPOINTS] = {0};
@@ -617,8 +597,6 @@ esp_err_t gw_c6_store_device_sync_endpoints(const gw_device_uid_t *uid)
         return err;
     }
 
-    record.has_onoff = 0u;
-    record.has_button = 0u;
     return gw_store_upsert_device(&record, NULL, NULL);
 }
 

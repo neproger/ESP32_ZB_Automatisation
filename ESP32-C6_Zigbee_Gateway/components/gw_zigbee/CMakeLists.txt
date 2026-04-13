@@ -7,6 +7,7 @@ idf_component_register(
         "src/gw_zigbee_events.c"
     INCLUDE_DIRS
         "include"
+        "src"
     PRIV_REQUIRES
         log
         esp_timer

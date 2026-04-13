@@ -42,8 +42,6 @@ void gw_proto_trim_device_v1(gw_proto_device_v1_t *dst, const gw_proto_device_v1
     trim_fixed_string(dst->name, sizeof(dst->name), src->name);
     dst->version = src->version;
     dst->last_seen_ms = src->last_seen_ms;
-    dst->has_onoff = src->has_onoff ? 1 : 0;
-    dst->has_button = src->has_button ? 1 : 0;
     dst->status = src->status;
 }
 

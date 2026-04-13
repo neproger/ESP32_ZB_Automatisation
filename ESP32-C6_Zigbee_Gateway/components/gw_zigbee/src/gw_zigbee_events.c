@@ -702,16 +702,12 @@ esp_err_t gw_zigbee_handle_simple_desc_discovered(const uint8_t ieee_addr[8],
     if (gw_c6_store_device_get(&duid, &d) == ESP_OK) {
         d.short_addr = short_addr;
         d.last_seen_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        d.has_button = false;
-        d.has_onoff = false;
         d.status = GW_DEVICE_STATUS_DISCOVERING;
         (void)gw_c6_store_device_upsert(&d);
     } else {
         d.device_uid = duid;
         d.short_addr = short_addr;
         d.last_seen_ms = (uint64_t)(esp_timer_get_time() / 1000);
-        d.has_button = false;
-        d.has_onoff = false;
         d.status = GW_DEVICE_STATUS_DISCOVERING;
         (void)gw_c6_store_device_upsert(&d);
     }

@@ -303,8 +303,6 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
         strlcpy(msg.name, device.name, sizeof(msg.name));
         msg.version = 0;
         msg.last_seen_ms = device.last_seen_ms;
-        msg.has_onoff = device.has_onoff ? 1u : 0u;
-        msg.has_button = device.has_button ? 1u : 0u;
         msg.status = (uint8_t)device.status;
         err = uart_send_frame_sync(GW_PROTO_MSG_DEVICE_UPSERT, seq++, &msg, sizeof(msg));
         if (err != ESP_OK) {

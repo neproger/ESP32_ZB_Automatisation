@@ -56,8 +56,6 @@ static void ensure_weather_model(void)
     strlcpy(dev.name, "Weather", sizeof(dev.name));
     dev.version = 1;
     dev.last_seen_ms = now_ts_ms();
-    dev.has_onoff = 0;
-    dev.has_button = 0;
     (void)gw_model_upsert_device(&dev, NULL, NULL);
 
     gw_proto_endpoint_v1_t ep = {0};

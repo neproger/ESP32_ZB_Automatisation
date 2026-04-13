@@ -17,8 +17,6 @@ typedef struct {
     uint16_t short_addr;
     char name[32];
     uint64_t last_seen_ms;
-    bool has_onoff;
-    bool has_button;
     gw_device_status_t status;
 } gw_device_t;
 
@@ -41,8 +39,6 @@ typedef struct {
     uint16_t short_addr;
     char name[32];
     uint64_t last_seen_ms;
-    bool has_onoff;
-    bool has_button;
     gw_device_status_t status;
     uint8_t endpoint_count;
     gw_device_endpoint_t endpoints[GW_DEVICE_MAX_ENDPOINTS];
