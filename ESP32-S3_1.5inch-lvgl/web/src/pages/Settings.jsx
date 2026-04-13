@@ -18,12 +18,55 @@ export default function Settings() {
   const { projectSettings, factoryReset } = useGateway()
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
+  const [citySearch, setCitySearch] = useState('')
+  const [cityResults, setCityResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const [form, setForm] = useState({
     screensaver_timeout_sec: 4,
     weather_success_interval_min: 60,
     weather_retry_interval_sec: 10,
     timezone: 'auto',
+    weather_location_auto: true,
+    weather_city: '',
+    weather_lat: 0,
+    weather_lon: 0,
   })
+
+  async function searchCity() {
+    if (!citySearch.trim()) return
+    setSearching(true)
+    try {
+      const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(citySearch)}&count=5&language=en&format=json`
+      const res = await fetch(url)
+      const data = await res.json()
+      if (data?.results) {
+        setCityResults(data.results.map(c => ({
+          name: c.name,
+          country: c.country || '',
+          state: c.admin1 || '',
+          lat: c.latitude,
+          lon: c.longitude,
+          label: `${c.name}${c.admin1 ? ', ' + c.admin1 : ''}, ${c.country || ''}`,
+        })))
+      }
+    } catch (e) {
+      console.error('city search failed', e)
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function selectCity(city) {
+    setForm(prev => ({
+      ...prev,
+      weather_location_auto: false,
+      weather_city: city.name,
+      weather_lat: city.lat,
+      weather_lon: city.lon,
+    }))
+    setCitySearch('')
+    setCityResults([])
+  }
 
   const timezoneOptions = useMemo(() => {
     const out = [{ value: 'auto', label: 'Auto (region)' }]
@@ -45,6 +88,10 @@ export default function Settings() {
       weather_success_interval_min: Math.max(1, Math.round(toInt(projectSettings?.weather_success_interval_ms, 60 * 60 * 1000) / 60000)),
       weather_retry_interval_sec: Math.max(3, Math.round(toInt(projectSettings?.weather_retry_interval_ms, 10 * 1000) / 1000)),
       timezone: tzAuto ? 'auto' : String(tzHour),
+      weather_location_auto: projectSettings?.weather_location_auto !== 0,
+      weather_city: projectSettings?.weather_city || '',
+      weather_lat: Number(projectSettings?.weather_lat) || 0,
+      weather_lon: Number(projectSettings?.weather_lon) || 0,
     })
   }, [projectSettings])
 
@@ -59,6 +106,10 @@ export default function Settings() {
       weather_retry_interval_ms: clampInt(form.weather_retry_interval_sec, 3, 600, 10) * 1000,
       timezone_auto: tzAuto,
       timezone_offset_min: tzAuto ? 0 : tzHour * 60,
+      weather_location_auto: form.weather_location_auto,
+      weather_lat: form.weather_lat,
+      weather_lon: form.weather_lon,
+      weather_city: form.weather_city,
     }
     try {
       sendWsCommand(protoEncodeSettingsChange(nextSettings, Date.now() & 0xffff))
@@ -140,6 +191,51 @@ export default function Settings() {
             ))}
           </select>
         </label>
+
+        <div className="settings-row">
+          <span>Weather location</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input
+                type="checkbox"
+                checked={form.weather_location_auto}
+                onChange={(e) => setForm((prev) => ({ ...prev, weather_location_auto: e.target.checked }))}
+              />
+              Auto (from IP)
+            </label>
+            {!form.weather_location_auto && (
+              <>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Search city..."
+                    value={citySearch}
+                    onChange={(e) => setCitySearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && searchCity()}
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={searchCity} disabled={searching}>
+                    {searching ? '...' : 'Search'}
+                  </button>
+                </div>
+                {cityResults.length > 0 && (
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, border: '1px solid #ccc' }}>
+                    {cityResults.map((c, i) => (
+                      <li key={i} style={{ padding: '4px 8px', cursor: 'pointer' }} onClick={() => selectCity(c)}>
+                        {c.label}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {form.weather_city && !cityResults.length && (
+                  <div style={{ fontSize: '12px', color: '#666' }}>
+                    Selected: <strong>{form.weather_city}</strong> ({form.weather_lat?.toFixed(4)}, {form.weather_lon?.toFixed(4)})
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
 
         <div className="row">
           <button onClick={onSave} disabled={saving}>

@@ -183,14 +183,24 @@ static esp_err_t ws_handle_settings_change(const gw_proto_cmd_settings_change_v1
     if (!gw_model_settings_validate(&msg->settings)) {
         ESP_LOGW(TAG,
                  "settings change rejected: screensaver=%" PRIu32 " weather_success=%" PRIu32
-                 " weather_retry=%" PRIu32 " timezone_auto=%u timezone_offset=%d",
+                 " weather_retry=%" PRIu32 " timezone_auto=%u timezone_offset=%d"
+                 " weather_loc_auto=%u weather_city=%.32s lat=%.4f lon=%.4f",
                  msg->settings.screensaver_timeout_ms,
                  msg->settings.weather_success_interval_ms,
                  msg->settings.weather_retry_interval_ms,
                  msg->settings.timezone_auto,
-                 msg->settings.timezone_offset_min);
+                 msg->settings.timezone_offset_min,
+                 msg->settings.weather_location_auto,
+                 msg->settings.weather_city,
+                 (double)msg->settings.weather_lat,
+                 (double)msg->settings.weather_lon);
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_LOGI(TAG, "settings changed: weather_loc_auto=%u city=%.32s lat=%.4f lon=%.4f",
+             msg->settings.weather_location_auto,
+             msg->settings.weather_city,
+             (double)msg->settings.weather_lat,
+             (double)msg->settings.weather_lon);
     return gw_model_set_settings(&msg->settings, NULL, NULL);
 }
 

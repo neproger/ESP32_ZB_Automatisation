@@ -293,6 +293,10 @@ void gw_proto_trim_settings_v1(gw_proto_settings_v1_t *dst, const gw_proto_setti
     dst->weather_retry_interval_ms = src->weather_retry_interval_ms;
     dst->timezone_auto = src->timezone_auto ? 1 : 0;
     dst->timezone_offset_min = src->timezone_offset_min;
+    dst->weather_location_auto = src->weather_location_auto ? 1 : 0;
+    dst->weather_lat = src->weather_lat;
+    dst->weather_lon = src->weather_lon;
+    strlcpy(dst->weather_city, src->weather_city, sizeof(dst->weather_city));
 }
 
 void gw_proto_trim_endpoint_remove_v1(gw_proto_endpoint_remove_v1_t *dst, const gw_proto_endpoint_remove_v1_t *src)

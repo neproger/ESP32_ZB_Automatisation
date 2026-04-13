@@ -13,6 +13,7 @@ static const uint32_t kDefaultScreensaverTimeoutMs = 10000;
 static const uint32_t kDefaultWeatherSuccessIntervalMs = 60 * 60 * 1000;
 static const uint32_t kDefaultWeatherRetryIntervalMs = 10 * 1000;
 static const uint8_t kDefaultTimezoneAuto = 1u;
+static const uint8_t kDefaultWeatherLocationAuto = 1u;
 static const int16_t kDefaultTimezoneOffsetMin = 0;
 static const uint32_t kMinScreensaverTimeoutMs = 1000;
 static const uint32_t kMaxScreensaverTimeoutMs = 600 * 1000;
@@ -39,6 +40,7 @@ esp_err_t gw_model_init_settings(void)
             .weather_retry_interval_ms = kDefaultWeatherRetryIntervalMs,
             .timezone_auto = kDefaultTimezoneAuto,
             .timezone_offset_min = kDefaultTimezoneOffsetMin,
+            .weather_location_auto = kDefaultWeatherLocationAuto,
         };
         return micro_db_table_upsert(&s_settings_table, &defaults, NULL, NULL);
     }
@@ -71,6 +73,17 @@ bool gw_model_settings_validate(const gw_proto_settings_v1_t *record)
     if (record->timezone_offset_min < kMinTimezoneOffsetMin ||
         record->timezone_offset_min > kMaxTimezoneOffsetMin) {
         return false;
+    }
+    if (!record->weather_location_auto) {
+        if (record->weather_lat < -90.0f || record->weather_lat > 90.0f) {
+            return false;
+        }
+        if (record->weather_lon < -180.0f || record->weather_lon > 180.0f) {
+            return false;
+        }
+        if (!record->weather_city[0]) {
+            return false;
+        }
     }
     return true;
 }

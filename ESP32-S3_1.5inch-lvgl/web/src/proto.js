@@ -661,13 +661,18 @@ export function protoEncodeGroupItemsChange(change, seq = 1) {
 }
 
 export function protoEncodeSettingsChange(settings, seq = 1) {
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_CHANGE, 4 + 16, seq)
+  const payloadSize = 4 + 4 + 4 + 1 + 1 + 2 + 4 + 4 + 32
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_CHANGE, payloadSize, seq)
   view.setUint32(HDR_SIZE + 0, 1, true)
   view.setUint32(HDR_SIZE + 4, Number(settings?.screensaver_timeout_ms) || 0, true)
   view.setUint32(HDR_SIZE + 8, Number(settings?.weather_success_interval_ms) || 0, true)
   view.setUint32(HDR_SIZE + 12, Number(settings?.weather_retry_interval_ms) || 0, true)
   view.setUint8(HDR_SIZE + 16, settings?.timezone_auto ? 1 : 0)
+  view.setUint8(HDR_SIZE + 17, settings?.weather_location_auto ? 1 : 0)
   view.setInt16(HDR_SIZE + 18, Number(settings?.timezone_offset_min) || 0, true)
+  view.setFloat32(HDR_SIZE + 20, Number(settings?.weather_lat) || 0, true)
+  view.setFloat32(HDR_SIZE + 24, Number(settings?.weather_lon) || 0, true)
+  writeFixedString(view, HDR_SIZE + 28, 32, settings?.weather_city || '')
   return buf
 }
 
@@ -1275,13 +1280,18 @@ export function protoFrameToEvent(frame) {
 export function protoParseSettingsFrame(frame) {
   if (!frame?.payload || frame.type !== GW_PROTO_MSG_SETTINGS) return null
   const payload = frame.payload
+  if (payload.byteLength < 16) return null
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
   return {
     screensaver_timeout_ms: Number(view.getUint32(0, true)),
     weather_success_interval_ms: Number(view.getUint32(4, true)),
     weather_retry_interval_ms: Number(view.getUint32(8, true)),
     timezone_auto: view.getUint8(12) !== 0,
+    weather_location_auto: payload.byteLength >= 14 ? view.getUint8(13) !== 0 : true,
     timezone_offset_min: view.getInt16(14, true),
+    weather_lat: payload.byteLength >= 20 ? view.getFloat32(16, true) : 0,
+    weather_lon: payload.byteLength >= 24 ? view.getFloat32(20, true) : 0,
+    weather_city: payload.byteLength >= 56 ? readFixedString(view, 24, 32) : '',
   }
 }
 

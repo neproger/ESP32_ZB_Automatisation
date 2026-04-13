@@ -65,6 +65,8 @@ function protoTypeName(type) {
 
 function logProtoFrame(direction, frame) {
 	if (!frame) return
+	const silentTypes = [0x44, 0x46]
+	if (silentTypes.includes(frame.type)) return
 	console.debug(`[ws ${direction}] ${protoTypeName(frame.type)}`, {
 		type: frame.type,
 		seq: frame.seq,

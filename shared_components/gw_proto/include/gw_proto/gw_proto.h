@@ -364,8 +364,11 @@ typedef struct GW_PROTO_PACKED {
     uint32_t weather_success_interval_ms;
     uint32_t weather_retry_interval_ms;
     uint8_t timezone_auto;
-    uint8_t reserved0;
+    uint8_t weather_location_auto;
     int16_t timezone_offset_min;
+    float weather_lat;
+    float weather_lon;
+    char weather_city[32];
 } gw_proto_settings_v1_t;
 
 typedef struct GW_PROTO_PACKED {

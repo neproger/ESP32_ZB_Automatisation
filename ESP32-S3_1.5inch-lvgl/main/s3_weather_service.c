@@ -198,6 +198,7 @@ static TickType_t weather_retry_ticks(void)
     if (load_settings(&cfg) == ESP_OK) {
         return ms_to_ticks_safe(cfg.weather_retry_interval_ms);
     }
+    ESP_LOGI(TAG, "using default retry interval: 10sec");
     return ms_to_ticks_safe(10 * 1000);
 }
 
@@ -205,6 +206,9 @@ static TickType_t weather_success_ticks(void)
 {
     gw_proto_settings_v1_t cfg = {0};
     if (load_settings(&cfg) == ESP_OK) {
+        ESP_LOGI(TAG, "weather interval: success=%usec retry=%usec",
+                 (unsigned)(cfg.weather_success_interval_ms / 1000),
+                 (unsigned)(cfg.weather_retry_interval_ms / 1000));
         return ms_to_ticks_safe(cfg.weather_success_interval_ms);
     }
     return ms_to_ticks_safe(60 * 60 * 1000);
@@ -359,6 +363,26 @@ static void persist_timezone_to_model(const char *tz_name)
 
 static esp_err_t ensure_geo_location(void)
 {
+    gw_proto_settings_v1_t settings = {0};
+    (void)load_settings(&settings);
+
+    if (!settings.weather_location_auto && settings.weather_city[0]) {
+        portENTER_CRITICAL(&s_lock);
+        s_geo_lat = settings.weather_lat;
+        s_geo_lon = settings.weather_lon;
+        s_geo_ready = true;
+        s_last_geo_refresh_ms = now_ts_ms();
+        portEXIT_CRITICAL(&s_lock);
+
+        set_location_text(settings.weather_city);
+        persist_location_to_model(settings.weather_city);
+        persist_weather_status_to_model("location_ready");
+        persist_geo_to_model(s_geo_lat, s_geo_lon);
+        ESP_LOGI(TAG, "using manual location: %s (lat=%.6f lon=%.6f)",
+                 settings.weather_city, s_geo_lat, s_geo_lon);
+        return ESP_OK;
+    }
+
     const uint64_t now_ms = now_ts_ms();
     const bool refresh_due = (s_last_geo_refresh_ms == 0) ||
                              (now_ms > 0 && (now_ms - s_last_geo_refresh_ms) >= kGeoRefreshPeriodMs);
@@ -442,6 +466,7 @@ static void weather_task(void *arg)
         get_geo_snapshot(&geo_for_tz);
         apply_timezone_from_settings_or_geo(&geo_for_tz);
 
+        ESP_LOGI(TAG, "fetching weather: lat=%.6f lon=%.6f", s_geo_lat, s_geo_lon);
         s3_weather_result_t res = {0};
         char err[128] = {0};
         esp_err_t fetch_err = s3_weather_http_fetch_once(s_geo_lat, s_geo_lon, 8000, &res, err, sizeof(err));
