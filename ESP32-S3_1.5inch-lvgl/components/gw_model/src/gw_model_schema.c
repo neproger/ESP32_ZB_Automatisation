@@ -22,6 +22,23 @@ static bool topology_device_record_equals(const void *lhs_record, const void *rh
     return memcmp(lhs_record, rhs_record, sizeof(gw_proto_device_v1_t)) == 0;
 }
 
+static void device_meta_key_of(const void *record, void *out_key)
+{
+    const gw_model_device_meta_t *r = (const gw_model_device_meta_t *)record;
+    gw_device_uid_t *key = (gw_device_uid_t *)out_key;
+    *key = r->uid;
+}
+
+static bool device_meta_key_equals(const void *lhs_key, const void *rhs_key)
+{
+    return memcmp(lhs_key, rhs_key, sizeof(gw_device_uid_t)) == 0;
+}
+
+static bool device_meta_record_equals(const void *lhs_record, const void *rhs_record)
+{
+    return memcmp(lhs_record, rhs_record, sizeof(gw_model_device_meta_t)) == 0;
+}
+
 static void topology_endpoint_key_of(const void *record, void *out_key)
 {
     const gw_proto_endpoint_v1_t *r = (const gw_proto_endpoint_v1_t *)record;
@@ -160,6 +177,19 @@ const micro_db_table_schema_t GW_MODEL_SCHEMA_TOPOLOGY_ENDPOINT = {
     .key_of = topology_endpoint_key_of,
     .key_equals = topology_endpoint_key_equals,
     .record_equals = topology_endpoint_record_equals,
+};
+
+const micro_db_table_schema_t GW_MODEL_SCHEMA_DEVICE_META = {
+    .name = "device_meta",
+    .record_size = sizeof(gw_model_device_meta_t),
+    .key_size = sizeof(gw_device_uid_t),
+    .max_records = GW_DEVICE_MAX_DEVICES,
+    .backing = MICRO_DB_BACKING_RAM | MICRO_DB_BACKING_FLASH,
+    .flags = MICRO_DB_TABLE_F_VERSIONED,
+    .persist_key = "dev_meta",
+    .key_of = device_meta_key_of,
+    .key_equals = device_meta_key_equals,
+    .record_equals = device_meta_record_equals,
 };
 
 const micro_db_table_schema_t GW_MODEL_SCHEMA_STATE_ITEM = {

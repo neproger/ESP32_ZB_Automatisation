@@ -348,35 +348,13 @@ static void process_attr_report(const gw_device_uid_t *uid, const gw_proto_event
     }
 }
 
-static void merge_device_upsert_preserve_local_name(gw_proto_device_v1_t *record)
+static void strip_device_upsert_business_fields(gw_proto_device_v1_t *record)
 {
     if (!record || record->device_uid.uid[0] == '\0') {
         return;
     }
 
-    if (record->name[0] != '\0') {
-        return;
-    }
-
-    gw_proto_device_v1_t existing = {0};
-    if (gw_model_get_device(&record->device_uid, &existing) != ESP_OK) {
-        return;
-    }
-
-    if (existing.name[0] != '\0') {
-        strlcpy(record->name, existing.name, sizeof(record->name));
-    }
-}
-
-static void snapshot_begin(const gw_proto_sync_begin_v1_t *msg)
-{
-    (void)msg;
-}
-
-static void snapshot_end(const gw_proto_sync_end_v1_t *msg)
-{
-    (void)msg;
-    publish_model_devices_snapshot();
+    record->name[0] = '\0';
 }
 
 static void gw_model_bus_listener(gw_proto_bus_channel_t channel,
@@ -407,20 +385,17 @@ static void gw_model_bus_listener(gw_proto_bus_channel_t channel,
             }
             break;
         case GW_PROTO_MSG_SYNC_BEGIN:
-            if (hdr->len >= sizeof(gw_proto_sync_begin_v1_t)) {
-                snapshot_begin((const gw_proto_sync_begin_v1_t *)payload);
-            }
             break;
         case GW_PROTO_MSG_SYNC_END:
             if (hdr->len >= sizeof(gw_proto_sync_end_v1_t)) {
-                snapshot_end((const gw_proto_sync_end_v1_t *)payload);
+                publish_model_devices_snapshot();
             }
             break;
         case GW_PROTO_MSG_DEVICE_UPSERT:
             if (hdr->len >= sizeof(gw_proto_device_v1_t)) {
                 gw_proto_device_v1_t merged = {0};
                 memcpy(&merged, payload, sizeof(merged));
-                merge_device_upsert_preserve_local_name(&merged);
+                strip_device_upsert_business_fields(&merged);
                 (void)gw_model_upsert_device(&merged, &changed, &inserted);
             }
             break;

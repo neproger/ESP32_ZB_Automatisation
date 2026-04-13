@@ -555,14 +555,6 @@ bool gw_zigbee_bootstrap_ready(void)
     return s_bootstrap_ready;
 }
 
-esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name)
-{
-    if (!uid || !uid->uid[0] || !name) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid)
 {
     if (!uid || !uid->uid[0]) {

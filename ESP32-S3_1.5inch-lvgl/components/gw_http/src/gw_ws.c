@@ -20,6 +20,7 @@
 #include "gw_core/action_exec.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_model/gw_model_automation.h"
+#include "gw_model/gw_model_device_meta.h"
 #include "gw_model/gw_model_groups.h"
 #include "gw_model/gw_model_settings.h"
 #include "gw_model/gw_model_state.h"
@@ -136,13 +137,11 @@ static esp_err_t ws_handle_device_change(const gw_proto_cmd_device_change_v1_t *
     }
 
     if (msg->fields & GW_PROTO_DEVICE_CHANGE_F_NAME) {
-        strlcpy(device.name, msg->name, sizeof(device.name));
+        bool changed = false;
+        return gw_model_set_device_name(&msg->device_uid, msg->name, &changed);
     }
 
-    bool changed = false;
-    bool inserted = false;
-    err = gw_model_upsert_device(&device, &changed, &inserted);
-    return err;
+    return ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t ws_handle_group_change(const gw_proto_cmd_group_change_v1_t *msg)

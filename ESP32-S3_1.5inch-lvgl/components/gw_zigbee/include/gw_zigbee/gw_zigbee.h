@@ -37,8 +37,6 @@ typedef struct {
 esp_err_t gw_zigbee_link_start(void);
 // True after the first complete snapshot has been applied on S3.
 bool gw_zigbee_bootstrap_ready(void);
-// Set user device name on C6 by UID.
-esp_err_t gw_zigbee_set_device_name(const gw_device_uid_t *uid, const char *name);
 // Remove device from C6 device registry by UID.
 esp_err_t gw_zigbee_remove_device(const gw_device_uid_t *uid);
 esp_err_t gw_zigbee_remove_all_devices(void);

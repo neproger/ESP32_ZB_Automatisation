@@ -1,5 +1,6 @@
 #include "gw_model/gw_model_topology.h"
 
+#include "gw_model/gw_model_device_meta.h"
 #include "gw_store/gw_store_topology.h"
 
 esp_err_t gw_model_init_topology(void)
@@ -22,19 +23,31 @@ esp_err_t gw_model_upsert_device(const gw_proto_device_v1_t *record,
 esp_err_t gw_model_get_device(const gw_device_uid_t *uid,
                               gw_proto_device_v1_t *out_record)
 {
-    return gw_store_get_device(uid, out_record);
+    esp_err_t err = gw_store_get_device(uid, out_record);
+    if (err == ESP_OK) {
+        gw_model_apply_device_meta(out_record);
+    }
+    return err;
 }
 
 esp_err_t gw_model_remove_full_device(const gw_device_uid_t *uid,
                                       bool *out_removed)
 {
-    return gw_store_remove_full_device(uid, out_removed);
+    esp_err_t err = gw_store_remove_full_device(uid, out_removed);
+    if (err == ESP_OK) {
+        (void)gw_model_remove_device_meta(uid, NULL);
+    }
+    return err;
 }
 
 esp_err_t gw_model_remove_device(const gw_device_uid_t *uid,
                                  bool *out_removed)
 {
-    return gw_store_remove_device(uid, out_removed);
+    esp_err_t err = gw_store_remove_device(uid, out_removed);
+    if (err == ESP_OK) {
+        (void)gw_model_remove_device_meta(uid, NULL);
+    }
+    return err;
 }
 
 size_t gw_model_count_devices(void)
@@ -45,7 +58,11 @@ size_t gw_model_count_devices(void)
 esp_err_t gw_model_get_device_by_index(size_t index,
                                        gw_proto_device_v1_t *out_record)
 {
-    return gw_store_get_device_by_index(index, out_record);
+    esp_err_t err = gw_store_get_device_by_index(index, out_record);
+    if (err == ESP_OK) {
+        gw_model_apply_device_meta(out_record);
+    }
+    return err;
 }
 
 size_t gw_model_iter_devices(micro_db_iter_cb_t cb, void *user_ctx)

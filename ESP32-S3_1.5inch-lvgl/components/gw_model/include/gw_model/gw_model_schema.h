@@ -16,6 +16,7 @@ typedef enum {
     GW_MODEL_TABLE_GROUP_ITEM = 5,
     GW_MODEL_TABLE_SETTINGS = 6,
     GW_MODEL_TABLE_AUTOMATION = 7,
+    GW_MODEL_TABLE_DEVICE_META = 8,
 } gw_model_table_id_t;
 
 typedef struct {
@@ -33,6 +34,11 @@ typedef struct {
     char key[GW_STATE_KEY_MAX];
 } gw_model_state_key_t;
 
+typedef struct {
+    gw_device_uid_t uid;
+    char name[32];
+} gw_model_device_meta_t;
+
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_TOPOLOGY_DEVICE;
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_TOPOLOGY_ENDPOINT;
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_STATE_ITEM;
@@ -40,6 +46,7 @@ extern const micro_db_table_schema_t GW_MODEL_SCHEMA_GROUP;
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_GROUP_ITEM;
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_SETTINGS;
 extern const micro_db_table_schema_t GW_MODEL_SCHEMA_AUTOMATION;
+extern const micro_db_table_schema_t GW_MODEL_SCHEMA_DEVICE_META;
 
 #ifdef __cplusplus
 }

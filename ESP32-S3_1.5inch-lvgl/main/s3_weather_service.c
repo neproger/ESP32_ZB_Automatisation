@@ -16,6 +16,7 @@
 #include "gw_core/net_time.h"
 #include "gw_core/gw_proto_bus.h"
 #include "gw_model/gw_model_settings.h"
+#include "gw_model/gw_model_device_meta.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_topology.h"
 
@@ -53,9 +54,9 @@ static void ensure_weather_model(void)
     gw_proto_device_v1_t dev = {0};
     dev.device_uid = uid;
     dev.short_addr = 0;
-    strlcpy(dev.name, "Weather", sizeof(dev.name));
     dev.version = 1;
     dev.last_seen_ms = now_ts_ms();
+    (void)gw_model_set_device_name(&uid, "Weather", NULL);
     (void)gw_model_upsert_device(&dev, NULL, NULL);
 
     gw_proto_endpoint_v1_t ep = {0};

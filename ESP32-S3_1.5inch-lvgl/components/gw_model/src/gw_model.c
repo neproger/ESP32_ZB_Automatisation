@@ -2,6 +2,7 @@
 
 #include "gw_model/gw_model_groups.h"
 #include "gw_model/gw_model_automation.h"
+#include "gw_model/gw_model_device_meta.h"
 #include "gw_model/gw_model_settings.h"
 #include "gw_model/gw_model_state.h"
 #include "gw_model/gw_model_sync.h"
@@ -24,8 +25,16 @@ esp_err_t gw_model_init(void)
         return err;
     }
 
+    err = gw_model_init_device_meta();
+    if (err != ESP_OK) {
+        (void)gw_model_deinit_state();
+        (void)gw_model_deinit_topology();
+        return err;
+    }
+
     err = gw_model_init_groups();
     if (err != ESP_OK) {
+        (void)gw_model_deinit_device_meta();
         (void)gw_model_deinit_state();
         (void)gw_model_deinit_topology();
         return err;
@@ -34,6 +43,7 @@ esp_err_t gw_model_init(void)
     err = gw_model_init_settings();
     if (err != ESP_OK) {
         (void)gw_model_deinit_groups();
+        (void)gw_model_deinit_device_meta();
         (void)gw_model_deinit_state();
         (void)gw_model_deinit_topology();
         return err;
@@ -43,6 +53,7 @@ esp_err_t gw_model_init(void)
     if (err != ESP_OK) {
         (void)gw_model_deinit_settings();
         (void)gw_model_deinit_groups();
+        (void)gw_model_deinit_device_meta();
         (void)gw_model_deinit_state();
         (void)gw_model_deinit_topology();
         return err;
@@ -53,6 +64,7 @@ esp_err_t gw_model_init(void)
         (void)gw_model_deinit_automation();
         (void)gw_model_deinit_settings();
         (void)gw_model_deinit_groups();
+        (void)gw_model_deinit_device_meta();
         (void)gw_model_deinit_state();
         (void)gw_model_deinit_topology();
         return err;
@@ -67,6 +79,7 @@ esp_err_t gw_model_deinit(void)
     (void)gw_model_deinit_automation();
     (void)gw_model_deinit_settings();
     (void)gw_model_deinit_groups();
+    (void)gw_model_deinit_device_meta();
     (void)gw_model_deinit_state();
     (void)gw_model_deinit_topology();
     return ESP_OK;

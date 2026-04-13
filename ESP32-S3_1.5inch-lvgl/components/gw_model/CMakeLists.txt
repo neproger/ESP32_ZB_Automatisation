@@ -3,6 +3,7 @@ idf_component_register(
         "src/gw_model.c"
         "src/gw_model_schema.c"
         "src/gw_model_topology.c"
+        "src/gw_model_device_meta.c"
         "src/gw_model_state.c"
         "src/gw_model_groups.c"
         "src/gw_model_settings.c"
