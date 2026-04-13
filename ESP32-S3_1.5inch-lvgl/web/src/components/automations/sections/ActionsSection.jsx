@@ -1,6 +1,16 @@
-﻿//UTF-8
+//UTF-8
 //ActionsSection.jsx
-import { getAcceptsByPrefix, getEndpointOptions } from '../utils.js'
+import { getEndpointClusterOptions, getEndpointOptions } from '../utils.js'
+import { CLUSTER_NAMES, CLUSTER_COMMANDS } from '../../../proto.js'
+
+function parseHexOrDec(s) {
+  if (!s) return 0
+  const str = String(s).trim()
+  if (str.startsWith('0x') || str.startsWith('0X')) {
+    return parseInt(str, 16)
+  }
+  return parseInt(str, 10) || 0
+}
 
 export default function ActionsSection({
 	actions,
@@ -12,6 +22,37 @@ export default function ActionsSection({
 	removeAction,
 	addAction,
 }) {
+	const getActionClusterOptions = (uid) => {
+		if (!uid) return []
+		return getEndpointClusterOptions(endpointsByUid, uid, 'in')
+	}
+
+	const getCommandOptions = (clusterId) => {
+		if (!clusterId) return []
+		return Object.entries(CLUSTER_COMMANDS[clusterId] || {}).map(([id, label]) => ({
+			id: id,
+			label: `${label} (0x${Number(id).toString(16).toUpperCase().padStart(2, '0')})`
+		}))
+	}
+
+	// Get cmd as number from string
+	const getCmdNum = (cmdStr) => {
+		if (!cmdStr) return 0
+		const s = String(cmdStr).trim()
+		if (s.startsWith('0x') || s.startsWith('0X')) {
+			return parseInt(s, 16)
+		}
+		return parseInt(s, 10) || 0
+	}
+
+	// Check if cmd needs parameters based on cluster + cmd
+	const needsParams = (clusterId, cmdNum) => {
+		if (clusterId === 0x0008) return 'level'       // Level Control
+		if (clusterId === 0x0300 && cmdNum === 0x00) return 'color_xy'  // Move to color XY
+		if (clusterId === 0x0300 && cmdNum === 0x01) return 'color_temp' // Move to color temp
+		return null
+	}
+
 	return (
 		<div style={{ flex: 1, minWidth: 360 }}>
 			<div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -25,34 +66,24 @@ export default function ActionsSection({
 				<div className="muted">No actions</div>
 			) : (
 				actions.map((a, idx) => {
-					const cmd = String(a?.cmd ?? 'onoff.toggle')
 					const isGroup = a?.group_id != null && String(a?.group_id ?? '') !== ''
 					const set = (patch) => updateAction(idx, patch)
-					const setCmd = (newCmd) => {
-						const base = { type: 'zigbee', cmd: newCmd }
-						if (newCmd.startsWith('scene.')) return set({ ...base, group_id: '0x0003', scene_id: 1 })
-						if (newCmd === 'bind' || newCmd === 'unbind') {
-							return set({ ...base, src_device_uid: '', src_endpoint: 1, cluster_id: '0x0006', dst_device_uid: '', dst_endpoint: 1 })
-						}
-						return set({ ...base, device_uid: a?.device_uid ?? '', endpoint: a?.endpoint ?? 1 })
-					}
+					const clusterId = parseHexOrDec(a?.cluster_id)
+					const cmdNum = getCmdNum(a?.cmd)
+					const paramType = needsParams(clusterId, cmdNum)
 
 					return (
 						<div key={idx} className="card" style={{ padding: 10, marginBottom: 10 }}>
 							<div className="row" style={{ justifyContent: 'space-between' }}>
 								<div className="row">
-									<label className="muted">cmd</label>
-									<select value={cmd} onChange={(e) => setCmd(String(e.target.value ?? 'onoff.toggle'))}>
-										<option value="onoff.on">onoff.on</option>
-										<option value="onoff.off">onoff.off</option>
-										<option value="onoff.toggle">onoff.toggle</option>
-										<option value="level.move_to_level">level.move_to_level</option>
-										<option value="color.move_to_color_xy">color.move_to_color_xy</option>
-										<option value="color.move_to_color_temperature">color.move_to_color_temperature</option>
-										<option value="scene.store">scene.store</option>
-										<option value="scene.recall">scene.recall</option>
-										<option value="bind">bind</option>
-										<option value="unbind">unbind</option>
+									<label className="muted">type</label>
+									<select value={isGroup ? 'group' : 'device'} onChange={(e) => {
+										const v = String(e.target.value ?? 'device')
+										if (v === 'group') set({ group_id: '0x0003', device_uid: undefined })
+										else set({ device_uid: String(a?.device_uid ?? ''), endpoint: 1, group_id: undefined, cluster_id: '0x0006', cmd: '2' })
+									}}>
+										<option value="device">device</option>
+										<option value="group">group</option>
 									</select>
 								</div>
 								<button onClick={() => removeAction(idx)}>Remove</button>
@@ -60,150 +91,151 @@ export default function ActionsSection({
 
 							<div style={{ height: 8 }} />
 
-							{cmd === 'bind' || cmd === 'unbind' ? (
-								<>
-									<div className="row">
-										<label className="muted">src_uid</label>
-										<input value={String(a?.src_device_uid ?? '')} onChange={(e) => set({ src_device_uid: String(e.target.value ?? '') })} style={{ minWidth: 260 }} />
-										<label className="muted">src_ep</label>
-										<input value={String(a?.src_endpoint ?? 1)} onChange={(e) => set({ src_endpoint: Number(e.target.value ?? 1) })} style={{ width: 90 }} />
-									</div>
-									<div style={{ height: 8 }} />
-									<div className="row">
-										<label className="muted">cluster_id</label>
-										<input value={String(a?.cluster_id ?? '0x0006')} onChange={(e) => set({ cluster_id: String(e.target.value ?? '') })} style={{ minWidth: 140 }} />
-									</div>
-									<div style={{ height: 8 }} />
-									<div className="row">
-										<label className="muted">dst_uid</label>
-										<input value={String(a?.dst_device_uid ?? '')} onChange={(e) => set({ dst_device_uid: String(e.target.value ?? '') })} style={{ minWidth: 260 }} />
-										<label className="muted">dst_ep</label>
-										<input value={String(a?.dst_endpoint ?? 1)} onChange={(e) => set({ dst_endpoint: Number(e.target.value ?? 1) })} style={{ width: 90 }} />
-									</div>
-								</>
-							) : cmd.startsWith('scene.') ? (
+							{isGroup ? (
 								<div className="row">
 									<label className="muted">group_id</label>
-									<input value={String(a?.group_id ?? '')} onChange={(e) => set({ group_id: String(e.target.value ?? '') })} placeholder="0x0003" style={{ minWidth: 140 }} />
-									<label className="muted">scene_id</label>
-									<input value={String(a?.scene_id ?? 1)} onChange={(e) => set({ scene_id: Number(e.target.value ?? 1) })} style={{ width: 90 }} />
+									<input 
+										value={String(a?.group_id ?? '')} 
+										onChange={(e) => set({ group_id: String(e.target.value ?? '') })} 
+										placeholder="0x0003" 
+										style={{ minWidth: 140 }} 
+									/>
 								</div>
 							) : (
 								<>
 									<div className="row">
-										<label className="muted">dst</label>
+										<label className="muted">device</label>
 										<select
-											value={isGroup ? 'group' : 'device'}
+											value={String(a?.device_uid ?? '')}
 											onChange={(e) => {
-												const v = String(e.target.value ?? 'device')
-												if (v === 'group') set({ group_id: '0x0003', device_uid: undefined })
-												else set({ device_uid: String(a?.device_uid ?? ''), endpoint: Number(a?.endpoint ?? 1), group_id: undefined })
+												const uid = String(e.target.value ?? '')
+												if (uid) ensureEndpoints?.(uid)
+												set({ device_uid: uid, cluster_id: '0x0006', cmd: '2' })
 											}}
+											style={{ minWidth: 280 }}
 										>
-											<option value="device">device</option>
-											<option value="group">group</option>
+											<option value="">(select device)</option>
+											{deviceOptions.map((d) => (
+												<option key={d.uid} value={d.uid}>{d.label}</option>
+											))}
 										</select>
-									</div>
-									<div style={{ height: 8 }} />
-									{isGroup ? (
-										<div className="row">
-											<label className="muted">group_id</label>
-											<input value={String(a?.group_id ?? '')} onChange={(e) => set({ group_id: String(e.target.value ?? '') })} placeholder="0x0003" style={{ minWidth: 140 }} />
-										</div>
-									) : (
-										<div className="row">
-											<label className="muted">device</label>
-											<select
-												value={String(a?.device_uid ?? '')}
-												onChange={(e) => {
-													const uid = String(e.target.value ?? '')
-													if (uid) ensureEndpoints?.(uid)
-													set({ device_uid: uid })
-												}}
-												style={{ minWidth: 320 }}
-											>
-												<option value="">(select device)</option>
-												{deviceOptions.map((d) => (
-													<option key={d.uid} value={d.uid}>{d.label}</option>
-												))}
-											</select>
-											<label className="muted">endpoint</label>
-											<select value={String(a?.endpoint ?? 1)} onChange={(e) => set({ endpoint: Number(e.target.value ?? 1) })}>
-												{(() => {
-													const uid = String(a?.device_uid ?? '')
-													return getEndpointOptions(endpointsByUid, uid).map((ep) => (
-														<option key={String(ep.endpoint)} value={String(ep.endpoint)}>
-															{ep.kind ? `${ep.endpoint} ${ep.kind}` : String(ep.endpoint)}
-														</option>
-													))
-												})()}
-											</select>
-										</div>
-									)}
-
-									<div className="row" style={{ marginTop: 8 }}>
-										<label className="muted">capability</label>
-										<select value={cmd} onChange={(e) => setCmd(String(e.target.value ?? 'onoff.toggle'))} style={{ minWidth: 320 }}>
-											{(() => {
-												if (isGroup) {
-													return (
-														<>
-															<option value="onoff.on">onoff.on</option>
-															<option value="onoff.off">onoff.off</option>
-															<option value="onoff.toggle">onoff.toggle</option>
-															<option value="level.move_to_level">level.move_to_level</option>
-															<option value="color.move_to_color_xy">color.move_to_color_xy</option>
-															<option value="color.move_to_color_temperature">color.move_to_color_temperature</option>
-														</>
-													)
-												}
-												const uid = String(a?.device_uid ?? '')
-												const items = getAcceptsByPrefix(endpointsByUid, uid, a?.endpoint ?? 1, ['onoff.', 'level.', 'color.'])
-												const list = items.length
-													? items
-													: ['onoff.on', 'onoff.off', 'onoff.toggle', 'level.move_to_level', 'color.move_to_color_xy', 'color.move_to_color_temperature']
-												return list.map((x) => <option key={x} value={x}>{x}</option>)
-											})()}
-										</select>
-										<span className="muted">
+										<label className="muted">ep</label>
+										<select 
+											value={String(a?.endpoint ?? '')} 
+											onChange={(e) => set({ endpoint: Number(e.target.value ?? 1) })}
+										>
+											<option value="">EP</option>
 											{(() => {
 												const uid = String(a?.device_uid ?? '')
-												const d = uid ? devicesByUid.get(uid) : null
-												return d?.name ? `device: ${String(d.name)}` : ''
+												return getEndpointOptions(endpointsByUid, uid).map((ep) => (
+													<option key={String(ep.endpoint)} value={String(ep.endpoint)}>
+														EP{ep.endpoint}
+													</option>
+												))
 											})()}
-										</span>
+										</select>
 									</div>
-
-									{cmd === 'level.move_to_level' ? (
-										<div className="row" style={{ marginTop: 8 }}>
-											<label className="muted">level</label>
-											<input value={String(a?.level ?? 254)} onChange={(e) => set({ level: Number(e.target.value ?? 254) })} style={{ width: 110 }} />
-											<label className="muted">transition_ms</label>
-											<input value={String(a?.transition_ms ?? 0)} onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-										</div>
-									) : null}
-
-									{cmd === 'color.move_to_color_xy' ? (
-										<div className="row" style={{ marginTop: 8 }}>
-											<label className="muted">x</label>
-											<input value={String(a?.x ?? 30000)} onChange={(e) => set({ x: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-											<label className="muted">y</label>
-											<input value={String(a?.y ?? 30000)} onChange={(e) => set({ y: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-											<label className="muted">transition_ms</label>
-											<input value={String(a?.transition_ms ?? 0)} onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-										</div>
-									) : null}
-
-									{cmd === 'color.move_to_color_temperature' ? (
-										<div className="row" style={{ marginTop: 8 }}>
-											<label className="muted">mireds</label>
-											<input value={String(a?.mireds ?? 250)} onChange={(e) => set({ mireds: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-											<label className="muted">transition_ms</label>
-											<input value={String(a?.transition_ms ?? 0)} onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} style={{ width: 110 }} />
-										</div>
-									) : null}
 								</>
 							)}
+
+							<div style={{ height: 8 }} />
+
+							{/* Cluster and Command selection */}
+							<div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+								<div className="row">
+									<label className="muted">cluster</label>
+									<select
+										value={String(a?.cluster_id ?? '')}
+										onChange={(e) => set({ cluster_id: e.target.value, cmd: '2' })}
+									>
+										<option value="">cluster</option>
+										{(() => {
+											const uid = String(a?.device_uid ?? '')
+											const epData = getActionClusterOptions(uid)
+											const epNum = Number(a?.endpoint ?? 0)
+											const filtered = epData.filter(ep => epNum ? ep.endpoint === epNum : true)
+											const allClusters = filtered.flatMap(ep => ep.clusters || [])
+											const uniq = [...new Map(allClusters.map(c => [c.id, c])).values()]
+											return uniq.map(c => (
+												<option key={String(c.id)} value={`0x${Number(c.id).toString(16).toUpperCase()}`}>
+													{c.name}
+												</option>
+											))
+										})()}
+									</select>
+								</div>
+
+								{clusterId ? (
+									<div className="row">
+										<label className="muted">cmd</label>
+										<select
+											value={String(a?.cmd ?? '2')}
+											onChange={(e) => set({ cmd: e.target.value })}
+										>
+											<option value="">cmd</option>
+											{getCommandOptions(clusterId).map(c => (
+												<option key={c.id} value={c.id}>
+													{c.label}
+												</option>
+											))}
+										</select>
+									</div>
+								) : null}
+							</div>
+
+							{/* Command parameters */}
+							{paramType === 'level' ? (
+								<div className="row" style={{ marginTop: 8 }}>
+									<label className="muted">level</label>
+									<input 
+										value={String(a?.level ?? 254)} 
+										onChange={(e) => set({ level: Number(e.target.value ?? 254) })} 
+										style={{ width: 80 }} 
+									/>
+									<label className="muted">ms</label>
+									<input 
+										value={String(a?.transition_ms ?? 0)} 
+										onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+								</div>
+							) : paramType === 'color_xy' ? (
+								<div className="row" style={{ marginTop: 8 }}>
+									<label className="muted">x</label>
+									<input 
+										value={String(a?.x ?? 30000)} 
+										onChange={(e) => set({ x: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+									<label className="muted">y</label>
+									<input 
+										value={String(a?.y ?? 30000)} 
+										onChange={(e) => set({ y: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+									<label className="muted">ms</label>
+									<input 
+										value={String(a?.transition_ms ?? 0)} 
+										onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+								</div>
+							) : paramType === 'color_temp' ? (
+								<div className="row" style={{ marginTop: 8 }}>
+									<label className="muted">mireds</label>
+									<input 
+										value={String(a?.mireds ?? 250)} 
+										onChange={(e) => set({ mireds: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+									<label className="muted">ms</label>
+									<input 
+										value={String(a?.transition_ms ?? 0)} 
+										onChange={(e) => set({ transition_ms: Number(e.target.value ?? 0) })} 
+										style={{ width: 80 }} 
+									/>
+								</div>
+							) : null}
 						</div>
 					)
 				})

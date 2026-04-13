@@ -20,6 +20,7 @@ esp_err_t gw_model_get_automation(const char *id,
                                   gw_automation_entry_t *out_record);
 esp_err_t gw_model_remove_automation(const char *id,
                                      bool *out_removed);
+esp_err_t gw_model_clear_automations(void);
 size_t gw_model_count_automations(void);
 size_t gw_model_list_automations(gw_automation_entry_t *out, size_t max_out);
 esp_err_t gw_model_get_automation_by_index(size_t index,

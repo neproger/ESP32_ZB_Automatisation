@@ -1,4 +1,5 @@
 import { EVT_ZIGBEE_COMMAND } from '../../eventNames.js'
+import { buildClusterOptions, getClusterName, getClusterCommands, getOutClusterEvents } from '../../proto.js'
 
 export function defaultAutomationDef({ id, name, enabled }) {
 	return {
@@ -10,7 +11,7 @@ export function defaultAutomationDef({ id, name, enabled }) {
 			{
 				type: 'event',
 				event_type: EVT_ZIGBEE_COMMAND,
-				match: { 'payload.cmd': 'toggle' },
+				match: { 'payload.cmd': '2', 'payload.cluster': '0x0006' },
 			},
 		],
 		conditions: [],
@@ -175,4 +176,67 @@ export function getReportOptions(endpointsByUid, uid, endpoint) {
 			endpoints: Array.from(x.endpoints).sort((a, b) => a - b),
 		}))
 		.sort((a, b) => a.key.localeCompare(b.key))
+}
+
+// Get clusters for triggers (out_clusters) - device sends commands
+export function getTriggerClusters(endpointsByUid, uid, endpoint) {
+	const eps = getEndpointsForUid(endpointsByUid, uid)
+	if (endpoint != null) {
+		const filtered = eps.filter(ep => Number(ep?.endpoint ?? 0) === Number(endpoint))
+		return filtered.flatMap(ep => {
+			const outClusters = Array.isArray(ep?.out_clusters) ? ep.out_clusters : []
+			return buildClusterOptions(outClusters, 'out')
+		})
+	}
+	return eps.flatMap(ep => {
+		const outClusters = Array.isArray(ep?.out_clusters) ? ep.out_clusters : []
+		return buildClusterOptions(outClusters, 'out').map(c => ({
+			...c,
+			endpoint: ep.endpoint,
+		}))
+	})
+}
+
+// Get clusters for actions (in_clusters) - device receives commands
+export function getActionClusters(endpointsByUid, uid, endpoint) {
+	const eps = getEndpointsForUid(endpointsByUid, uid)
+	if (endpoint != null) {
+		const filtered = eps.filter(ep => Number(ep?.endpoint ?? 0) === Number(endpoint))
+		return filtered.flatMap(ep => {
+			const inClusters = Array.isArray(ep?.in_clusters) ? ep.in_clusters : []
+			return buildClusterOptions(inClusters, 'in')
+		})
+	}
+	return eps.flatMap(ep => {
+		const inClusters = Array.isArray(ep?.in_clusters) ? ep.in_clusters : []
+		return buildClusterOptions(inClusters, 'in').map(c => ({
+			...c,
+			endpoint: ep.endpoint,
+		}))
+	})
+}
+
+// Get endpoint options with cluster lists
+export function getEndpointClusterOptions(endpointsByUid, uid, direction) {
+	const eps = getEndpointsForUid(endpointsByUid, uid)
+	const result = []
+	
+	for (const ep of eps) {
+		const epNum = Number(ep?.endpoint ?? 0)
+		if (!epNum) continue
+		
+		const clusters = direction === 'out' 
+			? (Array.isArray(ep?.out_clusters) ? ep.out_clusters : [])
+			: (Array.isArray(ep?.in_clusters) ? ep.in_clusters : [])
+		
+		const clusterOptions = buildClusterOptions(clusters, direction)
+		if (clusterOptions.length === 0) continue
+		
+		result.push({
+			endpoint: epNum,
+			clusters: clusterOptions,
+		})
+	}
+	
+	return result
 }

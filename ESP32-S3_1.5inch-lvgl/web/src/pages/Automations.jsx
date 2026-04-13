@@ -13,6 +13,8 @@ import {
 	conditionKeyType,
 } from '../components/automations/utils.js'
 
+const MAX_AUTOMATIONS = 32
+
 export default function Automations() {
 	const { automations, devices, reloadAutomations, setAutomationEnabled, removeAutomation: removeAutomationCmd, resetAllAutomations: resetAllAutomationsCmd, saveAutomation, execActions } = useGateway()
 	const [endpointsByUid, setEndpointsByUid] = useState({})
@@ -106,6 +108,10 @@ export default function Automations() {
 	}, [automations])
 
 	const startNew = () => {
+		if (Array.isArray(automations) && automations.length >= MAX_AUTOMATIONS) {
+			setDraftStatus(`Automation storage full (${automations.length}/${MAX_AUTOMATIONS}). Remove old automations or reset all.`)
+			return
+		}
 		const id = `auto_${Date.now()}`
 		const name = 'New automation'
 		setDraft(defaultAutomationDef({ id, name, enabled: true }))
@@ -167,13 +173,17 @@ export default function Automations() {
 			if (!name) throw new Error('Missing name')
 			const vErr = validateDraft(draft)
 			if (vErr) throw new Error(vErr)
+			const exists = Array.isArray(automations) && automations.some((it) => String(it?.id ?? '') === id)
+			if (!exists && Array.isArray(automations) && automations.length >= MAX_AUTOMATIONS) {
+				throw new Error(`Automation storage full (${automations.length}/${MAX_AUTOMATIONS}). Remove old automations or reset all.`)
+			}
 			const enabled = Boolean(draft?.enabled)
 			await saveAutomation({ ...draft, id, name, enabled })
 			setDraftStatus('Saved (waiting WS sync)')
 		} catch (e) {
 			setDraftStatus(String(e?.message ?? e))
 		}
-	}, [draft, validateDraft])
+	}, [automations, draft, validateDraft])
 
 	const testActions = useCallback(async () => {
 		if (!draft) return

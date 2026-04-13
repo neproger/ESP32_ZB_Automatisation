@@ -142,6 +142,33 @@ static void primary_index_remove(micro_db_table_t *table, const void *key)
     table->primary_states[pos] = INDEX_TOMBSTONE;
 }
 
+static void release_inserted_slot(micro_db_table_t *table, const void *key, uint32_t slot)
+{
+    if (!table || !key || slot >= table->capacity || !table->slot_used[slot]) {
+        return;
+    }
+    primary_index_remove(table, key);
+    table->slot_used[slot] = 0;
+    if (table->live_count > 0) {
+        table->live_count--;
+    }
+    table->free_slots[table->free_count++] = slot;
+    uint8_t *base = (uint8_t *)table->records;
+    memset(base + ((size_t)slot * table->schema->record_size), 0, table->schema->record_size);
+}
+
+static void clear_runtime_state(micro_db_table_t *table)
+{
+    primary_index_clear(table);
+    memset(table->records, 0, table->capacity * table->schema->record_size);
+    memset(table->slot_used, 0, table->capacity * sizeof(uint8_t));
+    table->live_count = 0;
+    table->free_count = table->capacity;
+    for (size_t slot = 0; slot < table->capacity; ++slot) {
+        table->free_slots[slot] = (uint32_t)slot;
+    }
+}
+
 static esp_err_t rebuild_runtime_state(micro_db_table_t *table)
 {
     if (!table || !table->initialized || !table->schema) {
@@ -345,6 +372,7 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     memset(key_buf, 0, sizeof(key_buf));
     table->schema->key_of(record, key_buf);
 
+retry_lookup:
     const int slot_idx = find_record_slot(table, key_buf);
     uint8_t *base = (uint8_t *)table->records;
 
@@ -367,6 +395,20 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     }
 
     if (table->free_count == 0) {
+        if (table->live_count < table->capacity) {
+            ESP_LOGW(TAG,
+                     "repairing inconsistent free list table=%s live=%u free=%u cap=%u",
+                     table->schema->name ? table->schema->name : "(unnamed)",
+                     (unsigned)table->live_count,
+                     (unsigned)table->free_count,
+                     (unsigned)table->capacity);
+            esp_err_t rebuild_err = rebuild_runtime_state(table);
+            if (rebuild_err != ESP_OK) {
+                table_unlock(table);
+                return rebuild_err;
+            }
+            goto retry_lookup;
+        }
         table_unlock(table);
         return ESP_ERR_NO_MEM;
     }
@@ -386,15 +428,37 @@ esp_err_t micro_db_table_upsert(micro_db_table_t *table,
     }
     esp_err_t err = persist_slot(table, slot);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "upsert persist slot failed table=%s slot=%u err=%s, rolling back RAM insert",
+                 table->schema->name ? table->schema->name : "(unnamed)",
+                 (unsigned)slot,
+                 esp_err_to_name(err));
+        release_inserted_slot(table, key_buf, slot);
         table_unlock(table);
         return err;
     }
     err = persist_slot_used(table, slot);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "upsert persist slot_used failed table=%s slot=%u err=%s, rolling back RAM insert",
+                 table->schema->name ? table->schema->name : "(unnamed)",
+                 (unsigned)slot,
+                 esp_err_to_name(err));
+        release_inserted_slot(table, key_buf, slot);
         table_unlock(table);
         return err;
     }
     err = persist_meta(table);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "upsert persist meta failed table=%s slot=%u err=%s, rolling back RAM insert",
+                 table->schema->name ? table->schema->name : "(unnamed)",
+                 (unsigned)slot,
+                 esp_err_to_name(err));
+        release_inserted_slot(table, key_buf, slot);
+        (void)persist_slot_used(table, slot);
+        (void)persist_meta(table);
+    }
     table_unlock(table);
     return err;
 }
@@ -471,6 +535,42 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
     err = persist_meta(table);
     table_unlock(table);
     return err;
+}
+
+esp_err_t micro_db_table_clear(micro_db_table_t *table)
+{
+    if (!table || !table->initialized) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
+
+    clear_runtime_state(table);
+    esp_err_t err = ESP_OK;
+    if (table_is_flash_backed(table)) {
+        err = micro_db_flash_clear_table(table);
+    }
+
+    table_unlock(table);
+    return err;
+}
+
+esp_err_t micro_db_table_get_stats(const micro_db_table_t *table, micro_db_table_stats_t *out_stats)
+{
+    if (!table || !table->initialized || !out_stats) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t lock_err = table_lock(table);
+    if (lock_err != ESP_OK) {
+        return lock_err;
+    }
+    out_stats->live_count = table->live_count;
+    out_stats->free_count = table->free_count;
+    out_stats->capacity = table->capacity;
+    table_unlock(table);
+    return ESP_OK;
 }
 
 size_t micro_db_table_count(const micro_db_table_t *table)

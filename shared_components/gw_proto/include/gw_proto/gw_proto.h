@@ -216,16 +216,15 @@ typedef struct GW_PROTO_PACKED {
 typedef struct GW_PROTO_PACKED {
     uint8_t kind;
     uint8_t endpoint;
-    uint8_t aux_ep;
-    uint8_t flags;
-    uint16_t u16_0;
-    uint16_t u16_1;
+    uint8_t reserved[2];
+    uint16_t cluster_id;
     uint32_t cmd_off;
     uint32_t uid_off;
-    uint32_t uid2_off;
+    uint32_t group_off;
     uint32_t arg0_u32;
     uint32_t arg1_u32;
     uint32_t arg2_u32;
+    uint8_t pad[2];
 } gw_auto_bin_action_v2_t;
 
 typedef struct GW_PROTO_PACKED {

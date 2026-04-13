@@ -206,13 +206,15 @@ export default function EndpointWidgets({
   }, [reportStatus, execActions])
 
   const doOnOff = useCallback((cmd) => {
-    return sendAction({ type: 'zigbee', cmd: `onoff.${cmd}`, device_uid: deviceUid, endpoint: ep })
+    const cmdMap = { on: '1', off: '0', toggle: '2' }
+    return sendAction({ type: 'zigbee', cmd: cmdMap[cmd] || '1', cluster_id: '0x0006', device_uid: deviceUid, endpoint: ep })
   }, [sendAction, deviceUid, ep])
 
   const doLevel = useCallback((v) => {
     return sendAction({
       type: 'zigbee',
-      cmd: 'level.move_to_level',
+      cmd: '0',
+      cluster_id: '0x0008',
       device_uid: deviceUid,
       endpoint: ep,
       level: Math.max(0, Math.min(254, Math.round(Number(v ?? 0)))),
@@ -224,7 +226,8 @@ export default function EndpointWidgets({
     const { x, y } = rgbHexToXy(hex)
     return sendAction({
       type: 'zigbee',
-      cmd: 'color.move_to_color_xy',
+      cmd: '0',
+      cluster_id: '0x0300',
       device_uid: deviceUid,
       endpoint: ep,
       x,
@@ -237,7 +240,8 @@ export default function EndpointWidgets({
     const k = Math.max(2000, Math.min(6500, Math.round(Number(kelvin ?? 3000))))
     return sendAction({
       type: 'zigbee',
-      cmd: 'color.move_to_color_temperature',
+      cmd: '1',
+      cluster_id: '0x0300',
       device_uid: deviceUid,
       endpoint: ep,
       mireds: Math.round(1_000_000 / k),

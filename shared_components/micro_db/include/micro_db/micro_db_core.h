@@ -28,6 +28,12 @@ typedef struct {
     bool initialized;
 } micro_db_table_t;
 
+typedef struct {
+    size_t live_count;
+    size_t free_count;
+    size_t capacity;
+} micro_db_table_stats_t;
+
 typedef bool (*micro_db_iter_cb_t)(const void *record, void *user_ctx);
 typedef bool (*micro_db_iter_slot_cb_t)(uint32_t slot, const void *record, void *user_ctx);
 
@@ -47,7 +53,10 @@ esp_err_t micro_db_table_remove(micro_db_table_t *table,
                                 const void *key,
                                 bool *out_removed);
 
+esp_err_t micro_db_table_clear(micro_db_table_t *table);
+
 size_t micro_db_table_count(const micro_db_table_t *table);
+esp_err_t micro_db_table_get_stats(const micro_db_table_t *table, micro_db_table_stats_t *out_stats);
 
 esp_err_t micro_db_table_get_slot(const micro_db_table_t *table,
                                   const void *key,

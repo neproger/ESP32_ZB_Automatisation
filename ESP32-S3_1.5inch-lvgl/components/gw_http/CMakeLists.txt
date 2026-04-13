@@ -17,3 +17,4 @@ idf_component_register(
         gw_zigbee
 )
 
+target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-unused-parameter" "-Wno-maybe-uninitialized")

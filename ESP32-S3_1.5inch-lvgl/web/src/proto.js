@@ -8,6 +8,212 @@ import {
   EVT_ZIGBEE_DEVICE_LEAVE,
 } from './eventNames.js'
 
+// Cluster ID -> Human-readable name
+const CLUSTER_NAMES = {
+  0x0000: 'Basic',
+  0x0001: 'Power Config',
+  0x0003: 'Identify',
+  0x0004: 'Groups',
+  0x0005: 'Scenes',
+  0x0006: 'On/Off',
+  0x0007: 'On/Off Config',
+  0x0008: 'Level Control',
+  0x0009: 'Alarms',
+  0x000A: 'Analog Input',
+  0x000B: 'Analog Output',
+  0x000C: 'Analog Value',
+  0x000D: 'Binary Input',
+  0x000E: 'Binary Output',
+  0x000F: 'Binary Value',
+  0x0010: 'Multistate Input',
+  0x0011: 'Multistate Output',
+  0x0012: 'Multistate Value',
+  0x0013: 'Commissioning',
+  0x0014: 'Partition',
+  0x0015: 'Analog Input (Basic)',
+  0x0016: 'Analog Output (Basic)',
+  0x0017: 'Analog Value (Basic)',
+  0x0018: 'Binary Input (Basic)',
+  0x0019: 'Binary Output (Basic)',
+  0x001A: 'Binary Value (Basic)',
+  0x001B: 'Multistate Input (Basic)',
+  0x001C: 'Multistate Output (Basic)',
+  0x001D: 'Multistate Value (Basic)',
+  0x001E: 'Multistate Configuration',
+  0x0020: 'poll_control',
+  0x0021: 'Green Power Proxy',
+  0x0100: 'Closures Door Lock',
+  0x0101: 'Closures Door Lock Config',
+  0x0102: 'Closures Windows Covering',
+  0x0103: 'Closures Barrier Control',
+  0x0104: 'HVACPump',
+  0x0105: 'HVAC Pump Config',
+  0x0106: 'HVACFan',
+  0x0107: 'HVACFan Config',
+  0x0108: 'HVACThermostat',
+  0x0109: 'HVAC Thermostat Config',
+  0x010A: 'HVACHumidifier',
+  0x010B: 'HVAC Humidifier Config',
+  0x0200: 'HVAC Dehumidifier',
+  0x0201: 'HVAC Dehumidifier Config',
+  0x0202: 'HVAC Fan Cycle',
+  0x0300: 'Lighting Color Control',
+  0x0301: 'Lighting Ballast Config',
+  0x0400: 'Illuminance Measurement',
+  0x0401: 'Illuminance Level Sensing',
+  0x0402: 'Temperature Measurement',
+  0x0403: 'Pressure Measurement',
+  0x0404: 'Flow Measurement',
+  0x0405: 'Relative Humidity',
+  0x0406: 'Occupancy Sensing',
+  0x0407: 'Occupancy Config',
+  0x0450: 'Meter Identification',
+  0x0500: 'IAS Zone',
+  0x0501: 'IAS ACE',
+  0x0502: 'IAS WD',
+  0x0700: 'SmartEnergy Metering',
+  0x0701: 'SmartEnergy Metering Config',
+  0x0702: 'SmartEnergy Tunneling',
+  0x0800: 'Price',
+  0x0801: 'Demand Response Load Control',
+  0x0802: 'SmartEnergy Calendar',
+  0x0803: 'SmartEnergy Device Mgmt',
+  0x0804: 'SmartEnergy Prepayment',
+  0x0805: 'SmartEnergy Credit Mgmt',
+  0x0806: 'SmartEnergy Payment',
+  0x8000: 'Metering',
+  0xE000: 'Tuya Private',
+  0xE001: 'Tuya Private 2',
+  0xE002: 'Tuya Private 3',
+  0xFC00: 'Vendor Specific',
+  0xFC01: 'Vendor Specific 2',
+  0xFC02: 'Vendor Specific 3',
+}
+
+// Cluster ID -> Command list
+const CLUSTER_COMMANDS = {
+  0x0006: {
+    0x00: 'Выключить',
+    0x01: 'Включить',
+    0x02: 'Переключить',
+    0xFD: 'Выкл с эффектом',
+    0xFE: 'Вкл с эффектом',
+    0x40: 'Запустить сцену A',
+    0x41: 'Запустить сцену B',
+    0x42: 'Запустить сцену C',
+  },
+  0x0008: {
+    0x00: 'Перейти к уровню',
+    0x01: 'Движение',
+    0x02: 'Шаг',
+    0x03: 'Стоп',
+    0x04: 'Перейти к уровню с вкл',
+    0x05: 'Движение с вкл',
+    0x06: 'Шаг с вкл',
+    0x07: 'Стоп с вкл',
+  },
+  0x0300: {
+    0x00: 'Перейти к цвету XY',
+    0x01: 'Перейти к цвету температуре',
+    0x02: 'Перейти к насыщенности',
+    0x03: 'Перейти к оттенку',
+    0x04: 'Перейти к насыщенности цвета',
+    0x05: 'Перейти к цвету XY с вкл',
+    0x06: 'Перейти к цвет. темп. с вкл',
+    0x07: 'Остановить',
+    0x10: 'Команда Move Hue',
+    0x20: 'Команда Move Saturation',
+    0x30: 'Команда Move Color',
+  },
+  0x0004: {
+    0x00: 'Добавить группу',
+    0x01: 'Просмотр групп',
+    0x02: 'Получить группу',
+    0x03: 'Обновить группу',
+    0x04: 'Удалить группу',
+    0x05: 'Удалить все группы',
+    0x06: 'Добавить группу если идентификация',
+  },
+  0x0005: {
+    0x00: 'Добавить сцену',
+     0x01: 'Просмотр сцен',
+    0x02: 'Получить сцену',
+    0x03: 'Обновить сцену',
+    0x04: 'Удалить сцену',
+    0x05: 'Удалить все сцены',
+    0x06: 'Магазин сцены',
+    0x07: 'Вспомнить сцену',
+    0x08: 'Получить группу сцены',
+    0x40: 'Добавить сцену расширенную',
+  },
+  0x0000: {
+    0x00: 'Идентификация',
+    0x01: 'Сброс до заводских',
+    0x02: 'Сброс факт. установок и связки',
+    0x04: 'Средства обнаружения',
+    0x05: 'Очистка журнала событий',
+    0x06: 'Аудит журнал',
+  },
+  0x0100: {
+    0x00: 'Запереть',
+    0x01: 'Отпереть',
+    0x02: 'Переключить',
+    0x03: 'Событие открытия',
+    0x04: 'Событие закрытия',
+    0x05: 'Получить статус замка',
+  },
+  0xE000: {
+    0x00: 'Tuya Data',
+    0x01: 'Tuya Status',
+    0x02: 'Tuya Report',
+    0x03: 'Tuya Trigger',
+  },
+}
+
+// Common event/command names for triggers (from out_clusters)
+const OUT_CLUSTER_EVENTS = {
+  0x0006: {
+    0x00: 'off',
+    0x01: 'on',
+    0x02: 'toggle',
+    0xFD: 'button.single',
+    0xFE: 'button.double',
+    0x40: 'button.hold',
+  },
+  0x0008: {
+    0x01: 'level.move',
+    0x02: 'level.step',
+    0x03: 'level.stop',
+  },
+}
+
+function getClusterName(clusterId) {
+  const id = Number(clusterId)
+  return CLUSTER_NAMES[id] || `Cluster 0x${id.toString(16).toUpperCase().padStart(4, '0')}`
+}
+
+function getClusterCommands(clusterId) {
+  const id = Number(clusterId)
+  return CLUSTER_COMMANDS[id] || null
+}
+
+function getOutClusterEvents(clusterId) {
+  const id = Number(clusterId)
+  return OUT_CLUSTER_EVENTS[id] || null
+}
+
+// Build cluster options for UI dropdown
+function buildClusterOptions(clusters, direction) {
+  if (!Array.isArray(clusters) || clusters.length === 0) return []
+  
+  return clusters.map(id => ({
+    id,
+    name: getClusterName(id),
+    commands: direction === 'in' ? getClusterCommands(id) : getOutClusterEvents(id),
+    direction,
+  }))
+}
+
 export const GW_PROTO_VERSION_V1 = 1
 
 export const GW_PROTO_MSG_SYNC_BEGIN = 0x40
@@ -94,6 +300,16 @@ const AUTO_ACTIONS_OFF = AUTO_CONDITIONS_OFF + AUTO_MAX_CONDITIONS * AUTO_CONDIT
 const AUTO_STRING_TABLE_SIZE_OFF = AUTO_ACTIONS_OFF + AUTO_MAX_ACTIONS * AUTO_ACTION_SIZE
 const AUTO_STRING_TABLE_OFF = AUTO_STRING_TABLE_SIZE_OFF + 2
 const AUTO_ENTRY_SIZE = AUTO_STRING_TABLE_OFF + AUTO_MAX_STRING_TABLE_BYTES
+const AUTO_ACTION_KIND_OFF = 0
+const AUTO_ACTION_ENDPOINT_OFF = 1
+const AUTO_ACTION_FLAGS_OFF = 2
+const AUTO_ACTION_CLUSTER_ID_OFF = 4
+const AUTO_ACTION_CMD_OFF = 6
+const AUTO_ACTION_UID_OFF = 10
+const AUTO_ACTION_GROUP_OFF = 14
+const AUTO_ACTION_ARG0_OFF = 18
+const AUTO_ACTION_ARG1_OFF = 22
+const AUTO_ACTION_ARG2_OFF = 26
 const GROUP_ID_SIZE = 32
 const GROUP_NAME_SIZE = 48
 const GROUP_LABEL_SIZE = 32
@@ -158,6 +374,10 @@ function hasCluster(list, clusterId) {
 function deriveEndpointMeta(ep) {
   const inClusters = Array.isArray(ep?.in_clusters) ? ep.in_clusters : []
   const outClusters = Array.isArray(ep?.out_clusters) ? ep.out_clusters : []
+
+  const inClusterOptions = buildClusterOptions(inClusters, 'in')
+  const outClusterOptions = buildClusterOptions(outClusters, 'out')
+
   const accepts = []
   const emits = []
   const reports = []
@@ -190,7 +410,7 @@ function deriveEndpointMeta(ep) {
     emits.push('level')
   }
 
-  return { accepts, emits, reports }
+  return { accepts, emits, reports, inClusterOptions, outClusterOptions }
 }
 
 function ensureDevice(snapshot, uid) {
@@ -553,48 +773,61 @@ function encodeAutomationCondition(view, base, condition, strtab) {
 }
 
 function encodeAutomationAction(view, base, action, strtab) {
-  const cmd = String(action?.cmd ?? '').trim()
-  if (!cmd) throw new Error('missing action.cmd')
-  view.setUint32(base + 8, automationAddString(strtab, cmd), true)
+  let cmd = 0
+  try { cmd = parseUnsignedInt(action?.cmd, 0xff) } catch {}
+  let clusterId = 0x0006
+  try { clusterId = parseUnsignedInt(action?.cluster_id, 0xffff) } catch {}
+  const rawCmd = String(action?.cmd ?? '').trim()
+  
+  const isBind = rawCmd === 'bind' || rawCmd === 'unbind'
+  const isScene = rawCmd === 'scene.store' || rawCmd === 'scene.recall'
 
-  if (cmd === 'bind' || cmd === 'unbind') {
-    view.setUint8(base + 0, GW_AUTO_ACT_BIND)
-    view.setUint8(base + 1, parseUnsignedInt(action?.src_endpoint, 240))
-    view.setUint8(base + 2, parseUnsignedInt(action?.dst_endpoint, 240))
-    view.setUint8(base + 3, cmd === 'unbind' ? GW_AUTO_ACT_FLAG_UNBIND : 0)
-    view.setUint16(base + 4, parseUnsignedInt(action?.cluster_id, 0xffff), true)
-    view.setUint32(base + 12, automationAddString(strtab, action?.src_device_uid), true)
-    view.setUint32(base + 16, automationAddString(strtab, action?.dst_device_uid), true)
+  if (isBind) {
+    view.setUint8(base + AUTO_ACTION_KIND_OFF, GW_AUTO_ACT_BIND)
+    view.setUint8(base + AUTO_ACTION_ENDPOINT_OFF, parseUnsignedInt(action?.src_endpoint, 240))
+    view.setUint8(base + AUTO_ACTION_FLAGS_OFF, rawCmd === 'unbind' ? GW_AUTO_ACT_FLAG_UNBIND : 0)
+    view.setUint16(base + AUTO_ACTION_CLUSTER_ID_OFF, clusterId, true)
+    view.setUint32(base + AUTO_ACTION_CMD_OFF, automationAddString(strtab, String(cmd)), true)
+    view.setUint32(base + AUTO_ACTION_UID_OFF, automationAddString(strtab, action?.src_device_uid), true)
+    view.setUint32(base + AUTO_ACTION_GROUP_OFF, automationAddString(strtab, action?.dst_device_uid), true)
+    view.setUint32(base + AUTO_ACTION_ARG0_OFF, clusterId, true)
     return
   }
 
-  if (cmd === 'scene.store' || cmd === 'scene.recall') {
-    view.setUint8(base + 0, GW_AUTO_ACT_SCENE)
-    view.setUint16(base + 4, parseUnsignedInt(action?.group_id, 0xffff), true)
-    view.setUint16(base + 6, parseUnsignedInt(action?.scene_id, 0xff), true)
+  if (isScene) {
+    view.setUint8(base + AUTO_ACTION_KIND_OFF, GW_AUTO_ACT_SCENE)
+    view.setUint8(base + AUTO_ACTION_ENDPOINT_OFF, 1)
+    view.setUint16(base + AUTO_ACTION_CLUSTER_ID_OFF, 0x0005, true)
+    view.setUint32(base + AUTO_ACTION_CMD_OFF, automationAddString(strtab, rawCmd === 'scene.store' ? '0x00' : '0x01'), true)
+    view.setUint32(base + AUTO_ACTION_ARG0_OFF, parseUnsignedInt(action?.group_id, 0xffff), true)
+    view.setUint32(base + AUTO_ACTION_ARG1_OFF, parseUnsignedInt(action?.scene_id, 0xff), true)
     return
   }
 
   const hasGroup = action?.group_id != null && String(action?.group_id ?? '').trim() !== ''
   if (hasGroup) {
-    view.setUint8(base + 0, GW_AUTO_ACT_GROUP)
-    view.setUint16(base + 4, parseUnsignedInt(action?.group_id, 0xffff), true)
+    view.setUint8(base + AUTO_ACTION_KIND_OFF, GW_AUTO_ACT_GROUP)
+    view.setUint8(base + AUTO_ACTION_ENDPOINT_OFF, 1)
+    view.setUint32(base + AUTO_ACTION_GROUP_OFF, parseUnsignedInt(action?.group_id, 0xffff), true)
   } else {
-    view.setUint8(base + 0, GW_AUTO_ACT_DEVICE)
-    view.setUint8(base + 1, parseUnsignedInt(action?.endpoint, 240))
-    view.setUint32(base + 12, automationAddString(strtab, action?.device_uid), true)
+    view.setUint8(base + AUTO_ACTION_KIND_OFF, GW_AUTO_ACT_DEVICE)
+    view.setUint8(base + AUTO_ACTION_ENDPOINT_OFF, parseUnsignedInt(action?.endpoint, 240))
+    view.setUint32(base + AUTO_ACTION_UID_OFF, automationAddString(strtab, action?.device_uid), true)
   }
 
-  if (cmd === 'level.move_to_level') {
-    view.setUint32(base + 20, parseUnsignedInt(action?.level, 254), true)
-    view.setUint32(base + 24, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
-  } else if (cmd === 'color.move_to_color_xy') {
-    view.setUint32(base + 20, parseUnsignedInt(action?.x, 0xffff), true)
-    view.setUint32(base + 24, parseUnsignedInt(action?.y, 0xffff), true)
-    view.setUint32(base + 28, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
-  } else if (cmd === 'color.move_to_color_temperature') {
-    view.setUint32(base + 20, parseUnsignedInt(action?.mireds, 0xffffffff), true)
-    view.setUint32(base + 24, parseUnsignedInt(action?.transition_ms ?? 0, 0xffffffff), true)
+  view.setUint16(base + AUTO_ACTION_CLUSTER_ID_OFF, clusterId, true)
+  view.setUint32(base + AUTO_ACTION_CMD_OFF, automationAddString(strtab, String(cmd)), true)
+
+  if (clusterId === 0x0008) {
+    view.setUint32(base + AUTO_ACTION_ARG0_OFF, parseUnsignedInt(action?.level ?? 254, 254), true)
+    view.setUint32(base + AUTO_ACTION_ARG1_OFF, parseUnsignedInt(action?.transition_ms ?? 0, 60000), true)
+  } else if (clusterId === 0x0300 && cmd === 0x00) {
+    view.setUint32(base + AUTO_ACTION_ARG0_OFF, parseUnsignedInt(action?.x ?? 30000, 0xffff), true)
+    view.setUint32(base + AUTO_ACTION_ARG1_OFF, parseUnsignedInt(action?.y ?? 30000, 0xffff), true)
+    view.setUint32(base + AUTO_ACTION_ARG2_OFF, parseUnsignedInt(action?.transition_ms ?? 0, 60000), true)
+  } else if (clusterId === 0x0300 && cmd === 0x01) {
+    view.setUint32(base + AUTO_ACTION_ARG0_OFF, parseUnsignedInt(action?.mireds ?? 250, 0xffff), true)
+    view.setUint32(base + AUTO_ACTION_ARG1_OFF, parseUnsignedInt(action?.transition_ms ?? 0, 60000), true)
   }
 }
 
@@ -636,7 +869,7 @@ function encodeAutomationEntryPayload(draft) {
 
 export function protoEncodeAutomationChange(draft, seq = 1) {
   const payload = encodeAutomationEntryPayload(draft)
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_CHANGE, 4 + payload.length, seq)
+  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_AUTOMATION_CHANGE, 4 + AUTO_ENTRY_SIZE, seq)
   view.setUint32(HDR_SIZE + 0, 1, true)
   new Uint8Array(buf, HDR_SIZE + 4).set(payload)
   return buf
@@ -652,7 +885,7 @@ export function protoEncodeActionExec(actions, seq = 1) {
     conditions: [],
     actions: list,
   })
-  const { buf } = encodeProtoFrame(GW_PROTO_MSG_CMD_ACTION_EXEC, payload.length, seq)
+  const { buf } = encodeProtoFrame(GW_PROTO_MSG_CMD_ACTION_EXEC, AUTO_ENTRY_SIZE, seq)
   new Uint8Array(buf, HDR_SIZE).set(payload)
   return buf
 }
@@ -766,51 +999,61 @@ function automationDecodeCondition(view, base, entry) {
 }
 
 function automationDecodeAction(view, base, entry) {
-  const kind = view.getUint8(base)
-  const endpoint = view.getUint8(base + 1)
-  const auxEndpoint = view.getUint8(base + 2)
-  const u16_0 = view.getUint16(base + 4, true)
-  const u16_1 = view.getUint16(base + 6, true)
-  const cmdOff = view.getUint32(base + 8, true)
-  const uidOff = view.getUint32(base + 12, true)
-  const uid2Off = view.getUint32(base + 16, true)
-  const arg0 = view.getUint32(base + 20, true)
-  const arg1 = view.getUint32(base + 24, true)
-  const arg2 = view.getUint32(base + 28, true)
+  const kind = view.getUint8(base + AUTO_ACTION_KIND_OFF)
+  const endpoint = view.getUint8(base + AUTO_ACTION_ENDPOINT_OFF)
+  const flags = view.getUint8(base + AUTO_ACTION_FLAGS_OFF)
+  const clusterId = view.getUint16(base + AUTO_ACTION_CLUSTER_ID_OFF, true)
+  const cmdOff = view.getUint32(base + AUTO_ACTION_CMD_OFF, true)
+  const uidOff = view.getUint32(base + AUTO_ACTION_UID_OFF, true)
+  const groupOff = view.getUint32(base + AUTO_ACTION_GROUP_OFF, true)
+  const arg0 = view.getUint32(base + AUTO_ACTION_ARG0_OFF, true)
+  const arg1 = view.getUint32(base + AUTO_ACTION_ARG1_OFF, true)
+  const arg2 = view.getUint32(base + AUTO_ACTION_ARG2_OFF, true)
 
-  const cmd = automationReadStringTable(view, cmdOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
-  const uid = automationReadStringTable(view, uidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
-  const uid2 = automationReadStringTable(view, uid2Off, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
-
-  const out = { type: 'zigbee', cmd }
-  if (kind === 4) {
-    out.src_device_uid = uid
+  const cmdStr = automationReadStringTable(view, cmdOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  const out = { type: 'zigbee', cmd: cmdStr, cluster_id: automationHex16(clusterId) }
+  
+  if (kind === GW_AUTO_ACT_BIND) {
+    out.cmd = (flags & GW_AUTO_ACT_FLAG_UNBIND) ? 'unbind' : 'bind'
+    out.src_device_uid = automationReadStringTable(view, uidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
     out.src_endpoint = endpoint
-    out.cluster_id = automationHex16(u16_0)
-    out.dst_device_uid = uid2
-    out.dst_endpoint = auxEndpoint
+    out.cluster_id = automationHex16(view.getUint16(base + 4, true))
+    out.dst_device_uid = automationReadStringTable(view, groupOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+    out.dst_endpoint = 1
     return out
   }
-  if (kind === 3) {
-    out.group_id = automationHex16(u16_0)
-    out.scene_id = u16_1
+  if (kind === GW_AUTO_ACT_SCENE) {
+    out.cmd = cmdStr === '0x00' || cmdStr === '0' ? 'scene.store' : 'scene.recall'
+    out.group_id = automationHex16(arg0)
+    out.scene_id = arg1
     return out
   }
-  if (kind === 2) {
-    out.group_id = automationHex16(u16_0)
-  } else if (kind === 1) {
-    out.device_uid = uid
-    out.endpoint = endpoint
+  if (kind === GW_AUTO_ACT_GROUP) {
+    out.group_id = automationHex16(groupOff)
+    if (clusterId === 0x0008) {
+      out.level = arg0
+      out.transition_ms = arg1
+    } else if (clusterId === 0x0300 && (cmdStr === '0x00' || cmdStr === '0')) {
+      out.x = arg0
+      out.y = arg1
+      out.transition_ms = arg2
+    } else if (clusterId === 0x0300 && (cmdStr === '0x01' || cmdStr === '1')) {
+      out.mireds = arg0
+      out.transition_ms = arg1
+    }
+    return out
   }
-
-  if (cmd === 'level.move_to_level') {
+  
+  out.device_uid = automationReadStringTable(view, uidOff, AUTO_MAX_STRING_TABLE_BYTES, entry.tableStart, entry.tableSize)
+  out.endpoint = endpoint
+  if (clusterId === 0x0008) {
     out.level = arg0
     out.transition_ms = arg1
-  } else if (cmd === 'color.move_to_color_xy') {
+  } else if (clusterId === 0x0300 && (cmdStr === '0x00' || cmdStr === '0')) {
     out.x = arg0
     out.y = arg1
     out.transition_ms = arg2
-  } else if (cmd === 'color.move_to_color_temperature') {
+  } else if (clusterId === 0x0300 && (cmdStr === '0x01' || cmdStr === '1')) {
     out.mireds = arg0
     out.transition_ms = arg1
   }
@@ -825,9 +1068,15 @@ function decodeAutomationEntry(payload) {
   const triggersCount = Math.min(view.getUint8(82), AUTO_MAX_TRIGGERS)
   const conditionsCount = Math.min(view.getUint8(83), AUTO_MAX_CONDITIONS)
   const actionsCount = Math.min(view.getUint8(84), AUTO_MAX_ACTIONS)
-  const tableSize = Math.min(view.getUint16(AUTO_STRING_TABLE_SIZE_OFF, true), AUTO_MAX_STRING_TABLE_BYTES)
+  
+  let tableSize = 0
+  let tableStart = AUTO_STRING_TABLE_OFF
+  if (payload.byteLength >= AUTO_STRING_TABLE_OFF) {
+    tableSize = Math.min(view.getUint16(AUTO_STRING_TABLE_SIZE_OFF, true), AUTO_MAX_STRING_TABLE_BYTES)
+  }
+  
   const entry = {
-    tableStart: AUTO_STRING_TABLE_OFF,
+    tableStart,
     tableSize,
   }
 
@@ -1273,3 +1522,9 @@ export function protoApplyFrame(acc, frame, onCommit) {
     }
   }
 }
+
+// Export new helper functions for automation UI
+export { getClusterName, getClusterCommands, getOutClusterEvents, buildClusterOptions }
+
+// Re-export for convenience
+export { CLUSTER_NAMES, CLUSTER_COMMANDS, OUT_CLUSTER_EVENTS }

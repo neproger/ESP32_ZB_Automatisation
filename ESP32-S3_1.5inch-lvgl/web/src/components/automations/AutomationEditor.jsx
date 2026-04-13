@@ -38,12 +38,12 @@ export default function AutomationEditor({
 	const removeCondition = (idx) => setField('conditions', conditions.filter((_, i) => i !== idx))
 	const removeAction = (idx) => setField('actions', actions.filter((_, i) => i !== idx))
 
-	const addTrigger = () => setField('triggers', [...triggers, { type: 'event', event_type: EVT_ZIGBEE_COMMAND, match: { 'payload.cmd': 'toggle' } }])
+	const addTrigger = () => setField('triggers', [...triggers, { type: 'event', event_type: EVT_ZIGBEE_COMMAND, match: { 'payload.cmd': '2', 'payload.cluster': '0x0006' } }])
 	const addCondition = () => {
 		const fromTrigger = String(triggers?.[0]?.match?.device_uid ?? '')
 		setField('conditions', [...conditions, { type: 'state', op: '>', ref: { device_uid: fromTrigger, endpoint: 1, key: 'temperature_c' }, value: 10 }])
 	}
-	const addAction = () => setField('actions', [...actions, { type: 'zigbee', cmd: 'onoff.toggle', device_uid: '', endpoint: 1 }])
+	const addAction = () => setField('actions', [...actions, { type: 'zigbee', cmd: '2', cluster_id: '0x0006', device_uid: '', endpoint: 1 }])
 
 	const devicesByUid = useMemo(() => {
 		const m = new Map()

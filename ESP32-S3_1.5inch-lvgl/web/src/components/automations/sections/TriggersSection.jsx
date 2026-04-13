@@ -1,7 +1,16 @@
 ﻿//UTF-8
 //TriggersSection.jsx
 import { EVT_ZIGBEE_ATTR_REPORT, EVT_ZIGBEE_COMMAND, EVT_ZIGBEE_DEVICE_JOIN, EVT_ZIGBEE_DEVICE_LEAVE } from '../../../eventNames.js'
-import { getEmitsByPrefix, getEndpointOptions, getReports, toNumberOrString } from '../utils.js'
+import { getEndpointClusterOptions, getEndpointOptions, getReports, toNumberOrString } from '../utils.js'
+import { CLUSTER_NAMES, CLUSTER_COMMANDS, OUT_CLUSTER_EVENTS } from '../../../proto.js'
+
+function getClusterName(id) {
+  return CLUSTER_NAMES[id] || `Cluster 0x${Number(id).toString(16).toUpperCase().padStart(4, '0')}`
+}
+
+function getCommandsForCluster(clusterId) {
+  return CLUSTER_COMMANDS[clusterId] || OUT_CLUSTER_EVENTS[clusterId] || null
+}
 
 export default function TriggersSection({
 	triggers,
@@ -15,6 +24,32 @@ export default function TriggersSection({
 	reportToClusterAttr,
 	clusterAttrToReportKey,
 }) {
+	// Get available clusters for trigger (out_clusters from endpoints)
+	const getTriggerClusterOptions = (uid) => {
+		if (!uid) return []
+		return getEndpointClusterOptions(endpointsByUid, uid, 'out')
+	}
+
+	// Parse selected cluster from match
+	const parseSelectedCluster = (match) => {
+		const cluster = Number(match?.['payload.cluster'] || 0)
+		const cmd = String(match?.['payload.cmd'] || '')
+		return { cluster, cmd }
+	}
+
+	// Build command options for selected cluster
+	const getCommandOptions = (clusterId, direction) => {
+		if (!clusterId) return []
+		const cmds = direction === 'out' 
+			? (OUT_CLUSTER_EVENTS[clusterId] || CLUSTER_COMMANDS[clusterId])
+			: CLUSTER_COMMANDS[clusterId]
+		if (!cmds) return []
+		return Object.entries(cmds).map(([id, label]) => ({
+			id: Number(id),
+			label: `${label} (0x${Number(id).toString(16).toUpperCase().padStart(2, '0')})`
+		}))
+	}
+
 	return (
 		<div style={{ flex: 1, minWidth: 360 }}>
 			<div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -47,13 +82,6 @@ export default function TriggersSection({
 									</option>
 								))}
 							</select>
-							<span className="muted">
-								{(() => {
-									const uid = String(t?.match?.device_uid ?? '')
-									const d = uid ? devicesByUid.get(uid) : null
-									return d?.name ? `name: ${String(d.name)}` : ''
-								})()}
-							</span>
 						</div>
 
 						<div className="row" style={{ justifyContent: 'space-between' }}>
@@ -83,45 +111,101 @@ export default function TriggersSection({
 
 						<div style={{ height: 8 }} />
 						{String(t?.event_type ?? EVT_ZIGBEE_COMMAND) === EVT_ZIGBEE_COMMAND ? (
-							<div className="row" style={{ marginTop: 6 }}>
-								<label className="muted">cmd</label>
-								<select
-									value={String(t?.match?.['payload.cmd'] ?? 'toggle')}
-									onChange={(e) => updateTrigger(idx, { match: { ...(t?.match ?? {}), 'payload.cmd': String(e.target.value ?? 'toggle') } })}
-								>
-									{(() => {
-										const uid = String(t?.match?.device_uid ?? '')
-										const onoffItems = getEmitsByPrefix(endpointsByUid, uid, 'onoff.')
-										const buttonItems = getEmitsByPrefix(endpointsByUid, uid, 'button.')
-											.map((x) => `button.${x}`)
-										const items = [...onoffItems, ...buttonItems]
-										const list = items.length ? items : ['toggle', 'on', 'off', 'button.single']
-										return list.map((c) => (
-											<option key={c} value={c}>{c}</option>
-										))
-									})()}
-								</select>
-								<label className="muted">endpoint</label>
-								<select
-									value={String(t?.match?.['payload.endpoint'] ?? '')}
-									onChange={(e) => {
-										const v = String(e.target.value ?? '')
-										const match = { ...(t?.match ?? {}) }
-										if (!v) delete match['payload.endpoint']
-										else match['payload.endpoint'] = Number(v)
-										updateTrigger(idx, { match })
-									}}
-								>
-									<option value="">(any)</option>
-									{(() => {
-										const uid = String(t?.match?.device_uid ?? '')
-										return getEndpointOptions(endpointsByUid, uid).map((ep) => (
-											<option key={String(ep.endpoint)} value={String(ep.endpoint)}>
-												{ep.kind ? `${ep.endpoint} ${ep.kind}` : String(ep.endpoint)}
-											</option>
-										))
-									})()}
-								</select>
+							<div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
+								{/* Endpoint selector */}
+								<div className="row">
+									<label className="muted">endpoint</label>
+									<select
+										value={String(t?.match?.['payload.endpoint'] ?? '')}
+										onChange={(e) => {
+											const v = String(e.target.value ?? '')
+											const match = { ...(t?.match ?? {}) }
+											if (!v) {
+												delete match['payload.endpoint']
+												delete match['payload.cluster']
+												delete match['payload.cmd']
+											} else {
+												match['payload.endpoint'] = Number(v)
+											}
+											updateTrigger(idx, { match })
+										}}
+									>
+										<option value="">EP (any)</option>
+										{(() => {
+											const uid = String(t?.match?.device_uid ?? '')
+											return getEndpointOptions(endpointsByUid, uid).map((ep) => (
+												<option key={String(ep.endpoint)} value={String(ep.endpoint)}>
+													EP{ep.endpoint}
+												</option>
+											))
+										})()}
+									</select>
+								</div>
+
+								{/* Cluster selector */}
+								<div className="row">
+									<label className="muted">cluster</label>
+									<select
+										value={t?.match?.['payload.cluster'] ? `0x${Number(t?.match?.['payload.cluster']).toString(16).toUpperCase()}` : ''}
+										onChange={(e) => {
+											const v = String(e.target.value ?? '')
+											const match = { ...(t?.match ?? {}) }
+											if (!v) {
+												delete match['payload.cluster']
+												delete match['payload.cmd']
+											} else {
+												const num = v.startsWith('0x') ? parseInt(v, 16) : Number(v)
+												match['payload.cluster'] = num
+												delete match['payload.cmd']
+											}
+											updateTrigger(idx, { match })
+										}}
+									>
+										<option value="">cluster</option>
+										{(() => {
+											const uid = String(t?.match?.device_uid ?? '')
+											const epData = getTriggerClusterOptions(uid)
+											const allClusters = epData.flatMap(ep => ep.clusters || [])
+											const uniq = [...new Map(allClusters.map(c => [c.id, c])).values()]
+											return uniq.map(c => (
+												<option key={String(c.id)} value={`0x${Number(c.id).toString(16).toUpperCase()}`}>
+													{c.name}
+												</option>
+											))
+										})()}
+									</select>
+								</div>
+
+								{/* Command selector */}
+								{Number(t?.match?.['payload.cluster']) ? (
+									<div className="row">
+										<label className="muted">cmd</label>
+										<select
+											value={String(t?.match?.['payload.cmd'] ?? '')}
+											onChange={(e) => {
+												const v = String(e.target.value ?? '')
+												const match = { ...(t?.match ?? {}) }
+												if (!v) {
+													delete match['payload.cmd']
+												} else {
+													match['payload.cmd'] = v
+												}
+												updateTrigger(idx, { match })
+											}}
+										>
+											<option value="">cmd</option>
+											{(() => {
+												const clusterId = Number(t?.match?.['payload.cluster'])
+												const cmdOpts = getCommandOptions(clusterId, 'out')
+												return cmdOpts.map(c => (
+													<option key={String(c.id)} value={String(c.id)}>
+														{c.label}
+													</option>
+												))
+											})()}
+										</select>
+									</div>
+								) : null}
 							</div>
 						) : null}
 

@@ -631,6 +631,8 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
+        char cmd_id_text[8] = {0};
+        (void)snprintf(cmd_id_text, sizeof(cmd_id_text), "%u", (unsigned)m->info.command.id);
         log_zb_rx_value("command",
                         &uid,
                         src_short,
@@ -654,7 +656,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                                false,
                                0,
                                0.0f,
-                               cmd_name,
+                               cmd_id_text,
                                NULL);
     }
 
@@ -680,6 +682,8 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
         }
 
         char cmd_buf[32] = {0};
+        char cmd_id_text[8] = {0};
+        (void)snprintf(cmd_id_text, sizeof(cmd_id_text), "%u", (unsigned)m->info.command.id);
         const char *cmd_name = zb_cmd_name(m->info.cluster, m->info.command.id);
         if (cmd_name == NULL || strcmp(cmd_name, "unknown") == 0) {
             (void)snprintf(cmd_buf, sizeof(cmd_buf), "custom.0x%02x", (unsigned)m->info.command.id);
@@ -709,7 +713,7 @@ static esp_err_t zb_core_action_handler(esp_zb_core_action_callback_id_t callbac
                                false,
                                0,
                                0.0f,
-                               cmd_name,
+                               cmd_id_text,
                                NULL);
     }
 

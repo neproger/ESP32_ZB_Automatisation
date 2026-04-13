@@ -435,18 +435,26 @@ static esp_err_t ws_handle_proto_command(uint8_t type, const uint8_t *payload, u
             return ws_remove_all_automations();
         }
         case GW_PROTO_MSG_CMD_AUTOMATION_CHANGE: {
-            if (payload_len < sizeof(gw_proto_cmd_automation_change_v1_t)) {
+            if (payload_len != sizeof(gw_proto_cmd_automation_change_v1_t)) {
+                ESP_LOGW(TAG, "automation_change: invalid size %u (expected %u)",
+                         payload_len, sizeof(gw_proto_cmd_automation_change_v1_t));
                 return ESP_ERR_INVALID_SIZE;
             }
             return ws_handle_automation_change((const gw_proto_cmd_automation_change_v1_t *)payload);
         }
         case GW_PROTO_MSG_CMD_ACTION_EXEC: {
-            if (payload_len < sizeof(gw_automation_entry_t)) {
+            if (payload_len != sizeof(gw_automation_entry_t)) {
+                ESP_LOGW(TAG, "action_exec: invalid size %u (expected %u)",
+                         payload_len, sizeof(gw_automation_entry_t));
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_automation_entry_t *msg = (const gw_automation_entry_t *)payload;
             char errbuf[128] = {0};
-            return gw_action_exec_entry(msg, errbuf, sizeof(errbuf));
+            esp_err_t rc = gw_action_exec_entry(msg, errbuf, sizeof(errbuf));
+            if (rc != ESP_OK) {
+                ESP_LOGW(TAG, "action_exec failed: %s", errbuf);
+            }
+            return rc;
         }
         default:
             return ESP_ERR_NOT_SUPPORTED;
@@ -553,28 +561,7 @@ static esp_err_t ws_route_proto_frame(httpd_req_t *req, int fd, const uint8_t *f
 
 static esp_err_t ws_remove_all_automations(void)
 {
-    const size_t count = gw_model_count_automations();
-    if (count == 0) {
-        return ESP_OK;
-    }
-
-    gw_automation_entry_t *items = (gw_automation_entry_t *)calloc(count, sizeof(gw_automation_entry_t));
-    if (!items) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    const size_t loaded = gw_model_list_automations(items, count);
-    esp_err_t result = ESP_OK;
-    for (size_t i = 0; i < loaded; ++i) {
-        esp_err_t err = gw_model_remove_automation(items[i].id, NULL);
-        if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
-            result = err;
-            break;
-        }
-    }
-
-    free(items);
-    return result;
+    return gw_model_clear_automations();
 }
 
 static uint32_t ws_group_snapshot_total_records(void)

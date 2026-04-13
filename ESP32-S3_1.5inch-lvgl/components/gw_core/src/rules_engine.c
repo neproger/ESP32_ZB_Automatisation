@@ -458,51 +458,12 @@ static void rebuild_trigger_index(rules_cache_t *cache)
     }
 }
 
-static void log_cache_trigger(const gw_automation_entry_t *entry,
-                              const gw_auto_bin_trigger_v2_t *t,
-                              uint8_t auto_idx,
-                              uint8_t trigger_idx)
-{
-    if (!entry || !t) {
-        return;
-    }
-
-    ESP_LOGI(TAG,
-             "rules cache auto[%u] id=%s enabled=%u trigger[%u] type=%u uid=%s ep=%u cmd=%s cluster=0x%04x attr=0x%04x",
-             (unsigned)auto_idx,
-             entry->id,
-             (unsigned)entry->enabled,
-             (unsigned)trigger_idx,
-             (unsigned)t->event_type,
-             strtab_at(entry, t->device_uid_off),
-             (unsigned)t->endpoint,
-             strtab_at(entry, t->cmd_off),
-             (unsigned)t->cluster_id,
-             (unsigned)t->attr_id);
-}
-
 static void reload_automation_cache(void)
 {
     rules_cache_t *dst = s_cache_use_a ? &s_cache_b : &s_cache_a;
     memset(dst, 0, sizeof(*dst));
     dst->count = gw_model_list_automations(dst->autos, GW_AUTOMATION_CAP);
     rebuild_trigger_index(dst);
-
-    ESP_LOGI(TAG, "rules cache reload: autos=%u", (unsigned)dst->count);
-    for (uint8_t i = 0; i < dst->count && i < 32; i++) {
-        const gw_automation_entry_t *entry = &dst->autos[i];
-        ESP_LOGI(TAG,
-                 "rules cache auto[%u] id=%s enabled=%u triggers=%u conditions=%u actions=%u",
-                 (unsigned)i,
-                 entry->id,
-                 (unsigned)entry->enabled,
-                 (unsigned)entry->triggers_count,
-                 (unsigned)entry->conditions_count,
-                 (unsigned)entry->actions_count);
-        for (uint8_t ti = 0; ti < entry->triggers_count; ti++) {
-            log_cache_trigger(entry, &entry->triggers[ti], i, ti);
-        }
-    }
 
     portENTER_CRITICAL(&s_cache_lock);
     s_cache = dst;
@@ -641,17 +602,6 @@ static void process_event(const gw_proto_event_v1_t *e)
     build_payload_view_from_event(e, &pv);
 
     uint32_t candidate_mask = lookup_candidate_mask(cache, e, &pv, evt_type);
-    if (evt_type == GW_AUTO_EVT_ZIGBEE_COMMAND) {
-        ESP_LOGI(TAG,
-                 "rules event command uid=%s short=0x%04x ep=%u cmd=%s cluster=0x%04x cache=%u candidates=0x%08lx",
-                 e->device_uid.uid,
-                 e->short_addr,
-                 pv.has_endpoint ? (unsigned)pv.endpoint : 0,
-                 pv.has_cmd ? pv.cmd : "",
-                 pv.has_cluster ? (unsigned)pv.cluster_id : 0,
-                 (unsigned)cache->count,
-                 (unsigned long)candidate_mask);
-    }
     if (candidate_mask == 0) {
         return;
     }
@@ -674,9 +624,6 @@ static void process_event(const gw_proto_event_v1_t *e)
             }
         }
         if (!matched) {
-            if (evt_type == GW_AUTO_EVT_ZIGBEE_COMMAND) {
-                ESP_LOGI(TAG, "rules candidate auto[%u] id=%s did not match trigger details", (unsigned)i, entry->id);
-            }
             continue;
         }
         if (!conditions_pass(entry)) {
