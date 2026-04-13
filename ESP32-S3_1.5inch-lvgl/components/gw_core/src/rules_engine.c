@@ -1,4 +1,4 @@
-﻿#include "gw_core/rules_engine.h"
+#include "gw_core/rules_engine.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -627,11 +627,11 @@ static void process_event(const gw_proto_event_v1_t *e)
             continue;
         }
         if (!conditions_pass(entry)) {
-            ESP_LOGI(TAG, "rules candidate auto[%u] id=%s blocked by conditions", (unsigned)i, entry->id);
+            ESP_LOGW(TAG, "rules candidate auto[%u] id=%s blocked by conditions", (unsigned)i, entry->id);
             continue;
         }
 
-        ESP_LOGI(TAG, "rules fire auto[%u] id=%s", (unsigned)i, entry->id);
+        ESP_LOGW(TAG, "rules fire auto[%u] id=%s", (unsigned)i, entry->id);
         publish_rules_fired(e, entry->id);
 
         for (uint8_t ai = 0; ai < entry->actions_count; ai++) {
@@ -740,6 +740,6 @@ esp_err_t gw_rules_init(void)
     reload_automation_cache();
 
     s_inited = true;
-    ESP_LOGI(TAG, "rules engine initialized (indexed)");
+    ESP_LOGW(TAG, "rules engine initialized (indexed)");
     return ESP_OK;
 }

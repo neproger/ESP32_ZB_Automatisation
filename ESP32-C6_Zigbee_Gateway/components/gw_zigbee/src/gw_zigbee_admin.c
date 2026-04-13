@@ -102,7 +102,7 @@ static void purge_local_device_state(const gw_device_uid_t *uid)
     }
 
     esp_err_t remove_err = gw_c6_store_device_set_status(uid, GW_DEVICE_STATUS_QUARANTINED);
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "mark device quarantined uid=%s status=%s",
              uid->uid,
              esp_err_to_name(remove_err));
@@ -289,7 +289,7 @@ static void permit_join_cb(uint8_t seconds)
         return;
     }
 
-    ESP_LOGI(TAG, "permit_join enabled for %u seconds", (unsigned)seconds);
+    ESP_LOGW(TAG, "permit_join enabled for %u seconds", (unsigned)seconds);
 
     char msg[48];
     (void)snprintf(msg, sizeof(msg), "seconds=%u", (unsigned)seconds);

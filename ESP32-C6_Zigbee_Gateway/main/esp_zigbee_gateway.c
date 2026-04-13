@@ -131,7 +131,7 @@ static void log_zb_rx_value(const char *source,
     const char *uid_str = (uid != NULL && uid->uid[0] != '\0') ? uid->uid : "-";
     const char *type_name = runtime_value_type_name(value_type);
     if (cmd != NULL && cmd[0] != '\0') {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x cmd_id=0x%02x cmd=%s",
                  source,
                  uid_str,
@@ -144,7 +144,7 @@ static void log_zb_rx_value(const char *source,
     }
 
     if (value_type == GW_PROTO_EVENT_VALUE_BOOL) {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%s",
                  source,
                  uid_str,
@@ -156,7 +156,7 @@ static void log_zb_rx_value(const char *source,
                  (unsigned)zcl_size,
                  value_bool ? "true" : "false");
     } else if (value_type == GW_PROTO_EVENT_VALUE_I64) {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%lld",
                  source,
                  uid_str,
@@ -168,7 +168,7 @@ static void log_zb_rx_value(const char *source,
                  (unsigned)zcl_size,
                  (long long)value_i64);
     } else if (value_type == GW_PROTO_EVENT_VALUE_F32) {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value=%.3f",
                  source,
                  uid_str,
@@ -180,7 +180,7 @@ static void log_zb_rx_value(const char *source,
                  (unsigned)zcl_size,
                  (double)value_f32);
     } else {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "zb_rx %s uid=%s short=0x%04x ep=%u cluster=0x%04x attr=0x%04x zcl_type=0x%02x size=%u value_type=%s",
                  source,
                  uid_str,
@@ -895,7 +895,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
         if (err_status == ESP_OK) {
             if (*(uint8_t *)esp_zb_app_signal_get_params(p_sg_p)) {
-                ESP_LOGI(TAG, "Network(0x%04hx) is open for %d seconds", esp_zb_get_pan_id(), *(uint8_t *)esp_zb_app_signal_get_params(p_sg_p));
+                ESP_LOGW(TAG, "Network(0x%04hx) is open for %d seconds", esp_zb_get_pan_id(), *(uint8_t *)esp_zb_app_signal_get_params(p_sg_p));
             } else {
                 ESP_LOGW(TAG, "Network(0x%04hx) closed, devices joining not allowed.", esp_zb_get_pan_id());
             }
@@ -910,7 +910,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         // Chatty status signals; skip to reduce log noise and CPU usage.
         break;
     default:
-        ESP_LOGI(TAG, "ZDO signal: %s (0x%x), status: %s", esp_zb_zdo_signal_to_string(sig_type), sig_type,
+        ESP_LOGW(TAG, "ZDO signal: %s (0x%x), status: %s", esp_zb_zdo_signal_to_string(sig_type), sig_type,
                  esp_err_to_name(err_status));
         break;
     }

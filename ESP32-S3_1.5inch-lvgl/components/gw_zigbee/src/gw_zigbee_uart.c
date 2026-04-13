@@ -20,7 +20,7 @@
 static const char *TAG = "gw_zigbee_uart";
 
 #if CONFIG_GW_ZIGBEE_UART_TRACE
-#define GW_UART_TRACE_I(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define GW_UART_TRACE_I(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
 #define GW_UART_TRACE_D(fmt, ...) ESP_LOGD(TAG, fmt, ##__VA_ARGS__)
 #else
 #define GW_UART_TRACE_I(fmt, ...) do { (void)0; } while (0)
@@ -167,7 +167,7 @@ static esp_err_t request_snapshot_sync(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "snapshot sync request failed: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "snapshot sync requested");
+        ESP_LOGW(TAG, "snapshot sync requested");
     }
     return err;
 }
@@ -189,7 +189,7 @@ static esp_err_t request_proto_async(uint8_t proto_type, const void *payload, ui
     xSemaphoreGive(s_cmd_lock);
 
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "%s requested (async)", label);
+        ESP_LOGW(TAG, "%s requested (async)", label);
     } else {
         ESP_LOGW(TAG, "%s async request failed: %s", label, esp_err_to_name(err));
     }
@@ -269,7 +269,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
     if (frame->hdr.type == GW_PROTO_MSG_EVENT_ZB && frame->hdr.len >= sizeof(gw_proto_event_v1_t)) {
         const gw_proto_event_v1_t *evt = (const gw_proto_event_v1_t *)frame->payload;
         if (evt->event_id_kind == GW_PROTO_EVENT_NET_STATE) {
-            ESP_LOGI(TAG,
+            ESP_LOGW(TAG,
                      "Peer net-state event: cmd=%s value=%s ts=%llu",
                      evt->cmd,
                      evt->value_text,
@@ -279,7 +279,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
                 (void)request_proto_async(GW_PROTO_MSG_SNAPSHOT_REQUEST, NULL, 0, "peer-online snapshot sync");
             }
         } else if (evt->event_id_kind == GW_PROTO_EVENT_COMMAND) {
-            ESP_LOGI(TAG,
+            ESP_LOGW(TAG,
                      "UART RX event command uid=%s short=0x%04x ep=%u cluster=0x%04x cmd=%s",
                      evt->device_uid.uid,
                      evt->short_addr,
@@ -303,7 +303,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             }
             s_snapshot_received_records = 0;
             s_bootstrap_ready = false;
-            ESP_LOGI(TAG, "Proto sync begin: expected=%u", (unsigned)s_snapshot_expected_records);
+            ESP_LOGW(TAG, "Proto sync begin: expected=%u", (unsigned)s_snapshot_expected_records);
             break;
         case GW_PROTO_MSG_SYNC_END:
             s_snapshot_last_chunk_us = esp_timer_get_time();
@@ -325,7 +325,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
     (void)gw_proto_bus_publish(GW_PROTO_BUS_CHANNEL_INGRESS, &frame->hdr, frame->payload);
 
     if (frame->hdr.type == GW_PROTO_MSG_SYNC_END) {
-        ESP_LOGI(TAG, "Proto sync end: expected=%u received=%u",
+        ESP_LOGW(TAG, "Proto sync end: expected=%u received=%u",
                  (unsigned)s_snapshot_expected_records,
                  (unsigned)s_snapshot_received_records);
         if (s_snapshot_expected_records > 0 && s_snapshot_received_records < s_snapshot_expected_records) {
@@ -333,7 +333,7 @@ static void handle_rx_frame(const gw_proto_uart_frame_t *frame)
             (void)request_snapshot_sync();
         } else {
             s_bootstrap_ready = true;
-            ESP_LOGI(TAG, "Topology snapshot applied; gw_model bootstrap ready");
+            ESP_LOGW(TAG, "Topology snapshot applied; gw_model bootstrap ready");
             (void)request_proto_async(GW_PROTO_MSG_CMD_STATE_SYNC, NULL, 0, "state sync");
         }
     }
@@ -482,7 +482,7 @@ static esp_err_t ensure_started(void)
     }
 
     s_started = true;
-    ESP_LOGI(TAG, "C6 link UART started: port=%d TX=%d RX=%d baud=%d",
+    ESP_LOGW(TAG, "C6 link UART started: port=%d TX=%d RX=%d baud=%d",
              (int)GW_UART_PORT, GW_UART_TX_PIN, GW_UART_RX_PIN, GW_UART_BAUD);
 
     xSemaphoreGive(s_init_lock);

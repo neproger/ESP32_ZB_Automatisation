@@ -252,7 +252,7 @@ static esp_err_t uart_send_snapshot(uint16_t base_seq)
         endpoint_count += device_endpoint_count;
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "proto snapshot tx: devices=%u endpoints=%u total=%u",
              (unsigned)dev_count,
              (unsigned)endpoint_count,
@@ -666,7 +666,7 @@ static void uart_state_sync_task(void *arg)
 
             const size_t dev_count = gw_c6_store_device_count();
             size_t endpoint_count = 0;
-            ESP_LOGI(TAG, "state sync begin: devices=%u", (unsigned)dev_count);
+            ESP_LOGW(TAG, "state sync begin: devices=%u", (unsigned)dev_count);
 
             for (size_t di = 0; di < dev_count; ++di) {
                 gw_device_full_t device = {0};
@@ -692,7 +692,7 @@ static void uart_state_sync_task(void *arg)
                 }
             }
 
-            ESP_LOGI(TAG, "state sync queued: endpoints=%u", (unsigned)endpoint_count);
+            ESP_LOGW(TAG, "state sync queued: endpoints=%u", (unsigned)endpoint_count);
         }
     }
 }
@@ -789,7 +789,7 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
                 return ESP_ERR_INVALID_SIZE;
             }
             const gw_proto_cmd_device_remove_v1_t *msg = (const gw_proto_cmd_device_remove_v1_t *)frame->payload;
-            ESP_LOGI(TAG, "cmd device_remove uid=%s", msg->device_uid.uid);
+            ESP_LOGW(TAG, "cmd device_remove uid=%s", msg->device_uid.uid);
             gw_device_full_t device = {0};
             esp_err_t err = gw_c6_store_device_get_full(&msg->device_uid, &device);
             if (err != ESP_OK) {
@@ -803,7 +803,7 @@ static esp_err_t exec_proto_command(const gw_proto_uart_frame_t *frame)
                 ESP_LOGW(TAG, "cmd device_remove uid=%s invalid short=0x%04x", msg->device_uid.uid, (unsigned)device.short_addr);
                 return ESP_ERR_INVALID_STATE;
             }
-            ESP_LOGI(TAG,
+            ESP_LOGW(TAG,
                      "cmd device_remove uid=%s short=0x%04x status=%u",
                      msg->device_uid.uid,
                      (unsigned)device.short_addr,
@@ -1006,7 +1006,7 @@ esp_err_t gw_uart_link_start(void)
     }
 
     s_snapshot_ready = false;
-    ESP_LOGI(TAG, "UART binary link started: UART1 TX=GPIO%d RX=GPIO%d baud=%d", GW_UART_TX_PIN, GW_UART_RX_PIN, GW_UART_BAUD);
+    ESP_LOGW(TAG, "UART binary link started: UART1 TX=GPIO%d RX=GPIO%d baud=%d", GW_UART_TX_PIN, GW_UART_RX_PIN, GW_UART_BAUD);
     return ESP_OK;
 }
 

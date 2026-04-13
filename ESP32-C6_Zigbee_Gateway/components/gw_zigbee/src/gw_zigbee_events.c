@@ -137,7 +137,7 @@ static void finalize_discovery_session(gw_zb_discovery_session_t *session)
         (void)gw_c6_store_device_sync_endpoints(&d.device_uid);
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "discovery complete: %s short=0x%04x endpoints=%u/%u status=%s",
              session->uid.uid,
              (unsigned)session->short_addr,
@@ -172,7 +172,7 @@ static void note_simple_desc_result(const gw_device_uid_t *uid, uint16_t short_a
     if (session->responded_eps >= session->expected_eps) {
         finalize_discovery_session(session);
     } else {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "discovery progress: %s short=0x%04x ep=%u %u/%u",
                  uid->uid,
                  (unsigned)short_addr,
@@ -309,7 +309,7 @@ static void purge_local_device_model(const gw_device_uid_t *uid, uint16_t short_
     }
 
     esp_err_t err = gw_c6_store_device_remove(uid);
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "purge local device uid=%s short=0x%04x reason=%s full_remove=%s",
              uid->uid,
              (unsigned)short_addr,
@@ -527,7 +527,7 @@ static esp_err_t handle_device_authorized(const gw_proto_event_v1_t *evt)
 
     start_join_discovery(&evt->device_uid, evt->short_addr, "device_authorized");
 
-    ESP_LOGI(TAG, "Device authorized; closing permit join");
+    ESP_LOGW(TAG, "Device authorized; closing permit join");
     esp_zb_scheduler_alarm((esp_zb_callback_t)close_network_cb, 0, 1);
     return ESP_OK;
 }
@@ -554,7 +554,7 @@ esp_err_t gw_zigbee_handle_device_announced(const uint8_t ieee_addr[8], uint16_t
     if (gw_c6_store_device_get(&d.device_uid, &existing) == ESP_OK) {
         if ((existing.status == GW_DEVICE_STATUS_DISCOVERING && find_session_by_uid(&d.device_uid) != NULL) ||
             (existing.status == GW_DEVICE_STATUS_READY && device_has_real_endpoints(&d.device_uid))) {
-            ESP_LOGI(TAG,
+            ESP_LOGW(TAG,
                      "device announce ignored: %s short=0x%04x status=%u",
                      d.device_uid.uid,
                      (unsigned)short_addr,
@@ -575,7 +575,7 @@ esp_err_t gw_zigbee_handle_device_announced(const uint8_t ieee_addr[8], uint16_t
         return err;
     }
 
-    ESP_LOGI(TAG, "Device announced: %s short=0x%04x cap=0x%02x", d.device_uid.uid, (unsigned)d.short_addr, (unsigned)capability);
+    ESP_LOGW(TAG, "Device announced: %s short=0x%04x cap=0x%02x", d.device_uid.uid, (unsigned)d.short_addr, (unsigned)capability);
     (void)gw_c6_store_device_sync_endpoints(&d.device_uid);
 
     char msg[64];
@@ -640,7 +640,7 @@ bool gw_zigbee_handle_active_ep_discovered(const uint8_t ieee_addr[8],
         return false;
     }
     if (session->expected_eps > 0) {
-        ESP_LOGI(TAG,
+        ESP_LOGW(TAG,
                  "active ep ignored: %s short=0x%04x discovery already in progress %u/%u",
                  duid.uid,
                  (unsigned)short_addr,
@@ -658,7 +658,7 @@ bool gw_zigbee_handle_active_ep_discovered(const uint8_t ieee_addr[8],
 
     char msg[64];
     (void)snprintf(msg, sizeof(msg), "ep_count=%u", (unsigned)ep_count);
-    ESP_LOGI(TAG, "active ep: %s short=0x%04x %s", duid.uid, (unsigned)short_addr, msg);
+    ESP_LOGW(TAG, "active ep: %s short=0x%04x %s", duid.uid, (unsigned)short_addr, msg);
     return true;
 }
 
@@ -696,7 +696,7 @@ esp_err_t gw_zigbee_handle_simple_desc_discovered(const uint8_t ieee_addr[8],
                    (unsigned)ep->in_cluster_count,
                    (unsigned)ep->out_cluster_count,
                    ep->kind);
-    ESP_LOGI(TAG, "simple desc: %s short=0x%04x %s", duid.uid, (unsigned)short_addr, msg);
+    ESP_LOGW(TAG, "simple desc: %s short=0x%04x %s", duid.uid, (unsigned)short_addr, msg);
 
     gw_device_t d = {0};
     if (gw_c6_store_device_get(&duid, &d) == ESP_OK) {

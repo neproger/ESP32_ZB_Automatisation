@@ -1,4 +1,4 @@
-﻿#include "gw_zigbee/gw_zigbee.h"
+#include "gw_zigbee/gw_zigbee.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,7 +122,7 @@ static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc
     char out_buf[128];
     format_cluster_list(in_clusters, simple_desc->app_input_cluster_count, in_buf, sizeof(in_buf));
     format_cluster_list(out_clusters, simple_desc->app_output_cluster_count, out_buf, sizeof(out_buf));
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "simple desc raw: short=0x%04x ep=%u profile=0x%04x dev=0x%04x in[%u]=%s out[%u]=%s",
              (unsigned)ctx->short_addr,
              (unsigned)simple_desc->endpoint,
@@ -198,7 +198,7 @@ static void active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8
 
     char ep_buf[64];
     format_endpoint_list(ep_id_list, ep_count, ep_buf, sizeof(ep_buf));
-    ESP_LOGI(TAG,
+    ESP_LOGW(TAG,
              "active ep raw: uid=%s short=0x%04x ep_count=%u eps=%s",
              uid,
              (unsigned)ctx->short_addr,
@@ -254,7 +254,7 @@ static void gw_zigbee_start_discovery(const uint8_t ieee_addr[8], uint16_t short
     ctx->short_addr = short_addr;
     char uid[GW_DEVICE_UID_STRLEN];
     gw_zigbee_ieee_to_uid_str(ieee_addr, uid);
-    ESP_LOGI(TAG, "discovery start: uid=%s short=0x%04x", uid, (unsigned)short_addr);
+    ESP_LOGW(TAG, "discovery start: uid=%s short=0x%04x", uid, (unsigned)short_addr);
     esp_zb_zdo_active_ep_req_param_t req = {.addr_of_interest = short_addr};
     esp_zb_zdo_active_ep_req(&req, active_ep_cb, ctx);
 }

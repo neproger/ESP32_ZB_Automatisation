@@ -1,6 +1,7 @@
 ﻿#include "gw_http/gw_ws.h"
 
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -177,9 +178,18 @@ static esp_err_t ws_handle_settings_change(const gw_proto_cmd_settings_change_v1
         return ESP_ERR_INVALID_ARG;
     }
     if ((msg->fields & GW_PROTO_SETTINGS_CHANGE_F_ALL) == 0) {
+        ESP_LOGW(TAG, "settings change rejected: fields=0x%08" PRIx32, msg->fields);
         return ESP_ERR_INVALID_ARG;
     }
     if (!gw_model_settings_validate(&msg->settings)) {
+        ESP_LOGW(TAG,
+                 "settings change rejected: screensaver=%" PRIu32 " weather_success=%" PRIu32
+                 " weather_retry=%" PRIu32 " timezone_auto=%u timezone_offset=%d",
+                 msg->settings.screensaver_timeout_ms,
+                 msg->settings.weather_success_interval_ms,
+                 msg->settings.weather_retry_interval_ms,
+                 msg->settings.timezone_auto,
+                 msg->settings.timezone_offset_min);
         return ESP_ERR_INVALID_ARG;
     }
     return gw_model_set_settings(&msg->settings, NULL, NULL);

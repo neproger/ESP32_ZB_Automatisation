@@ -75,7 +75,7 @@ void gw_store_hook_remove_state_for_endpoint(const gw_store_endpoint_key_t *endp
 
 esp_err_t gw_store_hook_notify_device_upsert(const gw_proto_device_v1_t *record)
 {
-    ESP_LOGI(TAG, "device_upsert notify: name=%s", record->name);
+    ESP_LOGW(TAG, "device_upsert notify: name=%s", record->name);
     return gw_model_notify_device_upsert(record);
 }
 
