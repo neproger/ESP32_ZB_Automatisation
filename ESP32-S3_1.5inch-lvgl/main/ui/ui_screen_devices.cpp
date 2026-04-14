@@ -2,16 +2,20 @@
 
 #include <atomic>
 
+#include "lvgl.h"
 #include "widgets/widget_group_state.hpp"
 #include "widgets/widget_ui_root.hpp"
 
 namespace
 {
+constexpr uint32_t kModelPollPeriodMs = 80;
+
 WidgetUiRoot *s_ui_root = nullptr;
 std::atomic<int> s_pending_group_delta{0};
 std::atomic<int> s_pending_item_delta{0};
 size_t s_target_group_index = 0;
 size_t s_target_item_index = 0;
+uint32_t s_last_model_poll_ms = 0;
 
 size_t wrap_index(size_t base, int delta, size_t count)
 {
@@ -85,6 +89,7 @@ void ui_screen_devices_init(lv_obj_t *root)
     s_ui_root = new WidgetUiRoot(root);
     s_target_group_index = 0;
     s_target_item_index = 0;
+    s_last_model_poll_ms = 0;
     s_pending_group_delta.store(0, std::memory_order_release);
     s_pending_item_delta.store(0, std::memory_order_release);
 }
@@ -95,6 +100,12 @@ void ui_screen_devices_render_if_needed(void)
         return;
     }
     apply_pending_targets();
+
+    const uint32_t now_ms = lv_tick_get();
+    if (s_last_model_poll_ms != 0 && (now_ms - s_last_model_poll_ms) < kModelPollPeriodMs) {
+        return;
+    }
+    s_last_model_poll_ms = now_ms;
     s_ui_root->render_if_needed();
 }
 
@@ -112,4 +123,10 @@ void ui_screen_devices_step_item(int delta)
         return;
     }
     s_pending_item_delta.fetch_add(delta, std::memory_order_acq_rel);
+}
+
+void ui_screen_devices_clear_pending_navigation(void)
+{
+    s_pending_group_delta.store(0, std::memory_order_release);
+    s_pending_item_delta.store(0, std::memory_order_release);
 }

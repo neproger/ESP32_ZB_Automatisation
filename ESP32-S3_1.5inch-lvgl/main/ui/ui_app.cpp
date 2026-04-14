@@ -28,8 +28,9 @@ static bool s_ui_ready = false;
 static bool s_saver_active = false;
 static lv_obj_t *s_splash = nullptr;
 static std::atomic<bool> s_pending_button_click{false};
+static std::atomic<bool> s_pending_user_activity{false};
 static constexpr uint8_t kDisplayBrightness80Pct = 204;
-static constexpr uint32_t kUiTickPeriodMs = 33;
+static constexpr uint32_t kUiTickPeriodMs = 16;
 static constexpr uint32_t kControlAckTimeoutMs = 1800;
 
 void log_ui_boot_stack_hwm(const char *stage)
@@ -39,11 +40,21 @@ void log_ui_boot_stack_hwm(const char *stage)
 
 uint32_t screensaver_timeout_ms()
 {
+    static uint32_t cached_timeout_ms = 10000;
+    static uint64_t last_read_ms = 0;
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    if (last_read_ms != 0 && (now_ms - last_read_ms) < 1000) {
+        return cached_timeout_ms;
+    }
+
     gw_proto_settings_v1_t cfg = {};
     if (gw_model_get_settings(&cfg) == ESP_OK) {
-        return cfg.screensaver_timeout_ms;
+        cached_timeout_ms = cfg.screensaver_timeout_ms;
+        last_read_ms = now_ms;
+        return cached_timeout_ms;
     }
-    return 10000;
+    last_read_ms = now_ms;
+    return cached_timeout_ms;
 }
 
 void splash_show(bool show)
@@ -127,13 +138,26 @@ void ui_gesture_cb(lv_event_t *event)
         ui_screen_devices_step_item(-1);
     } else if (dir == LV_DIR_TOP) {
         ui_screen_devices_step_item(1);
+    } else if (dir == LV_DIR_RIGHT) {
+        ui_screen_devices_step_group(-1);
+    } else if (dir == LV_DIR_LEFT) {
+        ui_screen_devices_step_group(1);
     }
 }
 
 void ui_tick_cb(lv_timer_t *timer)
 {
     (void)timer;
+    const bool user_activity = s_pending_user_activity.exchange(false, std::memory_order_acq_rel);
     const bool button_click = s_pending_button_click.exchange(false, std::memory_order_acq_rel);
+
+    if (user_activity) {
+        note_user_activity();
+        if (s_ui_ready && s_saver_active) {
+            wake_from_screensaver();
+            ui_screen_devices_clear_pending_navigation();
+        }
+    }
 
     if (button_click) {
         note_user_activity();
@@ -208,6 +232,7 @@ void ui_app_attach_screen_input(lv_obj_t *screen)
 extern "C" void ui_post_knob_event(void *event)
 {
     const int ev = (int)(intptr_t)event;
+    s_pending_user_activity.store(true, std::memory_order_release);
     if (ev == KNOB_RIGHT) {
         ui_screen_devices_step_group(1);
     } else if (ev == KNOB_LEFT) {

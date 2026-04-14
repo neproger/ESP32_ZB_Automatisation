@@ -14,6 +14,17 @@ function clampInt(v, min, max, fallback) {
   return Math.max(min, Math.min(max, n))
 }
 
+function toBool(v, fallback = false) {
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v !== 0
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    if (s === 'true' || s === '1') return true
+    if (s === 'false' || s === '0') return false
+  }
+  return fallback
+}
+
 export default function Settings() {
   const { projectSettings, factoryReset } = useGateway()
   const [status, setStatus] = useState('')
@@ -88,7 +99,7 @@ export default function Settings() {
       weather_success_interval_min: Math.max(1, Math.round(toInt(projectSettings?.weather_success_interval_ms, 60 * 60 * 1000) / 60000)),
       weather_retry_interval_sec: Math.max(3, Math.round(toInt(projectSettings?.weather_retry_interval_ms, 10 * 1000) / 1000)),
       timezone: tzAuto ? 'auto' : String(tzHour),
-      weather_location_auto: projectSettings?.weather_location_auto !== 0,
+      weather_location_auto: toBool(projectSettings?.weather_location_auto, true),
       weather_city: projectSettings?.weather_city || '',
       weather_lat: Number(projectSettings?.weather_lat) || 0,
       weather_lon: Number(projectSettings?.weather_lon) || 0,

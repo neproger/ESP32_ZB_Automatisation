@@ -15,6 +15,10 @@ static lv_indev_t *s_lvgl_touch_indev = nullptr;
 
 static constexpr uint32_t kThemePrimaryColorHex = 0x006aa3;
 static constexpr uint32_t kThemeSecondaryColorHex = 0x303030;
+static constexpr uint32_t kLvglTimerPeriodMs = 5;
+static constexpr uint32_t kLvglTaskMaxSleepMs = 5;
+static constexpr uint32_t kLvglRefreshPeriodMs = 16;
+static constexpr UBaseType_t kLvglTaskPriority = 6;
 
 typedef struct
 {
@@ -71,12 +75,12 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     }
 
     lvgl_port_cfg_t lvgl_cfg = {};
-    lvgl_cfg.task_priority = 5;
+    lvgl_cfg.task_priority = kLvglTaskPriority;
     lvgl_cfg.task_stack = 12288;
     lvgl_cfg.task_affinity = 1;
     lvgl_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    lvgl_cfg.task_max_sleep_ms = 5;
-    lvgl_cfg.timer_period_ms = 5;
+    lvgl_cfg.task_max_sleep_ms = kLvglTaskMaxSleepMs;
+    lvgl_cfg.timer_period_ms = kLvglTimerPeriodMs;
     esp_err_t err = lvgl_port_init(&lvgl_cfg);
     if (err != ESP_OK)
     {
@@ -132,6 +136,7 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
     // Panel active area is shifted by 6 px in X (see 0x2A init in display_init.cpp).
     // Tell LVGL that logical (0,0) corresponds to physical (6,0).
     lv_display_set_offset(s_lvgl_disp, 6, 0);
+    lv_timer_set_period(lv_display_get_refr_timer(s_lvgl_disp), kLvglRefreshPeriodMs);
 
     lv_color_t primary = lv_color_hex(kThemePrimaryColorHex);
     lv_color_t secondary = lv_color_hex(kThemeSecondaryColorHex);
@@ -150,6 +155,9 @@ esp_err_t devices_lvgl_init(esp_lcd_touch_handle_t touch_handle)
         touch_cfg.disp = s_lvgl_disp;
         touch_cfg.handle = touch_handle;
         s_lvgl_touch_indev = lvgl_port_add_touch(&touch_cfg);
+        if (s_lvgl_touch_indev) {
+            lv_timer_set_period(lv_indev_get_read_timer(s_lvgl_touch_indev), kLvglRefreshPeriodMs);
+        }
         ESP_LOGI(TAG_LVGL, "LVGL touch input added");
     }
     else

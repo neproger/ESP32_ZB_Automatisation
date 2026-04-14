@@ -62,12 +62,15 @@ esp_err_t gw_zigbee_discover_by_short(uint16_t short_addr);
 // Send On/Off/Toggle to a device endpoint (action executor primitive for automations).
 // Safe to call from any context; request is scheduled into Zigbee context.
 esp_err_t gw_zigbee_onoff_cmd(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_onoff_cmd_t cmd);
+esp_err_t gw_zigbee_onoff_cmd_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_onoff_cmd_t cmd);
 
 // Send Level Control "move_to_level" (0..254).
 esp_err_t gw_zigbee_level_move_to_level(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_level_t level);
+esp_err_t gw_zigbee_level_move_to_level_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_level_t level);
 
 // Send Color Control "move_to_color" (xy in 0..65535).
 esp_err_t gw_zigbee_color_move_to_xy(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_xy_t color);
+esp_err_t gw_zigbee_color_move_to_xy_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_xy_t color);
 
 // Send Color Control "move_to_color_temperature" (mireds).
 esp_err_t gw_zigbee_color_move_to_temp(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_temp_t temp);

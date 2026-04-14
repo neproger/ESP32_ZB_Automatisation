@@ -14,7 +14,7 @@ esp_err_t ui_actions_enqueue_onoff(const gw_device_uid_t *uid, uint8_t endpoint,
         return ESP_ERR_INVALID_ARG;
     }
 
-    return gw_zigbee_onoff_cmd(uid, endpoint, on ? GW_ZIGBEE_ONOFF_CMD_ON : GW_ZIGBEE_ONOFF_CMD_OFF);
+    return gw_zigbee_onoff_cmd_async(uid, endpoint, on ? GW_ZIGBEE_ONOFF_CMD_ON : GW_ZIGBEE_ONOFF_CMD_OFF);
 }
 
 esp_err_t ui_actions_enqueue_level(const gw_device_uid_t *uid, uint8_t endpoint, uint8_t level)
@@ -28,7 +28,7 @@ esp_err_t ui_actions_enqueue_level(const gw_device_uid_t *uid, uint8_t endpoint,
         .level = level,
         .transition_ms = 0,
     };
-    return gw_zigbee_level_move_to_level(uid, endpoint, cmd);
+    return gw_zigbee_level_move_to_level_async(uid, endpoint, cmd);
 }
 
 esp_err_t ui_actions_enqueue_color_xy(const gw_device_uid_t *uid, uint8_t endpoint, uint16_t x, uint16_t y)
@@ -43,6 +43,6 @@ esp_err_t ui_actions_enqueue_color_xy(const gw_device_uid_t *uid, uint8_t endpoi
         .y = y,
         .transition_ms = 0,
     };
-    return gw_zigbee_color_move_to_xy(uid, endpoint, cmd);
+    return gw_zigbee_color_move_to_xy_async(uid, endpoint, cmd);
 }
 

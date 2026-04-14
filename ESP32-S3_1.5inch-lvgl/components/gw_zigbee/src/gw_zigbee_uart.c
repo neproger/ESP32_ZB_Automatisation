@@ -63,6 +63,7 @@ static uint8_t s_snapshot_retry_count;
 static uint16_t s_snapshot_expected_records;
 static uint16_t s_snapshot_received_records;
 static bool s_bootstrap_ready;
+static esp_err_t ensure_started(void);
 static esp_err_t uart_send_frame(uint8_t msg_type, uint16_t seq, const void *payload, uint16_t payload_len);
 static esp_err_t send_proto_cmd_wait_result(uint8_t proto_type, const void *payload, uint16_t payload_len);
 static esp_err_t request_snapshot_sync(void);
@@ -177,6 +178,7 @@ static esp_err_t request_proto_async(uint8_t proto_type, const void *payload, ui
     if (!label) {
         label = "proto";
     }
+    ESP_RETURN_ON_ERROR(ensure_started(), TAG, "uart start failed");
     if (!s_cmd_lock) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -639,6 +641,18 @@ esp_err_t gw_zigbee_onoff_cmd(const gw_device_uid_t *uid, uint8_t endpoint, gw_z
     return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_ONOFF, &req, sizeof(req));
 }
 
+esp_err_t gw_zigbee_onoff_cmd_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_onoff_cmd_t cmd)
+{
+    if (!uid || !uid->uid[0] || endpoint == 0 || cmd > GW_ZIGBEE_ONOFF_CMD_TOGGLE) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_cmd_onoff_v1_t req = {0};
+    req.device_uid = *uid;
+    req.endpoint = endpoint;
+    req.cmd = (uint8_t)cmd;
+    return request_proto_async(GW_PROTO_MSG_CMD_ONOFF, &req, sizeof(req), "onoff cmd");
+}
+
 esp_err_t gw_zigbee_level_move_to_level(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_level_t level)
 {
     if (!uid || !uid->uid[0] || endpoint == 0) {
@@ -650,6 +664,19 @@ esp_err_t gw_zigbee_level_move_to_level(const gw_device_uid_t *uid, uint8_t endp
     req.level = level.level;
     req.transition_ds = (uint16_t)(level.transition_ms / 100);
     return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_LEVEL, &req, sizeof(req));
+}
+
+esp_err_t gw_zigbee_level_move_to_level_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_level_t level)
+{
+    if (!uid || !uid->uid[0] || endpoint == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_cmd_level_v1_t req = {0};
+    req.device_uid = *uid;
+    req.endpoint = endpoint;
+    req.level = level.level;
+    req.transition_ds = (uint16_t)(level.transition_ms / 100);
+    return request_proto_async(GW_PROTO_MSG_CMD_LEVEL, &req, sizeof(req), "level cmd");
 }
 
 esp_err_t gw_zigbee_color_move_to_xy(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_xy_t color)
@@ -664,6 +691,20 @@ esp_err_t gw_zigbee_color_move_to_xy(const gw_device_uid_t *uid, uint8_t endpoin
     req.y = color.y;
     req.transition_ds = (uint16_t)(color.transition_ms / 100);
     return send_proto_cmd_wait_result(GW_PROTO_MSG_CMD_COLOR_XY, &req, sizeof(req));
+}
+
+esp_err_t gw_zigbee_color_move_to_xy_async(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_xy_t color)
+{
+    if (!uid || !uid->uid[0] || endpoint == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gw_proto_cmd_color_xy_v1_t req = {0};
+    req.device_uid = *uid;
+    req.endpoint = endpoint;
+    req.x = color.x;
+    req.y = color.y;
+    req.transition_ds = (uint16_t)(color.transition_ms / 100);
+    return request_proto_async(GW_PROTO_MSG_CMD_COLOR_XY, &req, sizeof(req), "color xy cmd");
 }
 
 esp_err_t gw_zigbee_color_move_to_temp(const gw_device_uid_t *uid, uint8_t endpoint, gw_zigbee_color_temp_t temp)

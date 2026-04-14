@@ -1,7 +1,9 @@
 #include "widget_group_view_page.hpp"
 
 #include <stdio.h>
+#include <string.h>
 
+#include "gw_model/gw_model_topology.h"
 #include "ui_style.hpp"
 
 namespace
@@ -38,12 +40,16 @@ WidgetGroupViewPage::WidgetGroupViewPage(lv_obj_t *parent)
     lv_obj_add_event_cb(root_, on_root_deleted, LV_EVENT_DELETE, this);
 
     title_ = lv_label_create(root_);
+    lv_obj_set_width(title_, lv_pct(100));
     lv_obj_align(title_, LV_ALIGN_TOP_MID, 0, ui_style::kTitleY);
+    lv_obj_set_style_text_align(title_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title_, lv_color_hex(ui_style::kTitleTextHex), 0);
     lv_obj_set_style_text_font(title_, ui_style::kFontTitle, 0);
 
     subtitle_ = lv_label_create(root_);
+    lv_obj_set_width(subtitle_, lv_pct(100));
     lv_obj_align_to(subtitle_, title_, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(subtitle_, lv_color_hex(ui_style::kSubtitleTextHex), 0);
     lv_obj_set_style_text_font(subtitle_, ui_style::kFontSubtitle, 0);
 
@@ -164,7 +170,18 @@ void WidgetGroupViewPage::update_header(const WidgetGroupState &state)
         return;
     }
 
-    const char *label = state.active_item.label[0] ? state.active_item.label : state.active_item.ref.uid.uid;
+    char label[64] = {};
+    if (state.active_item.label[0]) {
+        strlcpy(label, state.active_item.label, sizeof(label));
+    } else if (state.has_active_item) {
+        gw_proto_device_v1_t device = {};
+        if (gw_model_get_device(&state.active_item.ref.uid, &device) == ESP_OK && device.name[0]) {
+            strlcpy(label, device.name, sizeof(label));
+        }
+    }
+    if (!label[0]) {
+        strlcpy(label, state.active_item.ref.uid.uid, sizeof(label));
+    }
     lv_label_set_text_fmt(subtitle_,
                           "#%u/%u %s",
                           (unsigned)(state.active_item_index + 1),

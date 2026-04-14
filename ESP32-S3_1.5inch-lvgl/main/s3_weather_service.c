@@ -214,6 +214,18 @@ static TickType_t weather_success_ticks(void)
     return ms_to_ticks_safe(60 * 60 * 1000);
 }
 
+static void weather_wait(TickType_t ticks)
+{
+    (void)ulTaskNotifyTake(pdTRUE, ticks);
+}
+
+static void weather_wake(void)
+{
+    if (s_task) {
+        xTaskNotifyGive(s_task);
+    }
+}
+
 static void apply_timezone_from_settings_or_geo(const s3_geoip_result_t *geo)
 {
     gw_proto_settings_v1_t cfg = {0};
@@ -296,6 +308,26 @@ static void apply_timezone_now_and_publish(const char *reason)
     (void)reason;
 }
 
+static void apply_weather_settings_change(const gw_proto_settings_v1_t *settings)
+{
+    if (!settings) {
+        return;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    s_last_geo_refresh_ms = 0;
+    if (!settings->weather_location_auto && settings->weather_city[0]) {
+        s_geo_lat = settings->weather_lat;
+        s_geo_lon = settings->weather_lon;
+        s_geo_ready = true;
+    } else {
+        s_geo_ready = false;
+    }
+    portEXIT_CRITICAL(&s_lock);
+
+    weather_wake();
+}
+
 static esp_err_t load_settings(gw_proto_settings_v1_t *out)
 {
     if (!out) {
@@ -315,6 +347,7 @@ static void settings_proto_listener(gw_proto_bus_channel_t channel,
         return;
     }
     apply_timezone_now_and_publish("settings.changed");
+    apply_weather_settings_change((const gw_proto_settings_v1_t *)payload);
 }
 
 void s3_weather_service_get_location(char *out, size_t out_size)
@@ -458,7 +491,7 @@ static void weather_task(void *arg)
 
     for (;;) {
         if (ensure_geo_location() != ESP_OK) {
-            vTaskDelay(weather_retry_ticks());
+            weather_wait(weather_retry_ticks());
             continue;
         }
 
@@ -478,20 +511,25 @@ static void weather_task(void *arg)
             } else {
                 persist_weather_status_to_model("weather_unavailable");
             }
-            vTaskDelay(weather_retry_ticks());
+            weather_wait(weather_retry_ticks());
             continue;
         }
 
         persist_weather_to_model(&res);
         persist_weather_status_to_model("weather_ready");
+        char location[64] = {0};
+        s3_weather_service_get_location(location, sizeof(location));
         ESP_LOGI(TAG,
-                 "weather updated: t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d obs=%s",
+                 "weather updated: location=%s lat=%.6f lon=%.6f t=%.1fC h=%.1f%% wind=%.1fkm/h code=%d obs=%s",
+                 location[0] ? location : "-",
+                 s_geo_lat,
+                 s_geo_lon,
                  (double)res.temperature_c,
                  (double)res.humidity_pct,
                  (double)res.wind_speed_kmh,
                  res.weather_code,
                  res.observed_time);
-        vTaskDelay(weather_success_ticks());
+        weather_wait(weather_success_ticks());
     }
 }
 

@@ -89,14 +89,6 @@ WidgetEndpointCard::WidgetEndpointCard(lv_obj_t *parent, const WidgetEndpointRef
     lv_obj_set_flex_flow(root_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(root_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-    title_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(title_, ui_style::kFontSectionTitle, 0);
-    lv_obj_set_style_text_color(title_, lv_color_hex(ui_style::kCardTitleHex), 0);
-
-    subtitle_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(subtitle_, ui_style::kFontSubtitle, 0);
-    lv_obj_set_style_text_color(subtitle_, lv_color_hex(ui_style::kSubtitleTextHex), 0);
-
     summary_ = lv_label_create(root_);
     lv_obj_set_style_text_font(summary_, ui_style::kFontBody, 0);
     lv_obj_set_style_text_color(summary_, lv_color_hex(ui_style::kTitleTextHex), 0);
@@ -175,7 +167,7 @@ const WidgetEndpointRef &WidgetEndpointCard::ref() const
 
 void WidgetEndpointCard::rebuild_if_needed(const WidgetEndpointState &state)
 {
-    if (!title_ || !subtitle_ || !summary_) {
+    if (!summary_) {
         return;
     }
 
@@ -183,15 +175,8 @@ void WidgetEndpointCard::rebuild_if_needed(const WidgetEndpointState &state)
     last_summary_version_ = 0;
 
     if (!state.has_endpoint) {
-        lv_label_set_text(subtitle_, "Endpoint");
         return;
     }
-
-    char subtitle[64] = {0};
-    snprintf(subtitle, sizeof(subtitle), "EP %u  %s",
-             (unsigned)state.endpoint.endpoint,
-             ui_mapper_kind_from_proto_endpoint(&state.endpoint));
-    lv_label_set_text(subtitle_, subtitle);
 
     if (state.caps.onoff) {
         onoff_ = new WidgetOnOffControl(root_, ref_);

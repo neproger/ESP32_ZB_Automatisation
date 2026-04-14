@@ -281,6 +281,11 @@ void WidgetOnOffControl::handle_click()
 
     lv_obj_remove_state(switch_, kStateError);
     lv_obj_add_state(switch_, LV_STATE_DISABLED);
+    if (target) {
+        lv_obj_add_state(switch_, LV_STATE_CHECKED);
+    } else {
+        lv_obj_remove_state(switch_, LV_STATE_CHECKED);
+    }
 
     const esp_err_t err = ui_actions_enqueue_onoff(&ref_.uid, ref_.endpoint, target);
     if (err != ESP_OK) {

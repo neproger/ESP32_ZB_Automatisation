@@ -313,6 +313,19 @@ const AUTO_ACTION_ARG2_OFF = 26
 const GROUP_ID_SIZE = 32
 const GROUP_NAME_SIZE = 48
 const GROUP_LABEL_SIZE = 32
+const SETTINGS_SIZE = 56
+const SETTINGS_WEATHER_CITY_SIZE = 32
+const SETTINGS_SCREENSAVER_TIMEOUT_OFF = 0
+const SETTINGS_WEATHER_SUCCESS_INTERVAL_OFF = 4
+const SETTINGS_WEATHER_RETRY_INTERVAL_OFF = 8
+const SETTINGS_TIMEZONE_AUTO_OFF = 12
+const SETTINGS_WEATHER_LOCATION_AUTO_OFF = 13
+const SETTINGS_TIMEZONE_OFFSET_OFF = 14
+const SETTINGS_WEATHER_LAT_OFF = 16
+const SETTINGS_WEATHER_LON_OFF = 20
+const SETTINGS_WEATHER_CITY_OFF = 24
+const CMD_SETTINGS_CHANGE_FIELDS_OFF = 0
+const CMD_SETTINGS_CHANGE_SETTINGS_OFF = 4
 const TRACE_KIND_OFF = 1
 const TRACE_OK_OFF = 2
 const TRACE_TS_OFF = 5
@@ -661,18 +674,22 @@ export function protoEncodeGroupItemsChange(change, seq = 1) {
 }
 
 export function protoEncodeSettingsChange(settings, seq = 1) {
-  const payloadSize = 4 + 4 + 4 + 1 + 1 + 2 + 4 + 4 + 32
-  const { buf, view } = encodeProtoFrame(GW_PROTO_MSG_CMD_SETTINGS_CHANGE, payloadSize, seq)
-  view.setUint32(HDR_SIZE + 0, 1, true)
-  view.setUint32(HDR_SIZE + 4, Number(settings?.screensaver_timeout_ms) || 0, true)
-  view.setUint32(HDR_SIZE + 8, Number(settings?.weather_success_interval_ms) || 0, true)
-  view.setUint32(HDR_SIZE + 12, Number(settings?.weather_retry_interval_ms) || 0, true)
-  view.setUint8(HDR_SIZE + 16, settings?.timezone_auto ? 1 : 0)
-  view.setUint8(HDR_SIZE + 17, settings?.weather_location_auto ? 1 : 0)
-  view.setInt16(HDR_SIZE + 18, Number(settings?.timezone_offset_min) || 0, true)
-  view.setFloat32(HDR_SIZE + 20, Number(settings?.weather_lat) || 0, true)
-  view.setFloat32(HDR_SIZE + 24, Number(settings?.weather_lon) || 0, true)
-  writeFixedString(view, HDR_SIZE + 28, 32, settings?.weather_city || '')
+  const { buf, view } = encodeProtoFrame(
+    GW_PROTO_MSG_CMD_SETTINGS_CHANGE,
+    CMD_SETTINGS_CHANGE_SETTINGS_OFF + SETTINGS_SIZE,
+    seq,
+  )
+  const base = HDR_SIZE + CMD_SETTINGS_CHANGE_SETTINGS_OFF
+  view.setUint32(HDR_SIZE + CMD_SETTINGS_CHANGE_FIELDS_OFF, 1, true)
+  view.setUint32(base + SETTINGS_SCREENSAVER_TIMEOUT_OFF, Number(settings?.screensaver_timeout_ms) || 0, true)
+  view.setUint32(base + SETTINGS_WEATHER_SUCCESS_INTERVAL_OFF, Number(settings?.weather_success_interval_ms) || 0, true)
+  view.setUint32(base + SETTINGS_WEATHER_RETRY_INTERVAL_OFF, Number(settings?.weather_retry_interval_ms) || 0, true)
+  view.setUint8(base + SETTINGS_TIMEZONE_AUTO_OFF, settings?.timezone_auto ? 1 : 0)
+  view.setUint8(base + SETTINGS_WEATHER_LOCATION_AUTO_OFF, settings?.weather_location_auto ? 1 : 0)
+  view.setInt16(base + SETTINGS_TIMEZONE_OFFSET_OFF, Number(settings?.timezone_offset_min) || 0, true)
+  view.setFloat32(base + SETTINGS_WEATHER_LAT_OFF, Number(settings?.weather_lat) || 0, true)
+  view.setFloat32(base + SETTINGS_WEATHER_LON_OFF, Number(settings?.weather_lon) || 0, true)
+  writeFixedString(view, base + SETTINGS_WEATHER_CITY_OFF, SETTINGS_WEATHER_CITY_SIZE, settings?.weather_city || '')
   return buf
 }
 
@@ -1283,15 +1300,23 @@ export function protoParseSettingsFrame(frame) {
   if (payload.byteLength < 16) return null
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
   return {
-    screensaver_timeout_ms: Number(view.getUint32(0, true)),
-    weather_success_interval_ms: Number(view.getUint32(4, true)),
-    weather_retry_interval_ms: Number(view.getUint32(8, true)),
-    timezone_auto: view.getUint8(12) !== 0,
-    weather_location_auto: payload.byteLength >= 14 ? view.getUint8(13) !== 0 : true,
-    timezone_offset_min: view.getInt16(14, true),
-    weather_lat: payload.byteLength >= 20 ? view.getFloat32(16, true) : 0,
-    weather_lon: payload.byteLength >= 24 ? view.getFloat32(20, true) : 0,
-    weather_city: payload.byteLength >= 56 ? readFixedString(view, 24, 32) : '',
+    screensaver_timeout_ms: Number(view.getUint32(SETTINGS_SCREENSAVER_TIMEOUT_OFF, true)),
+    weather_success_interval_ms: Number(view.getUint32(SETTINGS_WEATHER_SUCCESS_INTERVAL_OFF, true)),
+    weather_retry_interval_ms: Number(view.getUint32(SETTINGS_WEATHER_RETRY_INTERVAL_OFF, true)),
+    timezone_auto: view.getUint8(SETTINGS_TIMEZONE_AUTO_OFF) !== 0,
+    weather_location_auto: payload.byteLength > SETTINGS_WEATHER_LOCATION_AUTO_OFF
+      ? (view.getUint8(SETTINGS_WEATHER_LOCATION_AUTO_OFF) !== 0)
+      : true,
+    timezone_offset_min: view.getInt16(SETTINGS_TIMEZONE_OFFSET_OFF, true),
+    weather_lat: payload.byteLength >= SETTINGS_WEATHER_LAT_OFF + 4
+      ? view.getFloat32(SETTINGS_WEATHER_LAT_OFF, true)
+      : 0,
+    weather_lon: payload.byteLength >= SETTINGS_WEATHER_LON_OFF + 4
+      ? view.getFloat32(SETTINGS_WEATHER_LON_OFF, true)
+      : 0,
+    weather_city: payload.byteLength >= SETTINGS_WEATHER_CITY_OFF + SETTINGS_WEATHER_CITY_SIZE
+      ? readFixedString(view, SETTINGS_WEATHER_CITY_OFF, SETTINGS_WEATHER_CITY_SIZE)
+      : '',
   }
 }
 
