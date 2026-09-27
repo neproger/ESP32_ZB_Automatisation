@@ -22,8 +22,8 @@
 #define HA_RGB_LIGHT_ENDPOINT           4          /* Zigbee Color Dimmable Light (server) endpoint */
 
 /* Board GPIOs (adjust for your ESP32-H2 board if needed) */
-/* Test "relay" output (some boards have a user LED on GPIO13). */
-#define GPIO_OUTPUT_IO_RELAY_TEST       GPIO_NUM_13
+/* Relay output (external relay wired to GPIO12). */
+#define GPIO_OUTPUT_IO_RELAY_TEST       GPIO_NUM_12
 /* Set to 0 if your LED/relay is active-low (GPIO low = ON). */
 #define GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL 1
 
