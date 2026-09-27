@@ -20,6 +20,8 @@
 #define HA_ONOFF_RELAY_ENDPOINT         2          /* Zigbee On/Off light (server) endpoint (test relay) */
 #define HA_TEMP_HUMI_SENSOR_ENDPOINT    3          /* Zigbee Temperature + Humidity sensor endpoint */
 #define HA_RGB_LIGHT_ENDPOINT           4          /* Zigbee Color Dimmable Light (server) endpoint */
+#define HA_DS18B20_SENSOR_ENDPOINT      5          /* Zigbee DS18B20 temperature sensor endpoint */
+#define HA_RELAY_STATE_ENDPOINT         6          /* Zigbee read-only actual relay state endpoint */
 
 /* Board GPIOs (adjust for your ESP32-H2 board if needed) */
 /* Relay output (external relay wired to GPIO12). */

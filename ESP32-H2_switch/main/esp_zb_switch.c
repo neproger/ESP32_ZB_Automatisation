@@ -34,6 +34,8 @@
 #include "zdo/esp_zigbee_zdo_command.h"
 #include "zboss_api.h"
 #include "esp_zb_switch.h"
+#include "sensors.h"
+#include "device_control.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -49,13 +51,13 @@ static esp_timer_handle_t s_factory_reset_hold_blink_timer;
 static uint8_t s_last_binding_total;
 static int64_t s_last_binding_total_update_us;
 static bool s_relay_state;
+static bool s_relay_state_published;
 
-/* Fake sensor values (ZCL units): temperature in 0.01°C (int16), humidity in 0.01% (uint16) */
-static int16_t s_fake_temp_centi_c = 2300;
-static uint16_t s_fake_humi_centi_pct = 4500;
-static uint16_t s_fake_humi_min_centi_pct = ESP_ZB_ZCL_REL_HUMIDITY_MEASUREMENT_MIN_MEASURED_VALUE_MINIMUM;
-static uint16_t s_fake_humi_max_centi_pct = 10000; /* 100.00% */
-static uint16_t s_fake_humi_tolerance_centi_pct = 50; /* 0.50% */
+/* Sensor values (ZCL units): temperature in 0.01°C (int16), humidity in 0.01% (uint16) */
+static uint16_t s_humi_centi_pct = 0;
+static uint16_t s_humi_min_centi_pct = ESP_ZB_ZCL_REL_HUMIDITY_MEASUREMENT_MIN_MEASURED_VALUE_MINIMUM;
+static uint16_t s_humi_max_centi_pct = 10000; /* 100.00% */
+static uint16_t s_humi_tolerance_centi_pct = 50; /* 0.50% */
 
 /* RGB LED (WS2812/NeoPixel) state for HA_RGB_LIGHT_ENDPOINT */
 static bool s_rgb_on;
@@ -807,7 +809,24 @@ static void relay_set(bool on)
     s_relay_state = on;
     gpio_set_level(GPIO_OUTPUT_IO_RELAY_TEST, on ? GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL
                                                 : !GPIO_OUTPUT_IO_RELAY_TEST_ACTIVE_LEVEL);
-    ESP_LOGI(TAG, "Relay(test LED) -> %s", on ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Relay -> %s", on ? "ON" : "OFF");
+}
+
+/* Publish the actual relay state to the read-only endpoint 6 (only on change). */
+static void relay_state_publish_if_changed(bool on, bool zb_lock_held)
+{
+    if (on == s_relay_state_published) {
+        return;
+    }
+    s_relay_state_published = on;
+    if (!zb_lock_held) {
+        esp_zb_lock_acquire(portMAX_DELAY);
+    }
+    (void)esp_zb_zcl_set_attribute_val(HA_RELAY_STATE_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                                       ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &on, false);
+    if (!zb_lock_held) {
+        esp_zb_lock_release();
+    }
 }
 
 static void factory_reset_hold_blink_cb(void *arg)
@@ -866,8 +885,10 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
         message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF &&
         message->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID &&
         message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL) {
+        /* EP2 is the desired device power; the relay is driven by the state machine. */
         bool on = message->attribute.data.value ? *(bool *)message->attribute.data.value : false;
-        relay_set(on);
+        device_control_set_power(on);
+        relay_state_publish_if_changed(device_control_get_relay_state(), true);
     }
 
     if (message->info.dst_endpoint == HA_RGB_LIGHT_ENDPOINT) {
@@ -977,12 +998,99 @@ static void zb_buttons_handler(switch_func_pair_t *button_func_pair)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Sensor polling: keep the last value in RAM and push to Zigbee only  */
+/* when the value actually changed.                                    */
+/* ------------------------------------------------------------------ */
+#define SENSOR_POLL_INTERVAL_MS      (2000)
+#define DS18B20_REPORT_EPSILON_CENTI (10) /* 0.1 °C */
+
+static void zb_set_temperature_value(uint8_t endpoint, int16_t temp_centi_c)
+{
+    esp_zb_lock_acquire(portMAX_DELAY);
+    (void)esp_zb_zcl_set_attribute_val(endpoint, ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+                                       ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
+                                       &temp_centi_c, false);
+    esp_zb_lock_release();
+}
+
+static void zb_set_humidity_value(uint8_t endpoint, uint16_t humi_centi_pct)
+{
+    esp_zb_lock_acquire(portMAX_DELAY);
+    (void)esp_zb_zcl_set_attribute_val(endpoint, ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+                                       ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
+                                       &humi_centi_pct, false);
+    esp_zb_lock_release();
+}
+
+static void sensor_poll_task(void *arg)
+{
+    (void)arg;
+
+    int16_t last_dht_temp = 0;
+    uint16_t last_dht_humi = 0;
+    int16_t last_ds_temp = 0;
+    bool have_dht_temp = false;
+    bool have_dht_humi = false;
+    bool have_ds_temp = false;
+
+    for (;;) {
+        int16_t temp_centi_c = 0;
+        uint16_t humi_centi_pct = 0;
+
+        if (sensors_read_dht11(&temp_centi_c, &humi_centi_pct) == ESP_OK) {
+            if (!have_dht_temp || temp_centi_c != last_dht_temp) {
+                zb_set_temperature_value(HA_TEMP_HUMI_SENSOR_ENDPOINT, temp_centi_c);
+                last_dht_temp = temp_centi_c;
+                have_dht_temp = true;
+                ESP_LOGI(TAG, "DHT11 temperature -> %.2f C", temp_centi_c / 100.0f);
+            }
+            if (!have_dht_humi || humi_centi_pct != last_dht_humi) {
+                zb_set_humidity_value(HA_TEMP_HUMI_SENSOR_ENDPOINT, humi_centi_pct);
+                last_dht_humi = humi_centi_pct;
+                have_dht_humi = true;
+                ESP_LOGI(TAG, "DHT11 humidity -> %.2f %%", humi_centi_pct / 100.0f);
+            }
+        } else {
+            ESP_LOGW(TAG, "DHT11 read failed");
+        }
+
+        if (sensors_read_ds18b20(&temp_centi_c) == ESP_OK) {
+            /* Feed the state machine on every valid read (not only on report change). */
+            device_control_notify_temperature(temp_centi_c);
+            relay_state_publish_if_changed(device_control_get_relay_state(), false);
+
+            if (!have_ds_temp || abs((int)temp_centi_c - (int)last_ds_temp) >= DS18B20_REPORT_EPSILON_CENTI) {
+                zb_set_temperature_value(HA_DS18B20_SENSOR_ENDPOINT, temp_centi_c);
+                last_ds_temp = temp_centi_c;
+                have_ds_temp = true;
+                ESP_LOGI(TAG, "DS18B20 temperature -> %.2f C", temp_centi_c / 100.0f);
+            }
+        } else {
+            device_control_notify_temperature_lost();
+            relay_state_publish_if_changed(device_control_get_relay_state(), false);
+            ESP_LOGW(TAG, "DS18B20 read failed");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(SENSOR_POLL_INTERVAL_MS));
+    }
+}
+
 static esp_err_t deferred_driver_init(void)
 {
     ESP_RETURN_ON_FALSE(switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair), zb_buttons_handler), ESP_FAIL, TAG,
                         "Failed to initialize switch driver");
     relay_gpio_init();
+    device_control_init(relay_set);
     ESP_RETURN_ON_ERROR(rgb_led_init(), TAG, "Failed to init RGB LED");
+    ESP_RETURN_ON_ERROR(sensors_init(), TAG, "Failed to init sensors");
+
+    static bool s_sensor_task_started;
+    if (!s_sensor_task_started) {
+        BaseType_t created = xTaskCreate(sensor_poll_task, "sensors", 4096, NULL, 4, NULL);
+        ESP_RETURN_ON_FALSE(created == pdPASS, ESP_FAIL, TAG, "Failed to start sensor task");
+        s_sensor_task_started = true;
+    }
 
     if (s_rgb_persist_loaded) {
         esp_zb_lock_acquire(portMAX_DELAY);
@@ -1136,10 +1244,10 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_cluster_list_t *sensor_clusters = esp_zb_temperature_sensor_clusters_create(&temp_cfg);
 
     esp_zb_attribute_list_t *hum_attr_list = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT);
-    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID, &s_fake_humi_centi_pct));
-    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_MIN_VALUE_ID, &s_fake_humi_min_centi_pct));
-    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_MAX_VALUE_ID, &s_fake_humi_max_centi_pct));
-    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_TOLERANCE_ID, &s_fake_humi_tolerance_centi_pct));
+    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID, &s_humi_centi_pct));
+    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_MIN_VALUE_ID, &s_humi_min_centi_pct));
+    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_MAX_VALUE_ID, &s_humi_max_centi_pct));
+    ESP_ERROR_CHECK(esp_zb_humidity_meas_cluster_add_attr(hum_attr_list, ESP_ZB_ZCL_ATTR_REL_HUMIDITY_TOLERANCE_ID, &s_humi_tolerance_centi_pct));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_humidity_meas_cluster(sensor_clusters, hum_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
 
     esp_zb_endpoint_config_t sensor_ep_cfg = {
@@ -1172,6 +1280,53 @@ static void esp_zb_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, rgb_clusters, rgb_ep_cfg));
     esp_zcl_utility_add_ep_basic_manufacturer_info(ep_list, HA_RGB_LIGHT_ENDPOINT, &info);
+
+    /* Endpoint 5: DS18B20 temperature sensor (server) */
+    esp_zb_temperature_sensor_cfg_t ds_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
+    esp_zb_cluster_list_t *ds_clusters = esp_zb_temperature_sensor_clusters_create(&ds_cfg);
+    esp_zb_endpoint_config_t ds_ep_cfg = {
+        .endpoint = HA_DS18B20_SENSOR_ENDPOINT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, ds_clusters, ds_ep_cfg));
+    esp_zcl_utility_add_ep_basic_manufacturer_info(ep_list, HA_DS18B20_SENSOR_ENDPOINT, &info);
+
+    /* Endpoint 6: actual relay state (server, read-only On/Off) */
+    esp_zb_cluster_list_t *relay_state_clusters = esp_zb_zcl_cluster_list_create();
+
+    esp_zb_basic_cluster_cfg_t relay_basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DEFAULT_VALUE,
+    };
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(relay_state_clusters,
+                                                          esp_zb_basic_cluster_create(&relay_basic_cfg),
+                                                          ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    esp_zb_identify_cluster_cfg_t relay_identify_cfg = {
+        .identify_time = ESP_ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE,
+    };
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(relay_state_clusters,
+                                                             esp_zb_identify_cluster_create(&relay_identify_cfg),
+                                                             ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    esp_zb_attribute_list_t *relay_on_off_attrs = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_ON_OFF);
+    ESP_ERROR_CHECK(esp_zb_cluster_add_attr(relay_on_off_attrs, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                                            ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, ESP_ZB_ZCL_ATTR_TYPE_BOOL,
+                                            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+                                            &s_relay_state_published));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_on_off_cluster(relay_state_clusters, relay_on_off_attrs,
+                                                           ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    esp_zb_endpoint_config_t relay_state_ep_cfg = {
+        .endpoint = HA_RELAY_STATE_ENDPOINT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_ON_OFF_SWITCH_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(ep_list, relay_state_clusters, relay_state_ep_cfg));
+    esp_zcl_utility_add_ep_basic_manufacturer_info(ep_list, HA_RELAY_STATE_ENDPOINT, &info);
 
     esp_zb_device_register(ep_list);
     esp_zb_core_action_handler_register(zb_action_handler);
