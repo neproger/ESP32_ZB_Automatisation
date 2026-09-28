@@ -6,10 +6,10 @@
 ## 0. Ядро в одной фразе
 
 ```text
-Entity Store  — хранит данные
-Journal       — фиксирует, что произошло (история/диагностика). Не управляет системой.
-Dispatcher    — синхронно раздаёт события подписчикам Journal
-Command       — transient intent: доставляется напрямую сервису, Journal пишет факт отправки
+Entity Store  — хранит последнее известное состояние
+Journal       — системный поток фактов: хранит короткую историю и уведомляет подписчиков
+Dispatcher    — синхронно раздаёт факты подписчикам
+Command       — transient intent: доставляется напрямую сервису, Journal пишет факт COMMAND_SENT
 micro_db      — только механика хранения
 ```
 
@@ -29,7 +29,37 @@ micro_db      — только механика хранения
 Если у конкретного типа есть обязательный invariant — допускается validator.
 Никаких pre/post hooks, handler chains и скрытого special behavior.
 
-Журнал фиксирует систему, а не управляет ею.
+### 1.1. Главный принцип (Zigbee-модель)
+
+```text
+Команда никогда не является предположением о будущем состоянии.
+Состояние меняется только по факту, пришедшему снизу.
+```
+
+Domain не ставит timeout на команду, не откатывает optimistic state и не пытается
+понять, дошла ли она. Состояние остаётся таким, каким его **последний раз сообщил**
+устройство. Если report не пришёл — значит не пришёл.
+
+### 1.2. Store vs Journal
+
+```text
+Entity Store = последнее известное состояние
+Journal      = поток фактов, которые произошли
+```
+
+Store схлопывает историю до последнего состояния. Journal сохраняет последовательность.
+Поэтому **повторный факт с тем же значением — отдельное событие Journal**.
+
+Пример: датчик прислал `25`, потом снова `25`:
+
+```text
+STATE_REPORTED / temperature / 25
+STATE_REPORTED / temperature / 25
+```
+
+Store при этом всё время хранит `temperature = 25`. Домен не спрашивает «старое == новое?»
+и не решает, будить ли automation. Если конкретному consumer'у нужна дедупликация
+повторяющихся событий — он фильтрует их сам.
 
 ## 2. Слои
 
@@ -41,7 +71,7 @@ micro_db      — только механика хранения
                    v                      v
         ┌──────────────── Domain ─────────────────┐
         │  Entity Store  (generic CRUD)            │
-        │  Journal       (thin change log)         │
+        │  Journal       (fact stream)             │
         │  Dispatcher    (notify subscribers)      │
         └──────────────────────────────────────────┘
                             │
@@ -58,8 +88,8 @@ micro_db      — только механика хранения
 
 ```text
 Domain
-├── Entity Store   — постоянное состояние системы
-├── Journal        — что произошло (трасса + канал уведомлений)
+├── Entity Store   — последнее известное состояние
+├── Journal        — поток фактов (история + канал уведомлений)
 └── Dispatcher     — синхронная доставка подписчикам
 ```
 
@@ -72,6 +102,8 @@ Domain **не** знает про:
 - процедуры создания/удаления устройств;
 - связи (relationships) между сущностями;
 - роли, capabilities, permission-модели.
+
+Domain фиксирует систему, а не управляет ею.
 
 ## 4. Entity Store
 
@@ -104,58 +136,27 @@ settings
 entity_type → { micro_db table/schema, optional validate }
 ```
 
-Schema типа также задаёт **семантику сравнения**:
+Не framework. Никаких pre/post hooks, стадий коммита и фильтрации по изменению.
 
-```text
-record_equals(base)   — изменилась ли запись физически (включая ts)
-change_equals(semantic)— изменилось ли смысловое значение
-```
+### 4.2. Запись
 
-Не framework. Никаких pre/post hooks.
-
-### 4.2. Изменение: storage update vs semantic change
-
-Операция записи различает два факта:
-
-```text
-updated = true   — запись изменилась физически (например, новый ts)
-changed = true   — изменилось смысловое значение
-```
-
-Пример: датчик снова прислал `23.5`, но с новым timestamp.
-
-```text
-updated = true
-changed = false
-    ↓
-новый ts сохраняется в Entity Store
-но Journal НЕ эмитит ENTITY_CHANGED
-(нет Automation wakeup, WS delta, UI redraw)
-```
-
-Domain остаётся тупым: сравнение задаётся схемой entity, а не Domain.
-Journal эмитит событие **только** при `changed = true`.
-
-### 4.3. Изменение через upsert
-
-Пользователь изменил automation — это **не** command workflow и **не** staging:
+Любой `upsert/remove` — это факт. Пользователь изменил automation:
 
 ```text
 domain_upsert(AUTOMATION, "auto-1", record)
 ```
 
-Automation Engine подписан на `ENTITY_CHANGED / AUTOMATION`, делает `domain_get()` и
-обновляет своё runtime-состояние. То же для settings, groups, device state.
+Domain пишет запись и фиксирует факт в Journal. Automation Engine подписан на факты
+по `AUTOMATION`, делает `domain_get()` и обновляет своё runtime-состояние.
 
 Большие payload (включая automation на несколько КБ) живут **только** в Entity Store
 и никогда не копируются в Journal.
 
 ## 5. Journal
 
-Journal — это **одновременно** канал уведомлений об изменениях и системный журнал
-для истории/диагностики (в т.ч. дебага автоматик).
+Journal — **системный поток фактов**: сохраняет короткую историю и уведомляет подписчиков.
 
-Он **не является** транспортом доставки. Команды через него не ходят (см. §7).
+В нём только то, что уже произошло. Управления в нём нет.
 
 Тонкая запись:
 
@@ -163,12 +164,22 @@ Journal — это **одновременно** канал уведомлени�
 { seq, ts, kind, entity, key, op, source }
 ```
 
+Типы фактов:
+
+```text
+STATE_REPORTED  — entity получила состояние/запись (пришёл факт)
+ENTITY_REMOVED  — entity удалена
+COMMAND_SENT    — Domain передал команду исполнителю
+```
+
+(Позже могут добавиться системные события, automation trace и т.п.)
+
 - Payload в журнал **не попадает** — он живёт в Entity Store.
 - Подписчику нужны данные → `domain_get(entity, key)`.
-- `kind=ENTITY_CHANGED` — только при `changed = true` (см. §4.2).
-- `kind=COMMAND_SENT` — факт успешной передачи команды исполнителю (см. §7).
-- Journal — RAM-блоки, capacity compile-time/configurable (старт, например, с 50 событий).
-  Блок заполнен → заводим новый, старый пока выбрасываем.
+- Journal фиксирует **входящий факт независимо** от того, совпадает ли значение
+  с предыдущим. Равенство предыдущему — не повод молчать.
+- Journal — RAM-блоки, capacity compile-time/configurable (старт ~50). Блок заполнен →
+  заводим новый, старый пока выбрасываем.
 - В будущем старый блок можно асинхронно выгружать во flash/SD как историю, не меняя
   hot-path. **Сейчас эту механику не проектируем.**
 - Источник истины — **Entity Store**, не журнал. Это не Event Sourcing.
@@ -177,16 +188,16 @@ Journal — это **одновременно** канал уведомлени�
 
 Порядок — простой и строгий, last-writer-wins. Конфликт-резолюшн и merge не нужны.
 
-Один инвариант: **изменение Entity Store и запись в Journal имеют один сериализованный
-порядок**, и следующий writer не может поменять ту же entity раньше, чем синхронные
-подписчики обработали предыдущее событие.
+Один инвариант: **изменение Entity Store и запись факта в Journal имеют один
+сериализованный порядок**, и следующий writer не может поменять ту же entity раньше,
+чем синхронные подписчики обработали предыдущий факт.
 
 Внешний Domain-lock покрывает **только mutations/publication**:
 
 ```text
 acquire Domain-lock
     mutate Entity Store        (внутри — короткий micro_db lock)
-    if changed: journal append
+    journal append (факт)
     sync dispatch              (НЕ под micro_db lock)
 release Domain-lock
 ```
@@ -201,18 +212,43 @@ domain_get() / domain_list()  НЕ берут Domain-lock.
 Это обязательно, иначе subscriber, вызывающий `domain_get()` внутри callback,
 сделает deadlock сам себе.
 
-- subscriber callbacks **никогда** не выполняются под `micro_db` lock;
-- очередь и отдельный dispatch task не нужны;
-- dispatch двух операций не перемешиваются (Domain-lock держится до конца dispatch).
+### 6.1. Вложенная публикация (reentrancy)
+
+Основной путь автоматики:
+
+```text
+STATE_REPORTED
+  → Automation callback
+  → domain_post(OFF)
+  → COMMAND_SENT
+```
+
+`domain_post()` из subscriber callback — **допустимая вложенная публикация** в рамках
+уже активной Domain-операции. Повторно Domain-lock не берётся.
+
+Порядок:
+
+```text
+#100 STATE_REPORTED
+    subscriber Automation
+        → command delivered
+        → #101 COMMAND_SENT
+             → subscribers COMMAND_SENT
+    продолжение subscribers #100
+```
+
+- вложенный dispatch происходит синхронно внутри внешнего;
+- защита от патологической рекурсии — простой depth limit (без новой архитектуры);
+- очередь и отдельный dispatch task не нужны.
 
 ## 7. Команды
 
 Команда — **transient intent**, а не состояние. Она **не идёт через Journal как канал
-доставки** — у неё два независимых аспекта:
+доставки**. У неё два независимых аспекта:
 
 ```text
 delivery path  → напрямую в service/executor
-audit path     → тонкая запись в Journal
+audit path     → тонкая запись COMMAND_SENT в Journal
 ```
 
 ```text
@@ -222,27 +258,56 @@ domain_post(command)
       ↓
 Domain маршрутизирует команду соответствующему service/executor
       ↓
-после успешной передачи → thin record в Journal
+после успешной передачи → COMMAND_SENT в Journal
       ↓
-Journal уведомляет своих subscribers о факте отправки
+Journal уведомляет своих subscribers
 ```
 
-- `kind=COMMAND_SENT`: `target`, `op`, `source`, `ts/seq`.
-- Args команды **не хранятся** в Journal и не имеют lifetime-проблемы: их получает
-  исполнитель в момент dispatch.
-- Если передача не состоялась (нет executor / ошибка) — COMMAND_SENT не пишем.
-  При реальной необходимости позже можно ввести отдельный `COMMAND_REJECTED`.
+`COMMAND_SENT` означает **только одно**: Domain передал команду сервису для отправки.
+В нём нет смысла «устройство получило», «применило», «подтвердило». Domain этого не ждёт.
+
+- Args команды не хранятся в Journal: их получает исполнитель в момент dispatch.
+- Если executor не найден или сразу отклонил команду — `domain_post()` возвращает
+  обычную ошибку (`ESP_ERR_NOT_FOUND`, `ESP_ERR_INVALID_ARG`, ...), а `COMMAND_SENT`
+  не пишется. Отдельных diagnostic-фактов отказа пока не вводим.
 - Отдельного persistent command journal/queue/store нет.
-- Большие payload команд не проектируем; вероятно, «тяжёлые изменения» — это
-  обычные `upsert` сущностей.
+
+### 7.1. Command Registry
+
+Чтобы «Domain маршрутизирует команду» не было магией, есть маленький механизм:
+
+```text
+domain_register_command_handler(command_type, executor_cb)
+```
+
+(или эквивалентный статический compile-time registry.)
+
+Domain знает только discriminator `command_type` и callback. Ничего предметного:
+
+```text
+COMMAND_ZIGBEE_X → callback X
+COMMAND_SYSTEM_Y → callback Y
+```
+
+Это не слой, а регистрация.
+
+### 7.2. Никакой корреляции
 
 Корреляцию `command → fact` **не отслеживаем**. Это не HTTP RPC.
-UI отправил команду → Journal зафиксировал отправку → позже устройство реально
-изменилось → Entity Store обновился → Journal зафиксировал **факт изменения**.
+
+```text
+UI отправил команду
+   → Journal: COMMAND_SENT
+
+позже устройство реально изменилось
+   → Domain: state = ON
+   → Journal: STATE_REPORTED
+```
+
 UI не сопоставляет эти события, а просто отображает текущее состояние.
 Pending — **локальная UI-механика**; Domain о нём не знает.
 
-### Граница: COMMAND vs request/response
+### 7.3. Граница: COMMAND vs request/response
 
 ```text
 COMMAND = fire-and-forget intent
@@ -251,7 +316,6 @@ COMMAND = fire-and-forget intent
 Операции, которым вызывающему реально нужен ответ (`read_attr`, network scan,
 `permit_join`, binding table и т.п.), — **другой класс взаимодействия**.
 Мы его сейчас **не решаем** и не смешиваем с COMMAND.
-Позже для него может появиться отдельная минимальная модель.
 
 ## 8. Subscribers
 
@@ -259,7 +323,8 @@ COMMAND = fire-and-forget intent
 
 - слушает Journal (фильтр по `kind/entity/source`);
 - читает нужную entity через `domain_get()`;
-- при необходимости инициировать действие — вызывает `domain_post(command)`.
+- при необходимости инициировать действие — вызывает `domain_post(command)`
+  (допустима вложенная публикация, см. §6.1).
 
 Роли, capability system и permission-модели сейчас не вводим.
 
@@ -278,12 +343,13 @@ Domain **не знает** отношений. Связи выражаем да�
 
 ### Удаление (REMOVE)
 
-Для `UPSERT` subscriber делает `event → domain_get(key)`.
-Для `REMOVE` читать нечего — значит Journal record для удаления **обязан содержать
-полный canonical key**, достаточный для реакции без payload. Для составных ключей
-(`device + endpoint + cluster/...`) это явный invariant.
+Для `STATE_REPORTED` subscriber делает `event → domain_get(key)`.
+Для `ENTITY_REMOVED` читать нечего — значит Journal record для удаления **обязан
+содержать полный canonical key**, достаточный для реакции без payload. Для составных
+ключей (`device + endpoint + cluster/...`) это явный invariant.
 
-Никаких relationship-таблиц, которыми управляет Domain.
+Каскадное удаление остаётся **последовательным**: серия `ENTITY_REMOVED` — нормальна,
+пока не появится конкретный invariant, требующий атомарности.
 
 ## 10. UI
 
@@ -291,17 +357,18 @@ Domain **не знает** отношений. Связи выражаем да�
 
 Читает Entity Store напрямую через Domain, своей модели не держит.
 Пользуется `handle/check`, чтобы не читать payload без нужды.
-Подписан на `ENTITY_CHANGED`, перечитывает только изменённое.
+Подписан на факты, перечитывает только нужное.
 
 ### Web
 
-Физически удалён, держит реплику:
+Физически удалён, держит семантическую реплику:
 
 ```text
-ENTITY_CHANGED → domain_get → WS → Browser Store → React
+STATE_REPORTED → domain_get → WS → Browser Store → React
 ```
 
-Снапшот при подключении + дельты дальше.
+Снапшот при подключении + дельты дальше. Каждый факт реплицируется, поэтому реплика
+не расходится со store (в т.ч. по timestamp).
 
 ### Pending
 
@@ -317,8 +384,8 @@ check(generation/version)
 read(copy-out)
 ```
 
-`generation` существует именно для slot reuse — вопрос реализации `check()`,
-не архитектурный. Zero-copy borrow, новый flash-layout — **позже, только по замерам**.
+`generation` существует для slot reuse — вопрос реализации `check()`, не архитектурный.
+Zero-copy borrow, новый flash-layout — **позже, только по замерам**.
 Детали — в `MICRO_DB_V2_DRAFT.md`.
 
 ## 12. gw_proto
@@ -340,9 +407,10 @@ transport framing          — UART SOF/CRC, WS frame
 
 В core-архитектуре специально **не проектируем**.
 
-Фиксируем только: Zigbee будет одним из сервисов/подписчиков Domain, и команды
-приходят к нему **напрямую** (см. §7), а не через Journal.
-Детали его state machine, адресации, cluster/endpoint-модели и P4↔C6 — отдельная тема.
+Фиксируем только: Zigbee — один из сервисов/подписчиков Domain, команды приходят
+к нему **напрямую** (см. §7), а не через Journal. Дальше живёт обычная Zigbee-модель:
+report → Zigbee service → Domain: state → Journal: STATE_REPORTED → subscribers.
+Детали state machine, адресации, cluster/endpoint-модели и P4↔C6 — отдельная тема.
 
 ## 14. Инварианты
 
@@ -352,16 +420,17 @@ transport framing          — UART SOF/CRC, WS frame
 4. Все entity равны; `entity_type` — только routing, максимум validator.
 5. Journal тонкий; payload только в Entity Store.
 6. Store change и Journal append — один сериализованный порядок; last-writer-wins.
-7. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
-8. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
-9. Подписчики читают через `domain_get()`, не мутируют store из колбэка.
-10. Journal эмитит `ENTITY_CHANGED` только при `changed = true`.
-11. Command — fire-and-forget intent; доставляется напрямую сервису; Journal пишет
-    только `COMMAND_SENT`; корреляции нет; pending — локально в UI.
-12. REMOVE record содержит полный canonical key.
-13. Связи — данные/ключи, а не Domain-relations.
-14. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
-15. Нет публичной функции без реализации.
+7. Journal фиксирует входящий факт независимо от равенства предыдущему значению.
+8. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
+9. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
+10. `domain_post()` из subscriber callback — вложенная публикация без повторного Domain-lock.
+11. Command — fire-and-forget; доставляется напрямую сервису; Journal пишет только
+    `COMMAND_SENT`; корреляции нет; pending — локально в UI.
+12. Состояние меняется только по факту снизу; optimistic state и timeout отсутствуют.
+13. REMOVE record содержит полный canonical key.
+14. Связи — данные/ключи, а не Domain-relations.
+15. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
+16. Нет публичной функции без реализации.
 
 ## 15. Миграция из v1
 
@@ -381,23 +450,20 @@ ui_control_ack     → удаляем; pending уходит в UI
 
 Закрываем **явным решением**, а не новым слоем автоматически.
 
-1. **Семантика semantic change.** Для каких entity types задаём `change_equals`
-   и как (сенсоры vs актуаторы). Нужно решить до реализации — сенсоры быстро покажут
-   проблему ts-only.
-2. **Representation automation trace.** v1 публикует `GW_PROTO_TRACE_*`
-   (fired / action / error / action_index). Как это выражается в тонком Journal:
-   дополнительный `kind` или отдельный канал.
-3. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
-4. **Journal capacity.** Значение по умолчанию и retention (сейчас configurable,
-   старт ~50). Persistence — позже.
-5. **Request/response.** Отдельная минимальная модель для операций, которым нужен
+1. **Automation trace.** v1 публикует `GW_PROTO_TRACE_*` (fired / action / error /
+   action_index). Как это выражается в тонком Journal: дополнительный `kind` или
+   отдельный канал.
+2. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
+3. **Journal capacity/retention.** Значение по умолчанию (старт ~50) и future
+   persistence. Учесть, что chatty-сенсоры дают много фактов; при необходимости
+   consumer фильтрует сам.
+4. **Request/response.** Отдельная минимальная модель для операций, которым нужен
    ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
-6. **COMMAND_REJECTED.** Нужен ли отдельный факт отказа при неудачной передаче команды,
-   или достаточно просто не писать COMMAND_SENT.
 
-Уже принято (не открытые):
-- порядок и неперемешивание dispatch — закрыто §6 (Domain-lock);
-- каскадное удаление — последовательность событий нормальна, атомарность не вводим,
-  пока не появится конкретный invariant;
+Принято (не открытые):
+- reentrancy `domain_post()` — вложенная публикация + depth limit (§6.1);
+- `COMMAND_REJECTED` не вводим — ошибку возвращает сам `domain_post()`;
+- `updated/changed`, `record_equals/change_equals`, semantic filtering — убраны;
+- каскадное удаление — последовательное, атомарность не вводим без concrete invariant;
 - handle/generation для slot reuse — вопрос реализации `check()`;
-- lifetime args команды — закрыто (аргументы у исполнителя в момент dispatch).
+- lifetime args команды — аргументы у исполнителя в момент dispatch.
