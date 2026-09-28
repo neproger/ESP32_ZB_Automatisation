@@ -100,25 +100,31 @@ Store всё время хранит `temperature = 25`. Если конкрет
 
 ## 2. Слои
 
+Сервисы симметричны: каждый знает свою внешнюю среду, читает Domain, слушает Journal,
+отправляет действия обратно в Domain и не знает деталей других сервисов.
+
 ```text
-                 clients                              services
-         Web (WS) | Display            Zigbee | Automation | Settings | System
-                 \                          /
-                  \                        /
-                   v                      v
+   Zigbee world     Browser (WS)      Automation
+        │                │                │
+   Zigbee service    Web service     Automation service
+        │                │                │
+        └────────────────┼────────────────┘
+                         v
         ┌──────────────── Domain ─────────────────┐
         │  Entity Store  (generic CRUD)            │
         │  Journal       (fact stream)             │
         │  Dispatcher    (notify subscribers)      │
         └──────────────────────────────────────────┘
-                            │
-                         micro_db            (приватна для Domain)
+                         │
+                      micro_db            (приватна для Domain)
+
+        Display ── direct read ──► Entity Store
 ```
 
 Правила зависимостей:
 
 - `micro_db` линкует **только** Domain;
-- сервисы и клиенты зависят **только** от Domain;
+- сервисы (Zigbee / Automation / Web / ...) и Display зависят **только** от Domain;
 - никто не зависит от конкретного сервиса.
 
 ## 3. Domain
@@ -456,26 +462,76 @@ Domain **не знает** отношений. Связи выражаем да�
 Каскадное удаление остаётся **последовательным**: серия `ENTITY_REMOVED` — нормальна,
 пока не появится конкретный invariant, требующий атомарности.
 
-## 10. UI
+## 10. Сервисы и UI
 
-### Display
+Каждый сервис:
+
+- знает свою внешнюю среду;
+- читает Domain и слушает Journal;
+- отправляет действия обратно в Domain;
+- не знает деталей других сервисов.
+
+### 10.1. Web Service (backend-for-frontend)
+
+Web Service — адаптер для браузера, симметричный Zigbee-сервису.
+
+```text
+Zigbee world → Zigbee service → Domain → Journal → Web service → Browser
+Browser      → Web service    → Domain → command / entity mutation
+```
+
+Он **не** хранит source of truth. Он:
+
+- слушает Journal и понимает, какая entity изменилась;
+- при необходимости делает `domain_get(entity, key)`;
+- строит из canonical records удобный браузеру DTO (projection);
+- пушит delta через WebSocket;
+- при подключении клиента собирает snapshot через `domain_list/get`;
+- принимает команды/CRUD от браузера и переводит их в Domain-вызовы;
+- решает фронтенд-особенности: batching, throttling, формат дат, capability projection,
+  совместимость версий.
+
+Пример: Domain хранит `device / endpoint / cluster / state`, а фронту нужен собранный view:
+
+```json
+{
+  "id": "lamp-1",
+  "name": "Kitchen",
+  "capabilities": { "onoff": true, "level": true },
+  "state": { "on": true, "level": 80 }
+}
+```
+
+Domain про такой view не знает — его собирает Web Service из нескольких entity.
+
+Snapshot и delta — задача Web layer:
+
+```text
+WS client connected
+   → domain_list(DEVICE / ENDPOINT / STATE / GROUP / ...)
+   → serialize DTO
+   → SNAPSHOT_BEGIN / records... / SNAPSHOT_END
+
+ENTITY_UPSERTED → domain_get → Web DTO → STATE_DELTA → Browser
+```
+
+Разделение моделей:
+
+```text
+Domain model → Web projection (DTO) → binary WS
+```
+
+а не `Domain struct == WebSocket packet`. Бинарность и эффективность сохраняем,
+но проекция — отдельный слой. Все web-специфичные костыли остаются здесь и не лезут
+в Domain.
+
+### 10.2. Display
 
 Читает Entity Store напрямую через Domain, своей модели не держит.
 Пользуется `handle/check`, чтобы не читать payload без нужды.
 Подписан на факты, перечитывает только нужное.
 
-### Web
-
-Физически удалён, держит семантическую реплику:
-
-```text
-ENTITY_UPSERTED → domain_get → WS → Browser Store → React
-```
-
-Снапшот при подключении + дельты дальше. Каждый факт реплицируется, поэтому реплика
-не расходится со store (в т.ч. по timestamp).
-
-### Pending
+### 10.3. Pending
 
 Локальная механика UI. Domain в ней не участвует.
 
@@ -509,6 +565,9 @@ transport framing          — UART SOF/CRC, WS frame
 - Интерфейс (envelope) — одинаковый, payload-структуры — строго типизированные.
 - Сокращаем количество специальных типов и `MSG_*` там, где хватает универсального
   интерфейса. `(обсуждается)` — точный список.
+- Для браузера Web Service строит собственную проекцию (DTO) поверх canonical records.
+  Envelope остаётся универсальным внутри; WS-протокол — забота Web Service, Domain ABI
+  не равен WebSocket-пакету один-в-один.
 
 ## 13. Zigbee
 
@@ -542,6 +601,8 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → sub
 15. Связи — данные/ключи, а не Domain-relations.
 16. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
 17. Нет публичной функции без реализации.
+18. Web Service — адаптер для браузера (BFF), не источник истины; snapshot / delta /
+    projection — его забота, а не Domain. Domain ABI не равен WS-пакету.
 
 ## 15. Миграция из v1
 
@@ -570,6 +631,9 @@ ui_control_ack     → удаляем; pending уходит в UI
    consumer фильтрует сам.
 4. **Request/response.** Отдельная минимальная модель для операций, которым нужен
    ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
+5. **Snapshot consistency.** Web Service собирает snapshot несколькими `domain_list`.
+   Параллельные writers могут дать torn snapshot. Варианты: принять eventual
+   consistency (дельты догонят) или version-stamped snapshot.
 
 Принято (не открытые):
 - Journal может хранить компактный `domain_value_t`; большие записи — нет;
@@ -581,4 +645,6 @@ ui_control_ack     → удаляем; pending уходит в UI
 - `updated/changed`, `record_equals/change_equals`, semantic filtering — убраны;
 - каскадное удаление — последовательное, атомарность не вводим без concrete invariant;
 - handle/generation для slot reuse — вопрос реализации `check()`;
-- lifetime args команды — аргументы у исполнителя в момент dispatch.
+- lifetime args команды — аргументы у исполнителя в момент dispatch;
+- Web Service — BFF для браузера, симметричный Zigbee-сервису; snapshot/delta/projection
+  и web-костыли живут у него.
