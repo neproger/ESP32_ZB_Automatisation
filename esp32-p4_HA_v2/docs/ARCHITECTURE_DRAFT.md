@@ -7,9 +7,9 @@
 
 ```text
 Entity Store  — хранит данные
-Journal       — фиксирует, что произошло, и служит каналом уведомлений
-Dispatcher    — синхронно раздаёт события подписчикам
-Command       — transient intent: Domain передаёт исполнителю и логирует факт отправки
+Journal       — фиксирует, что произошло (история/диагностика). Не управляет системой.
+Dispatcher    — синхронно раздаёт события подписчикам Journal
+Command       — transient intent: доставляется напрямую сервису, Journal пишет факт отправки
 micro_db      — только механика хранения
 ```
 
@@ -18,9 +18,9 @@ micro_db      — только механика хранения
 
 ## 1. Принцип
 
-Ядро максимально тупое и универсальное.
-
+```text
 > Если слой нельзя объяснить несколькими простыми правилами — слой слишком большой.
+```
 
 `Domain` не знает предметной области. Для него все entity **равны**:
 `device`, `automation`, `settings`, `group` — одно и то же. Различается только payload.
@@ -28,6 +28,8 @@ micro_db      — только механика хранения
 `entity_type` нужен только чтобы через простой registry выбрать нужную таблицу/schema.
 Если у конкретного типа есть обязательный invariant — допускается validator.
 Никаких pre/post hooks, handler chains и скрытого special behavior.
+
+Журнал фиксирует систему, а не управляет ею.
 
 ## 2. Слои
 
@@ -57,7 +59,7 @@ micro_db      — только механика хранения
 ```text
 Domain
 ├── Entity Store   — постоянное состояние системы
-├── Journal        — что изменилось (трасса + канал уведомлений)
+├── Journal        — что произошло (трасса + канал уведомлений)
 └── Dispatcher     — синхронная доставка подписчикам
 ```
 
@@ -102,14 +104,41 @@ settings
 entity_type → { micro_db table/schema, optional validate }
 ```
 
-Не framework.
+Schema типа также задаёт **семантику сравнения**:
 
-### 4.2. Изменение
+```text
+record_equals(base)   — изменилась ли запись физически (включая ts)
+change_equals(semantic)— изменилось ли смысловое значение
+```
 
-`upsert/remove` возвращают `changed / inserted / removed`.
-Если ничего не изменилось — событие **не** эмитим.
+Не framework. Никаких pre/post hooks.
 
-Пример: пользователь изменил automation. Это **не** command workflow и **не** staging:
+### 4.2. Изменение: storage update vs semantic change
+
+Операция записи различает два факта:
+
+```text
+updated = true   — запись изменилась физически (например, новый ts)
+changed = true   — изменилось смысловое значение
+```
+
+Пример: датчик снова прислал `23.5`, но с новым timestamp.
+
+```text
+updated = true
+changed = false
+    ↓
+новый ts сохраняется в Entity Store
+но Journal НЕ эмитит ENTITY_CHANGED
+(нет Automation wakeup, WS delta, UI redraw)
+```
+
+Domain остаётся тупым: сравнение задаётся схемой entity, а не Domain.
+Journal эмитит событие **только** при `changed = true`.
+
+### 4.3. Изменение через upsert
+
+Пользователь изменил automation — это **не** command workflow и **не** staging:
 
 ```text
 domain_upsert(AUTOMATION, "auto-1", record)
@@ -123,18 +152,23 @@ Automation Engine подписан на `ENTITY_CHANGED / AUTOMATION`, дела�
 
 ## 5. Journal
 
-Тонкий. Только метаинформация:
+Journal — это **одновременно** канал уведомлений об изменениях и системный журнал
+для истории/диагностики (в т.ч. дебага автоматик).
+
+Он **не является** транспортом доставки. Команды через него не ходят (см. §7).
+
+Тонкая запись:
 
 ```text
 { seq, ts, kind, entity, key, op, source }
 ```
 
-- Journal — это **одновременно** канал событий и системный журнал для диагностики
-  (в т.ч. дебага автоматик).
 - Payload в журнал **не попадает** — он живёт в Entity Store.
 - Подписчику нужны данные → `domain_get(entity, key)`.
-- Journal — небольшие RAM-блоки (например, ~50 событий). Блок заполнен → заводим новый,
-  старый пока выбрасываем.
+- `kind=ENTITY_CHANGED` — только при `changed = true` (см. §4.2).
+- `kind=COMMAND_SENT` — факт успешной передачи команды исполнителю (см. §7).
+- Journal — RAM-блоки, capacity compile-time/configurable (старт, например, с 50 событий).
+  Блок заполнен → заводим новый, старый пока выбрасываем.
 - В будущем старый блок можно асинхронно выгружать во flash/SD как историю, не меняя
   hot-path. **Сейчас эту механику не проектируем.**
 - Источник истины — **Entity Store**, не журнал. Это не Event Sourcing.
@@ -145,50 +179,79 @@ Automation Engine подписан на `ENTITY_CHANGED / AUTOMATION`, дела�
 
 Один инвариант: **изменение Entity Store и запись в Journal имеют один сериализованный
 порядок**, и следующий writer не может поменять ту же entity раньше, чем синхронные
-подписчики обработали предыдущее событие (если они читают payload через `domain_get()`).
+подписчики обработали предыдущее событие.
 
-Решение — простой внешний Domain-lock на всю доменную операцию:
+Внешний Domain-lock покрывает **только mutations/publication**:
 
 ```text
 acquire Domain-lock
-    mutate Entity Store      (внутри — короткий micro_db lock)
+    mutate Entity Store        (внутри — короткий micro_db lock)
     if changed: journal append
-    sync dispatch            (НЕ под micro_db lock)
+    sync dispatch              (НЕ под micro_db lock)
 release Domain-lock
 ```
 
+Read API во время dispatch:
+
+```text
+domain_get() / domain_list()  НЕ берут Domain-lock.
+Они берут только внутреннюю защиту соответствующей micro_db table.
+```
+
+Это обязательно, иначе subscriber, вызывающий `domain_get()` внутри callback,
+сделает deadlock сам себе.
+
 - subscriber callbacks **никогда** не выполняются под `micro_db` lock;
-- очередь и отдельный dispatch task для этого не нужны;
-- если в будущем появится медленный подписчик, вопрос решается отдельно `(обсуждается)`.
+- очередь и отдельный dispatch task не нужны;
+- dispatch двух операций не перемешиваются (Domain-lock держится до конца dispatch).
 
 ## 7. Команды
 
-Команда — **transient intent**, а не состояние.
+Команда — **transient intent**, а не состояние. Она **не идёт через Journal как канал
+доставки** — у неё два независимых аспекта:
 
 ```text
-domain_post(command)
-    ↓
-Domain синхронно передаёт команду заинтересованному subscriber/executor
-    ↓
-в Event Journal пишется только факт отправки:
-target, operation, source, timestamp/seq, короткая мета
+delivery path  → напрямую в service/executor
+audit path     → тонкая запись в Journal
 ```
 
-- Команда **не обязана** храниться как полноценная запись Entity Store.
-- Небольшие фиксированные `args` могут жить **только** во время synchronous dispatch
-  и вообще не попадать в исторический Journal.
-  (Если исполнитель асинхронен, он сам копирует args в свою очередь `(обсуждается)`.)
-- Отдельного persistent command journal/queue/store на старте **нет**.
-- Большие payload команд сейчас не проектируем; вероятно, «тяжёлые изменения» — это
-  вообще не команды, а обычные `upsert` сущностей.
-- Если позже выяснится, что команды надо буферизовать/повторять/гарантированно
-  доставлять — это отдельная доказанная потребность.
+```text
+UI / Automation
+      ↓
+domain_post(command)
+      ↓
+Domain маршрутизирует команду соответствующему service/executor
+      ↓
+после успешной передачи → thin record в Journal
+      ↓
+Journal уведомляет своих subscribers о факте отправки
+```
+
+- `kind=COMMAND_SENT`: `target`, `op`, `source`, `ts/seq`.
+- Args команды **не хранятся** в Journal и не имеют lifetime-проблемы: их получает
+  исполнитель в момент dispatch.
+- Если передача не состоялась (нет executor / ошибка) — COMMAND_SENT не пишем.
+  При реальной необходимости позже можно ввести отдельный `COMMAND_REJECTED`.
+- Отдельного persistent command journal/queue/store нет.
+- Большие payload команд не проектируем; вероятно, «тяжёлые изменения» — это
+  обычные `upsert` сущностей.
 
 Корреляцию `command → fact` **не отслеживаем**. Это не HTTP RPC.
 UI отправил команду → Journal зафиксировал отправку → позже устройство реально
-изменилось → Entity Store обновился → Journal зафиксировал уже **факт изменения**.
+изменилось → Entity Store обновился → Journal зафиксировал **факт изменения**.
 UI не сопоставляет эти события, а просто отображает текущее состояние.
-Pending, если нужен конкретному контролу, — **локальная UI-механика**. Domain о нём не знает.
+Pending — **локальная UI-механика**; Domain о нём не знает.
+
+### Граница: COMMAND vs request/response
+
+```text
+COMMAND = fire-and-forget intent
+```
+
+Операции, которым вызывающему реально нужен ответ (`read_attr`, network scan,
+`permit_join`, binding table и т.п.), — **другой класс взаимодействия**.
+Мы его сейчас **не решаем** и не смешиваем с COMMAND.
+Позже для него может появиться отдельная минимальная модель.
 
 ## 8. Subscribers
 
@@ -196,9 +259,9 @@ Pending, если нужен конкретному контролу, — **ло
 
 - слушает Journal (фильтр по `kind/entity/source`);
 - читает нужную entity через `domain_get()`;
-- при необходимости инициировать действие — отправляет `COMMAND`.
+- при необходимости инициировать действие — вызывает `domain_post(command)`.
 
-Роли, capability system и permission-модели сейчас не вводим — лишнее.
+Роли, capability system и permission-модели сейчас не вводим.
 
 ## 9. Связи сущностей
 
@@ -212,6 +275,13 @@ Domain **не знает** отношений. Связи выражаем да�
 
 - «найти endpoint'ы устройства» → `list(ENDPOINT, prefix = device_uid)`;
 - «найти родителя кластера» → endpoint, в записи которого кластер лежит.
+
+### Удаление (REMOVE)
+
+Для `UPSERT` subscriber делает `event → domain_get(key)`.
+Для `REMOVE` читать нечего — значит Journal record для удаления **обязан содержать
+полный canonical key**, достаточный для реакции без payload. Для составных ключей
+(`device + endpoint + cluster/...`) это явный invariant.
 
 Никаких relationship-таблиц, которыми управляет Domain.
 
@@ -247,8 +317,8 @@ check(generation/version)
 read(copy-out)
 ```
 
-Этого достаточно, чтобы Display перестал постоянно читать payload.
-Zero-copy borrow, новый flash-layout и прочие оптимизации — **позже, только по замерам**.
+`generation` существует именно для slot reuse — вопрос реализации `check()`,
+не архитектурный. Zero-copy borrow, новый flash-layout — **позже, только по замерам**.
 Детали — в `MICRO_DB_V2_DRAFT.md`.
 
 ## 12. gw_proto
@@ -270,7 +340,8 @@ transport framing          — UART SOF/CRC, WS frame
 
 В core-архитектуре специально **не проектируем**.
 
-Фиксируем только: Zigbee будет одним из сервисов/подписчиков Domain.
+Фиксируем только: Zigbee будет одним из сервисов/подписчиков Domain, и команды
+приходят к нему **напрямую** (см. §7), а не через Journal.
 Детали его state machine, адресации, cluster/endpoint-модели и P4↔C6 — отдельная тема.
 
 ## 14. Инварианты
@@ -281,12 +352,16 @@ transport framing          — UART SOF/CRC, WS frame
 4. Все entity равны; `entity_type` — только routing, максимум validator.
 5. Journal тонкий; payload только в Entity Store.
 6. Store change и Journal append — один сериализованный порядок; last-writer-wins.
-7. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
-8. Подписчики читают через `domain_get()`, не мутируют store из колбэка.
-9. Command — transient intent; корреляции нет; pending — локально в UI.
-10. Связи — данные/ключи, а не Domain-relations.
-11. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
-12. Нет публичной функции без реализации.
+7. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
+8. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
+9. Подписчики читают через `domain_get()`, не мутируют store из колбэка.
+10. Journal эмитит `ENTITY_CHANGED` только при `changed = true`.
+11. Command — fire-and-forget intent; доставляется напрямую сервису; Journal пишет
+    только `COMMAND_SENT`; корреляции нет; pending — локально в UI.
+12. REMOVE record содержит полный canonical key.
+13. Связи — данные/ключи, а не Domain-relations.
+14. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
+15. Нет публичной функции без реализации.
 
 ## 15. Миграция из v1
 
@@ -304,33 +379,25 @@ ui_control_ack     → удаляем; pending уходит в UI
 
 ## 16. Открытые вопросы
 
-Это места, где простая модель может не стыковаться с реальной реализацией.
 Закрываем **явным решением**, а не новым слоем автоматически.
 
-1. **ts-only изменения.** Считать ли `changed`, если изменился только timestamp
-   (сенсоры шлют тот же value с новым ts)? Иначе — churn в Journal.
-2. **Глобальный Domain-lock при sync dispatch.** Медленный подписчик блокирует
-   **всех** писателей, а не только по той же entity. Приемлемо ли, или подписчик
-   обязан иметь собственную очередь?
-3. **Reentrancy.** Subscriber отправляет COMMAND прямо внутри dispatch, когда Domain-lock
-   удержан. Нужно правило: `domain_post` не должен брать store/Domain-lock (иначе рекурсия).
-4. **Request/response операции.** `read_attr`, `permit_join`, network scan, binding table,
-   factory reset, device remove confirm — результат нужен, а correlation нет.
-   Куда приходит результат и кто адресат? (в v1 — `CMD_RESULT`).
-5. **Automation trace.** v1 публикует `GW_PROTO_TRACE_*` (fired / action / error /
-   action_index). Как это выражается в тонком Journal: дополнительный `kind` или
-   отдельный канал?
-6. **Каскадное удаление** (device → endpoints / state / group_item / meta). Несколько
-   `domain_remove`, наблюдаемая неконсистентность и возможный interleave.
-   `domain_apply(batch)` сейчас **не вводим**; обсуждаем только при конкретном invariant.
-7. **Journal capacity.** ~50 записей достаточно для Events-страницы и дебага автоматик?
-   Или нужен больший retention / несколько блоков уже сейчас?
-8. **`list(prefix)` для связей.** Нужен ли частичный индекс в micro_db, или допускаем
-   полный scan таблицы (например, `endpoint`)?
-9. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
-10. **micro_db handle и slot reuse.** Как Display надёжно обнаруживает REMOVE/STALE
-    при переиспользовании слота.
-11. **Command args при асинхронном исполнителе.** Подтвердить правило: копирует args
-    в свою очередь сам исполнитель.
-12. **Порядок Journal == порядок store** при нескольких producer'ах — гарантируется
-    Domain-lock; подтвердить, что перемешивание dispatch между двумя операциями допустимо.
+1. **Семантика semantic change.** Для каких entity types задаём `change_equals`
+   и как (сенсоры vs актуаторы). Нужно решить до реализации — сенсоры быстро покажут
+   проблему ts-only.
+2. **Representation automation trace.** v1 публикует `GW_PROTO_TRACE_*`
+   (fired / action / error / action_index). Как это выражается в тонком Journal:
+   дополнительный `kind` или отдельный канал.
+3. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
+4. **Journal capacity.** Значение по умолчанию и retention (сейчас configurable,
+   старт ~50). Persistence — позже.
+5. **Request/response.** Отдельная минимальная модель для операций, которым нужен
+   ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
+6. **COMMAND_REJECTED.** Нужен ли отдельный факт отказа при неудачной передаче команды,
+   или достаточно просто не писать COMMAND_SENT.
+
+Уже принято (не открытые):
+- порядок и неперемешивание dispatch — закрыто §6 (Domain-lock);
+- каскадное удаление — последовательность событий нормальна, атомарность не вводим,
+  пока не появится конкретный invariant;
+- handle/generation для slot reuse — вопрос реализации `check()`;
+- lifetime args команды — закрыто (аргументы у исполнителя в момент dispatch).
