@@ -7,9 +7,9 @@
 
 ```text
 Entity Store  — хранит последнее известное состояние
-Journal       — системный поток фактов: хранит короткую историю и уведомляет подписчиков
+Journal       — системный поток фактов: короткая история (со значением факта) + уведомление
 Dispatcher    — синхронно раздаёт факты подписчикам
-Command       — transient intent: доставляется напрямую сервису, Journal пишет факт COMMAND_SENT
+Command       — transient intent: доставляется напрямую сервису, Journal пишет COMMAND_SENT
 micro_db      — только механика хранения
 ```
 
@@ -28,6 +28,9 @@ micro_db      — только механика хранения
 `entity_type` нужен только чтобы через простой registry выбрать нужную таблицу/schema.
 Если у конкретного типа есть обязательный invariant — допускается validator.
 Никаких pre/post hooks, handler chains и скрытого special behavior.
+
+Domain **не** исполняет предметные процедуры. Он хранит entities, публикует факты
+и маршрутизирует commands.
 
 ### 1.1. Zigbee semantics are authoritative
 
@@ -69,21 +72,30 @@ Domain не ставит timeout на команду и не откатывае�
 
 ```text
 Entity Store = последнее известное состояние
-Journal      = поток фактов, которые произошли
+Journal      = последовательность фактов, которые произошли
 ```
 
 Store схлопывает историю до последнего состояния. Journal сохраняет последовательность.
 Поэтому **повторный факт с тем же значением — отдельное событие Journal**.
 
+Событие и состояние — разные вещи:
+
+```text
+пришёл факт        → всегда Journal
+изменился snapshot → только тогда физический update/version записи
+```
+
+micro_db может решить, что физически переписывать одинаковый payload не нужно — это его
+механика. Domain не связывает Journal с условием «snapshot изменился».
+
 Пример: датчик прислал `25`, потом снова `25`:
 
 ```text
-STATE_REPORTED / temperature / 25
-STATE_REPORTED / temperature / 25
+ENTITY_UPSERTED / DEVICE_STATE / temperature / 25
+ENTITY_UPSERTED / DEVICE_STATE / temperature / 25
 ```
 
-Store при этом всё время хранит `temperature = 25`. Домен не спрашивает «старое == новое?»
-и не решает, будить ли automation. Если конкретному consumer'у нужна дедупликация
+Store всё время хранит `temperature = 25`. Если конкретному consumer'у нужна дедупликация
 повторяющихся событий — он фильтрует их сам.
 
 ## 2. Слои
@@ -128,8 +140,6 @@ Domain **не** знает про:
 - связи (relationships) между сущностями;
 - роли, capabilities, permission-модели.
 
-Domain фиксирует систему, а не управляет ею.
-
 ## 4. Entity Store
 
 Всё постоянное состояние — сущности. У всех единый жизненный цикл:
@@ -137,8 +147,8 @@ Domain фиксирует систему, а не управляет ею.
 ```text
 get(entity, key)
 list(entity, filter?)
-upsert(entity, key, record)
-remove(entity, key)
+upsert(entity, key, record, event_meta)
+remove(entity, key, event_meta)
 ```
 
 Различаются только типы и payload.
@@ -161,48 +171,108 @@ settings
 entity_type → { micro_db table/schema, optional validate }
 ```
 
-Не framework. Никаких pre/post hooks, стадий коммита и фильтрации по изменению.
+Не framework. Никаких pre/post hooks, стадий коммита и schema-хуков для журнала.
 
-### 4.2. Запись
+### 4.2. Кто описывает журнальный факт
 
-Любой `upsert/remove` — это факт. Пользователь изменил automation:
+Domain не должен сам извлекать «что интересно для журнала» из записи. Тот, кто
+инициирует изменение, уже знает контекст и передаёт компактное описание факта.
 
-```text
-domain_upsert(AUTOMATION, "auto-1", record)
+```c
+typedef struct {
+    domain_source_t source;   // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+    domain_value_t  value;    // optional компактный snapshot
+} domain_event_meta_t;
+
+domain_upsert(entity_type, key, record, const domain_event_meta_t *meta);
+domain_remove(entity_type, key,           const domain_event_meta_t *meta);
 ```
 
-Domain пишет запись и фиксирует факт в Journal. Automation Engine подписан на факты
-по `AUTOMATION`, делает `domain_get()` и обновляет своё runtime-состояние.
+Domain сам добавляет `seq / ts / entity / key / op`. Он ничего не вычисляет и не знает,
+почему `25` важно.
 
-Большие payload (включая automation на несколько КБ) живут **только** в Entity Store
-и никогда не копируются в Journal.
+Примеры:
+
+```text
+Zigbee report temperature = 25
+    domain_upsert(DEVICE_STATE, key, record, { source = ZIGBEE, value = F32(25) })
+
+UI изменил automation
+    domain_upsert(AUTOMATION, "auto-7", big_record, { source = UI, value = NONE })
+```
+
+Большие entity records (включая automation на несколько КБ) живут **только**
+в Entity Store и в Journal не копируются.
 
 ## 5. Journal
 
 Journal — **системный поток фактов**: сохраняет короткую историю и уведомляет подписчиков.
-
 В нём только то, что уже произошло. Управления в нём нет.
 
-Тонкая запись:
+```c
+typedef struct {
+    uint64_t seq;
+    uint64_t ts;
 
-```text
-{ seq, ts, kind, entity, key, op, source }
+    domain_event_kind_t  kind;    // ENTITY_UPSERTED | ENTITY_REMOVED | COMMAND_SENT
+    domain_entity_type_t entity;
+    domain_operation_t   op;      // UPSERT | REMOVE | <command op>
+    domain_source_t      source;  // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+
+    domain_key_t   key;
+    domain_value_t value;         // optional компактный snapshot
+} domain_event_t;
 ```
 
 Типы фактов:
 
 ```text
-STATE_REPORTED  — entity получила состояние/запись (пришёл факт)
-ENTITY_REMOVED  — entity удалена
-COMMAND_SENT    — Domain передал команду исполнителю
+ENTITY_UPSERTED  — сущность получила новое состояние/запись
+ENTITY_REMOVED   — сущность удалена
+COMMAND_SENT     — Domain передал команду исполнителю
 ```
 
-(Позже могут добавиться системные события, automation trace и т.п.)
+`source` различает происхождение (`ZIGBEE` / `UI` / `AUTOMATION` / ...). Отдельного
+специального `STATE_REPORTED` в generic Domain нет: Zigbee-состояние — это
+`ENTITY_UPSERTED, entity = DEVICE_STATE, source = ZIGBEE`.
 
-- Payload в журнал **не попадает** — он живёт в Entity Store.
-- Подписчику нужны данные → `domain_get(entity, key)`.
-- Journal фиксирует **входящий факт независимо** от того, совпадает ли значение
-  с предыдущим. Равенство предыдущему — не повод молчать.
+### 5.1. Что Journal хранит
+
+> Journal **никогда** не хранит большие entity records. Он может хранить **компактный
+> snapshot значения**, необходимый для понимания исторического факта.
+
+Почему: `domain_get()` возвращает только последнее состояние. Без значения событие
+через час теряет смысл (`#100 25`, `#101 26` → уже неотличимы).
+
+```text
+Zigbee report: temperature = 25
+        ↓
+domain_upsert(DEVICE_STATE, record, value = 25)
+        ↓
+Store: temperature = 25
+Journal: #101 ENTITY_UPSERTED / DEVICE_STATE / temperature / 25
+```
+
+`domain_value_t` — маленький универсальный variant:
+
+```text
+NONE
+BOOL
+I32
+U32
+F32
+ENUM
+```
+
+(Позже, при реальной необходимости, — небольшой fixed byte/string. Строковые
+human-readable `description` не храним: это форматирование/локализация/heap.
+Events UI строит читаемый вид из структуры: `DEVICE_STATE / temperature / 25`.)
+
+Для automation value = `NONE`: сам факт «auto-7 была записана» уже достаточен,
+подробности остаются в Entity Store.
+
+### 5.2. Прочее
+
 - Journal — RAM-блоки, capacity compile-time/configurable (старт ~50). Блок заполнен →
   заводим новый, старый пока выбрасываем.
 - В будущем старый блок можно асинхронно выгружать во flash/SD как историю, не меняя
@@ -242,7 +312,7 @@ domain_get() / domain_list()  НЕ берут Domain-lock.
 Основной путь автоматики:
 
 ```text
-STATE_REPORTED
+ENTITY_UPSERTED (DEVICE_STATE, source=ZIGBEE)
   → Automation callback
   → domain_post(OFF)
   → COMMAND_SENT
@@ -254,7 +324,7 @@ STATE_REPORTED
 Порядок:
 
 ```text
-#100 STATE_REPORTED
+#100 ENTITY_UPSERTED
     subscriber Automation
         → command delivered
         → #101 COMMAND_SENT
@@ -279,7 +349,7 @@ audit path     → тонкая запись COMMAND_SENT в Journal
 ```text
 UI / Automation
       ↓
-domain_post(command)
+domain_post(command, event_meta)
       ↓
 Domain маршрутизирует команду соответствующему service/executor
       ↓
@@ -291,7 +361,10 @@ Journal уведомляет своих subscribers
 `COMMAND_SENT` означает **только одно**: Domain передал команду сервису для отправки.
 В нём нет смысла «устройство получило», «применило», «подтвердило». Domain этого не ждёт.
 
-- Args команды не хранятся в Journal: их получает исполнитель в момент dispatch.
+- Args команды не хранятся целиком: их получает исполнитель в момент dispatch.
+- Если маленький аргумент важен для истории (`SET_LEVEL 32`) — он передаётся
+  в `event_meta.value` и попадает в `COMMAND_SENT`. Иначе журнал «отправили SET_LEVEL»
+  мало полезен для дебага.
 - Если executor не найден или сразу отклонил команду — `domain_post()` возвращает
   обычную ошибку (`ESP_ERR_NOT_FOUND`, `ESP_ERR_INVALID_ARG`, ...), а `COMMAND_SENT`
   не пишется. Отдельных diagnostic-фактов отказа пока не вводим.
@@ -326,7 +399,7 @@ UI отправил команду
 
 позже устройство реально изменилось
    → Domain: state = ON
-   → Journal: STATE_REPORTED
+   → Journal: ENTITY_UPSERTED (DEVICE_STATE, source=ZIGBEE)
 ```
 
 UI не сопоставляет эти события, а просто отображает текущее состояние.
@@ -348,8 +421,15 @@ COMMAND = fire-and-forget intent
 
 - слушает Journal (фильтр по `kind/entity/source`);
 - читает нужную entity через `domain_get()`;
-- при необходимости инициировать действие — вызывает `domain_post(command)`
+- при необходимости инициировать действие — вызывает `domain_post(command, meta)`
   (допустима вложенная публикация, см. §6.1).
+
+Пример фильтра автоматики:
+
+```text
+entity = DEVICE_STATE
+source = ZIGBEE
+```
 
 Роли, capability system и permission-модели сейчас не вводим.
 
@@ -368,7 +448,7 @@ Domain **не знает** отношений. Связи выражаем да�
 
 ### Удаление (REMOVE)
 
-Для `STATE_REPORTED` subscriber делает `event → domain_get(key)`.
+Для `ENTITY_UPSERTED` subscriber делает `event → domain_get(key)`.
 Для `ENTITY_REMOVED` читать нечего — значит Journal record для удаления **обязан
 содержать полный canonical key**, достаточный для реакции без payload. Для составных
 ключей (`device + endpoint + cluster/...`) это явный invariant.
@@ -389,7 +469,7 @@ Domain **не знает** отношений. Связи выражаем да�
 Физически удалён, держит семантическую реплику:
 
 ```text
-STATE_REPORTED → domain_get → WS → Browser Store → React
+ENTITY_UPSERTED → domain_get → WS → Browser Store → React
 ```
 
 Снапшот при подключении + дельты дальше. Каждый факт реплицируется, поэтому реплика
@@ -409,9 +489,11 @@ check(generation/version)
 read(copy-out)
 ```
 
-`generation` существует для slot reuse — вопрос реализации `check()`, не архитектурный.
-Zero-copy borrow, новый flash-layout — **позже, только по замерам**.
-Детали — в `MICRO_DB_V2_DRAFT.md`.
+- micro_db **может** не переписывать одинаковый payload и не увеличивать version,
+  если запись физически не изменилась. Journal всё равно уже получил факт (§1.2).
+- `generation` существует для slot reuse — вопрос реализации `check()`, не архитектурный.
+- Zero-copy borrow, новый flash-layout — **позже, только по замерам**.
+- Детали — в `MICRO_DB_V2_DRAFT.md`.
 
 ## 12. gw_proto
 
@@ -420,7 +502,7 @@ Zero-copy borrow, новый flash-layout — **позже, только по з
 
 ```text
 canonical entity records   — типы хранилища / Domain
-event/command envelope     — отдельный универсальный слой
+event/command envelope     — отдельный универсальный слой (kind/entity/key/op/source/value)
 transport framing          — UART SOF/CRC, WS frame
 ```
 
@@ -434,7 +516,7 @@ transport framing          — UART SOF/CRC, WS frame
 
 Фиксируем только: Zigbee — один из сервисов/подписчиков Domain, команды приходят
 к нему **напрямую** (см. §7), а не через Journal. Дальше живёт обычная Zigbee-модель:
-report → Zigbee service → Domain: state → Journal: STATE_REPORTED → subscribers.
+report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → subscribers.
 Детали state machine, адресации, cluster/endpoint-модели и P4↔C6 — отдельная тема.
 
 ## 14. Инварианты
@@ -442,21 +524,24 @@ report → Zigbee service → Domain: state → Journal: STATE_REPORTED → subs
 1. Только Domain физически пишет в store.
 2. `micro_db` линкует только Domain.
 3. Сервисы и UI — клиенты Domain с единым интерфейсом.
-4. Все entity равны; `entity_type` — только routing, максимум validator.
-5. Journal тонкий; payload только в Entity Store.
+4. Все entity равны; `entity_type` — только routing (+ optional validator).
+5. Journal никогда не хранит большие entity records; может хранить компактный
+   `domain_value_t`, переданный caller'ом.
 6. Store change и Journal append — один сериализованный порядок; last-writer-wins.
-7. Journal фиксирует входящий факт независимо от равенства предыдущему значению.
-8. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
-9. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
-10. `domain_post()` из subscriber callback — вложенная публикация без повторного Domain-lock.
-11. Command — fire-and-forget; доставляется напрямую сервису; Journal пишет только
-    `COMMAND_SENT`; корреляции нет; pending — локально в UI.
-12. Семантика Zigbee авторитетна: состояние меняется только по факту снизу;
+7. Пришедший факт всегда попадает в Journal, независимо от равенства snapshot.
+8. Физический update/version записи — только если snapshot реально изменился
+   (решение storage, не Domain).
+9. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
+10. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
+11. `domain_post()` из subscriber callback — вложенная публикация без повторного Domain-lock.
+12. Command — fire-and-forget; доставляется напрямую сервису; Journal пишет `COMMAND_SENT`
+    (+ compact value); корреляции нет; pending — локально в UI.
+13. Семантика Zigbee авторитетна: состояние меняется только по факту снизу;
     optimistic state, timeout и корреляция отсутствуют.
-13. REMOVE record содержит полный canonical key.
-14. Связи — данные/ключи, а не Domain-relations.
-15. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
-16. Нет публичной функции без реализации.
+14. REMOVE record содержит полный canonical key.
+15. Связи — данные/ключи, а не Domain-relations.
+16. Domain не расширяем заранее; новый механизм — только под доказанную потребность.
+17. Нет публичной функции без реализации.
 
 ## 15. Миграция из v1
 
@@ -487,6 +572,10 @@ ui_control_ack     → удаляем; pending уходит в UI
    ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
 
 Принято (не открытые):
+- Journal может хранить компактный `domain_value_t`; большие записи — нет;
+- caller передаёт `event_meta {source, value}`, Domain не извлекает журнал из записи;
+- generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
+- факт → всегда Journal; физический update — только при реальном изменении snapshot;
 - reentrancy `domain_post()` — вложенная публикация + depth limit (§6.1);
 - `COMMAND_REJECTED` не вводим — ошибку возвращает сам `domain_post()`;
 - `updated/changed`, `record_equals/change_equals`, semantic filtering — убраны;
