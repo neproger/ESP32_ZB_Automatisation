@@ -133,7 +133,7 @@ Store всё время хранит `temperature = 25`. Если конкрет
 Domain
 ├── Entity Store   — последнее известное состояние
 ├── Journal        — поток фактов (история + канал уведомлений)
-└── Dispatcher     — синхронная доставка подписчикам
+└── Dispatcher     — отдельная задача-потребитель Journal; уведомляет подписчиков
 ```
 
 Domain **не** знает про:
@@ -289,58 +289,62 @@ Events UI строит читаемый вид из структуры: `DEVICE_
 
 Порядок — простой и строгий, last-writer-wins. Конфликт-резолюшн и merge не нужны.
 
-Один инвариант: **изменение Entity Store и запись факта в Journal имеют один
-сериализованный порядок**, и следующий writer не может поменять ту же entity раньше,
-чем синхронные подписчики обработали предыдущий факт.
-
-Внешний Domain-lock покрывает **только mutations/publication**:
+Изменение store и запись факта в Journal имеют один сериализованный порядок.
+Producer **не вызывает подписчиков** — он только пишет state и факт и возвращается:
 
 ```text
-acquire Domain-lock
-    mutate Entity Store        (внутри — короткий micro_db lock)
-    journal append (факт)
-    sync dispatch              (НЕ под micro_db lock)
-release Domain-lock
+producer
+    write Entity Store        (короткий micro_db lock)
+    append fact в Journal
+    return
 ```
 
-Read API во время dispatch:
+Уведомление — отдельная задача-Диспетчер, которая читает Journal и раздаёт факты:
 
 ```text
-domain_get() / domain_list()  НЕ берут Domain-lock.
-Они берут только внутреннюю защиту соответствующей micro_db table.
+Dispatcher (своя задача)
+    читает Journal по seq (свой cursor)
+    для каждого факта — уведомляет подходящих подписчиков
 ```
 
-Это обязательно, иначе subscriber, вызывающий `domain_get()` внутри callback,
-сделает deadlock сам себе.
+- Dispatcher — единственный потребитель порядка; факты идут по `seq`.
+- Подписчики **не** выполняются в контексте producer'а.
+- Domain-lock нужен только на mutation/publication и **не удерживается** во время
+  работы подписчиков.
+- Нет head-of-line blocking писателей: медленный подписчик тормозит только себя.
+- Read API (`domain_get/list`) берёт только внутреннюю защиту micro_db table.
 
-### 6.1. Вложенная публикация (reentrancy)
-
-Основной путь автоматики:
+Подписчик — это не колбек с логикой, а **контакт**, которому Диспетчер доставляет
+сообщение (лёгкий триггер). Сам подписчик работает в своём контексте и читает Journal
+по собственному cursor'у:
 
 ```text
-ENTITY_UPSERTED (DEVICE_STATE, source=ZIGBEE)
-  → Automation callback
-  → domain_post(OFF)
-  → COMMAND_SENT
+Dispatcher → notify(subscriber)     (лёгкий триггер, не логика)
+                   ↓
+             subscriber task просыпается
+             → читает Journal по своему cursor'у
+             → обрабатывает как знает
 ```
 
-`domain_post()` из subscriber callback — **допустимая вложенная публикация** в рамках
-уже активной Domain-операции. Повторно Domain-lock не берётся.
+Это снимает:
+- вызов чужой логики в task'е writer'а;
+- вложенную рекурсию и depth limit (подписчик постит команду — она попадает в Journal —
+  Диспетчер обработает её в общем порядке);
+- удержание Domain-lock во время подписчиков.
 
-Порядок:
+### 6.1. Что подписчик читает
 
-```text
-#100 ENTITY_UPSERTED
-    subscriber Automation
-        → command delivered
-        → #101 COMMAND_SENT
-             → subscribers COMMAND_SENT
-    продолжение subscribers #100
-```
+Факт несёт компактный `value` **на момент события**. К моменту обработки Entity Store
+уже может содержать более новое состояние, поэтому:
 
-- вложенный dispatch происходит синхронно внутри внешнего;
-- защита от патологической рекурсии — простой depth limit (без новой архитектуры);
-- очередь и отдельный dispatch task не нужны.
+- реагировать нужно на `value` из факта;
+- `domain_get()` — только для вспомогательных/текущих данных.
+
+### 6.2. Retention (открыто)
+
+Пока подписчик не прочитал факт, Journal-блок нельзя переиспользовать. Политика
+(сколько ждать отстающего, что при переполнении, копировать ли факт в inbox подписчика) —
+в §16.
 
 ## 7. Команды
 
@@ -361,7 +365,7 @@ Domain маршрутизирует команду соответствующе�
       ↓
 после успешной передачи → COMMAND_SENT в Journal
       ↓
-Journal уведомляет своих subscribers
+Диспетчер уведомляет подписчиков
 ```
 
 `COMMAND_SENT` означает **только одно**: Domain передал команду сервису для отправки.
@@ -423,12 +427,15 @@ COMMAND = fire-and-forget intent
 
 ## 8. Subscribers
 
-Подписчик:
+Подписчик — это зарегистрированный **контакт**, а не колбек с бизнес-логикой.
 
-- слушает Journal (фильтр по `kind/entity/source`);
-- читает нужную entity через `domain_get()`;
-- при необходимости инициировать действие — вызывает `domain_post(command, meta)`
-  (допустима вложенная публикация, см. §6.1).
+- подписчик регистрирует свой контакт (notification / mailbox) и фильтр
+  (`kind/entity/source`);
+- Диспетчер доставляет ему **лёгкий триггер** («есть новые факты»);
+- подписчик читает Journal по своему cursor'у и обрабатывает сам, в своём task'е;
+- свою очередь / backpressure подписчик организует сам;
+- при необходимости инициировать действие — `domain_post(command, meta)` (попадёт
+  в Journal, Диспетчер обработает в общем порядке).
 
 Пример фильтра автоматики:
 
@@ -590,9 +597,11 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → sub
 7. Пришедший факт всегда попадает в Journal, независимо от равенства snapshot.
 8. Физический update/version записи — только если snapshot реально изменился
    (решение storage, не Domain).
-9. Domain-lock покрывает только mutations/publication; read API берёт только lock таблицы.
-10. Никаких callbacks под micro_db lock; dispatch после release storage-lock.
-11. `domain_post()` из subscriber callback — вложенная публикация без повторного Domain-lock.
+9. Запись store и факта Journal — один сериализованный порядок (короткий lock только на запись).
+10. Подписчики не вызываются в контексте producer'а: Диспетчер — отдельная
+    задача-потребитель Journal.
+11. Подписчик получает от Диспетчера лёгкий триггер и обрабатывает факты сам;
+    read API берёт только lock соответствующей таблицы.
 12. Command — fire-and-forget; доставляется напрямую сервису; Journal пишет `COMMAND_SENT`
     (+ compact value); корреляции нет; pending — локально в UI.
 13. Семантика Zigbee авторитетна: состояние меняется только по факту снизу;
@@ -626,9 +635,9 @@ ui_control_ack     → удаляем; pending уходит в UI
    action_index). Как это выражается в тонком Journal: дополнительный `kind` или
    отдельный канал.
 2. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
-3. **Journal capacity/retention.** Значение по умолчанию (старт ~50) и future
-   persistence. Учесть, что chatty-сенсоры дают много фактов; при необходимости
-   consumer фильтрует сам.
+3. **Journal capacity / retention под Диспетчер.** Очередь — сам Journal. Нужны размер,
+   политика при отставании подписчика (копировать факт в его inbox / drop-oldest +
+   счётчик / back-pressure) и future persistence. Учесть chatty-сенсоры.
 4. **Request/response.** Отдельная минимальная модель для операций, которым нужен
    ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
 5. **Snapshot consistency.** Web Service собирает snapshot несколькими `domain_list`.
@@ -640,7 +649,7 @@ ui_control_ack     → удаляем; pending уходит в UI
 - caller передаёт `event_meta {source, value}`, Domain не извлекает журнал из записи;
 - generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
 - факт → всегда Journal; физический update — только при реальном изменении snapshot;
-- reentrancy `domain_post()` — вложенная публикация + depth limit (§6.1);
+- sync dispatch под Domain-lock — отвергнут; Диспетчер отдельный, подписчики вне producer'а;
 - `COMMAND_REJECTED` не вводим — ошибку возвращает сам `domain_post()`;
 - `updated/changed`, `record_equals/change_equals`, semantic filtering — убраны;
 - каскадное удаление — последовательное, атомарность не вводим без concrete invariant;
