@@ -2,6 +2,9 @@
 
 > Статус: **черновик, открыт для обсуждения.**
 > Это не финальный контракт. Спорные места помечены `(обсуждается)`.
+>
+> Документ описывает **общий каркас и очертания** системы, а не построчный API.
+> Конкретные сигнатуры, структуры и типы ниже — иллюстративные и уточняются на реализации.
 
 ## 0. Ядро в одной фразе
 
@@ -120,7 +123,7 @@ Store всё время хранит `temperature = 25`. Если конкрет
                          │
         micro_db  (Table Store + Ring Store)     (приватна для Domain)
 
-        Display ── direct read ──► Entity Store
+        Display ── poll read via Domain ──► Entity Store   (исключение, см. §10.2)
 ```
 
 Правила зависимостей:
@@ -188,6 +191,9 @@ oldest / newest
 простой Domain API под свою задачу. Если позже сервису понадобится более сложная
 операция — она добавляется в Domain API отдельно, по реальной необходимости, а не
 через прямой доступ к `micro_db`.
+
+Исключение — **Display**: ему разрешён прямой polling Domain read API ради быстрых
+LVGL-обновлений (см. §10.2). Доступ всё равно через Domain, а не к `micro_db`.
 
 ## 4. Entity Store
 
@@ -346,9 +352,9 @@ runtime-потребителю, факт несёт `payload_ref` в Transient P
 ### 5.2. Прочее
 
 - Journal — bounded RAM ring, capacity compile-time/configurable (старт ~50). При
-  заполнении вытесняется самая старая запись (см. §6.2). Подписчики журнал не удерживают.
-- Вытесненные записи уходят в RAM Archive (§6.2); выгрузка completed batch во flash/SD —
-  позже, в уже зафиксированную точку. Hot-path от этого не меняется.
+  заполнении вытесняется самая старая запись; никто ничего не удерживает и не ждёт.
+- Вытесненные факты просто исчезают. Длинная история / persistence — future, сейчас не
+  проектируется.
 - Источник истины — **Entity Store**, не журнал. Это не Event Sourcing.
 
 ### 5.3. Transient Payload Ring
@@ -458,19 +464,15 @@ Transient Payload
 Не всё, что происходит, выражается в current state. Кнопка, `single_press` / `double_press`,
 vendor-специфичные события — это факты, из которых **не** следует новое состояние сущности.
 
-Для них есть отдельная категория `EVENT` и отдельный publisher:
-
-```c
-esp_err_t domain_publish_event(const domain_event_meta_t *meta);
-```
+Для них есть отдельная категория `EVENT` и отдельный publisher — `domain_publish_event()`.
+Точная сигнатура и поля уточнятся на реализации; существенное:
 
 - **не трогает Entity Store**;
 - append-ит `EVENT` в Journal;
-- принимает `source / value / payload_ref`;
-- возвращает обычный результат публикации.
+- несёт `source`, компактный `value` и, при необходимости, transient `payload_ref`;
+- `entity/key` — optional/contextual: смысл несёт `value`, transient details — `payload_ref`.
 
-`entity/key` для `EVENT` — optional/contextual: смысл несёт `value`, transient details —
-`payload_ref`:
+Пример (иллюстративно):
 
 ```text
 EVENT
@@ -556,30 +558,22 @@ compact `domain_event_t`; event сам говорит, что произошло
 - `event.value` — для истории/диагностики, не обязан быть business-input автоматики;
 - если `event.payload_ref != NONE` — transient details читаются через
   `domain_payload_get(event.payload_ref, ...)` (best-effort, может быть STALE);
-- промежуточные состояния могут «схлопываться»: подписчик видит актуальное состояние
-  на момент пробуждения, а не каждое событие по отдельности.
+- события **не** схлопываются: каждый факт доставляется и считается отдельно
+  (`on on on off` — это четыре факта); что с ними делает подписчик — его дело.
 
-### 6.2. Retention и Archive
+### 6.2. Retention
 
-Live Journal — bounded ring на `micro_db` Ring Store. Его никто не удерживает:
-подписчики читают Domain, а не Journal, поэтому вытеснение факта их не ломает.
+Live Journal — bounded ring на `micro_db` Ring Store. Его никто не удерживает и не ждёт:
+факт живёт в ring ограниченное время, и если consumer не успел его прочитать, мы не ждём
+(это Zigbee-политика: отсутствие нового факта не является ошибкой).
 
 ```text
-Live Journal Ring                (micro_db Ring Store, capacity compile-time ~50)
-    ↓ evicted oldest event (по одной записи)
-RAM Archive                      (фиксированный batch, напр. 50 записей)
-    ↓ batch заполнен
-Completed Archive Batch
-    ↓
-[future: async flash/SD persistence]
+Live Journal Ring   (micro_db Ring Store, capacity compile-time ~50)
+    ↓ capacity full
+oldest event вытесняется (просто исчезает)
 ```
 
-- При вытеснении события уходят **по одной записи** в RAM Archive.
-- Archive набирает фиксированный batch (напр. 50 записей); заполненный batch считается
-  completed, начинается следующий.
-- Запись completed batch во flash/SD **пока не реализуем**: lifecycle фиксируем сейчас,
-  физическое сохранение подключается позже в точку после completed batch.
-- Archive нужен для истории/диагностики, но **не** для runtime replay.
+- Длинная история / persistence (flash/SD) — **future**, сейчас не проектируется.
 - **Dispatcher — единственный consumer Journal**, поэтому Journal-gap обнаруживает
   Dispatcher, а не сервис:
 
@@ -680,7 +674,7 @@ Pending — **локальная UI-механика**; Domain о нём не з
 ### 7.3. Граница: COMMAND vs request/response
 
 ```text
-COMMAND = fire-and-forget intent
+COMMAND = fire-and-forget intent (передали и результат не ждём)
 ```
 
 Операции, которым вызывающему реально нужен ответ (`read_attr`, network scan,
@@ -727,7 +721,8 @@ Entity Store  = данные для решения
 ```
 
 Если было `ON` → быстро `OFF`, и Automation проснулась уже на `OFF`, то условие `ON` не
-выполняется — это нормальная семантика. Промежуточный state воспроизводить не обязаны.
+выполняется — это нормальная семантика. События при этом **не** теряются и не
+схлопываются (§6.1); просто решение в этом примере принимается по текущему состоянию.
 
 Если позже появятся действительно event-based Zigbee события, которые нельзя выразить
 текущим state (`single_press`, `double_press`, vendor event и т.п.), они публикуются как
@@ -822,12 +817,15 @@ Domain model → Web projection (DTO) → binary WS
 но проекция — отдельный слой. Все web-специфичные костыли остаются здесь и не лезут
 в Domain.
 
-### 10.2. Display
+### 10.2. Display (исключение)
 
-Читает Entity Store напрямую через Domain, своей модели не держит.
-Пользуется Domain read facade (`handle/check`), чтобы не читать payload без нужды;
-к `micro_db` напрямую не линкуется.
-Подписан на события, перечитывает только нужное.
+Display — осознанное исключение: обновлять LVGL на каждое событие дорого, поэтому ему
+разрешён **прямой polling** Domain read API (это его быстрый путь).
+
+- Display остаётся клиентом Domain и **не** линкуется к `micro_db`;
+- вместо подписки на каждое событие он сам периодически читает нужные entity;
+- read path остаётся за Domain (внутри может использоваться handle/check);
+  наружу `micro_db`-типы не выходят.
 
 ### 10.3. Pending
 
@@ -861,7 +859,7 @@ Ring Store    — ordered bounded records; append / get_by_seq / oldest / newest
 
 ```text
 canonical entity records   — типы хранилища / Domain
-event/command envelope     — отдельный универсальный слой (kind/entity/key/op/source/value)
+event/command envelope     — отдельный универсальный слой (kind/entity/key/op/source/value/payload_ref)
 transport framing          — UART SOF/CRC, WS frame
 ```
 
@@ -900,9 +898,9 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
     выполняет его логику и не ждёт её. Подписчик не читает Journal через `micro_db`;
     state читает из Domain, transient payload — через `domain_payload_get`. Read API
     берёт только lock соответствующей таблицы.
-11. Command — fire-and-forget; синхронно доставляется напрямую сервису; Journal пишет
-    `COMMAND_SENT` (+ compact value); корреляции нет; pending — локально в UI; побочные
-    эффекты — на факте изменения состояния entity.
+11. Command — fire-and-forget (результат не ждём), но доставка executor'у синхронная;
+    Journal пишет `COMMAND_SENT` (+ compact value); корреляции нет; pending — локально
+    в UI; побочные эффекты — на факте изменения состояния entity.
 12. Семантика Zigbee авторитетна: состояние меняется только по факту снизу;
     optimistic state, timeout и корреляция отсутствуют.
 13. REMOVE record содержит полный canonical key.
@@ -911,16 +909,15 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
 16. Нет публичной функции без реализации.
 17. Web Service — адаптер для браузера (BFF), не источник истины; snapshot / delta /
     projection — его забота, а не Domain. Domain ABI не равен WS-пакету.
-18. Live Journal — bounded ring, никто его не удерживает (подписчики читают Domain).
-    Вытесненные факты уходят в RAM Archive по одной записи; gap у отставшего
-    потребителя определяется по `event_id`.
+18. Live Journal — bounded ring; никто его не удерживает и не ждёт. Вытесненный факт
+    просто исчезает; gap у отставшего потребителя определяется по `event_id`.
 19. Journal и Transient Payload — клиенты `micro_db` Ring Store; они не entities и не
     проходят через generic entity CRUD.
 20. Transient Payload Ring — best-effort: без ownership / refcount / release / TTL;
     вытесненный payload даёт STALE, Domain не блокируется и никого не ждёт.
-21. Четыре разных хранения: Entity Store (текущее состояние), Journal Ring (короткая
-    последовательность фактов), Transient Payload Ring (временные runtime payload),
-    Archive (история вытесненных Journal records). На текущем этапе все — fixed-capacity RAM.
+21. Три хранения: Entity Store (текущее состояние), Journal Ring (короткая
+    последовательность фактов), Transient Payload Ring (временные runtime payload).
+    На текущем этапе — fixed-capacity RAM; длинная история/persistence — future.
 22. Journal record осмыслен без payload: `value`/fields содержат минимально достаточное
     историческое описание; transient payload — только дополнительные runtime-данные,
     которые допустимо потерять.
@@ -932,6 +929,11 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
     event-lookup перед payload access нет.
 25. `EVENT` — transient fact: не меняет Entity Store; публикуется через
     `domain_publish_event()`; `entity/key` optional; смысл несут `value` / `payload_ref`.
+26. События **не** схлопываются: каждый факт доставляется и считается отдельно
+    (`on on on off` — четыре факта). Никому ничего не гарантируется — обработка и
+    реакция на потерю/переполнение своего inbox — задача подписчика.
+27. Display — осознанное исключение: ему разрешён прямой polling Domain read API
+    ради быстрых LVGL-обновлений. Доступ всё равно через Domain, не к `micro_db`.
 
 ## 15. Миграция из v1
 
@@ -944,7 +946,7 @@ transient payload  → Transient Payload Ring (micro_db Ring Store)
 rules engine       → сервис-подписчик
 gw_zigbee_uart     → Zigbee-сервис (state-machine, отдельная тема)
 Web snapshot+delta → сохраняем
-Display direct     → сохраняем, через handle/check
+Display read       → сохраняем, через Domain read API (исключение, poll)
 ui_control_ack     → удаляем; pending уходит в UI
 ```
 
@@ -956,19 +958,16 @@ ui_control_ack     → удаляем; pending уходит в UI
    action_index). Как это выражается в тонком Journal: дополнительный `kind` или
    отдельный канал.
 2. **gw_proto.** Точный список типов на сокращение и формат универсального envelope.
-3. **Journal capacity / Archive persistence.** Live Journal — bounded ring, вытеснение не
-   блокируется потребителями (подписчики читают Domain, а не Journal); Archive — RAM
-   batches (§6.2). Открыто: размеры ring/batch, поведение Archive при переполнении RAM,
-   формат и момент async-выгрузки completed batch во flash/SD. Учесть chatty-сенсоры.
+3. **Journal capacity / retention.** Live Journal — bounded ring; вытеснение никого не
+   блокирует и никого не ждёт. Открыто: размер ring (старт ~50) и нужна ли длинная
+   история/persistence (flash/SD). Учесть chatty-сенсоры.
 4. **Request/response.** Отдельная минимальная модель для операций, которым нужен
    ответ. Граница зафиксирована (COMMAND = fire-and-forget), реализация — позже.
 5. **Snapshot consistency.** Web Service собирает snapshot несколькими `domain_list`.
    Параллельные writers могут дать torn snapshot. Варианты: принять eventual
    consistency (дельты догонят) или version-stamped snapshot.
-6. **Ring persistence vs Archive.** `micro_db` Ring Store может получить persistence
-   (roadmap micro_db), при этом Domain ведёт RAM Archive вытесненных Journal records.
-   Нужно явно решить, кто пишет во flash, и не появляются ли два конкурирующих механизма
-   истории.
+6. **Длинная история / persistence.** Вытесненные Journal-факты сейчас просто теряются.
+   Стоит ли и когда персистить историю (flash/SD) — future, не проектируем сейчас.
 7. **value vs payload_ref.** Критерий, когда факт несёт компактный `domain_value_t`, а
    когда — transient `payload_ref`, пока не зафиксирован. До решения: по умолчанию compact
    value, `payload_ref` — только для реально event-like данных.
@@ -991,9 +990,8 @@ ui_control_ack     → удаляем; pending уходит в UI
 - lifetime args команды — аргументы у исполнителя в момент dispatch;
 - Web Service — BFF для браузера, симметричный Zigbee-сервису; snapshot/delta/projection
   и web-костыли живут у него;
-- Journal — bounded ring, никто его не удерживает (подписчики читают Domain);
-  вытеснение → RAM Archive batch; persistence completed batch во flash/SD — позже;
-  Archive не для runtime replay;
+- Journal — bounded ring; никто его не удерживает и не ждёт, вытесненные факты теряются;
+  длинная история/persistence — future;
 - Journal и transient payload — клиенты `micro_db` Ring Store, не entities и не через
   generic entity CRUD;
 - Transient Payload Ring — best-effort, без ownership/refcount/release/TTL; stale —

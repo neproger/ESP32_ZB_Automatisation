@@ -575,7 +575,7 @@ metadata
 
 Любая event-based логика строится слоем выше.
 
-Ни Table Store, ни Ring Store не знают про Journal, Archive, Domain или Zigbee semantics —
+Ни Table Store, ни Ring Store не знают про Journal, Domain или Zigbee semantics —
 оба остаются storage mechanics.
 
 ## 18. Роль в Home Automation v2
