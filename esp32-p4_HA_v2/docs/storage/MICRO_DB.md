@@ -134,3 +134,73 @@ micro_db
 11. Вытесненный seq даёт STALE/NOT_FOUND, а не ошибку жизненного цикла.
 12. Flash-персистентность не проникает в application code.
 13. Компонент полностью домен-агностичен.
+
+## 7. Контракт (предложение)
+
+Общие соглашения:
+
+- возвращаемое значение — `esp_err_t` (`OK / NOT_FOUND / INVALID_ARG / NO_MEM /
+  INVALID_STATE / INVALID_SIZE`);
+- экземпляр table/ring — caller-owned структура; жизненный цикл `init / deinit`;
+- capacity фиксирована; память выделяется компонентом при `init`;
+- у экземпляра один внутренний lock; все операции — thread-safe относительно него.
+
+### 7.1. Table Store
+
+Схема (задаётся caller'ом): `name`, `record_size`, `key_size`, `max_records`,
+`backing` (`RAM` / `RAM+Flash`), `flags`, `persist_key`, и колбэки `key_of`,
+`key_equals`, `record_equals`.
+
+Операции:
+
+```text
+init(table, schema) / deinit(table)
+upsert(table, record, *changed, *inserted)
+get(table, key, *record)
+remove(table, key, *removed)
+clear(table) / count(table) / get_stats(table, *stats)
+get_slot(table, key, *slot) / get_by_slot(table, slot, *record) / get_by_index(table, index, *record)
+iter(table, cb, ctx) / iter_slots(table, cb, ctx)
+resolve(table, key, *handle)                 // key → handle (один раз)
+check(table, handle, *status, *meta)         // без чтения payload
+```
+
+Данные handle/check:
+
+```text
+slot_meta = { used, generation, version }
+handle    = { slot, generation, version }
+status    = CURRENT | CHANGED | REMOVED | STALE
+```
+
+`upsert` определяет `changed` через `record_equals`; `version` растёт только при реальном
+изменении payload; `generation` меняется при переиспользовании слота.
+
+### 7.2. Ring Store
+
+Конфигурация: `record_size`, `capacity`.
+
+```text
+init(ring, config) / deinit(ring) / count(ring)
+append(ring, record, *seq)
+get_by_seq(ring, seq, *record)               // вытесненный seq → STALE / NOT_FOUND
+oldest_seq(ring, *seq) / newest_seq(ring, *seq)
+contains(ring, seq, *bool)
+```
+
+`seq` — `uint64`, монотонный; slot/cursor — внутренняя деталь.
+
+## 8. Что нужно решить до реализации
+
+1. **Аллокация.** Компонент выделяет сам (v1-стиль, с выбором caps) или принимает
+   заранее выделенный буфер. *Предложение: компонент выделяет, caller-буфер — позже.*
+2. **Lock и итерация.** `iter` вызывает колбэк под lock — возможна реентрантность в ту
+   же таблицу. *Предложение: документировать «колбэк не мутирует эту же таблицу».*
+3. **Persistence.** Table — RAM-only или RAM+Flash (per-slot); Ring — RAM-only.
+   *Предложение: оставить как декларативный `backing`, без flash-layout v2.*
+4. **`list` vs `iter`.** Фильтрация (prefix) в micro_db или на слое Domain.
+   *Предложение: micro_db даёт `iter`; `list(filter)` собирает Domain.*
+5. **Version.** Источник `version` — slot metadata (компонент) или поле записи (caller).
+   *Предложение: slot metadata; поля записи не трогаем.*
+6. **Handle наружу.** micro_db отдаёт `handle`/`slot_meta` как свои низкоуровневые типы;
+   Domain оборачивает их в opaque id. *Предложение: да.*
