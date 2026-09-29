@@ -61,23 +61,21 @@ slot → meta          (только заголовок, без payload)
 slot → full record   (meta + payload)
 ```
 
-**За что отвечает:**
+**Ядро (ничего лишнего):**
 
 | Возможность | Смысл |
 |---|---|
-| `get / upsert / remove` | базовый copy-out API, безопасный и простой |
+| `upsert / get / remove` | базовый copy-out API, безопасный и простой |
 | `get_slot(key)` | key → slot |
 | `read_meta(slot)` | заголовок **без чтения payload** |
-| `read(slot)` | вся запись |
+| `read(slot)` | вся запись (meta + payload) |
 | `iter` | обход записей |
+| `count / clear` | размер и очистка |
 
 **Слежение за изменениями — забота consumer'а.** Если consumer хочет знать, изменилась
-ли запись, он сам хранит `slot + last_generation + last_version` и сверяет с `meta`.
-Это его локальное состояние, не сущность micro_db; отдельный `handle` не нужен.
-
-```text
-check(slot, seen_generation, seen_version) → CURRENT | CHANGED | REMOVED | STALE
-```
+ли запись, он сам хранит `slot + last_generation + last_version`, делает `read_meta(slot)`
+и сравнивает. Это его локальное состояние, не сущность micro_db. Отдельные `handle` и
+`check()` не нужны — `check` был бы лишь helper'ом над `read_meta`.
 
 **Zero-copy borrow** (`acquire/release`) — не основная цель. Это опциональная
 оптимизация, которая держит lock на время чтения и добавляется только по результатам
@@ -149,7 +147,7 @@ micro_db
 2. Payload хранится в одном canonical location.
 3. `meta` — заголовок записи (`record = meta + payload`), а не отдельная структура.
 4. Самый частый путь должен быть самым дешёвым.
-5. `check()` не читает payload.
+5. `read_meta()` не читает payload.
 6. Raw pointer никогда не является долгоживущей identity; долгоживущее — key.
 7. Слежение за изменениями — забота consumer'а (`slot + generation + version`); micro_db handles не ведёт.
 8. `get()` остаётся простым и безопасным даже при наличии fast-path.
@@ -175,31 +173,37 @@ micro_db
 `backing` (`RAM` / `RAM+Flash`), `flags`, `persist_key`, и колбэки `key_of`,
 `key_equals`, `record_equals`.
 
-Операции:
+Ядро:
 
 ```text
 init(table, schema) / deinit(table)
+
 upsert(table, record, *changed, *inserted)
 get(table, key, *record)
 remove(table, key, *removed)
-clear(table) / count(table) / get_stats(table, *stats)
+
 get_slot(table, key, *slot)
 read_meta(table, slot, *meta)
-get_by_slot(table, slot, *record) / get_by_index(table, index, *record)
-iter(table, cb, ctx) / iter_slots(table, cb, ctx)
-check(table, slot, seen_generation, seen_version, *status)   // без чтения payload
+read(table, slot, *record)        // meta + payload
+
+iter(table, cb, ctx)
+count(table)
+clear(table)
 ```
 
 Данные:
 
 ```text
-meta   = { used, generation, version }        // заголовок записи (record = meta + payload)
-status = CURRENT | CHANGED | REMOVED | STALE
+meta = { used, generation, version }   // заголовок записи (record = meta + payload)
 ```
 
-`handle` не нужен: consumer хранит `slot + generation + version` у себя. `upsert`
-определяет `changed` через `record_equals`; `version` растёт только при реальном
-изменении payload; `generation` меняется при переиспользовании слота.
+`handle` не нужен: consumer хранит `slot + generation + version` у себя и сверяет с
+`meta` из `read_meta`. `upsert` определяет `changed` через `record_equals`; `version`
+растёт только при реальном изменении payload; `generation` меняется при
+переиспользовании слота.
+
+Всё остальное (например `get_by_index`, `*_stats`) добавляется только под конкретного
+потребителя.
 
 ### 7.2. Ring Store
 
