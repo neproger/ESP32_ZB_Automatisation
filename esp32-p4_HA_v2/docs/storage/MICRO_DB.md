@@ -31,15 +31,26 @@ Ring Store    — «какие записи последовательно пр�
 
 **Роль:** keyed mutable records.
 
-**Модель:**
+### 2.1. Термины
+
+```text
+table   — экземпляр таблицы
+slot    — физическая ячейка таблицы
+meta    — служебный заголовок slot, принадлежит micro_db
+payload — данные caller'а
+key     — логический ключ payload
+```
+
+В API слово `record` означает **только caller payload** (то же, что `payload`).
+Физически запись в таблице — это `meta + payload`, но наружу эти части отдаются раздельно.
+
+### 2.2. Физическая модель
 
 - RAM заранее выделяется на всю capacity; таблица — массив слотов;
-- **slot — единая физическая единица хранения: `meta` (заголовок) + `payload`**;
-- фиксированный stride: `slot_size = sizeof(meta) + record_size`;
-- key адресует slot целиком; слоты переиспользуются;
+- **slot = `meta` (заголовок) + `payload`**;
+- фиксированный stride: `slot_size = sizeof(meta) + payload_size`;
+- key адресует slot; слоты переиспользуются;
 - runtime — RAM; flash — backing персистентности (по слотам, не перезапись всей таблицы).
-
-Layout:
 
 ```text
 [meta][payload][meta][payload][meta][payload]...   // фиксированный stride
@@ -49,33 +60,62 @@ meta      = slot_addr
 payload   = slot_addr + sizeof(meta)
 ```
 
-`meta` — **заголовок конкретной записи**, а не отдельная структура/таблица:
-`used`, `generation` (та же ли это запись после reuse), `version` (изменились ли
-данные).
+### 2.3. Ownership
 
-**Операции — три естественных шага:**
+```text
+meta    → полностью управляется micro_db
+payload → полностью задаётся caller'ом
+```
+
+- Caller передаёт в `upsert()` только payload и **никогда** не задаёт и не меняет
+  `used / generation / version`.
+- Metadata обновляет micro_db.
+- `meta` — заголовок конкретной записи, а не отдельная структура/таблица.
+
+### 2.4. slot и identity
+
+- `slot` — **не** долговечная identity: он может переиспользоваться.
+- Валидность закешированного slot всегда проверяется через `generation`.
+- Долговечная логическая identity — `key`.
+
+### 2.5. generation / version
+
+```text
+generation
+→ не меняется при update той же записи
+→ меняется при reuse slot другой записью
+
+version
+→ относится к текущему владельцу slot
+→ меняется только при реальном изменении payload
+→ одинаковый payload version не меняет
+```
+
+Значение начала (0/1) и поведение при wraparound — вопрос реализации.
+
+### 2.6. Операции
 
 ```text
 key  → slot
-slot → meta          (только заголовок, без payload)
-slot → full record   (meta + payload)
+slot → meta             (заголовок, без payload)
+slot → meta + payload   (всё сразу)
 ```
 
-**Ядро (ничего лишнего):**
+Ядро (ничего лишнего):
 
 | Возможность | Смысл |
 |---|---|
 | `upsert / get / remove` | базовый copy-out API, безопасный и простой |
 | `get_slot(key)` | key → slot |
 | `read_meta(slot)` | заголовок **без чтения payload** |
-| `read(slot)` | вся запись (meta + payload) |
+| `read(slot, *meta, *payload)` | обе части сразу |
 | `iter` | обход записей |
 | `count / clear` | размер и очистка |
 
-**Слежение за изменениями — забота consumer'а.** Если consumer хочет знать, изменилась
-ли запись, он сам хранит `slot + last_generation + last_version`, делает `read_meta(slot)`
-и сравнивает. Это его локальное состояние, не сущность micro_db. Отдельные `handle` и
-`check()` не нужны — `check` был бы лишь helper'ом над `read_meta`.
+**Слежение за изменениями — забота consumer'а.** Consumer хранит `slot + last_generation
++ last_version`, делает `read_meta(slot)` и сравнивает. Это его локальное состояние, не
+сущность micro_db. Отдельные `handle` и `check()` не нужны — `check` был бы лишь
+helper'ом над `read_meta`.
 
 **Zero-copy borrow** (`acquire/release`) — не основная цель. Это опциональная
 оптимизация, которая держит lock на время чтения и добавляется только по результатам
@@ -169,22 +209,22 @@ micro_db
 
 ### 7.1. Table Store
 
-Схема (задаётся caller'ом): `name`, `record_size`, `key_size`, `max_records`,
+Схема (задаётся caller'ом): `name`, `payload_size`, `key_size`, `max_records`,
 `backing` (`RAM` / `RAM+Flash`), `flags`, `persist_key`, и колбэки `key_of`,
-`key_equals`, `record_equals`.
+`key_equals`, `payload_equals`.
 
 Ядро:
 
 ```text
 init(table, schema) / deinit(table)
 
-upsert(table, record, *changed, *inserted)
-get(table, key, *record)
+upsert(table, payload, *changed, *inserted)
+get(table, key, *payload)
 remove(table, key, *removed)
 
 get_slot(table, key, *slot)
 read_meta(table, slot, *meta)
-read(table, slot, *record)        // meta + payload
+read(table, slot, *meta, *payload)
 
 iter(table, cb, ctx)
 count(table)
@@ -194,11 +234,11 @@ clear(table)
 Данные:
 
 ```text
-meta = { used, generation, version }   // заголовок записи (record = meta + payload)
+meta = { used, generation, version }   // заголовок slot, принадлежит micro_db
 ```
 
 `handle` не нужен: consumer хранит `slot + generation + version` у себя и сверяет с
-`meta` из `read_meta`. `upsert` определяет `changed` через `record_equals`; `version`
+`meta` из `read_meta`. `upsert` определяет `changed` через `payload_equals`; `version`
 растёт только при реальном изменении payload; `generation` меняется при
 переиспользовании слота.
 
