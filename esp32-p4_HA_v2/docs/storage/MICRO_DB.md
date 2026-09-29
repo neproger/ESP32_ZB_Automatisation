@@ -29,35 +29,59 @@ Ring Store    — «какие записи последовательно пр�
 
 ## 2. Table Store
 
-**Роль:** keyed mutable records (keyed-таблица с изменяемыми записями).
+**Роль:** keyed mutable records.
 
 **Модель:**
 
-- RAM заранее выделяется на всю capacity; запись лежит в своём слоте;
-- слоты переиспользуются;
-- runtime-представление — RAM; flash — backing для персистентности;
-- персистентность по слотам (не перезапись всей таблицы).
+- RAM заранее выделяется на всю capacity; таблица — массив слотов;
+- **slot — единая физическая единица хранения: `meta` (заголовок) + `payload`**;
+- фиксированный stride: `slot_size = sizeof(meta) + record_size`;
+- key адресует slot целиком; слоты переиспользуются;
+- runtime — RAM; flash — backing персистентности (по слотам, не перезапись всей таблицы).
 
-**Подмодели:**
+Layout:
 
-- **slot metadata** — `used`, `generation` (та же ли это запись после reuse),
-  `version` (изменились ли данные);
-- **handle** — lightweight ссылка на запись (`slot` + `generation`), не raw pointer;
-- **resolve** — key → handle (медленный путь, выполняется один раз).
+```text
+[meta][payload][meta][payload][meta][payload]...   // фиксированный stride
+
+slot_addr = base + slot * slot_size
+meta      = slot_addr
+payload   = slot_addr + sizeof(meta)
+```
+
+`meta` — **заголовок конкретной записи**, а не отдельная структура/таблица:
+`used`, `generation` (та же ли это запись после reuse), `version` (изменились ли
+данные).
+
+**Операции — три естественных шага:**
+
+```text
+key  → slot
+slot → meta          (только заголовок, без payload)
+slot → full record   (meta + payload)
+```
 
 **За что отвечает:**
 
 | Возможность | Смысл |
 |---|---|
-| `get / upsert / remove / list` | базовый copy-out API, безопасный и простой |
-| `resolve` | key → handle, дальше без hash-lookup |
-| `check(handle)` | дешёвая проверка metadata **без чтения payload** (`CURRENT / CHANGED / REMOVED / STALE`) |
-| `read(copy-out)` | чтение записи по handle/слоту |
+| `get / upsert / remove` | базовый copy-out API, безопасный и простой |
+| `get_slot(key)` | key → slot |
+| `read_meta(slot)` | заголовок **без чтения payload** |
+| `read(slot)` | вся запись |
 | `iter` | обход записей |
+
+**Слежение за изменениями — забота consumer'а.** Если consumer хочет знать, изменилась
+ли запись, он сам хранит `slot + last_generation + last_version` и сверяет с `meta`.
+Это его локальное состояние, не сущность micro_db; отдельный `handle` не нужен.
+
+```text
+check(slot, seen_generation, seen_version) → CURRENT | CHANGED | REMOVED | STALE
+```
 
 **Zero-copy borrow** (`acquire/release`) — не основная цель. Это опциональная
 оптимизация, которая держит lock на время чтения и добавляется только по результатам
-замеров. Базовый fast-path — `resolve → check → read(copy-out)`.
+замеров. Базовый fast-path — `get_slot → read_meta → (при изменении) read`.
 
 **Persistence:** flash-раскладка по слотам, per-slot checksum, declarative-политика
 (`RAM` / `RAM + Flash`). При старте — загрузка образа, проверка layout/metadata/CRC,
@@ -123,11 +147,11 @@ micro_db
 
 1. Fixed memory layout важнее удобства динамических контейнеров.
 2. Payload хранится в одном canonical location.
-3. Metadata отделена от payload.
+3. `meta` — заголовок записи (`record = meta + payload`), а не отдельная структура.
 4. Самый частый путь должен быть самым дешёвым.
 5. `check()` не читает payload.
-6. Raw pointer никогда не является долгоживущей identity.
-7. Handle переживает updates, но обнаруживает remove/reuse.
+6. Raw pointer никогда не является долгоживущей identity; долгоживущее — key.
+7. Слежение за изменениями — забота consumer'а (`slot + generation + version`); micro_db handles не ведёт.
 8. `get()` остаётся простым и безопасным даже при наличии fast-path.
 9. Ring — ordered append/overwrite: без key, hash, free-list и remove-by-key.
 10. `seq` — долгоживущая identity Ring-записи; slot — внутренняя деталь.
@@ -159,21 +183,22 @@ upsert(table, record, *changed, *inserted)
 get(table, key, *record)
 remove(table, key, *removed)
 clear(table) / count(table) / get_stats(table, *stats)
-get_slot(table, key, *slot) / get_by_slot(table, slot, *record) / get_by_index(table, index, *record)
+get_slot(table, key, *slot)
+read_meta(table, slot, *meta)
+get_by_slot(table, slot, *record) / get_by_index(table, index, *record)
 iter(table, cb, ctx) / iter_slots(table, cb, ctx)
-resolve(table, key, *handle)                 // key → handle (один раз)
-check(table, handle, *status, *meta)         // без чтения payload
+check(table, slot, seen_generation, seen_version, *status)   // без чтения payload
 ```
 
-Данные handle/check:
+Данные:
 
 ```text
-slot_meta = { used, generation, version }
-handle    = { slot, generation, version }
-status    = CURRENT | CHANGED | REMOVED | STALE
+meta   = { used, generation, version }        // заголовок записи (record = meta + payload)
+status = CURRENT | CHANGED | REMOVED | STALE
 ```
 
-`upsert` определяет `changed` через `record_equals`; `version` растёт только при реальном
+`handle` не нужен: consumer хранит `slot + generation + version` у себя. `upsert`
+определяет `changed` через `record_equals`; `version` растёт только при реальном
 изменении payload; `generation` меняется при переиспользовании слота.
 
 ### 7.2. Ring Store
@@ -200,7 +225,6 @@ contains(ring, seq, *bool)
    *Предложение: оставить как декларативный `backing`, без flash-layout v2.*
 4. **`list` vs `iter`.** Фильтрация (prefix) в micro_db или на слое Domain.
    *Предложение: micro_db даёт `iter`; `list(filter)` собирает Domain.*
-5. **Version.** Источник `version` — slot metadata (компонент) или поле записи (caller).
-   *Предложение: slot metadata; поля записи не трогаем.*
-6. **Handle наружу.** micro_db отдаёт `handle`/`slot_meta` как свои низкоуровневые типы;
-   Domain оборачивает их в opaque id. *Предложение: да.*
+
+Решено: `record = meta + payload` — единая физическая единица; отдельного `handle`
+нет, consumer сам хранит `slot + generation + version`.
