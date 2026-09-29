@@ -7,8 +7,8 @@
 
 ```text
 Entity Store  — хранит последнее известное состояние
-Journal       — системный поток фактов: короткая история (со значением факта) + источник триггеров
-Dispatcher    — раздаёт подписчикам лёгкие триггеры; их логику не выполняет и не ждёт
+Journal       — системный поток фактов: короткая история (со значением факта) + источник событий
+Dispatcher    — доставляет подписчикам compact domain_event_t; их логику не выполняет и не ждёт
 Command       — transient intent: синхронно доставляется сервису, Journal пишет COMMAND_SENT
 micro_db      — только механика хранения (Table Store + Ring Store)
 ```
@@ -100,7 +100,7 @@ Store всё время хранит `temperature = 25`. Если конкрет
 
 ## 2. Слои
 
-Сервисы симметричны: каждый знает свою внешнюю среду, читает Domain, получает триггеры,
+Сервисы симметричны: каждый знает свою внешнюю среду, читает Domain, получает события,
 отправляет действия обратно в Domain и не знает деталей других сервисов.
 
 ```text
@@ -133,9 +133,9 @@ Store всё время хранит `temperature = 25`. Если конкрет
 ```text
 Domain
 ├── Entity Store            — последнее известное состояние            → micro_db Table Store
-├── Journal                 — поток фактов (история + источник триггеров) → micro_db Ring Store
+├── Journal                 — поток фактов (история + источник событий) → micro_db Ring Store
 ├── Transient Payload Ring  — best-effort runtime payload (редкие event-like факты) → micro_db Ring Store
-└── Dispatcher              — отдельная задача-потребитель Journal; рассылает триггеры
+└── Dispatcher              — отдельная задача-потребитель Journal; доставляет события
 ```
 
 Entity Store использует keyed Table Store. Journal и transient payload используют Ring
@@ -163,7 +163,7 @@ Domain API
 ├── entity CRUD
 ├── command API
 ├── payload_put / payload_get
-└── subscription / trigger API
+└── subscription / event delivery API
         ↓
 internal Domain implementation
         ↓
@@ -239,8 +239,9 @@ domain_upsert(entity_type, key, record, const domain_event_meta_t *meta);
 domain_remove(entity_type, key,           const domain_event_meta_t *meta);
 ```
 
-Domain сам добавляет `seq / ts / entity / key / op`. Он ничего не вычисляет и не знает,
-почему `25` важно.
+Domain сам добавляет `event_id / ts / entity / key / op`. Внутренне `event_id` мапится на
+ring seq, но наружу отдаётся только как `domain_event_id_t`. Domain ничего не вычисляет и
+не знает, почему `25` важно.
 
 Примеры:
 
@@ -258,26 +259,34 @@ UI изменил automation
 ## 5. Journal
 
 Journal — **системный поток фактов**: сохраняет короткую историю и служит источником
-триггеров. В нём только то, что уже произошло. Управления в нём нет.
+событий. В нём только то, что уже произошло. Управления в нём нет.
 
 Journal — клиент `micro_db` **Ring Store**: `domain_event_t` кладётся через
-`micro_db_ring_append` и получает monotonic `seq` как identity. Это bounded live ring
-(см. §6.2), не keyed table.
+`micro_db_ring_append` и получает monotonic identity. Это bounded live ring (см. §6.2),
+не keyed table. Наружу отдаётся доменный `domain_event_id_t`; внутренний ring seq —
+деталь реализации.
+
+`domain_event_t` — **compact runtime descriptor факта** (он же и запись истории Journal).
+Он сам несёт достаточно информации, чтобы subscriber понял: что произошло; к какой
+entity/key относится факт; есть ли optional transient payload.
 
 ```c
+typedef uint64_t domain_event_id_t;    // identity факта Journal
+
 typedef struct {
-    uint64_t seq;
-    uint64_t ts;
+    domain_event_id_t event_id;       // identity этой Journal-записи
+    uint64_t          ts;
 
-    domain_event_kind_t  kind;    // ENTITY_UPSERTED | ENTITY_REMOVED | COMMAND_SENT
+    domain_event_kind_t  kind;        // ENTITY_UPSERTED | ENTITY_REMOVED | COMMAND_SENT
+    domain_operation_t   op;          // UPSERT | REMOVE | <command op>
+    domain_source_t      source;      // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+
     domain_entity_type_t entity;
-    domain_operation_t   op;      // UPSERT | REMOVE | <command op>
-    domain_source_t      source;  // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+    domain_key_t         key;
 
-    domain_key_t   key;
-    domain_value_t value;         // optional компактный snapshot
+    domain_value_t       value;         // optional компактный snapshot (history / diagnostics)
 
-    domain_payload_ref_t payload_ref;  // optional transient payload (best-effort), иначе NONE
+    domain_payload_ref_t payload_ref;   // NONE/null если transient payload отсутствует
 } domain_event_t;
 ```
 
@@ -391,16 +400,16 @@ domain_payload_ref_t ref
         ↓
 domain publishes Journal fact with optional payload_ref
         ↓
-Dispatcher triggers subscriber
+Dispatcher delivers compact domain_event_t to subscriber inbox
         ↓
-subscriber:
-    - normal state event       → domain_get(...)
-    - if payload_ref needed    → domain_payload_get(ref)
+subscriber receives event:
+    - state event              → domain_get(entity, key)
+    - payload_ref != NONE      → domain_payload_get(payload_ref)
 ```
 
 Если `domain_payload_get()` возвращает STALE — это нормальная best-effort семантика.
-Для обычных state-based событий payload ring не используется: подписчик читает текущее
-состояние из Entity Store (см. §6.1).
+Для обычных state-based событий payload ring не используется: подписчик получает event
+и читает текущее состояние из Entity Store (см. §6.1).
 
 Typed payload (не только bytes+size) можно рассмотреть позже, по реальной необходимости;
 сейчас достаточно generic bytes + size.
@@ -456,34 +465,39 @@ producer
     return
 ```
 
-Уведомление — отдельная задача-Диспетчер, которая читает Journal и рассылает триггеры:
+Уведомление — отдельная задача-Диспетчер, которая читает Journal и доставляет
+подписчикам compact events:
 
 ```text
 Dispatcher (своя задача)
-    читает Journal по seq (свой cursor)
-    для каждого факта — триггерит подходящих подписчиков
+    читает Journal по event_id (свой cursor)
+    для каждого события — находит подходящих подписчиков
+    → кладёт compact domain_event_t в inbox подписчика
+    → будит его task
 ```
 
-- Dispatcher — **единственный** потребитель Journal; факты идут по `seq`.
+- Dispatcher — **единственный** потребитель Journal; события идут по `event_id`.
 - Подписчики **не** выполняются в контексте producer'а и **не** в контексте Диспетчера.
-- Диспетчер **не выполняет логику подписчика** и **не ждёт** её: колбек — это только
-  триггер, который будит задачу подписчика. Диспетчер продолжает сразу.
+- Диспетчер **не выполняет бизнес-логику подписчика** и **не ждёт** её: он только
+  доставляет compact `domain_event_t` в локальный inbox/FIFO подписчика и будит task.
+  Диспетчер продолжает сразу.
 - Domain-lock нужен только на mutation/publication и **не удерживается** во время
   работы подписчиков.
 - Нет head-of-line blocking писателей: медленный подписчик тормозит только себя.
 - Read API (`domain_get/list`) берёт только внутреннюю защиту micro_db table.
 
-Подписчик — это не колбек с логикой, а **контакт**, которому Диспетчер доставляет
-лёгкий триггер. Триггер лишь будит задачу подписчика; **данные подписчик берёт не из
-факта, а из Domain** — сам запрашивает нужные entity:
+Subscriber получает **сам `domain_event_t`** (compact, без больших payload), а не пустой
+wake-up и не только `event_id`. Он не читает Journal напрямую через `micro_db`; event
+приходит к нему в inbox. Event используется как trigger/context, а source of truth для
+state остаётся Entity Store:
 
 ```text
-Dispatcher → trigger(subscriber)    (пробуждает, логику не выполняет и не ждёт)
+Dispatcher → deliver(domain_event_t) в inbox подписчика   (логику не выполняет и не ждёт)
                    ↓
-             subscriber task просыпается
-             → читает нужные entity из Domain (domain_get/list)
-             → обрабатывает как знает
-             → при необходимости domain_post(command, meta)
+             subscriber task просыпается с event
+             ├─ state event     → domain_get(entity, key) / domain_list(...)
+             ├─ event-like      → domain_payload_get(event.payload_ref, ...)
+             └─ при необходимости → domain_post(command, meta)
 ```
 
 Это снимает:
@@ -494,13 +508,16 @@ Dispatcher → trigger(subscriber)    (пробуждает, логику не �
 
 ### 6.1. Что подписчик читает
 
-Подписчик **не читает Journal**. Триггер говорит только «что-то релевантное изменилось»;
-подписчик сам обращается к Domain за entity, которые ему нужны:
+Подписчик **не читает Journal напрямую через `micro_db`**. Диспетчер доставляет ему
+compact `domain_event_t`; event сам говорит, что произошло и есть ли transient payload.
 
-- источник данных подписчика — **Entity Store** (`domain_get/list`), а не факт;
-- компактный `value` в факте нужен для истории/Archive и диагностики, не для реакции;
-- поэтому промежуточные состояния могут «схлопываться»: подписчик видит актуальное
-  состояние на момент пробуждения, а не каждое событие по отдельности.
+- для state-based фактов источник данных — **Entity Store** (`domain_get/list`), а не
+  event; event нужен как trigger/context;
+- `event.value` — для истории/диагностики, не обязан быть business-input автоматики;
+- если `event.payload_ref != NONE` — transient details читаются через
+  `domain_payload_get(event.payload_ref, ...)` (best-effort, может быть STALE);
+- промежуточные состояния могут «схлопываться»: подписчик видит актуальное состояние
+  на момент пробуждения, а не каждое событие по отдельности.
 
 ### 6.2. Retention и Archive
 
@@ -527,8 +544,8 @@ Completed Archive Batch
   Dispatcher, а не сервис:
 
   ```text
-  Dispatcher expected seq = X
-  Journal oldest seq     = Y > X
+  Dispatcher expected event_id = X
+  Journal oldest event_id      = Y > X
   → Dispatcher обнаружил Journal gap
   ```
 
@@ -563,7 +580,7 @@ executor отправляет команду и сразу возвращает 
       ↓
 COMMAND_SENT в Journal
       ↓
-Диспетчер триггерит подписчиков
+Диспетчер доставляет событие подписчикам
 ```
 
 `COMMAND_SENT` означает **только одно**: Domain синхронно передал команду сервису для
@@ -634,11 +651,12 @@ COMMAND = fire-and-forget intent
 
 Подписчик — это зарегистрированный **контакт**, а не колбек с бизнес-логикой.
 
-- подписчик регистрирует контакт (notification / mailbox) и фильтр (`kind/entity/source`);
-- Диспетчер доставляет **лёгкий триггер** — он только будит задачу подписчика,
-  не выполняет его логику и не ждёт его;
-- подписчик просыпается в своём task'е и читает нужные entity **из Domain**, не из Journal;
-- свою очередь / backpressure подписчик организует сам;
+- подписчик регистрирует контакт (notification / mailbox / inbox) и фильтр (`kind/entity/source`);
+- Диспетчер доставляет **compact `domain_event_t`** в inbox — он не выполняет логику
+  подписчика и не ждёт его;
+- подписчик просыпается в своём task'е с event; актуальное состояние читает из Domain,
+  а transient payload — через `domain_payload_get(event.payload_ref)`;
+- свою очередь / backpressure подписчик организует сам (event кладётся в его локальный FIFO);
 - при необходимости инициировать действие — `domain_post(command, meta)`.
 
 Пример фильтра автоматики:
@@ -653,10 +671,11 @@ source = ZIGBEE
 Обычная автоматика работает по **текущему состоянию**, а не по каждому событию:
 
 ```text
-Journal/Dispatcher → trigger Automation
-Automation wakes
-→ reads current Entity Store
-→ evaluates current conditions
+Journal/Dispatcher → delivers event to Automation
+Automation wakes with event
+→ event используется как trigger/context
+→ reads current Entity Store via domain_get()
+→ evaluates rule against current state
 → if true, posts COMMAND
 ```
 
@@ -705,7 +724,7 @@ Domain **не знает** отношений. Связи выражаем да�
 Каждый сервис:
 
 - знает свою внешнюю среду;
-- читает Domain и получает триггеры;
+- читает Domain и получает события;
 - отправляет действия обратно в Domain;
 - не знает деталей других сервисов.
 
@@ -720,7 +739,7 @@ Browser      → Web service    → Domain → command / entity mutation
 
 Он **не** хранит source of truth. Он:
 
-- получает триггер и понимает, какая entity изменилась;
+- получает event и понимает, какая entity изменилась;
 - при необходимости делает `domain_get(entity, key)`;
 - строит из canonical records удобный браузеру DTO (projection);
 - пушит delta через WebSocket;
@@ -768,7 +787,7 @@ Domain model → Web projection (DTO) → binary WS
 Читает Entity Store напрямую через Domain, своей модели не держит.
 Пользуется Domain read facade (`handle/check`), чтобы не читать payload без нужды;
 к `micro_db` напрямую не линкуется.
-Подписан на триггеры, перечитывает только нужное.
+Подписан на события, перечитывает только нужное.
 
 ### 10.3. Pending
 
@@ -837,8 +856,9 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
    (решение storage, не Domain).
 9. Подписчики не вызываются в контексте producer'а: Диспетчер — отдельная
    задача-потребитель Journal.
-10. Диспетчер доставляет подписчику только лёгкий триггер: не выполняет его логику и
-    не ждёт её. Подписчик читает нужные entity из **Domain** (не из Journal); read API
+10. Диспетчер доставляет подписчику compact `domain_event_t` в локальный inbox: не
+    выполняет его логику и не ждёт её. Подписчик не читает Journal через `micro_db`;
+    state читает из Domain, transient payload — через `domain_payload_get`. Read API
     берёт только lock соответствующей таблицы.
 11. Command — fire-and-forget; синхронно доставляется напрямую сервису; Journal пишет
     `COMMAND_SENT` (+ compact value); корреляции нет; pending — локально в UI; побочные
@@ -853,7 +873,7 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
     projection — его забота, а не Domain. Domain ABI не равен WS-пакету.
 18. Live Journal — bounded ring, никто его не удерживает (подписчики читают Domain).
     Вытесненные факты уходят в RAM Archive по одной записи; gap у отставшего
-    потребителя определяется по `seq`.
+    потребителя определяется по `event_id`.
 19. Journal и Transient Payload — клиенты `micro_db` Ring Store; они не entities и не
     проходят через generic entity CRUD.
 20. Transient Payload Ring — best-effort: без ownership / refcount / release / TTL;
@@ -865,7 +885,11 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
     историческое описание; transient payload — только дополнительные runtime-данные,
     которые допустимо потерять.
 23. Сервисы видят только Domain API. Типы `micro_db` (seq, slot, generation, ring API) не
-    выходят наружу; `domain_payload_ref_t` — доменный opaque-тип, не `micro_db_ring_seq_t`.
+    выходят наружу; `domain_event_id_t` и `domain_payload_ref_t` — доменные opaque-типы,
+    не `micro_db_ring_seq_t`.
+24. `event_id` и `payload_ref` — независимые identity: первый ссылается на Journal-запись,
+    второй — на Transient Payload Ring. Payload не ищется через `event_id`, отдельного
+    event-lookup перед payload access нет.
 
 ## 15. Миграция из v1
 
@@ -912,6 +936,8 @@ ui_control_ack     → удаляем; pending уходит в UI
 - caller передаёт `event_meta {source, value, payload_ref?}`, Domain не извлекает журнал из записи;
 - transient payload доступен сервисам только через `domain_payload_put/get`;
   `domain_payload_ref_t` — доменный opaque-тип, `micro_db_ring_seq_t` наружу не выходит;
+- Диспетчер доставляет подписчику compact `domain_event_t`, не пустой wake-up; `event_id`
+  и `payload_ref` — независимые identity (event-lookup перед payload access не вводим);
 - generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
 - факт → всегда Journal; физический update — только при реальном изменении snapshot;
 - sync dispatch под Domain-lock — отвергнут; Диспетчер отдельный, подписчики вне producer'а;
