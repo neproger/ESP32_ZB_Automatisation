@@ -598,8 +598,8 @@ Domain владеет смыслом сущностей и событий и п�
 `micro_db` Ring/Table API напрямую и не видят `micro_db` seq / slot / generation типы.
 
 Доменные identity (`domain_event_id_t`, `domain_payload_ref_t`) принадлежат Domain API.
-Ring ref/seq остаётся внутренней механикой реализации: Domain мапит доменные identity на
-ring ref/seq, не отдавая `micro_db` API наружу.
+Domain отдаёт наружу свои opaque id-типы; реализация может напрямую кодировать `micro_db`
+ring seq, отдельной таблицы сопоставления не требуется.
 
 `micro_db` владеет только storage mechanics. Его Ring Store — low-level storage primitive,
 не application-facing API.

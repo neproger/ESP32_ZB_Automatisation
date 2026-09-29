@@ -9,6 +9,7 @@
 Entity Store  — хранит последнее известное состояние
 Journal       — системный поток фактов: короткая история (со значением факта) + источник событий
 Dispatcher    — доставляет подписчикам compact domain_event_t; их логику не выполняет и не ждёт
+Event         — transient fact: публикуется в Journal, Entity Store не трогает
 Command       — transient intent: синхронно доставляется сервису, Journal пишет COMMAND_SENT
 micro_db      — только механика хранения (Table Store + Ring Store)
 ```
@@ -227,7 +228,7 @@ Domain не должен сам извлекать «что интересно �
 инициирует изменение, уже знает контекст и передаёт компактное описание факта.
 
 ```c
-typedef uint64_t domain_payload_ref_t;   // доменный opaque-тип; Domain сам мапит на ring seq/ref
+typedef uint64_t domain_payload_ref_t;   // доменный opaque-тип; реализация может кодировать ring seq/ref напрямую
 
 typedef struct {
     domain_source_t source;            // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
@@ -239,9 +240,9 @@ domain_upsert(entity_type, key, record, const domain_event_meta_t *meta);
 domain_remove(entity_type, key,           const domain_event_meta_t *meta);
 ```
 
-Domain сам добавляет `event_id / ts / entity / key / op`. Внутренне `event_id` мапится на
-ring seq, но наружу отдаётся только как `domain_event_id_t`. Domain ничего не вычисляет и
-не знает, почему `25` важно.
+Domain сам добавляет `event_id / ts / entity / key / op`. Внутренне `event_id` может
+кодировать ring seq напрямую, но наружу отдаётся только как `domain_event_id_t`.
+Domain ничего не вычисляет и не знает, почему `25` важно.
 
 Примеры:
 
@@ -277,7 +278,7 @@ typedef struct {
     domain_event_id_t event_id;       // identity этой Journal-записи
     uint64_t          ts;
 
-    domain_event_kind_t  kind;        // ENTITY_UPSERTED | ENTITY_REMOVED | COMMAND_SENT
+    domain_event_kind_t  kind;        // ENTITY_UPSERTED | ENTITY_REMOVED | EVENT | COMMAND_SENT
     domain_operation_t   op;          // UPSERT | REMOVE | <command op>
     domain_source_t      source;      // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
 
@@ -295,6 +296,7 @@ typedef struct {
 ```text
 ENTITY_UPSERTED  — сущность получила новое состояние/запись
 ENTITY_REMOVED   — сущность удалена
+EVENT            — что-то произошло, но current state из этого не следует
 COMMAND_SENT     — Domain передал команду исполнителю
 ```
 
@@ -450,6 +452,44 @@ Transient Payload
 ```
 
 `value` при этом сохраняет роль history / diagnostics, а не бизнес-input автоматики.
+
+### 5.4. Transient EVENT (без Entity Store)
+
+Не всё, что происходит, выражается в current state. Кнопка, `single_press` / `double_press`,
+vendor-специфичные события — это факты, из которых **не** следует новое состояние сущности.
+
+Для них есть отдельная категория `EVENT` и отдельный publisher:
+
+```c
+esp_err_t domain_publish_event(const domain_event_meta_t *meta);
+```
+
+- **не трогает Entity Store**;
+- append-ит `EVENT` в Journal;
+- принимает `source / value / payload_ref`;
+- возвращает обычный результат публикации.
+
+`entity/key` для `EVENT` — optional/contextual: смысл несёт `value`, transient details —
+`payload_ref`:
+
+```text
+EVENT
+source      = ZIGBEE
+entity      = DEVICE           (optional / contextual)
+key         = button-1         (optional / contextual)
+value       = DOUBLE_PRESS
+payload_ref = vendor_data_ref  (optional)
+```
+
+Искусственный `domain_upsert()` ради кнопочного события не нужен.
+
+Три категории становятся явными:
+
+```text
+Entity  → domain_upsert / domain_remove  → Entity Store + Journal
+Event   → domain_publish_event           → Journal (+ optional Payload Ring)
+Command → domain_post                    → executor + Journal
+```
 
 ## 6. Порядок и Dispatcher
 
@@ -690,9 +730,9 @@ Entity Store  = данные для решения
 выполняется — это нормальная семантика. Промежуточный state воспроизводить не обязаны.
 
 Если позже появятся действительно event-based Zigbee события, которые нельзя выразить
-текущим state (`single_press`, `double_press`, vendor event и т.п.), Automation может
-использовать `payload_ref`/transient payload. Но это не заставляет все state events ходить
-через payload ring.
+текущим state (`single_press`, `double_press`, vendor event и т.п.), они публикуются как
+`EVENT` через `domain_publish_event()` (см. §5.4), и Automation может использовать
+`value`/`payload_ref`. Но это не заставляет все state events ходить через payload ring.
 
 Роли, capability system и permission-модели сейчас не вводим.
 
@@ -890,6 +930,8 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
 24. `event_id` и `payload_ref` — независимые identity: первый ссылается на Journal-запись,
     второй — на Transient Payload Ring. Payload не ищется через `event_id`, отдельного
     event-lookup перед payload access нет.
+25. `EVENT` — transient fact: не меняет Entity Store; публикуется через
+    `domain_publish_event()`; `entity/key` optional; смысл несут `value` / `payload_ref`.
 
 ## 15. Миграция из v1
 
@@ -938,7 +980,8 @@ ui_control_ack     → удаляем; pending уходит в UI
   `domain_payload_ref_t` — доменный opaque-тип, `micro_db_ring_seq_t` наружу не выходит;
 - Диспетчер доставляет подписчику compact `domain_event_t`, не пустой wake-up; `event_id`
   и `payload_ref` — независимые identity (event-lookup перед payload access не вводим);
-- generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
+- generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `EVENT` / `COMMAND_SENT`;
+- `EVENT` публикуется через `domain_publish_event()`, Entity Store не трогает;
 - факт → всегда Journal; физический update — только при реальном изменении snapshot;
 - sync dispatch под Domain-lock — отвергнут; Диспетчер отдельный, подписчики вне producer'а;
 - `COMMAND_REJECTED` не вводим — ошибку возвращает сам `domain_post()`;
