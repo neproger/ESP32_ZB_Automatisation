@@ -475,6 +475,9 @@ iter_meta(slot, meta)
 Отдельный primitive, **не связанный** с primary-key CRUD Table Store. Ordered bounded
 records с монотонным seq.
 
+Ring Store — **low-level storage primitive**, не application-facing API. Приложение
+работает с ним через фасад слоя выше, а не через `micro_db` ring-функции напрямую.
+
 ```text
 records[capacity]
 write_cursor
@@ -577,23 +580,28 @@ metadata
 
 ## 18. Роль в Home Automation v2
 
-Home Automation использует `micro_db` через Domain, двумя разными primitive:
+Home Automation services используют `micro_db` только через Domain facade:
 
 ```text
-Home Automation
+Home Automation services (Zigbee / Web / Automation / Display)
       ↓
-Domain
-├── Entity Store          → micro_db Table Store
-├── Journal               → micro_db Ring Store
-└── Transient Payload     → micro_db Ring Store
+Domain facade
+      ↓
+micro_db internals
+├── Table Store   → Entity Store
+├── Ring Store    → Journal
+└── Ring Store    → Transient Payload
 ```
 
-Domain владеет смыслом сущностей и событий.
+Domain владеет смыслом сущностей и событий и предоставляет сервисам упрощённый API
+(entity CRUD, commands, payload put/get, subscription/trigger). Сервисы **не** используют
+`micro_db` Ring/Table API напрямую и не видят `micro_db` seq / slot / generation типы.
 
-`micro_db` владеет только storage mechanics.
+`micro_db` владеет только storage mechanics. Его Ring Store — low-level storage primitive,
+не application-facing API.
 
-Display сможет использовать metadata/handle API только через Domain read facade,
-не создавая отдельную копию state. Прямой линк к `micro_db` минуя Domain не вводится.
+Display использует metadata/handle API только через Domain read facade, не создавая
+отдельную копию state. Прямой линк к `micro_db` минуя Domain не вводится.
 
 ## 19. План развития от текущей версии
 

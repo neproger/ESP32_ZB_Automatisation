@@ -152,6 +152,42 @@ Domain **не** знает про:
 - связи (relationships) между сущностями;
 - роли, capabilities, permission-модели.
 
+### 3.1. Domain API — что видят сервисы
+
+Сервисы зависят только от Domain и не должны знать типы и механику `micro_db`. Граница:
+
+```text
+Application services
+        ↓
+Domain API
+├── entity CRUD
+├── command API
+├── payload_put / payload_get
+└── subscription / trigger API
+        ↓
+internal Domain implementation
+        ↓
+micro_db
+├── Table Store
+└── Ring Store
+```
+
+`micro_db` остаётся приватной storage-механикой Domain. Сервисы **не** должны знать:
+
+```text
+ring cursor
+slot
+generation
+micro_db seq type (micro_db_ring_seq_t)
+ring contains
+oldest / newest
+```
+
+`micro_db` может иметь богатый low-level API, но application services видят только
+простой Domain API под свою задачу. Если позже сервису понадобится более сложная
+операция — она добавляется в Domain API отдельно, по реальной необходимости, а не
+через прямой доступ к `micro_db`.
+
 ## 4. Entity Store
 
 Всё постоянное состояние — сущности. У всех единый жизненный цикл:
@@ -191,10 +227,12 @@ Domain не должен сам извлекать «что интересно �
 инициирует изменение, уже знает контекст и передаёт компактное описание факта.
 
 ```c
+typedef uint64_t domain_payload_ref_t;   // доменный opaque-тип; Domain сам мапит на ring seq/ref
+
 typedef struct {
     domain_source_t source;            // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
     domain_value_t  value;             // optional компактный snapshot
-    micro_db_ring_seq_t payload_ref;   // optional: ссылка на Transient Payload Ring (см. §5.3)
+    domain_payload_ref_t payload_ref;  // optional: ссылка на Transient Payload Ring (см. §5.3)
 } domain_event_meta_t;
 
 domain_upsert(entity_type, key, record, const domain_event_meta_t *meta);
@@ -239,7 +277,7 @@ typedef struct {
     domain_key_t   key;
     domain_value_t value;         // optional компактный snapshot
 
-    micro_db_ring_seq_t payload_ref;  // optional transient payload (best-effort), иначе NONE
+    domain_payload_ref_t payload_ref;  // optional transient payload (best-effort), иначе NONE
 } domain_event_t;
 ```
 
@@ -310,31 +348,99 @@ runtime-потребителю, факт несёт `payload_ref` в Transient P
 - payload нужен runtime-потребителю;
 - payload не является persistent/current Entity State.
 
-Payload хранится в отдельном RAM ring (тот же `micro_db` Ring Store):
-
-```text
-Transient Payload Ring
-seq 201 → payload A
-seq 202 → payload B
-...
-```
-
-Событие может нести ссылку:
+Payload хранится в отдельном RAM ring (`micro_db` Ring Store), но сервисы **не** работают
+с ring-API напрямую. Есть тонкий Domain-фасад:
 
 ```c
-optional micro_db_ring_seq_t payload_ref;
+esp_err_t domain_payload_put(
+    const void *payload,
+    size_t size,
+    domain_payload_ref_t *out_ref);
+
+esp_err_t domain_payload_get(
+    domain_payload_ref_t ref,
+    void *out_payload,
+    size_t out_size,
+    size_t *out_actual_size);
 ```
 
-Никакого ownership / refcount / release:
+Семантика:
 
-- payload живёт, пока не вытеснен новым payload;
-- subscriber успел прочитать — хорошо;
-- не успел — `STALE`;
-- producer никого не ждёт.
+```text
+domain_payload_put()
+→ append в Transient Payload Ring
+→ возвращает opaque domain_payload_ref_t
 
-Это **best-effort transient runtime data**. Retention payload **не** зависит от consumers.
+domain_payload_get()
+→ читает payload по ref
+→ OK, если payload ещё жив
+→ STALE / NOT_FOUND, если уже вытеснен
+```
+
+Никакого release / retain / refcount / ownership / TTL / consumer tracking:
+payload живёт, пока его не вытеснит ring.
+
+Flow:
+
+```text
+Zigbee service receives event-like payload
+        ↓
+domain_payload_put(payload)
+        ↓
+domain_payload_ref_t ref
+        ↓
+domain publishes Journal fact with optional payload_ref
+        ↓
+Dispatcher triggers subscriber
+        ↓
+subscriber:
+    - normal state event       → domain_get(...)
+    - if payload_ref needed    → domain_payload_get(ref)
+```
+
+Если `domain_payload_get()` возвращает STALE — это нормальная best-effort семантика.
 Для обычных state-based событий payload ring не используется: подписчик читает текущее
 состояние из Entity Store (см. §6.1).
+
+Typed payload (не только bytes+size) можно рассмотреть позже, по реальной необходимости;
+сейчас достаточно generic bytes + size.
+
+**Invariant.** Journal record должен оставаться осмысленным для истории и диагностики
+даже после того, как связанный transient payload уже вытеснен. `payload_ref` — только
+дополнительная runtime-информация.
+
+Хороший пример:
+
+```text
+Journal:
+  kind = ENTITY_UPSERTED / EVENT
+  op/value = DOUBLE_PRESS
+  payload_ref = vendor-specific details
+
+после потери payload остаётся понятный факт: DOUBLE_PRESS
+```
+
+Плохой вариант:
+
+```text
+Journal:
+  value = NONE
+  payload_ref = вся семантика события
+```
+
+После вытеснения payload такой Journal record становится бесполезным.
+
+Правило:
+
+```text
+Journal fields/value
+→ минимально достаточное историческое описание факта
+
+Transient Payload
+→ дополнительные runtime-данные, которые допустимо потерять
+```
+
+`value` при этом сохраняет роль history / diagnostics, а не бизнес-input автоматики.
 
 ## 6. Порядок и Dispatcher
 
@@ -417,9 +523,24 @@ Completed Archive Batch
 - Запись completed batch во flash/SD **пока не реализуем**: lifecycle фиксируем сейчас,
   физическое сохранение подключается позже в точку после completed batch.
 - Archive нужен для истории/диагностики, но **не** для runtime replay.
-- Journal **не ждёт** отстающего потребителя (Диспетчер — единственный, кто читает
-  Journal). Gap определяется по `seq`, recovery решает сам сервис; потеря промежуточных
-  фактов — не ошибка.
+- **Dispatcher — единственный consumer Journal**, поэтому Journal-gap обнаруживает
+  Dispatcher, а не сервис:
+
+  ```text
+  Dispatcher expected seq = X
+  Journal oldest seq     = Y > X
+  → Dispatcher обнаружил Journal gap
+  ```
+
+  Что делает Dispatcher:
+
+  - записывает diagnostic / counter;
+  - продолжает с oldest available;
+  - не блокирует producer;
+  - state-based subscribers восстанавливают актуальное состояние через Entity Store.
+
+  Journal-gap **не** приписывается сервису. Если у конкретного сервиса переполнился его
+  собственный локальный FIFO / inbox — это локальная потеря этого сервиса, не Journal gap.
 
 ## 7. Команды
 
@@ -645,7 +766,8 @@ Domain model → Web projection (DTO) → binary WS
 ### 10.2. Display
 
 Читает Entity Store напрямую через Domain, своей модели не держит.
-Пользуется `handle/check`, чтобы не читать payload без нужды.
+Пользуется Domain read facade (`handle/check`), чтобы не читать payload без нужды;
+к `micro_db` напрямую не линкуется.
 Подписан на триггеры, перечитывает только нужное.
 
 ### 10.3. Pending
@@ -661,6 +783,8 @@ Table Store   — keyed mutable records; get / upsert / remove / list
 Ring Store    — ordered bounded records; append / get_by_seq / oldest / newest / overwrite-oldest
 ```
 
+- Приватный storage для Domain: сервисы не видят `micro_db` API напрямую (§3.1); наружу —
+  только простой Domain API.
 - **Entity Store** использует Table Store (`handle` / `check(generation/version)` /
   `read(copy-out)`).
 - **Journal и Transient Payload** используют Ring Store (`seq` как identity, overwrite
@@ -737,6 +861,11 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
 21. Четыре разных хранения: Entity Store (текущее состояние), Journal Ring (короткая
     последовательность фактов), Transient Payload Ring (временные runtime payload),
     Archive (история вытесненных Journal records). На текущем этапе все — fixed-capacity RAM.
+22. Journal record осмыслен без payload: `value`/fields содержат минимально достаточное
+    историческое описание; transient payload — только дополнительные runtime-данные,
+    которые допустимо потерять.
+23. Сервисы видят только Domain API. Типы `micro_db` (seq, slot, generation, ring API) не
+    выходят наружу; `domain_payload_ref_t` — доменный opaque-тип, не `micro_db_ring_seq_t`.
 
 ## 15. Миграция из v1
 
@@ -781,6 +910,8 @@ ui_control_ack     → удаляем; pending уходит в UI
 Принято (не открытые):
 - Journal может хранить компактный `domain_value_t`; большие записи — нет;
 - caller передаёт `event_meta {source, value, payload_ref?}`, Domain не извлекает журнал из записи;
+- transient payload доступен сервисам только через `domain_payload_put/get`;
+  `domain_payload_ref_t` — доменный opaque-тип, `micro_db_ring_seq_t` наружу не выходит;
 - generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
 - факт → всегда Journal; физический update — только при реальном изменении snapshot;
 - sync dispatch под Domain-lock — отвергнут; Диспетчер отдельный, подписчики вне producer'а;
