@@ -10,7 +10,7 @@ Entity Store  — хранит последнее известное состо�
 Journal       — системный поток фактов: короткая история (со значением факта) + источник триггеров
 Dispatcher    — раздаёт подписчикам лёгкие триггеры; их логику не выполняет и не ждёт
 Command       — transient intent: синхронно доставляется сервису, Journal пишет COMMAND_SENT
-micro_db      — только механика хранения
+micro_db      — только механика хранения (Table Store + Ring Store)
 ```
 
 `Domain` должен оставаться объяснимым ровно этим. Если модели реально не хватает —
@@ -111,12 +111,13 @@ Store всё время хранит `temperature = 25`. Если конкрет
         └────────────────┼────────────────┘
                          v
         ┌──────────────── Domain ─────────────────┐
-        │  Entity Store  (generic CRUD)            │
-        │  Journal       (fact stream)             │
-        │  Dispatcher    (notify subscribers)      │
+        │  Entity Store   (generic CRUD → Table)   │
+        │  Journal        (fact stream  → Ring)    │
+        │  Payload Ring   (transient    → Ring)    │
+        │  Dispatcher     (notify subscribers)     │
         └──────────────────────────────────────────┘
                          │
-                      micro_db            (приватна для Domain)
+        micro_db  (Table Store + Ring Store)     (приватна для Domain)
 
         Display ── direct read ──► Entity Store
 ```
@@ -131,17 +132,22 @@ Store всё время хранит `temperature = 25`. Если конкрет
 
 ```text
 Domain
-├── Entity Store   — последнее известное состояние
-├── Journal        — поток фактов (история + источник триггеров)
-└── Dispatcher     — отдельная задача-потребитель Journal; рассылает триггеры
+├── Entity Store            — последнее известное состояние            → micro_db Table Store
+├── Journal                 — поток фактов (история + источник триггеров) → micro_db Ring Store
+├── Transient Payload Ring  — best-effort runtime payload (редкие event-like факты) → micro_db Ring Store
+└── Dispatcher              — отдельная задача-потребитель Journal; рассылает триггеры
 ```
+
+Entity Store использует keyed Table Store. Journal и transient payload используют Ring
+Store. У них разная семантика, и они **не** проходят через generic entity CRUD: Journal и
+transient payload — не entities.
 
 Domain **не** знает про:
 
 - pending UI;
 - lifecycle команд;
 - cause/correlation;
-- staging больших payload;
+- ownership / refcount / release / TTL transient payload;
 - процедуры создания/удаления устройств;
 - связи (relationships) между сущностями;
 - роли, capabilities, permission-модели.
@@ -186,8 +192,9 @@ Domain не должен сам извлекать «что интересно �
 
 ```c
 typedef struct {
-    domain_source_t source;   // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
-    domain_value_t  value;    // optional компактный snapshot
+    domain_source_t source;            // ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+    domain_value_t  value;             // optional компактный snapshot
+    micro_db_ring_seq_t payload_ref;   // optional: ссылка на Transient Payload Ring (см. §5.3)
 } domain_event_meta_t;
 
 domain_upsert(entity_type, key, record, const domain_event_meta_t *meta);
@@ -215,6 +222,10 @@ UI изменил automation
 Journal — **системный поток фактов**: сохраняет короткую историю и служит источником
 триггеров. В нём только то, что уже произошло. Управления в нём нет.
 
+Journal — клиент `micro_db` **Ring Store**: `domain_event_t` кладётся через
+`micro_db_ring_append` и получает monotonic `seq` как identity. Это bounded live ring
+(см. §6.2), не keyed table.
+
 ```c
 typedef struct {
     uint64_t seq;
@@ -227,6 +238,8 @@ typedef struct {
 
     domain_key_t   key;
     domain_value_t value;         // optional компактный snapshot
+
+    micro_db_ring_seq_t payload_ref;  // optional transient payload (best-effort), иначе NONE
 } domain_event_t;
 ```
 
@@ -277,6 +290,10 @@ Events UI строит читаемый вид из структуры: `DEVICE_
 Для automation value = `NONE`: сам факт «auto-7 была записана» уже достаточен,
 подробности остаются в Entity Store.
 
+`value` сохраняет роль компактного значения **для истории/диагностики**; это не обязательно
+бизнес-input автоматики. Если компактного `value` недостаточно, а payload реально нужен
+runtime-потребителю, факт несёт `payload_ref` в Transient Payload Ring (см. §5.3).
+
 ### 5.2. Прочее
 
 - Journal — bounded RAM ring, capacity compile-time/configurable (старт ~50). При
@@ -284,6 +301,40 @@ Events UI строит читаемый вид из структуры: `DEVICE_
 - Вытесненные записи уходят в RAM Archive (§6.2); выгрузка completed batch во flash/SD —
   позже, в уже зафиксированную точку. Hot-path от этого не меняется.
 - Источник истины — **Entity Store**, не журнал. Это не Event Sourcing.
+
+### 5.3. Transient Payload Ring
+
+Отдельный **escape hatch**, не обязательный путь для всех событий. Нужен для фактов, где:
+
+- компактного `domain_value_t` недостаточно;
+- payload нужен runtime-потребителю;
+- payload не является persistent/current Entity State.
+
+Payload хранится в отдельном RAM ring (тот же `micro_db` Ring Store):
+
+```text
+Transient Payload Ring
+seq 201 → payload A
+seq 202 → payload B
+...
+```
+
+Событие может нести ссылку:
+
+```c
+optional micro_db_ring_seq_t payload_ref;
+```
+
+Никакого ownership / refcount / release:
+
+- payload живёт, пока не вытеснен новым payload;
+- subscriber успел прочитать — хорошо;
+- не успел — `STALE`;
+- producer никого не ждёт.
+
+Это **best-effort transient runtime data**. Retention payload **не** зависит от consumers.
+Для обычных state-based событий payload ring не используется: подписчик читает текущее
+состояние из Entity Store (см. §6.1).
 
 ## 6. Порядок и Dispatcher
 
@@ -347,15 +398,15 @@ Dispatcher → trigger(subscriber)    (пробуждает, логику не �
 
 ### 6.2. Retention и Archive
 
-Live Journal — bounded ring. Его никто не удерживает: подписчики читают Domain,
-а не Journal, поэтому вытеснение факта их не ломает.
+Live Journal — bounded ring на `micro_db` Ring Store. Его никто не удерживает:
+подписчики читают Domain, а не Journal, поэтому вытеснение факта их не ломает.
 
 ```text
-Live Journal                     (bounded ring, capacity compile-time ~50)
-    ↓ вытеснение по одной записи
+Live Journal Ring                (micro_db Ring Store, capacity compile-time ~50)
+    ↓ evicted oldest event (по одной записи)
 RAM Archive                      (фиксированный batch, напр. 50 записей)
     ↓ batch заполнен
-completed batch
+Completed Archive Batch
     ↓
 [future: async flash/SD persistence]
 ```
@@ -476,6 +527,33 @@ entity = DEVICE_STATE
 source = ZIGBEE
 ```
 
+### 8.1. Automation semantics (state-based)
+
+Обычная автоматика работает по **текущему состоянию**, а не по каждому событию:
+
+```text
+Journal/Dispatcher → trigger Automation
+Automation wakes
+→ reads current Entity Store
+→ evaluates current conditions
+→ if true, posts COMMAND
+```
+
+То есть для state-based automation:
+
+```text
+Journal event = причина проснуться
+Entity Store  = данные для решения
+```
+
+Если было `ON` → быстро `OFF`, и Automation проснулась уже на `OFF`, то условие `ON` не
+выполняется — это нормальная семантика. Промежуточный state воспроизводить не обязаны.
+
+Если позже появятся действительно event-based Zigbee события, которые нельзя выразить
+текущим state (`single_press`, `double_press`, vendor event и т.п.), Automation может
+использовать `payload_ref`/transient payload. Но это не заставляет все state events ходить
+через payload ring.
+
 Роли, capability system и permission-модели сейчас не вводим.
 
 ## 9. Связи сущностей
@@ -576,14 +654,17 @@ Domain model → Web projection (DTO) → binary WS
 
 ## 11. micro_db
 
-Storage engine, домен-агностичен. Первый этап — не усложняем:
+Storage engine, домен-агностичен. Содержит **два независимых primitive**:
 
 ```text
-handle
-check(generation/version)
-read(copy-out)
+Table Store   — keyed mutable records; get / upsert / remove / list
+Ring Store    — ordered bounded records; append / get_by_seq / oldest / newest / overwrite-oldest
 ```
 
+- **Entity Store** использует Table Store (`handle` / `check(generation/version)` /
+  `read(copy-out)`).
+- **Journal и Transient Payload** используют Ring Store (`seq` как identity, overwrite
+  oldest, вытесненный `seq` → STALE). Это не entities и не проходят через entity CRUD.
 - micro_db **может** не переписывать одинаковый payload и не увеличивать version,
   если запись физически не изменилась. Journal всё равно уже получил факт (§1.2).
 - `generation` существует для slot reuse — вопрос реализации `check()`, не архитектурный.
@@ -624,7 +705,7 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
 3. Сервисы и UI — клиенты Domain с единым интерфейсом.
 4. Все entity равны; `entity_type` — только routing (+ optional validator).
 5. Journal никогда не хранит большие entity records; может хранить компактный
-   `domain_value_t`, переданный caller'ом.
+   `domain_value_t` (передан caller'ом) и/или `payload_ref` на Transient Payload Ring.
 6. Store change и Journal append — один сериализованный порядок (короткий lock только
    на запись); last-writer-wins.
 7. Пришедший факт всегда попадает в Journal, независимо от равенства snapshot.
@@ -649,14 +730,22 @@ report → Zigbee service → Domain: state → Journal: ENTITY_UPSERTED → Dis
 18. Live Journal — bounded ring, никто его не удерживает (подписчики читают Domain).
     Вытесненные факты уходят в RAM Archive по одной записи; gap у отставшего
     потребителя определяется по `seq`.
+19. Journal и Transient Payload — клиенты `micro_db` Ring Store; они не entities и не
+    проходят через generic entity CRUD.
+20. Transient Payload Ring — best-effort: без ownership / refcount / release / TTL;
+    вытесненный payload даёт STALE, Domain не блокируется и никого не ждёт.
+21. Четыре разных хранения: Entity Store (текущее состояние), Journal Ring (короткая
+    последовательность фактов), Transient Payload Ring (временные runtime payload),
+    Archive (история вытесненных Journal records). На текущем этапе все — fixed-capacity RAM.
 
 ## 15. Миграция из v1
 
 ```text
-micro_db           → развиваем (handle / check / read)
-gw_model           → Entity Store (generic CRUD + registry)
-gw_model_notify    → Journal
+micro_db           → развиваем: Table Store (handle/check/read) + Ring Store
+gw_model           → Entity Store (micro_db Table Store + registry)
+gw_model_notify    → Journal (micro_db Ring Store)
 gw_proto_bus       → Dispatcher
+transient payload  → Transient Payload Ring (micro_db Ring Store)
 rules engine       → сервис-подписчик
 gw_zigbee_uart     → Zigbee-сервис (state-machine, отдельная тема)
 Web snapshot+delta → сохраняем
@@ -681,10 +770,17 @@ ui_control_ack     → удаляем; pending уходит в UI
 5. **Snapshot consistency.** Web Service собирает snapshot несколькими `domain_list`.
    Параллельные writers могут дать torn snapshot. Варианты: принять eventual
    consistency (дельты догонят) или version-stamped snapshot.
+6. **Ring persistence vs Archive.** `micro_db` Ring Store может получить persistence
+   (roadmap micro_db), при этом Domain ведёт RAM Archive вытесненных Journal records.
+   Нужно явно решить, кто пишет во flash, и не появляются ли два конкурирующих механизма
+   истории.
+7. **value vs payload_ref.** Критерий, когда факт несёт компактный `domain_value_t`, а
+   когда — transient `payload_ref`, пока не зафиксирован. До решения: по умолчанию compact
+   value, `payload_ref` — только для реально event-like данных.
 
 Принято (не открытые):
 - Journal может хранить компактный `domain_value_t`; большие записи — нет;
-- caller передаёт `event_meta {source, value}`, Domain не извлекает журнал из записи;
+- caller передаёт `event_meta {source, value, payload_ref?}`, Domain не извлекает журнал из записи;
 - generic kinds: `ENTITY_UPSERTED` / `ENTITY_REMOVED` / `COMMAND_SENT`;
 - факт → всегда Journal; физический update — только при реальном изменении snapshot;
 - sync dispatch под Domain-lock — отвергнут; Диспетчер отдельный, подписчики вне producer'а;
@@ -697,4 +793,23 @@ ui_control_ack     → удаляем; pending уходит в UI
   и web-костыли живут у него;
 - Journal — bounded ring, никто его не удерживает (подписчики читают Domain);
   вытеснение → RAM Archive batch; persistence completed batch во flash/SD — позже;
-  Archive не для runtime replay.
+  Archive не для runtime replay;
+- Journal и transient payload — клиенты `micro_db` Ring Store, не entities и не через
+  generic entity CRUD;
+- Transient Payload Ring — best-effort, без ownership/refcount/release/TTL; stale —
+  нормальная потеря, Domain никого не ждёт;
+- zero-copy borrow — не основная цель; сначала handle/check/read(copy-out), borrow
+  только по замерам.
+
+## 17. Формула хранения
+
+```text
+micro_db Table
+    → mutable current state
+    → Entity Store
+
+micro_db Ring
+    → bounded ordered records
+    → Journal
+    → Transient Payload
+```
