@@ -193,11 +193,35 @@ payload, процедуры создания/удаления устройств
 5. Связи сущностей выражаются данными и составными ключами, а не Domain-relations.
 6. Domain не расширяем заранее: новый механизм — только под доказанную потребность.
 
-## 7. Нерешённое
+## 7. Структура документации
 
-Архитектурные решения, ещё не зафиксированные:
+```text
+docs/
+├── ARCHITECTURE.md          — карта: что существует и зачем
+├── domain/
+│   ├── ENTITY_STORE.md
+│   ├── JOURNAL.md
+│   ├── DISPATCHER.md
+│   ├── TRANSIENT_PAYLOAD.md
+│   └── COMMANDS.md
+├── services/
+│   ├── ZIGBEE.md
+│   ├── AUTOMATION.md
+│   └── WEB.md
+├── clients/
+│   └── DISPLAY.md
+└── storage/
+    └── MICRO_DB.md
+```
 
-- критерий «compact value vs transient payload»;
-- гарантии (или их отсутствие) для edge-triggered автоматик;
-- модель request/response операций (`read_attr`, scan, `permit_join`);
-- консистентность snapshot в Web service при параллельных писателях.
+Правило разделения:
+
+```text
+ARCHITECTURE.md           → что существует и зачем
+layer/component document  → контракт и поведение слоя
+code                      → конкретная реализация
+```
+
+Детали не дублируются между документами. `ARCHITECTURE.md` говорит «Journal — поток
+фактов», а подробности живут только в `domain/JOURNAL.md`. Открытые вопросы — в
+соответствующем layer-документе.
