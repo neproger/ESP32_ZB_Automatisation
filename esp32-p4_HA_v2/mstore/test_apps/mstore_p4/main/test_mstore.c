@@ -111,8 +111,46 @@ static void run_ring_suite(void) {
     ESP_LOGI(TAG, "ring suite: OK");
 }
 
+static void run_flash_suite(void) {
+    mstore_table_t table = {0};
+    mstore_table_schema_t schema = {
+        .capacity = 8,
+        .key_size = sizeof(uint32_t),
+        .payload_size = sizeof(value_t),
+        .payload_equals = NULL,
+        .backing = MSTORE_BACKING_FLASH,
+        .persist_key = "p4_flash",
+    };
+
+    require(mstore_table_init(&table, &schema) == MSTORE_OK, "flash init");
+    require(mstore_table_clear(&table) == MSTORE_OK, "flash clear");
+
+    uint32_t key = 7;
+    value_t v = {7, 7};
+    mstore_slot_t slot;
+    uint32_t gen;
+    require(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen) == MSTORE_OK, "flash alloc");
+    require(mstore_table_deinit(&table) == MSTORE_OK, "flash deinit");
+
+    /* reboot: тот же durable partition */
+    mstore_table_t reopened = {0};
+    require(mstore_table_init(&reopened, &schema) == MSTORE_OK, "flash reopen");
+    mstore_slot_t found;
+    require(mstore_table_slot_find(&reopened, &key, &found) == MSTORE_OK, "flash find after reboot");
+    mstore_meta_t meta;
+    uint32_t read_key;
+    value_t read_value;
+    require(mstore_table_slot_read(&reopened, found, &meta, &read_key, &read_value) == MSTORE_OK,
+            "flash read");
+    require(read_key == key && read_value.a == 7 && read_value.b == 7, "flash payload");
+    require(mstore_table_deinit(&reopened) == MSTORE_OK, "flash deinit 2");
+
+    ESP_LOGI(TAG, "flash suite: OK");
+}
+
 void app_main(void) {
     run_table_suite();
     run_ring_suite();
+    run_flash_suite();
     ESP_LOGI(TAG, "ALL MSTORE TESTS PASSED");
 }

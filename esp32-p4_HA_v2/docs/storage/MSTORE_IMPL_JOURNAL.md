@@ -10,7 +10,7 @@
 | Компонент | `mstore` (Table Store + Ring Store) |
 | Архитектура | `MSTORE.md` (Ревизия 4 + storage backend, §2.11) |
 | RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
-| Storage backend | RAM, FLASH (append-only, recovery, checkpoint), RAM\|FLASH composite — реализованы и протестированы |
+| Storage backend | RAM, FLASH, RAM\|FLASH composite, ESP-IDF `esp_partition` adapter — реализованы; hardware verification pending |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
 | Осталось | storage backend extraction → flash format → hardware verification |
 
@@ -139,8 +139,8 @@ Storage phase:
 - [x] randomized model suite на RAM/FLASH (`test_model`, `test_flash_model` — 100k ops,
       reboot каждые 5000, checkpoint, invariants каждый op)
 - [x] RAM+FLASH composite backend (`mstore_storage_ram_flash.c`; public API не менялся)
-- [ ] ESP-IDF `esp_partition` backend
-- [ ] единый mstore hardware suite на реальной P4
+- [x] ESP-IDF `esp_partition` backend (adapter + Kconfig partition label; IDF build зелёный)
+- [ ] hardware verification на реальной P4 (flash / boot / suite)
 
 Порядок из архитектурного решения соблюдается: flash format проектируется только после
 зелёного RAM backend extraction.
@@ -189,6 +189,7 @@ Storage phase:
 | 2026-09-30 | `generation` wraparound запрещён: slot с generation==MAX не переиспользуется | исключить ABA по физическому адресу |
 | 2026-09-30 | `version` wraparound запрещён: changed update при version==MAX -> `MSTORE_OVERFLOW` | исключить неоднозначную ревизию |
 | 2026-09-30 | Новая нейтральная ошибка `MSTORE_OVERFLOW` | отделить overflow от `INVALID_STATE` |
+| 2026-09-30 | `esp_partition` adapter: device через partition label (Kconfig), auto-bind при первом обращении | host использует nor_sim, target — реальный partition |
 
 ## 6. Хронология
 
@@ -242,15 +243,21 @@ Storage phase:
   переиспользуется (-> `MSTORE_OVERFLOW`), changed update при `version == UINT32_MAX`
   -> `MSTORE_OVERFLOW`. Добавлена ошибка `MSTORE_OVERFLOW` и тест `test_boundaries`.
   Host 11/11, IDF build.
+- Реализован ESP-IDF `esp_partition` adapter (`port/espidf/mstore_platform_espidf.c`):
+  device поверх `esp_partition_read/write/erase_range`, partition по метке
+  `CONFIG_MSTORE_FLASH_PARTITION_LABEL` (default `mstore`). В test_apps добавлены
+  `partitions.csv` (data-partition `mstore`) и FLASH-секция smoke-теста. IDF build
+  под esp32p4 проходит; поведение на реальном flash ещё не проверялось.
 
 Следующий шаг:
 
-- ESP-IDF `esp_partition` adapter (реализация `mstore_flash_device` через partition);
-  затем hardware suite на реальной P4.
+- hardware verification на реальной P4: flash `mstore_p4`, boot, прогон suite
+  (Table + Ring + FLASH), проверка allocator/lock/erase/reboot.
 
 ## 7. Открытые вопросы
 
-1. ESP-IDF `esp_partition` adapter — не реализован (hardware blocker).
+1. Hardware verification на реальной ESP32-P4: flash/boot/suite, erase/write alignment,
+   реальный reboot recovery.
 2. FLASH: committed prefix corruption без последующих записей классифицируется как
    torn tail (осознанное ограничение revision 1).
 3. Ring persistence: общий storage abstraction или специализированный layout — после Table.

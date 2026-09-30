@@ -510,7 +510,8 @@ REWORK / DROP:
   payload, CRC, commit marker/sequence) — гипотеза, а не решение. Выбор по критериям:
   power-loss safety, atomic observable state, recovery, bounded RAM, erase/write
   amplification, compaction, corruption detection.
-- ESP-IDF `esp_partition` backend — после того, как формат и recovery доказаны на host.
+- ESP-IDF `esp_partition` backend реализован (adapter + partition label
+  `CONFIG_MSTORE_FLASH_PARTITION_LABEL`); hardware verification на P4 — отдельный шаг.
 - Persistence остаётся внутри mstore и не меняет семантику Table Store.
 
 #### 2.11.5. Error semantics

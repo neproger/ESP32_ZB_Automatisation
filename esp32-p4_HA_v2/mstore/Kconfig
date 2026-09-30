@@ -1,0 +1,10 @@
+menu "mstore"
+
+    config MSTORE_FLASH_PARTITION_LABEL
+        string "Partition label for mstore FLASH backing"
+        default "mstore"
+        help
+            Data partition, используемая как NOR-регион для FLASH / RAM+FLASH
+            backing. Партиция ищется по этой метке при первом обращении.
+
+endmenu

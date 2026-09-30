@@ -15,4 +15,5 @@ idf_component_register(
         "src"
     REQUIRES
         esp_common
+        esp_partition
 )
