@@ -242,14 +242,29 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
         mstore_platform_lock_release(st->lock);
         return MSTORE_NO_SPACE;
     }
-    mstore_slot_t slot = st->free_slots[st->free_count - 1];
 
-    mstore_meta_t meta;
-    err = mstore_storage_read_meta(st->storage, slot, &meta);
-    if (err != MSTORE_OK) {
-        mstore_platform_lock_release(st->lock);
-        return err;
+    /* Берём первый свободный slot с неисчерпанной generation; исчерпанные
+     * остаются в free-list, но больше не переиспользуются (без ABA). */
+    size_t pick = SIZE_MAX;
+    mstore_meta_t meta = {0};
+    for (size_t i = st->free_count; i > 0; i--) {
+        mstore_slot_t candidate = st->free_slots[i - 1];
+        err = mstore_storage_read_meta(st->storage, candidate, &meta);
+        if (err != MSTORE_OK) {
+            mstore_platform_lock_release(st->lock);
+            return err;
+        }
+        if (meta.generation != UINT32_MAX) {
+            pick = i - 1;
+            break;
+        }
     }
+    if (pick == SIZE_MAX) {
+        mstore_platform_lock_release(st->lock);
+        return MSTORE_OVERFLOW;
+    }
+
+    mstore_slot_t slot = st->free_slots[pick];
     meta.used = true;
     meta.generation++;
     meta.version = 1;
@@ -260,6 +275,7 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
         return err;
     }
 
+    st->free_slots[pick] = st->free_slots[st->free_count - 1];
     st->free_count--;
     mstore_index_insert(st, slot, key);
     st->live_count++;
@@ -304,6 +320,10 @@ mstore_err_t mstore_table_slot_update(mstore_table_t *table, mstore_slot_t slot,
 
     bool changed = !mstore_payload_equal(&st->schema, st->scratch_payload, payload);
     if (changed) {
+        if (meta.version == UINT32_MAX) {
+            mstore_platform_lock_release(st->lock);
+            return MSTORE_OVERFLOW;
+        }
         meta.version++;
         err = mstore_storage_write_slot(st->storage, slot, &meta, st->scratch_key, payload);
         if (err != MSTORE_OK) {

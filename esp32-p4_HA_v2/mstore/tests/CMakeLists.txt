@@ -33,6 +33,7 @@ mstore_add_test(test_table)
 mstore_add_test(test_model)
 mstore_add_test(test_ring)
 mstore_add_test(test_ring_model)
+mstore_add_test(test_boundaries)
 
 # NOR simulator — host-only support, без core.
 add_executable(test_flash_sim test_flash_sim.c support/nor_sim.c)

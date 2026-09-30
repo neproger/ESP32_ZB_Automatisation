@@ -191,7 +191,18 @@ reuse того же physical slot:
 `version` относится к текущему incarnation и меняется только при реальном изменении
 payload (через `payload_equals`).
 
-Значение начала (0/1) и поведение при wraparound — вопрос реализации.
+Начальное значение (0/1) — вопрос реализации. Wraparound **не допускается**:
+
+```text
+allocate:
+    slot с generation == UINT32_MAX не переиспользуется
+    (все свободные slots исчерпаны -> MSTORE_OVERFLOW)
+
+update:
+    реальное изменение при version == UINT32_MAX -> MSTORE_OVERFLOW
+```
+
+Так исключается ABA по generation и неоднозначная ревизия по version.
 
 Пример жизненного цикла одного физического slot'а:
 
@@ -588,8 +599,9 @@ mstore
 Общие соглашения:
 
 - возвращаемое значение — нейтральный `mstore_err_t` (`OK / NOT_FOUND / ALREADY_EXISTS /
-  STALE / INVALID_ARG / NO_MEM / NO_SPACE / INVALID_STATE / INVALID_SIZE`); адаптер
-  ESP-IDF маппит его в `esp_err_t`;
+  STALE / INVALID_ARG / NO_MEM / NO_SPACE / INVALID_STATE / INVALID_SIZE /
+  INVARIANT_FAILED / IO / CORRUPT / OVERFLOW`); адаптер ESP-IDF маппит его в
+  `esp_err_t`;
 - экземпляр table/ring — caller-owned структура; жизненный цикл `init / deinit`;
 - capacity фиксирована; память выделяется core'ом через platform allocator;
 - у экземпляра один внутренний lock (platform lock); все операции thread-safe

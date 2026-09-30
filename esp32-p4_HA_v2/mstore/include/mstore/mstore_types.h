@@ -21,6 +21,7 @@ typedef enum {
     MSTORE_INVARIANT_FAILED,
     MSTORE_IO,      /* physical read/program/erase failure */
     MSTORE_CORRUPT, /* committed durable structure invalid */
+    MSTORE_OVERFLOW, /* generation/version исчерпаны */
 } mstore_err_t;
 
 /* slot — физическое место в table, не долговечная identity. */
