@@ -10,9 +10,14 @@
 | Компонент | `mstore` (Table Store + Ring Store) |
 | Архитектура | `MSTORE.md` (Ревизия 4 + storage backend, §2.11) |
 | RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
-| Storage backend | RAM, FLASH, RAM\|FLASH composite, ESP-IDF `esp_partition` adapter — реализованы; hardware verification pending |
+| Storage backend | RAM, FLASH, RAM\|FLASH composite, ESP-IDF `esp_partition` adapter — реализованы |
+| FLASH regions | Region Manager (directory + region view) реализован; multi-table проверен host и P4 |
+| Статус | **mstore v1 — implementation complete, host verified, hardware verified. Заморожен.** |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
-| Осталось | region manager для multi-table FLASH → hardware verification |
+| Осталось | пересчёт `partitions.csv` под реальные schema Domain (вместе с Entity Store) |
+
+**Заморозка.** mstore не улучшается «на всякий случай». Возврат — только под дефект или
+под отсутствующую способность, доказанную Domain.
 
 ## 2. Опорная модель
 
@@ -140,7 +145,15 @@ Storage phase:
       reboot каждые 5000, checkpoint, invariants каждый op)
 - [x] RAM+FLASH composite backend (`mstore_storage_ram_flash.c`; public API не менялся)
 - [x] ESP-IDF `esp_partition` backend (adapter + Kconfig partition label; IDF build зелёный)
-- [ ] hardware verification на реальной P4 (flash / boot / suite)
+- [x] hardware verification на реальной P4 (flash / boot / suite)
+
+Region phase:
+
+- [x] directory регионов + region view (ping-pong, recovery, CORRUPT) — `test_regions`
+- [x] подключение Region Manager к FLASH backend вместо прямого device
+- [x] multi-table на одном разделе + reopen (host)
+- [x] hardware verification region manager на P4 rev 1.3
+- [ ] пересчёт `partitions.csv` под фактические schema Domain
 
 Порядок из архитектурного решения соблюдается: flash format проектируется только после
 зелёного RAM backend extraction.
@@ -195,6 +208,14 @@ Storage phase:
 | 2026-09-30 | Гарды `SIZE_MAX` для ring/table/RAM и bounded `next_pow2` | на 32-битном P4 переполнение размера даёт малую аллокацию и запись за границей |
 | 2026-09-30 | `bank_size` округляется арифметикой, не маской | маска требует `erase_size` степени двойки |
 | 2026-09-30 | `mstore_iter_cb_t` получает `key` помимо `meta/payload` | колбэку не нужно вызывать API table ради ключа; контракт не зависит от рекурсивности lock'а |
+| 2026-09-30 | Region Manager: directory (2 ping-pong слота по erase-блоку, N = 16) + region view как derived device; FLASH backend получает уже выделенный регион и не знает о соседях | разделение владения разделом и формата внутри региона (`MSTORE_FLASH_REGIONS.md`) |
+| 2026-09-30 | Размер региона считает FLASH backend (`mstore_storage_flash_region_size`), Region Manager только резервирует место | формат и его геометрия не должны быть описаны дважды |
+| 2026-09-30 | Байтовые примитивы (LE-доступ, CRC32, persist_id) вынесены в `mstore_bytes` | общие для FLASH backend и Region Manager |
+| 2026-09-30 | Состояние RETIRED не вводится | v1 не производит переразметку — нет сценария, который его порождает |
+| 2026-09-30 | Смена геометрии: совпавший размер региона → `INVALID_STATE` от backend по bank header; не совпавший → `INVALID_SIZE` от Region Manager | геометрия таблицы не дублируется в directory |
+| 2026-09-30 | Плата P4 — rev 1.3: нужны `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, `REV_MIN_100` и явные 360 МГц | иначе boot-loop `assert failed: esp_clk_init`: 400 МГц по умолчанию для rev <3.0 недоступна |
+| 2026-09-30 | Загрязнённый раздел даёт `MSTORE_CORRUPT`, авто-формата нет: ввод требует erase региона | потеря данных не должна быть тихой; подтверждено на железе |
+| 2026-09-30 | **mstore v1 заморожен** | слой хранения закончен и проверен; изменения — только под дефект или доказанную потребность Domain |
 
 ## 6. Хронология
 
@@ -265,26 +286,33 @@ Storage phase:
   * `mstore_iter_cb_t` дополнен `key`: колбэк больше не должен входить в API table под
     lock (поведение не зависит от рекурсивности mutex на порте).
   Host-тесты 11/11 зелёные, предупреждений компиляции (`/W4`) — 0.
-
-Следующий шаг:
-
-- class FLASH region manager (multi-table ownership) — отдельное архитектурное решение,
-  см. §7 п.6; затем concurrency hardening ленивой инициализации device и hardware
-  verification на реальной P4.
+- Hardware verification на реальной ESP32-P4 (плата rev 1.3, IDF 6.1): `table`, `ring`,
+  `flash` suite зелёные, persistence после повторной загрузки подтверждена. Загрязнённый
+  раздел дал `MSTORE_CORRUPT`, erase региона — ожидаемый ввод в эксплуатацию.
+- Реализован Region Manager (`src/storage/mstore_region.c`): directory из двух ping-pong
+  слотов, N = 16, bump-аллокатор, region view как derived device. FLASH backend получает
+  выделенный регион и семантически не изменился. Новый suite `test_regions`: две таблицы
+  на одном разделе, повторный bind → `INVALID_STATE`, смена геометрии, ёмкость directory
+  (`NO_SPACE`), тесный free tail (`INVALID_SIZE`), грязный раздел → `CORRUPT`.
+  Host 12/12, IDF build зелёный.
+- На P4 проверен multi-table: `region suite: OK` (две FLASH-таблицы, reopen находит оба
+  региона), повторная загрузка — зелёная. mstore v1 заморожен.
 
 ## 7. Открытые вопросы
 
-1. Hardware verification на реальной ESP32-P4: flash/boot/suite, erase/write alignment,
-   реальный reboot recovery.
+1. ~~Hardware verification на реальной ESP32-P4~~ — закрыто: rev 1.3, IDF 6.1, table/ring/
+   flash/region suite зелёные, reboot recovery подтверждён.
 2. FLASH: committed prefix corruption без последующих записей классифицируется как
    torn tail (осознанное ограничение revision 1).
 3. Ring persistence: общий storage abstraction или специализированный layout — после Table.
 4. Table index: возможное изменение стратегии по результатам benchmark.
 5. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
-6. **Владение FLASH-регионом (multi-table).** Сейчас одна FLASH-таблица занимает весь
-   device целиком: `persist_key` лишь проверка identity, разделения регионов нет. Две
-   таблицы с разным ключом не открываются (`INVALID_STATE`), с одинаковым — портят друг
-   друга. Entity Store нужны несколько таблиц одновременно. Контракт решения —
-   `../MSTORE_FLASH_REGIONS.md`: Table Engine → FLASH backend → region → allocator →
-   `esp_partition`; backend получает уже выделенный `offset + size` и не знает о соседях.
+6. ~~**Владение FLASH-регионом (multi-table).**~~ Закрыто Region Manager: Table Engine →
+   FLASH backend → region view → directory → `esp_partition`; backend получает уже
+   выделенный `offset + size` и не знает о соседях. Остаток темы — размер раздела.
+7. **Размер раздела `mstore`.** Сейчас `0x40000` (256 КБ): directory 8 КБ + регионы.
+   Пересчитать под реальные schema Domain вместе с Entity Store.
+8. **Concurrency Region Manager.** `bind/release` — общий singleton без блокировки;
+   защита и отношение к lock'у таблицы — отдельным шагом, если появится многозадачный
+   сценарий инициализации.
 
