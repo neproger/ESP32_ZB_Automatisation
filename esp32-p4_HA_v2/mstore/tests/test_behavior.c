@@ -42,7 +42,7 @@ static void run_suite(mstore_backing_t backing) {
     schema.payload_size = sizeof(value_t);
     schema.payload_equals = NULL;
     schema.backing = backing;
-    schema.persist_key = (backing == MSTORE_BACKING_FLASH) ? "behavior" : NULL;
+    schema.persist_key = (backing == MSTORE_BACKING_RAM) ? NULL : "behavior";
 
     CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
     CHECK(mstore_table_init(&table, &schema) == MSTORE_INVALID_STATE);
@@ -122,9 +122,23 @@ static void run_flash(void) {
     printf("test_behavior: FLASH OK\n");
 }
 
+static void run_composite(void) {
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(4096, 1024);
+    CHECK(sim != NULL);
+    nor_sim_device_t device;
+    nor_sim_device_init(&device, sim);
+    mstore_platform_flash_set_device(&device.base);
+
+    run_suite(MSTORE_BACKING_RAM | MSTORE_BACKING_FLASH);
+
+    mstore_nor_sim_destroy(sim);
+    printf("test_behavior: RAM|FLASH OK\n");
+}
+
 int main(void) {
     run_ram();
     run_flash();
+    run_composite();
     printf("test_behavior: OK\n");
     return 0;
 }

@@ -175,7 +175,7 @@ static void verify_full(mstore_table_t *table, ref_model_t *ref, handle_t handle
     }
 }
 
-int main(void) {
+static void run_model(mstore_backing_t backing, const char *persist_key) {
     mstore_nor_sim_t *sim = mstore_nor_sim_create(1024, 64);
     CHECK(sim != NULL);
     nor_sim_device_t device;
@@ -187,8 +187,8 @@ int main(void) {
     schema.key_size = sizeof(uint32_t);
     schema.payload_size = sizeof(value_t);
     schema.payload_equals = NULL;
-    schema.backing = MSTORE_BACKING_FLASH;
-    schema.persist_key = "model";
+    schema.backing = backing;
+    schema.persist_key = persist_key;
 
     mstore_table_t table = {0};
     CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
@@ -218,6 +218,12 @@ int main(void) {
     CHECK(mstore_table_deinit(&table) == MSTORE_OK);
 
     mstore_nor_sim_destroy(sim);
-    printf("test_flash_model: OK (%d ops)\n", OPS);
+}
+
+int main(void) {
+    run_model(MSTORE_BACKING_FLASH, "model_flash");
+    printf("test_flash_model: FLASH OK (%d ops)\n", OPS);
+    run_model(MSTORE_BACKING_RAM | MSTORE_BACKING_FLASH, "model_composite");
+    printf("test_flash_model: RAM|FLASH OK (%d ops)\n", OPS);
     return 0;
 }

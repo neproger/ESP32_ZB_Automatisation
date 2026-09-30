@@ -10,7 +10,7 @@
 | Компонент | `mstore` (Table Store + Ring Store) |
 | Архитектура | `MSTORE.md` (Ревизия 4 + storage backend, §2.11) |
 | RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
-| Storage backend | RAM реализован; FLASH (append-only, recovery, checkpoint) реализован и durability-протестирован |
+| Storage backend | RAM, FLASH (append-only, recovery, checkpoint), RAM\|FLASH composite — реализованы и протестированы |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
 | Осталось | storage backend extraction → flash format → hardware verification |
 
@@ -138,7 +138,7 @@ Storage phase:
 - [x] общий behavioral suite RAM/FLASH (`test_behavior`)
 - [x] randomized model suite на RAM/FLASH (`test_model`, `test_flash_model` — 100k ops,
       reboot каждые 5000, checkpoint, invariants каждый op)
-- [ ] RAM+FLASH composite backend
+- [x] RAM+FLASH composite backend (`mstore_storage_ram_flash.c`; public API не менялся)
 - [ ] ESP-IDF `esp_partition` backend
 - [ ] единый mstore hardware suite на реальной P4
 
@@ -217,11 +217,16 @@ Storage phase:
 - Добавлен randomized model suite поверх FLASH (`test_flash_model`, 100k ops против
   reference-модели, reboot каждые 5000, checkpoint при переполнении банки, invariants
   каждый op). Host-тесты 9/9 зелёные.
+- Реализован RAM|FLASH composite backend (`src/storage/mstore_storage_ram_flash.c`):
+  RAM — working/hot, FLASH — durable, write-through (durable commit, затем RAM),
+  seed RAM из FLASH при open. Public API и Table Engine не менялись. Покрытие:
+  `test_behavior` (RAM|FLASH), `test_flash_model` (RAM|FLASH), `test_composite`
+  (reboot, flash-fail без изменения RAM). Host 10/10, IDF-сборка проходит.
 
 Следующий шаг:
 
-- RAM|FLASH composite backend (backend-only; публичный API менять не планируется);
-  затем ESP-IDF `esp_partition` adapter.
+- ESP-IDF `esp_partition` adapter (реализация `mstore_flash_device` через partition);
+  затем hardware suite на реальной P4.
 
 Следующий шаг:
 

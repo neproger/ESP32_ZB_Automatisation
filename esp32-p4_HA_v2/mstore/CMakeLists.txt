@@ -7,6 +7,7 @@ idf_component_register(
         "src/storage/mstore_storage.c"
         "src/storage/mstore_storage_ram.c"
         "src/storage/mstore_storage_flash.c"
+        "src/storage/mstore_storage_ram_flash.c"
         "port/espidf/mstore_platform_espidf.c"
     INCLUDE_DIRS
         "include"

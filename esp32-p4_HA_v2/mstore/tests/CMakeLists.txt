@@ -14,6 +14,7 @@ set(MSTORE_CORE
     ../src/storage/mstore_storage.c
     ../src/storage/mstore_storage_ram.c
     ../src/storage/mstore_storage_flash.c
+    ../src/storage/mstore_storage_ram_flash.c
 )
 set(MSTORE_HOST_PORT ../port/host/mstore_platform_host.c)
 
@@ -55,7 +56,7 @@ endif()
 add_test(NAME test_flash COMMAND test_flash)
 
 # Общий behavioral suite (RAM + FLASH) и FLASH durability.
-foreach(flash_test IN ITEMS test_behavior test_flash_durability test_flash_model)
+foreach(flash_test IN ITEMS test_behavior test_flash_durability test_flash_model test_composite)
     add_executable(${flash_test} ${flash_test}.c
         support/nor_sim.c support/nor_sim_device.c
         ${MSTORE_CORE} ${MSTORE_HOST_PORT})
