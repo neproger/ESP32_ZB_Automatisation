@@ -10,7 +10,7 @@
 | Компонент | `mstore` (Table Store + Ring Store) |
 | Архитектура | `MSTORE.md` (Ревизия 4 + storage backend, §2.11) |
 | RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
-| Storage architecture | зафиксирована: один Table Engine + storage backend'ы; RAM extraction выполнен |
+| Storage backend | RAM реализован; FLASH (append-only, recovery, checkpoint) реализован и durability-протестирован |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
 | Осталось | storage backend extraction → flash format → hardware verification |
 
@@ -133,9 +133,11 @@ Storage phase:
 - [x] спроектировать durable format (`MSTORE_FLASH_FORMAT.md`)
 - [x] FLASH backend: append-only log, две банки, recovery scan, checkpoint, atomic clear
       (базовый lifecycle + reboot recovery; `test_flash` зелёный)
-- [ ] FLASH backend: power-loss fault injection, checkpoint overflow, corruption tests
+- [x] FLASH backend: power-loss fault injection, checkpoint overflow, corruption tests
+      (`test_flash_durability`)
+- [x] общий behavioral suite RAM/FLASH (`test_behavior`)
+- [ ] общий randomized model suite на RAM/FLASH
 - [ ] RAM+FLASH composite backend
-- [ ] общий behavioral/model suite на всех трёх storage modes
 - [ ] ESP-IDF `esp_partition` backend
 - [ ] единый mstore hardware suite на реальной P4
 
@@ -208,11 +210,13 @@ Storage phase:
   NOR device через platform-provided seam (`mstore_flash_device.h`, host adapter над
   `nor_sim`). `test_flash` зелёный (lifecycle, duplicate, update changed, free/clear +
   reboot recovery); IDF-сборка проходит.
+- Durability hardening: `test_flash_durability` (torn tail, fail erase, fail program
+  now, committed corruption -> `MSTORE_CORRUPT`, checkpoint overflow) и
+  `test_behavior` (общий behavioral suite RAM + FLASH). Host-тесты 8/8 зелёные.
 
 Следующий шаг:
 
-- FLASH: power-loss fault injection (partial program, fail before/after commit/erase),
-  checkpoint overflow, corruption tests; затем общий behavioral suite RAM/FLASH.
+- общий randomized model suite на RAM/FLASH; затем RAM+FLASH composite и `esp_partition`.
 
 Следующий шаг:
 

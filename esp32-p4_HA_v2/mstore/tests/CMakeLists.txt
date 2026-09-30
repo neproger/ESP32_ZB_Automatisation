@@ -53,3 +53,17 @@ else()
     target_compile_options(test_flash PRIVATE -Wall -Wextra -Werror)
 endif()
 add_test(NAME test_flash COMMAND test_flash)
+
+# Общий behavioral suite (RAM + FLASH) и FLASH durability.
+foreach(flash_test IN ITEMS test_behavior test_flash_durability)
+    add_executable(${flash_test} ${flash_test}.c
+        support/nor_sim.c support/nor_sim_device.c
+        ${MSTORE_CORE} ${MSTORE_HOST_PORT})
+    target_include_directories(${flash_test} PRIVATE ../include ../src support)
+    if(MSVC)
+        target_compile_options(${flash_test} PRIVATE /W4)
+    else()
+        target_compile_options(${flash_test} PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME ${flash_test} COMMAND ${flash_test})
+endforeach()
