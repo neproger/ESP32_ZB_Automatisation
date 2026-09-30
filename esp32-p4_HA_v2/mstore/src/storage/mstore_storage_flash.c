@@ -193,6 +193,71 @@ static mstore_err_t program_record(const mstore_flash_storage_t *st, size_t bank
     return MSTORE_OK;
 }
 
+static mstore_err_t header_region_state(const mstore_flash_storage_t *st, size_t bank) {
+    uint8_t buf[32];
+    size_t offset = 0;
+    while (offset < st->header_size) {
+        size_t chunk = st->header_size - offset;
+        if (chunk > sizeof(buf)) {
+            chunk = sizeof(buf);
+        }
+        if (!dev_read(st, bank_offset(st, bank) + offset, buf, chunk)) {
+            return MSTORE_IO;
+        }
+        for (size_t i = 0; i < chunk; i++) {
+            if (buf[i] != 0xFF) {
+                return MSTORE_CORRUPT;
+            }
+        }
+        offset += chunk;
+    }
+    return MSTORE_OK;
+}
+
+/*
+ * Классифицирует хвост банки от offset:
+ *   полностью erased                -> clean end (torn=false)
+ *   один не-erased run <= max_record -> torn uncommitted append (torn=true)
+ *   не-erased после erased / run > max_record -> MSTORE_CORRUPT
+ */
+static mstore_err_t flash_classify_tail(const mstore_flash_storage_t *st, size_t from, bool *out_torn) {
+    uint8_t buf[64];
+    size_t offset = from;
+    size_t run = 0;
+    bool seen_erased = false;
+
+    while (offset < st->bank_size) {
+        size_t chunk = st->bank_size - offset;
+        if (chunk > sizeof(buf)) {
+            chunk = sizeof(buf);
+        }
+        if (!dev_read(st, bank_offset(st, st->active_bank) + offset, buf, chunk)) {
+            return MSTORE_IO;
+        }
+        for (size_t i = 0; i < chunk; i++) {
+            if (buf[i] != 0xFF) {
+                if (seen_erased) {
+                    return MSTORE_CORRUPT;
+                }
+                run++;
+            } else {
+                seen_erased = true;
+            }
+        }
+        offset += chunk;
+    }
+
+    if (run == 0) {
+        *out_torn = false;
+        return MSTORE_OK;
+    }
+    if (run > st->record_capacity) {
+        return MSTORE_CORRUPT;
+    }
+    *out_torn = true;
+    return MSTORE_OK;
+}
+
 static mstore_err_t flash_scan(mstore_flash_storage_t *st, bool *out_torn) {
     size_t offset = st->header_size;
     bool torn = false;
@@ -202,35 +267,39 @@ static mstore_err_t flash_scan(mstore_flash_storage_t *st, bool *out_torn) {
         if (!dev_read(st, bank_offset(st, st->active_bank) + offset, prefix, sizeof(prefix))) {
             return MSTORE_IO;
         }
-        if (get_u16(prefix) != MSTORE_FLASH_RECORD_MAGIC) {
-            bool erased = true;
-            for (size_t i = 0; i < sizeof(prefix); i++) {
-                if (prefix[i] != 0xFF) {
-                    erased = false;
-                    break;
-                }
-            }
-            torn = !erased;
-            break;
-        }
+
         uint8_t kind = prefix[2];
-        if (kind != MSTORE_FLASH_KIND_SET && kind != MSTORE_FLASH_KIND_META) {
-            torn = true;
+        bool header_ok = get_u16(prefix) == MSTORE_FLASH_RECORD_MAGIC &&
+                         (kind == MSTORE_FLASH_KIND_SET || kind == MSTORE_FLASH_KIND_META);
+        if (!header_ok) {
+            mstore_err_t tail = flash_classify_tail(st, offset, &torn);
+            if (tail != MSTORE_OK) {
+                return tail;
+            }
             break;
         }
+
         size_t len = record_len(st, kind);
         if (offset + len > st->bank_size) {
-            torn = true;
+            mstore_err_t tail = flash_classify_tail(st, offset, &torn);
+            if (tail != MSTORE_OK) {
+                return tail;
+            }
             break;
         }
+
         uint8_t marker[4];
         if (!dev_read(st, bank_offset(st, st->active_bank) + offset + len - 4, marker, sizeof(marker))) {
             return MSTORE_IO;
         }
         if (get_u32(marker) != MSTORE_FLASH_COMMIT_MARKER) {
-            torn = true;
+            mstore_err_t tail = flash_classify_tail(st, offset, &torn);
+            if (tail != MSTORE_OK) {
+                return tail;
+            }
             break;
         }
+
         if (len > st->record_capacity) {
             return MSTORE_CORRUPT;
         }
@@ -363,6 +432,7 @@ static mstore_err_t flash_append(mstore_flash_storage_t *st, uint32_t slot, uint
     build_record(st, kind, slot, meta, key, payload, len);
     mstore_err_t err = program_record(st, st->active_bank, st->write_offset, st->record_buf, len);
     if (err != MSTORE_OK) {
+        st->needs_checkpoint = true; /* возможен torn append: следующий append сделает compact */
         return err;
     }
     st->latest[slot].offset = (uint32_t)st->write_offset;
@@ -495,7 +565,8 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     if (config->capacity == 0 || config->key_size == 0) {
         return MSTORE_INVALID_SIZE;
     }
-    if (config->key_size > 0xFFFF || config->payload_size > 0xFFFF) {
+    if (config->capacity > (size_t)UINT32_MAX || config->key_size > 0xFFFF ||
+        config->payload_size > 0xFFFF) {
         return MSTORE_INVALID_SIZE;
     }
 
@@ -510,6 +581,9 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     size_t bank_size = (device->size / 2) & ~(device->erase_size - 1);
     size_t max_record =
         MSTORE_FLASH_RECORD_FIXED + config->key_size + config->payload_size + MSTORE_FLASH_RECORD_TAIL;
+    if (config->capacity > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
+        return MSTORE_INVALID_SIZE;
+    }
     if (bank_size < MSTORE_FLASH_HEADER_SIZE + config->capacity * max_record) {
         return MSTORE_INVALID_SIZE;
     }
@@ -555,7 +629,12 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
 
     mstore_err_t err = MSTORE_OK;
     if (active < 0) {
-        if (!dev_erase(st, 0, st->bank_size)) {
+        /* Нет валидного header: fresh допустим только если регион реально erased. */
+        mstore_err_t state0 = header_region_state(st, 0);
+        mstore_err_t state1 = header_region_state(st, 1);
+        if (state0 != MSTORE_OK || state1 != MSTORE_OK) {
+            err = (state0 == MSTORE_IO || state1 == MSTORE_IO) ? MSTORE_IO : MSTORE_CORRUPT;
+        } else if (!dev_erase(st, 0, st->bank_size)) {
             err = MSTORE_IO;
         } else {
             uint8_t hdr[MSTORE_FLASH_HEADER_SIZE];

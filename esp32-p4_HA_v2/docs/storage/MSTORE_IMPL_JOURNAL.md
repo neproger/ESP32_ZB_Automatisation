@@ -181,6 +181,11 @@ Storage phase:
 | 2026-09-30 | Новые нейтральные ошибки `MSTORE_IO` / `MSTORE_CORRUPT` (архитектурная фиксация) | caller не видит RAM/flash-специфику; torn tail — не ошибка |
 | 2026-09-30 | NOR device — platform-provided (`mstore_platform_flash_device`), public schema не менялся | host: settable device; IDF: partition позже |
 | 2026-09-30 | Integrity: CRC32 над record/header; identity — `persist_id` (два FNV-1a-64) | CRC для integrity, не для identity |
+| 2026-09-30 | Нет валидного bank header + non-erased region -> `MSTORE_CORRUPT` (без авто-формата) | corruption не должен давать тихую потерю данных |
+| 2026-09-30 | Index хранит `home` bucket + `index_of_slot`; insert/remove без I/O, probes bounded | post-commit derived update infallible |
+| 2026-09-30 | После committed `clear_all` runtime reset без I/O | clear не откатывается ошибкой rebuild |
+| 2026-09-30 | `flash_append`: program failure -> `needs_checkpoint` | same-process torn recovery до reboot |
+| 2026-09-30 | Tail classification: torn <= max_record, разрыв/больше -> `MSTORE_CORRUPT` | отличать power-loss tail от committed corruption |
 
 ## 6. Хронология
 
@@ -222,25 +227,28 @@ Storage phase:
   seed RAM из FLASH при open. Public API и Table Engine не менялись. Покрытие:
   `test_behavior` (RAM|FLASH), `test_flash_model` (RAM|FLASH), `test_composite`
   (reboot, flash-fail без изменения RAM). Host 10/10, IDF-сборка проходит.
+- Durability/atomicity hardening (по ревью):
+  * header corruption: нет валидного header + non-erased region -> `MSTORE_CORRUPT`, без авто-формата;
+  * index хранит `home` bucket + `index_of_slot`; `index_insert/remove` без I/O, probes bounded;
+  * `clear()`: после committed `clear_all` runtime reset без I/O;
+  * `flash_append`: program failure -> `needs_checkpoint` (same-process torn recovery);
+  * `flash_scan`: tail classification (torn vs committed corruption);
+  * overflow guards: `capacity <= UINT32_MAX`, `capacity * max_record`.
+  Regression-тесты: header corruption, same-process torn recovery. Host 10/10, IDF build.
 
 Следующий шаг:
 
 - ESP-IDF `esp_partition` adapter (реализация `mstore_flash_device` через partition);
   затем hardware suite на реальной P4.
-
-Следующий шаг:
-
-- durable format поверх ограничений симулятора: варианты layout, recovery и
-  power-loss; выбрать по критериям (atomic observable state, bounded RAM, erase/write
-  amplification, compaction, corruption detection).
+- Остаётся открытым: `generation/version` wraparound (32-bit; v1 не обрабатывает).
 
 ## 7. Открытые вопросы
 
-1. Durable flash format: append-only/journaled или иное; compaction, erase/write
-   amplification, corruption detection — после host simulator.
-2. RAM+FLASH commit policy: write-through vs batched; recovery/rollback внутри composite.
-3. Storage contract: точный набор/гранулярность операций определится по коду extraction.
-4. Ring persistence: общий storage abstraction или специализированный layout — после
-   Table.
+1. ESP-IDF `esp_partition` adapter — не реализован (hardware blocker).
+2. `generation/version` wraparound (32-bit) — v1 не обрабатывает.
+3. FLASH: committed prefix corruption без последующих записей классифицируется как
+   torn tail (осознанное ограничение revision 1).
+4. Ring persistence: общий storage abstraction или специализированный layout — после Table.
 5. Table index: возможное изменение стратегии по результатам benchmark.
 6. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
+

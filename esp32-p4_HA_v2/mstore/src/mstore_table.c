@@ -25,6 +25,7 @@ static void mstore_state_destroy(mstore_state_t *st) {
     mstore_storage_close(st->storage);
     mstore_platform_free(st->scratch_payload);
     mstore_platform_free(st->scratch_key);
+    mstore_platform_free(st->index_of_slot);
     mstore_platform_free(st->index);
     mstore_platform_free(st->free_slots);
     if (st->lock != NULL) {
@@ -41,6 +42,9 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
         return MSTORE_INVALID_STATE;
     }
     if (schema->capacity == 0 || schema->key_size == 0) {
+        return MSTORE_INVALID_SIZE;
+    }
+    if (schema->capacity > (size_t)UINT32_MAX || schema->capacity > SIZE_MAX / 2) {
         return MSTORE_INVALID_SIZE;
     }
     if (schema->backing != MSTORE_BACKING_RAM && schema->backing != MSTORE_BACKING_FLASH &&
@@ -75,13 +79,14 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     }
 
     st->free_slots = mstore_platform_alloc(sizeof(mstore_slot_t) * schema->capacity);
-    st->index = mstore_platform_alloc(sizeof(mstore_slot_t) * st->index_capacity);
+    st->index = mstore_platform_alloc(sizeof(mstore_index_entry_t) * st->index_capacity);
+    st->index_of_slot = mstore_platform_alloc(sizeof(uint32_t) * schema->capacity);
     st->scratch_key = mstore_platform_alloc(schema->key_size);
     st->scratch_payload = mstore_platform_alloc(schema->payload_size == 0 ? 1 : schema->payload_size);
     st->lock = mstore_platform_lock_create();
 
-    if (st->free_slots == NULL || st->index == NULL || st->scratch_key == NULL ||
-        st->scratch_payload == NULL || st->lock == NULL) {
+    if (st->free_slots == NULL || st->index == NULL || st->index_of_slot == NULL ||
+        st->scratch_key == NULL || st->scratch_payload == NULL || st->lock == NULL) {
         mstore_state_destroy(st);
         return MSTORE_NO_MEM;
     }
@@ -133,7 +138,8 @@ mstore_err_t mstore_table_clear(mstore_table_t *table) {
     mstore_platform_lock_acquire(st->lock);
     mstore_err_t err = mstore_storage_clear_all(st->storage);
     if (err == MSTORE_OK) {
-        err = mstore_runtime_rebuild(st);
+        /* После успешного clear_all runtime reset детерминирован и без I/O. */
+        mstore_runtime_reset(st);
     }
     mstore_platform_lock_release(st->lock);
     return err;
@@ -335,12 +341,6 @@ mstore_err_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
         return MSTORE_STALE;
     }
 
-    err = mstore_storage_read_key(st->storage, slot, st->scratch_key);
-    if (err != MSTORE_OK) {
-        mstore_platform_lock_release(st->lock);
-        return err;
-    }
-
     meta.used = false;
     err = mstore_storage_write_meta(st->storage, slot, &meta);
     if (err != MSTORE_OK) {
@@ -348,11 +348,8 @@ mstore_err_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
         return err;
     }
 
-    err = mstore_index_remove(st, slot, st->scratch_key);
-    if (err != MSTORE_OK) {
-        mstore_platform_lock_release(st->lock);
-        return err;
-    }
+    /* post-commit derived update: без I/O */
+    mstore_index_remove(st, slot);
     mstore_freelist_push(st, slot);
     st->live_count--;
 

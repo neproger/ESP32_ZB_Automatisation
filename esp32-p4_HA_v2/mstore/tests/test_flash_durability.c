@@ -222,12 +222,82 @@ static void test_checkpoint_overflow(void) {
     printf("test_flash_durability: checkpoint overflow OK\n");
 }
 
+static void test_header_corruption(void) {
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    CHECK(sim != NULL);
+    nor_sim_device_t device;
+    nor_sim_device_init(&device, sim);
+    mstore_platform_flash_set_device(&device.base);
+
+    mstore_table_t table = {0};
+    open_ok(&table, "hdr");
+
+    mstore_slot_t slot;
+    uint32_t gen;
+    uint32_t k1 = 1;
+    value_t v1 = value(1, 1);
+    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+
+    /* повреждаем byte в bank header: region не erased, валидного header нет */
+    mstore_nor_sim_poke(sim, 4, 0x00);
+
+    mstore_table_schema_t schema = schema_for("hdr");
+    mstore_table_t reopened = {0};
+    CHECK(mstore_table_init(&reopened, &schema) == MSTORE_CORRUPT);
+
+    mstore_nor_sim_destroy(sim);
+    printf("test_flash_durability: header corruption OK\n");
+}
+
+static void test_same_process_torn_recovery(void) {
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    CHECK(sim != NULL);
+    nor_sim_device_t device;
+    nor_sim_device_init(&device, sim);
+    mstore_platform_flash_set_device(&device.base);
+
+    mstore_table_t table = {0};
+    open_ok(&table, "torn_same");
+
+    uint32_t k1 = 1, k2 = 2;
+    mstore_slot_t slot;
+    uint32_t gen;
+    value_t v1 = value(1, 1);
+    value_t v2 = value(2, 2);
+    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+
+    /* повреждаем append и НЕ перезагружаемся */
+    mstore_nor_sim_fail_program_after(sim, 3);
+    bool changed = false;
+    CHECK(mstore_table_slot_update(&table, slot, gen, &v2, &changed) == MSTORE_IO);
+
+    /* следующая мутация должна сначала сделать checkpoint и пройти */
+    mstore_slot_t slot2;
+    uint32_t gen2;
+    CHECK(mstore_table_slot_allocate(&table, &k2, &v2, &slot2, &gen2) == MSTORE_OK);
+    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
+    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_OK);
+    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+
+    reopen(&table, "torn_same");
+    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
+    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_OK);
+    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+
+    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    mstore_nor_sim_destroy(sim);
+    printf("test_flash_durability: same-process torn recovery OK\n");
+}
+
 int main(void) {
     test_torn_tail();
     test_fail_erase_on_clear();
     test_fail_program_now();
     test_committed_corruption();
     test_checkpoint_overflow();
+    test_header_corruption();
+    test_same_process_torn_recovery();
     printf("test_flash_durability: OK\n");
     return 0;
 }

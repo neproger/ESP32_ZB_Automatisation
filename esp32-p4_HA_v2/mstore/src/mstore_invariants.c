@@ -32,21 +32,27 @@ mstore_err_t mstore_check_invariants(mstore_state_t *st) {
         if (err != MSTORE_OK) {
             return err;
         }
+        if (st->index_of_slot[slot] == MSTORE_INDEX_NONE) {
+            return MSTORE_INVARIANT_FAILED;
+        }
     }
     if (used_count != st->live_count) {
         return MSTORE_INVARIANT_FAILED;
     }
 
     for (size_t i = 0; i < st->index_capacity; i++) {
-        mstore_slot_t slot = st->index[i];
-        if (slot == MSTORE_SLOT_NONE) {
+        mstore_index_entry_t entry = st->index[i];
+        if (entry.slot == MSTORE_SLOT_NONE) {
             continue;
         }
-        if (slot >= st->schema.capacity) {
+        if (entry.slot >= st->schema.capacity) {
+            return MSTORE_INVARIANT_FAILED;
+        }
+        if (st->index_of_slot[entry.slot] != (uint32_t)i) {
             return MSTORE_INVARIANT_FAILED;
         }
         mstore_meta_t meta;
-        mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+        mstore_err_t err = mstore_storage_read_meta(st->storage, entry.slot, &meta);
         if (err != MSTORE_OK) {
             return err;
         }

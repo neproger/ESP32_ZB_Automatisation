@@ -114,32 +114,50 @@ u32 commit_marker     // пишется ПОСЛЕДНИМ
 read bank0.header, bank1.header
 valid = crc ok and magic/revision ok
 active = valid с максимальным seq
-  нет валидных -> fresh: erase bank0, write header seq=1
-scan active.records от header_size:
 
-    fixed prefix не парсится (magic invalid / erased 0xFF)
-        -> torn tail / конец лога -> stop
+нет валидного header:
+    обе header-области действительно erased (0xFF)
+        -> fresh: erase bank0, write header seq=1
+    есть non-erased данные
+        -> MSTORE_CORRUPT        // повреждённый persistent region НЕ форматируем
 
-    parse kind/slot -> record length
-    read commit_marker:
-        marker отсутствует / partial / erased
-            -> torn uncommitted tail -> stop        // норма, не ошибка
-        marker valid:
-            validate magic/slot/kind/crc32
-                ok   -> latest[slot] = offset; advance
-                bad  -> MSTORE_CORRUPT               // committed повреждён
+scan active.records от header_size; пока запись валидна и committed:
+    parse prefix (magic + kind) -> record length -> commit_marker
+    marker valid:
+        validate slot/kind/crc32
+            ok  -> latest[slot] = offset; advance
+            bad -> MSTORE_CORRUPT
+    marker отсутствует / partial / prefix не парсится:
+        -> классифицировать хвост (см. ниже), stop
 ```
+
+Классификация хвоста (torn vs corruption):
+
+```text
+от точки останова до конца банки:
+    всё erased                       -> clean end   (не torn)
+    один contiguous non-erased run
+        длиной <= max_record         -> torn uncommitted append (норма, needs checkpoint)
+    non-erased после erased (разрыв)
+        или run > max_record         -> MSTORE_CORRUPT
+```
+
+Смысл: настоящий torn append — это не более одной незавершённой записи подряд, а затем
+erased до конца банки. Если за точкой останова есть ещё committed-подобная структура
+(не-erased после erased) или «хвост» длиннее одной записи, это повреждение committed
+состояния, а не power-loss tail.
 
 Границы семантики:
 
 ```text
-torn uncommitted tail      != MSTORE_CORRUPT   (нормальный recovery)
-committed record corrupted  = MSTORE_CORRUPT
+torn uncommitted tail       != MSTORE_CORRUPT   (нормальный recovery)
+committed record corrupted   = MSTORE_CORRUPT
 ```
 
-Ограничение: если у committed-записи повреждён сам fixed prefix (magic), marker
-локализовать нельзя — такой случай классифицируется как torn tail. Это осознанный
-компромисс: различаем committed corruption там, где структура ещё парсится.
+Ограничение: если у committed-записи повреждён сам prefix (magic) и после неё больше
+нет записей, отличить её от одиночного torn append нельзя — она классифицируется как
+torn tail. Это осознанный компромисс; при необходимости формат усиливается отдельным
+recovery-полем (не входит в revision 1).
 
 ## 8. Append и порядок derived state
 
