@@ -11,6 +11,8 @@ set(MSTORE_CORE
     ../src/mstore_runtime.c
     ../src/mstore_invariants.c
     ../src/mstore_ring.c
+    ../src/storage/mstore_storage.c
+    ../src/storage/mstore_storage_ram.c
 )
 set(MSTORE_HOST_PORT ../port/host/mstore_platform_host.c)
 

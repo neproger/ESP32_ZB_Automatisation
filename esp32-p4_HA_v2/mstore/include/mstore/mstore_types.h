@@ -33,11 +33,21 @@ typedef struct {
 /* Сравнивает два payload. NULL означает побайтовое сравнение payload_size. */
 typedef bool (*mstore_payload_equals_fn)(const void *lhs, const void *rhs);
 
+/* Storage policy; backing выбирается один раз при init(). */
+typedef enum {
+    MSTORE_BACKING_NONE = 0,
+    MSTORE_BACKING_RAM = 1 << 0,
+    MSTORE_BACKING_FLASH = 1 << 1,
+} mstore_backing_t;
+
 typedef struct {
     size_t capacity;
     size_t key_size;   /* key — opaque bytes фиксированной длины */
     size_t payload_size;
     mstore_payload_equals_fn payload_equals;
+
+    mstore_backing_t backing; /* RAM / FLASH / RAM|FLASH */
+    const char *persist_key;  /* stable persistent identity; нужен для FLASH */
 } mstore_table_schema_t;
 
 #ifdef __cplusplus

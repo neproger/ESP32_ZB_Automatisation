@@ -178,6 +178,8 @@ int main(void) {
     schema.key_size = sizeof(uint32_t);
     schema.payload_size = sizeof(value_t);
     schema.payload_equals = NULL;
+    schema.backing = MSTORE_BACKING_RAM;
+    schema.persist_key = NULL;
     CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
 
     ref_model_t ref = {0};

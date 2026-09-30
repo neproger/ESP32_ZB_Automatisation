@@ -8,32 +8,26 @@
 | | |
 |---|---|
 | Компонент | `mstore` (Table Store + Ring Store) |
-| Архитектура | заморожена, `MSTORE.md` Ревизия 4 |
-| Реализация | RAM core complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
+| Архитектура | `MSTORE.md` (Ревизия 4 + storage backend, §2.11) |
+| RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
+| Storage architecture | зафиксирована: один Table Engine + storage backend'ы; RAM extraction выполнен |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
-| Тестовые контуры | host (unit + randomized model tests) + ESP32-P4 test app |
-| Осталось | hardware verification на реальной ESP32-P4 |
-
-RAM core считается **функционально полным**; новые требования — только по результатам
-прогона на железе/измерений, а не предположений.
+| Осталось | storage backend extraction → flash format → hardware verification |
 
 ## 2. Опорная модель
 
 ### Table Store
 
 ```text
-canonical model:
-    slots = meta + key + payload
-runtime acceleration:
-    index (linear probing + backward-shift), free-list, live_count
-safe cached reference:
-    slot + generation
-change detection:
-    version
-logical lookup:
-    key -> slot
-mutation:
-    slot + expected_generation
+canonical model   = логический fixed-capacity массив slots
+slot              = meta + key + payload
+physical residence= storage backend (RAM / FLASH / RAM+FLASH)
+
+derived runtime   = index (linear probing + backward-shift), free-list, live_count
+safe cached ref   = slot + generation
+change detection  = version
+logical lookup    = key -> slot
+mutation          = slot + expected_generation
 ```
 
 ```text
@@ -49,143 +43,158 @@ payload изменился        -> OK + changed=true
 
 ```text
 records[capacity] + next_seq + count
+seq — долгоживущая identity (uint64 с 1); slot = (seq - 1) % capacity
+oldest = next_seq - count;  newest = next_seq - 1
+append перезаписывает oldest при полном ring
+seq >= next_seq / 0 -> NOT_FOUND;  seq < oldest -> STALE;  пустой ring -> NOT_FOUND
+index / generation / free-list у Ring нет
+```
 
-seq — долгоживущая identity записи (uint64, начинается с 1)
-slot = (seq - 1) % capacity        // только физическое место
-oldest = next_seq - count
-newest = next_seq - 1
+## 3. Storage architecture (checkpoint)
 
-append -> перезапись oldest при полном ring
+Главное разделение:
+
+```text
+Table Engine     — ЧТО означает операция (вся семантика и runtime state)
+Storage Backend  — ГДЕ и КАК физически лежат canonical slot bytes
 ```
 
 ```text
-seq ещё не существовал   -> NOT_FOUND   (seq == 0 или seq >= next_seq)
-seq вытеснен из окна     -> STALE       (seq < oldest)
-seq в окне               -> OK
-пустой ring              -> oldest/newest -> NOT_FOUND
+                    public mstore API
+                           │
+                    mstore_table facade
+                           │
+                    Table Engine
+             semantics / lifecycle / runtime state
+                           │
+                    storage backend
+               ┌───────────┼───────────┐
+               │           │           │
+              RAM        FLASH      RAM+FLASH
 ```
 
-Ни index, ни generation, ни free-list у Ring нет.
+Table Engine владеет: key identity, slot lifecycle, generation, version,
+expected_generation, `ALREADY_EXISTS / NOT_FOUND / STALE / NO_SPACE`, `changed`, index,
+free-list, live_count, iter, count, clear, rebuild, invariants.
 
-## 3. Структура
+Backend владеет только canonical bytes и sync/commit. Backend не знает смысла key и
+причины изменения generation/version.
+
+Storage modes (bitmask в schema):
 
 ```text
-esp32-p4_HA_v2/mstore/
-├── CMakeLists.txt                 # IDF-компонент: core + port/espidf
-├── include/mstore/
-│   ├── mstore_types.h             # mstore_err_t, mstore_meta_t, mstore_slot_t, schema
-│   ├── mstore_table.h             # Table Store: slot-first API
-│   └── mstore_ring.h              # Ring Store: append/seq API
-├── src/
-│   ├── mstore_platform.h          # внутренний контракт порта: allocator + lock
-│   ├── mstore_internal.h          # Table: slot layout + состояние instance
-│   ├── mstore_table.c             # Table: canonical slots: lifecycle + API
-│   ├── mstore_runtime.c           # Table: derived index / free-list / live_count + rebuild
-│   ├── mstore_invariants.c        # Table: check_invariants()
-│   └── mstore_ring.c              # Ring: bounded окно + seq
-├── port/
-│   ├── host/mstore_platform_host.c      # malloc + CRITICAL_SECTION / pthread
-│   └── espidf/mstore_platform_espidf.c  # heap_caps + FreeRTOS mutex
-├── tests/                         # host build: unit + randomized model tests
-│   ├── test_table.c
-│   ├── test_model.c
-│   ├── test_ring.c
-│   └── test_ring_model.c
-└── test_apps/mstore_p4/           # ESP-IDF smoke/integration: Table + Ring
+RAM_ONLY   = MSTORE_BACKING_RAM
+FLASH_ONLY = MSTORE_BACKING_FLASH
+RAM_FLASH  = MSTORE_BACKING_RAM | MSTORE_BACKING_FLASH
 ```
 
-## 4. План и прогресс
+Internal storage contract (private, имена уточняются по коду):
 
-Table Store:
+```text
+open / init, close
+read_meta(slot), read_key(slot), read_slot(slot)
+write_slot(slot, state), write_meta(slot, meta)
+clear_slot(slot), clear_all()
+sync / commit
+```
 
-- [x] public types/API skeleton
-- [x] internal table state + slot layout
-- [x] host platform port
-- [x] allocate / update / free / read / meta
-- [x] runtime index / free-list / live_count
-- [x] slot_find
-- [x] rebuild_runtime
-- [x] invariants
-- [x] unit tests
-- [x] randomized reference-model test
+Публичный API не зависит от backend; наружу только `mstore_table_*`.
 
-Ring Store:
+Планируемая структура:
 
-- [x] public ring API + ring core
-- [x] unit tests (границы: empty / 1 / capacity / capacity+1 / много оборотов)
-- [x] randomized reference-model test
+```text
+src/
+├── mstore_table.c               # Table Engine (semantics)
+├── mstore_runtime.c             # derived acceleration
+├── mstore_invariants.c
+├── mstore_ring.c
+└── storage/
+    ├── mstore_storage.h         # internal backend contract
+    ├── mstore_storage_ram.c
+    ├── mstore_storage_flash.c       # позже
+    └── mstore_storage_ram_flash.c   # позже
+```
 
-Интеграция:
+## 4. План
 
-- [x] ESP-IDF port
-- [x] ESP32-P4 test app (Table + Ring)
-- [ ] прогон на реальной ESP32-P4 (QEMU для esp32p4 в IDF не поддерживается)
+Table/Ring RAM core — сделано:
 
-`rebuild_runtime()` и `check_invariants()` — internal/debug, не публичный API; host tests
-получают к ним доступ через `src/` private include.
+- [x] Table Store RAM core + host tests
+- [x] Ring Store RAM core + host tests
+- [x] ESP-IDF port + P4 smoke app
+
+Storage phase:
+
+- [x] прочитать `MSTORE.md`, журнал, код `mstore`, старый `micro_db`
+- [x] зафиксировать storage architecture в документации
+- [x] выделить physical RAM access из Table Engine за internal storage contract
+- [x] подключить RAM backend; host tests зелёные без смены reference-модели
+- [ ] host flash/NOR simulator + fault injection
+- [ ] durable flash format поверх ограничений симулятора
+- [ ] FLASH backend
+- [ ] RAM+FLASH composite backend
+- [ ] общий behavioral/model suite на всех трёх storage modes
+- [ ] reboot / power-loss / corruption tests
+- [ ] ESP-IDF `esp_partition` backend
+- [ ] единый mstore hardware suite на реальной P4
+
+Порядок из архитектурного решения соблюдается: flash format проектируется только после
+зелёного RAM backend extraction.
 
 ## 5. Решения (decision log)
 
 | Дата | Решение | Причина |
 |---|---|---|
 | 2026-09-30 | Заведён журнал реализации | фиксировать «делаем / собираемся делать» |
-| 2026-09-30 | Компонент в `esp32-p4_HA_v2/mstore/`, не в `shared_components/` | один потребитель: держим рядом, шарим при втором |
-| 2026-09-30 | Scope v1 — RAM-only Table Store | сначала доказать корректность slots, persistence позже |
-| 2026-09-30 | Два контура тестирования: host + ESP32-P4 | host — алгоритм/скорость; P4 — интеграция embedded-кода |
-| 2026-09-30 | Один core, `port/{host,espidf}`; platform выбирается при сборке | без vtable: compile-time port, ноль накладных |
-| 2026-09-30 | `mstore_platform.h` — internal (`src/`), не публичный | caller его не использует |
-| 2026-09-30 | Handle: `mstore_table_t/mstore_ring_t { void *_state; }` | внутренности скрыты, caller-owned |
-| 2026-09-30 | Table `meta { used, generation, version }` — оба `uint32_t` | симметрично, без uint64 до необходимости |
-| 2026-09-30 | `count` возвращает `mstore_err_t` + out-параметр | единая модель ошибок во всём API |
-| 2026-09-30 | `rebuild_runtime` и `check_invariants` — internal | maintenance/debug, не пользовательский API |
-| 2026-09-30 | Table index: linear probing + backward-shift; `index_capacity >= 2 * capacity` (load <= 0.5) | нет tombstones, не нужен rehash на этой load |
-| 2026-09-30 | Ring `seq` — `uint64_t` с 1; `next_seq` = следующий выдаваемый | логическая identity, не зависящая от slot |
-| 2026-09-30 | Ring без index/generation/free-list; `slot = (seq - 1) % capacity` | Ring проще Table; окно вычисляется из next_seq/count |
-| 2026-09-30 | Ring: `seq >= next_seq`/0 → NOT_FOUND, `seq < oldest` → STALE | «не существовал» и «вытеснен» — разные исходы |
-| 2026-09-30 | `check_invariants()` и model tests — часть v1 | больше уверенности, чем ручные unit-тесты |
+| 2026-09-30 | Компонент в `esp32-p4_HA_v2/mstore/`, не в `shared_components/` | один потребитель: держим рядом |
+| 2026-09-30 | Scope v1 — RAM-only | сначала доказать корректность slots |
+| 2026-09-30 | Два контура: host + ESP32-P4 | host — алгоритм/скорость; P4 — интеграция |
+| 2026-09-30 | Один core, `port/{host,espidf}`, compile-time port | без vtable, ноль накладных |
+| 2026-09-30 | `mstore_platform.h` — internal, не публичный | caller его не использует |
+| 2026-09-30 | Handle: `{ void *_state; }`, caller-owned | внутренности скрыты |
+| 2026-09-30 | Table `meta { used, generation, version }` — оба `uint32_t` | симметрично |
+| 2026-09-30 | `count` -> `mstore_err_t` + out | единая модель ошибок |
+| 2026-09-30 | `rebuild_runtime` / `check_invariants` — internal | maintenance/debug |
+| 2026-09-30 | Table index: linear probing + backward-shift; load <= 0.5 | без tombstones/rehash |
+| 2026-09-30 | Ring `seq` — `uint64_t` с 1; без index/generation/free-list | Ring проще Table |
+| 2026-09-30 | Ring: будущий/несуществующий seq -> NOT_FOUND, вытесненный -> STALE | разные исходы |
+| 2026-09-30 | **Один Table Engine + storage backends**, не две реализации Table Store | убрать дублирование semantics |
+| 2026-09-30 | Backing — bitmask в schema (RAM / FLASH / RAM\|FLASH) | отражает композицию |
+| 2026-09-30 | FLASH-only поддерживается; RAM больше не обязателен | снимает ограничение v1 |
+| 2026-09-30 | Публичный API не зависит от backing | caller не знает storage mode |
+| 2026-09-30 | Durable format не фиксируется; сначала host simulator + fault injection | доказать recovery без P4 |
+| 2026-09-30 | Ring не втягивать в persistence refactor | без преждевременной универсализации |
+| 2026-09-30 | Storage contract: vtable + copy-out (`read_meta/read_key/read_slot`, `write_slot/write_meta`, `clear_all`, `sync`, `close`); `read_key` сохранён | FLASH reserve: `slot_find`/rebuild не читают payload |
+| 2026-09-30 | `write_*` = logical canonical commit; derived runtime меняется только после успешного write | backend сам решает commit/recovery, engine без rollback |
+| 2026-09-30 | `sync()` — внутренний backend flush, не public durability contract | caller не должен знать persistence policy |
 
 ## 6. Хронология
 
 ### 2026-09-30
 
 - Архитектура `MSTORE.md` доведена до Ревизии 4 и зафиксирована.
-- Заведён журнал; определён scope и согласована последовательность.
-- Реализован host core Table Store: `mstore_table.c`, `mstore_runtime.c`,
-  `mstore_invariants.c`, публичный API и host-порт.
-- Реализован host core Ring Store: `mstore_ring.c`, публичный API.
-- Добавлены IDF-порт, component `CMakeLists.txt` и ESP32-P4 test app (Table + Ring);
-  сборка под ESP-IDF v6.1 / esp32p4 успешно проверена.
-
-Результаты host-тестов (MSVC 14.51, `/W4`, warnings-as-errors):
-
-```text
-test_table       Passed
-test_model       Passed   // 200000 random ops vs reference
-test_ring        Passed   // границы: empty / 1 / capacity / capacity+1 / обороты
-test_ring_model  Passed   // 300000 random ops vs reference
-100% tests passed, 0 failed
-```
-
-Результаты IDF-сборки (ESP-IDF v6.1, target esp32p4):
-
-```text
-libmstore.a  собрана (Table + Ring + port/espidf)
-mstore_p4.bin собран (test_apps/mstore_p4)
-```
-
-`idf.py qemu` для `esp32p4` IDF не поддерживает — запуск только на реальной P4.
+- Реализован RAM core: Table Store и Ring Store, публичный API, host-порт.
+- Host tests: `test_table`, `test_model`, `test_ring`, `test_ring_model` — зелёные.
+- IDF-сборка ESP-IDF v6.1 / esp32p4 и P4 smoke app (Table + Ring) — проходят.
+- Новый checkpoint: storage architecture (Table Engine + backends); `MSTORE.md`
+  обновлён (§2.5, §2.10, §2.11), storage decisions зафиксированы в журнале.
+- Выполнен extraction: Table Engine работает поверх internal storage contract
+  (`src/storage/mstore_storage.h`, `mstore_storage.c`, `mstore_storage_ram.c`);
+  публичный API и reference-модели не менялись (в schema добавлен только `backing`).
+  Host-тесты и IDF-сборка — зелёные.
 
 Следующий шаг:
 
-- RAM core complete, awaiting P4 hardware verification: flash `mstore_p4`, boot,
-  прогон smoke suite (Table + Ring), проверка allocator/lock/lifecycle на железе;
-- затем измерения: RAM footprint, latency `find/update`, стоимость lock, поведение при
-  высокой capacity.
+- host flash/NOR simulator (erased=0xFF, write 1->0, erase block, fault injection),
+  затем durable format проектируется поверх его ограничений, а не в вакууме.
 
 ## 7. Открытые вопросы
 
-1. Persistence: RAM-only или RAM+Flash; CRC/atomicity/wear/layout — после железа.
-2. Table index: возможное изменение стратегии по результатам benchmark.
-3. Ring: поведение при переполнении `uint64 next_seq` (wraparound) — сейчас не проектируется.
-4. Lock и `iter`: контракт «колбэк не мутирует эту же таблицу» зафиксирован в заголовке.
-5. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
+1. Durable flash format: append-only/journaled или иное; compaction, erase/write
+   amplification, corruption detection — после host simulator.
+2. RAM+FLASH commit policy: write-through vs batched; recovery/rollback внутри composite.
+3. Storage contract: точный набор/гранулярность операций определится по коду extraction.
+4. Ring persistence: общий storage abstraction или специализированный layout — после
+   Table.
+5. Table index: возможное изменение стратегии по результатам benchmark.
+6. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.

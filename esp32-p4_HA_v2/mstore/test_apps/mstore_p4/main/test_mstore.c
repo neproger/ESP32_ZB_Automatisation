@@ -26,6 +26,8 @@ static void run_table_suite(void) {
         .key_size = sizeof(uint32_t),
         .payload_size = sizeof(value_t),
         .payload_equals = NULL,
+        .backing = MSTORE_BACKING_RAM,
+        .persist_key = NULL,
     };
 
     require(mstore_table_init(&table, &schema) == MSTORE_OK, "table init");

@@ -3,10 +3,6 @@
 #include "mstore/mstore_table.h"
 #include "mstore_internal.h"
 
-static size_t mstore_align_up(size_t value, size_t alignment) {
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
 static size_t mstore_next_pow2(size_t value) {
     size_t result = 8;
     while (result < value) {
@@ -26,12 +22,14 @@ static void mstore_state_destroy(mstore_state_t *st) {
     if (st == NULL) {
         return;
     }
+    mstore_storage_close(st->storage);
+    mstore_platform_free(st->scratch_payload);
+    mstore_platform_free(st->scratch_key);
+    mstore_platform_free(st->index);
+    mstore_platform_free(st->free_slots);
     if (st->lock != NULL) {
         mstore_platform_lock_destroy(st->lock);
     }
-    mstore_platform_free(st->index);
-    mstore_platform_free(st->free_slots);
-    mstore_platform_free(st->slots);
     mstore_platform_free(st);
 }
 
@@ -45,6 +43,10 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     if (schema->capacity == 0 || schema->key_size == 0) {
         return MSTORE_INVALID_SIZE;
     }
+    if (schema->backing != MSTORE_BACKING_RAM && schema->backing != MSTORE_BACKING_FLASH &&
+        schema->backing != (MSTORE_BACKING_RAM | MSTORE_BACKING_FLASH)) {
+        return MSTORE_INVALID_ARG;
+    }
 
     mstore_state_t *st = mstore_platform_alloc(sizeof(*st));
     if (st == NULL) {
@@ -56,22 +58,40 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     st->schema.key_size = schema->key_size;
     st->schema.payload_size = schema->payload_size;
     st->schema.payload_equals = schema->payload_equals;
-    st->schema.slot_size = mstore_align_up(
-        sizeof(mstore_meta_t) + schema->key_size + schema->payload_size, _Alignof(mstore_meta_t));
+    st->backing = schema->backing;
     st->index_capacity = mstore_next_pow2(schema->capacity * 2);
 
-    st->slots = mstore_platform_alloc(st->schema.slot_size * schema->capacity);
+    mstore_storage_config_t storage_config;
+    storage_config.backing = schema->backing;
+    storage_config.capacity = schema->capacity;
+    storage_config.key_size = schema->key_size;
+    storage_config.payload_size = schema->payload_size;
+    storage_config.persist_key = schema->persist_key;
+
+    mstore_err_t err = mstore_storage_open(&storage_config, &st->storage);
+    if (err != MSTORE_OK) {
+        mstore_state_destroy(st);
+        return err;
+    }
+
     st->free_slots = mstore_platform_alloc(sizeof(mstore_slot_t) * schema->capacity);
     st->index = mstore_platform_alloc(sizeof(mstore_slot_t) * st->index_capacity);
+    st->scratch_key = mstore_platform_alloc(schema->key_size);
+    st->scratch_payload = mstore_platform_alloc(schema->payload_size == 0 ? 1 : schema->payload_size);
     st->lock = mstore_platform_lock_create();
 
-    if (st->slots == NULL || st->free_slots == NULL || st->index == NULL || st->lock == NULL) {
+    if (st->free_slots == NULL || st->index == NULL || st->scratch_key == NULL ||
+        st->scratch_payload == NULL || st->lock == NULL) {
         mstore_state_destroy(st);
         return MSTORE_NO_MEM;
     }
 
-    memset(st->slots, 0, st->schema.slot_size * schema->capacity);
-    mstore_runtime_rebuild(st);
+    err = mstore_runtime_rebuild(st);
+    if (err != MSTORE_OK) {
+        mstore_state_destroy(st);
+        return err;
+    }
+
     table->_state = st;
     return MSTORE_OK;
 }
@@ -111,12 +131,12 @@ mstore_err_t mstore_table_clear(mstore_table_t *table) {
         return MSTORE_INVALID_STATE;
     }
     mstore_platform_lock_acquire(st->lock);
-    for (size_t i = 0; i < st->schema.capacity; i++) {
-        mstore_slot_meta_mut(st, (mstore_slot_t)i)->used = false;
+    mstore_err_t err = mstore_storage_clear_all(st->storage);
+    if (err == MSTORE_OK) {
+        err = mstore_runtime_rebuild(st);
     }
-    mstore_runtime_rebuild(st);
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return err;
 }
 
 mstore_err_t mstore_table_slot_find(const mstore_table_t *table, const void *key,
@@ -148,10 +168,14 @@ mstore_err_t mstore_table_slot_meta(const mstore_table_t *table, mstore_slot_t s
     }
 
     mstore_platform_lock_acquire(st->lock);
-    const mstore_meta_t *meta = mstore_slot_meta(st, slot);
-    mstore_err_t err = meta->used ? MSTORE_OK : MSTORE_STALE;
+    mstore_meta_t meta;
+    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
     if (err == MSTORE_OK) {
-        *out_meta = *meta;
+        if (meta.used) {
+            *out_meta = meta;
+        } else {
+            err = MSTORE_STALE;
+        }
     }
     mstore_platform_lock_release(st->lock);
     return err;
@@ -171,13 +195,14 @@ mstore_err_t mstore_table_slot_read(const mstore_table_t *table, mstore_slot_t s
     }
 
     mstore_platform_lock_acquire(st->lock);
-    const mstore_meta_t *meta = mstore_slot_meta(st, slot);
-    mstore_err_t err = MSTORE_STALE;
-    if (meta->used) {
-        *out_meta = *meta;
-        memcpy(out_key, mstore_slot_key(st, slot), st->schema.key_size);
-        memcpy(out_payload, mstore_slot_payload(st, slot), st->schema.payload_size);
-        err = MSTORE_OK;
+    mstore_meta_t meta;
+    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (err == MSTORE_OK) {
+        if (meta.used) {
+            err = mstore_storage_read_slot(st->storage, slot, out_meta, out_key, out_payload);
+        } else {
+            err = MSTORE_STALE;
+        }
     }
     mstore_platform_lock_release(st->lock);
     return err;
@@ -197,31 +222,44 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     mstore_platform_lock_acquire(st->lock);
 
     mstore_slot_t existing;
-    if (mstore_index_find(st, key, &existing) == MSTORE_OK) {
+    mstore_err_t err = mstore_index_find(st, key, &existing);
+    if (err == MSTORE_OK) {
         mstore_platform_lock_release(st->lock);
         return MSTORE_ALREADY_EXISTS;
     }
+    if (err != MSTORE_NOT_FOUND) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
 
-    mstore_slot_t slot;
-    mstore_err_t err = mstore_freelist_pop(st, &slot);
+    if (st->free_count == 0) {
+        mstore_platform_lock_release(st->lock);
+        return MSTORE_NO_SPACE;
+    }
+    mstore_slot_t slot = st->free_slots[st->free_count - 1];
+
+    mstore_meta_t meta;
+    err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+    meta.used = true;
+    meta.generation++;
+    meta.version = 1;
+
+    err = mstore_storage_write_slot(st->storage, slot, &meta, key, payload);
     if (err != MSTORE_OK) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
 
-    mstore_meta_t *meta = mstore_slot_meta_mut(st, slot);
-    meta->used = true;
-    meta->generation++;
-    meta->version = 1;
-    memcpy(mstore_slot_key_mut(st, slot), key, st->schema.key_size);
-    memcpy(mstore_slot_payload_mut(st, slot), payload, st->schema.payload_size);
-
-    mstore_index_insert(st, slot);
+    st->free_count--;
+    mstore_index_insert(st, slot, key);
     st->live_count++;
 
     *out_slot = slot;
-    *out_generation = meta->generation;
-
+    *out_generation = meta.generation;
     mstore_platform_lock_release(st->lock);
     return MSTORE_OK;
 }
@@ -241,19 +279,33 @@ mstore_err_t mstore_table_slot_update(mstore_table_t *table, mstore_slot_t slot,
     }
 
     mstore_platform_lock_acquire(st->lock);
-    mstore_meta_t *meta = mstore_slot_meta_mut(st, slot);
-    if (!meta->used || meta->generation != expected_generation) {
+    mstore_meta_t meta;
+    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+    if (!meta.used || meta.generation != expected_generation) {
         mstore_platform_lock_release(st->lock);
         return MSTORE_STALE;
     }
 
-    bool changed = !mstore_payload_equal(&st->schema, mstore_slot_payload(st, slot), payload);
+    err = mstore_storage_read_slot(st->storage, slot, &meta, st->scratch_key, st->scratch_payload);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+
+    bool changed = !mstore_payload_equal(&st->schema, st->scratch_payload, payload);
     if (changed) {
-        memcpy(mstore_slot_payload_mut(st, slot), payload, st->schema.payload_size);
-        meta->version++;
+        meta.version++;
+        err = mstore_storage_write_slot(st->storage, slot, &meta, st->scratch_key, payload);
+        if (err != MSTORE_OK) {
+            mstore_platform_lock_release(st->lock);
+            return err;
+        }
     }
     *out_changed = changed;
-
     mstore_platform_lock_release(st->lock);
     return MSTORE_OK;
 }
@@ -272,14 +324,35 @@ mstore_err_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
     }
 
     mstore_platform_lock_acquire(st->lock);
-    mstore_meta_t *meta = mstore_slot_meta_mut(st, slot);
-    if (!meta->used || meta->generation != expected_generation) {
+    mstore_meta_t meta;
+    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+    if (!meta.used || meta.generation != expected_generation) {
         mstore_platform_lock_release(st->lock);
         return MSTORE_STALE;
     }
 
-    mstore_index_remove(st, slot);
-    meta->used = false;
+    err = mstore_storage_read_key(st->storage, slot, st->scratch_key);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+
+    meta.used = false;
+    err = mstore_storage_write_meta(st->storage, slot, &meta);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
+
+    err = mstore_index_remove(st, slot, st->scratch_key);
+    if (err != MSTORE_OK) {
+        mstore_platform_lock_release(st->lock);
+        return err;
+    }
     mstore_freelist_push(st, slot);
     st->live_count--;
 
@@ -297,16 +370,26 @@ mstore_err_t mstore_table_iter(const mstore_table_t *table, mstore_iter_cb_t cb,
     }
 
     mstore_platform_lock_acquire(st->lock);
+    mstore_err_t err = MSTORE_OK;
     for (size_t i = 0; i < st->schema.capacity; i++) {
         mstore_slot_t slot = (mstore_slot_t)i;
-        const mstore_meta_t *meta = mstore_slot_meta(st, slot);
-        if (!meta->used) {
+        mstore_meta_t meta;
+        err = mstore_storage_read_meta(st->storage, slot, &meta);
+        if (err != MSTORE_OK) {
+            break;
+        }
+        if (!meta.used) {
             continue;
         }
-        if (!cb(slot, meta, mstore_slot_payload(st, slot), ctx)) {
+        err = mstore_storage_read_slot(st->storage, slot, &meta, st->scratch_key,
+                                       st->scratch_payload);
+        if (err != MSTORE_OK) {
+            break;
+        }
+        if (!cb(slot, &meta, st->scratch_payload, ctx)) {
             break;
         }
     }
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return err;
 }

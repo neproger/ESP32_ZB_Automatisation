@@ -115,10 +115,13 @@ meta.used == 0:
 ```
 
 ```text
-source of truth (canonical):
+canonical model = логический fixed-capacity массив slots
     slots[].meta
     slots[].key      // валиден только при meta.used == 1
     slots[].payload  // валиден только при meta.used == 1
+
+physical residence (где физически лежат canonical bytes):
+    определяется storage backend (RAM / FLASH / RAM+FLASH), см. §2.11
 
 derived runtime acceleration:
     index        (key → slot)
@@ -127,7 +130,7 @@ derived runtime acceleration:
 ```
 
 Index, free-list и live_count **не** являются источником истины: они полностью
-восстанавливаются из slots.
+восстанавливаются из canonical slots (через storage backend).
 
 ```text
 rebuild_runtime():
@@ -371,18 +374,158 @@ typedef struct {
     size_t payload_size;
 
     bool (*payload_equals)(const void *a, const void *b);  // опц.; иначе memcmp
+
+    mstore_backing_t backing;  // RAM / FLASH / RAM|FLASH (см. §2.11.1)
+    const char *persist_key;   // stable persistent identity; нужен для FLASH
 } mstore_table_schema_t;
 ```
 
-`payload_equals` нужен только чтобы решить, вырос ли `version`.
+`payload_equals` нужен только чтобы решить, вырос ли `version`. `backing` задаёт
+storage policy один раз при `init()`; после этого caller не знает, где лежат данные.
 
-### 2.11. Persistence
+### 2.11. Table Engine и storage backend
 
-Persistence проектируется **после** стабилизации RAM-модели slots. Runtime slots —
-canonical модель Table Store, и flash backend не должен менять семантику Table Store.
-CRC/checksum, flash atomicity, wear, layout и политика записи — открытые вопросы
-persistence layer, а не часть Table Store contract. Старую схему v1
-(sector erase / write-through на каждую мутацию) нельзя переносить автоматически.
+Table Store разделён на два уровня:
+
+```text
+Table Engine     — ЧТО означает операция
+Storage Backend  — ГДЕ и КАК физически лежат canonical slot bytes
+```
+
+```text
+                    public mstore API
+                           │
+                    mstore_table facade
+                           │
+                    Table Engine
+             semantics / lifecycle / runtime state
+                           │
+                    storage backend
+               ┌───────────┼───────────┐
+               │           │           │
+              RAM        FLASH      RAM+FLASH
+```
+
+Table Engine владеет **всей** семантикой: key identity, slot lifecycle, generation,
+version, expected_generation, `ALREADY_EXISTS / NOT_FOUND / STALE / NO_SPACE`,
+`changed`, index, free-list, live_count, iter, count, clear, rebuild, invariants.
+
+Storage backend не знает, что означает key и почему изменился generation/version. Он
+только хранит/читает canonical slot state (`meta + key + payload`) и умеет sync/commit.
+
+Публичный `mstore_table_*` API **не зависит** от backend. Caller один раз задаёт
+storage policy в schema и после `init()` не знает, где лежат данные. Table Engine не
+содержит ветвлений `if RAM / if FLASH / if RAM_FLASH`.
+
+#### 2.11.1. Storage modes
+
+Backing задаётся bitmask (композиция backing'ов, а не отдельный enum из трёх значений):
+
+```c
+typedef enum {
+    MSTORE_BACKING_NONE  = 0,
+    MSTORE_BACKING_RAM   = 1 << 0,
+    MSTORE_BACKING_FLASH = 1 << 1,
+} mstore_backing_t;
+```
+
+```text
+RAM_ONLY   = RAM
+FLASH_ONLY = FLASH
+RAM_FLASH  = RAM | FLASH
+```
+
+- **RAM** — canonical slot bytes в RAM; index/free-list/live_count — derived.
+- **FLASH** — canonical slot bytes во flash; в RAM только derived runtime structures и
+  небольшой scratch. Полный массив payload в RAM не требуется.
+- **RAM+FLASH** — composite backend: RAM — working/hot storage, FLASH — durable backing.
+  Именно composite владеет load on init, write/commit policy, recovery, rollback и
+  consistency policy. Отдельной реализации Table Store под этот режим нет.
+
+#### 2.11.2. Internal storage contract (private)
+
+Концептуально backend обязан уметь:
+
+```text
+open / init
+close
+
+read_meta(slot)          // hot path; payload не читается
+read_key(slot)           // для index probing
+read_slot(slot)          // snapshot meta + key + payload
+
+write_slot(slot, state)
+write_meta(slot, meta)
+clear_slot(slot)
+clear_all()
+
+sync / commit            // для FLASH / RAM+FLASH
+```
+
+Точные имена, гранулярность и набор операций определяются по реализации. Interface
+**internal**: наружу существует только `mstore_table_*`; имён `mstore_ram_*` /
+`mstore_flash_*` в публичном API нет.
+
+#### 2.11.3. Что переносится из micro_db v1
+
+```text
+KEEP:
+    backing задаётся в schema;
+    stable persist_key как persistent identity таблицы;
+    caller не знает backend;
+    load/recover внутри mstore;
+    derived runtime state rebuild после load;
+    per-table persistent identity.
+
+REWORK / DROP:
+    RAM обязателен, FLASH-only не поддерживается;
+    records + slot_used как отдельная старая модель;
+    read-modify-erase-write 4K сектора на каждую мелкую мутацию;
+    глобальный flash singleton, MAX_TABLES, persist_key[16];
+    FNV-checksum как единственная integrity-защита.
+```
+
+Старый flash backend нельзя переносить напрямую.
+
+#### 2.11.4. Persistence: порядок и формат
+
+- Сначала host-версия flash/NOR **simulator**, а не сразу `esp_partition`. Simulator
+  моделирует ограничения flash: erased byte `0xFF`, write only `1 → 0`, `0 → 1` только
+  через erase, erase block size, bounded region; плюс fault injection: fail after N
+  written bytes, fail during erase, fail before/after commit, corrupt bytes, reopen
+  after simulated reboot.
+- Durable format проектируется **отдельно** и пока не фиксируется. Append-only /
+  journaled layout (record header, slot identity, generation/version, used, key,
+  payload, CRC, commit marker/sequence) — гипотеза, а не решение. Выбор по критериям:
+  power-loss safety, atomic observable state, recovery, bounded RAM, erase/write
+  amplification, compaction, corruption detection.
+- ESP-IDF `esp_partition` backend — после того, как формат и recovery доказаны на host.
+- Persistence остаётся внутри mstore и не меняет семантику Table Store.
+
+#### 2.11.5. Error semantics
+
+Публичная семантика одинакова для всех backing modes:
+`NOT_FOUND / STALE / ALREADY_EXISTS / NO_SPACE / INVALID_ARG / INVALID_STATE /
+INVALID_SIZE / NO_MEM`. Caller не видит RAM/flash-специфику. Новый нейтральный
+`mstore_err_t` для IO/corruption вводится только с отдельной архитектурной фиксацией.
+
+#### 2.11.6. Тесты поверх storage modes
+
+Один behavioral suite и один reference model поверх всех режимов:
+
+```text
+run_table_suite(RAM)
+run_table_suite(FLASH)
+run_table_suite(RAM | FLASH)
+```
+
+Для caller observable behavior совпадает. Для persistent режимов дополнительно:
+reboot after every mutation, power-loss на границах записи, corrupt header/slot,
+partial write/erase, compaction interruption, schema mismatch, `persist_key`
+mismatch/collision. После recovery инварианты обязаны выполняться.
+
+Ring Store в persistence refactor **не втягивается**, пока storage architecture не
+доказана на Table Store (см. §3).
 
 ## 3. Ring Store
 
@@ -471,8 +614,9 @@ contains(ring, seq, *bool)
 ## 7. Намерения (design rules)
 
 1. Fixed memory layout важнее удобства динамических контейнеров.
-2. Canonical state — только slots (`meta + key + payload`); `index / free-list /
-   live_count` — производные и восстанавливаемые ускорители.
+2. Canonical state — логический массив slots (`meta + key + payload`); физическое
+   расположение определяет storage backend (RAM / FLASH / RAM+FLASH); `index /
+   free-list / live_count` — производные и восстанавливаемые ускорители.
 3. Storage владеет `meta` и `key`; caller владеет только `payload`.
 4. Самый частый путь самый дешёвый: `key → slot` один раз, дальше доступ по slot.
 5. `slot_meta()` не читает payload.
@@ -490,6 +634,8 @@ contains(ring, seq, *bool)
 16. Persistence не меняет семантику Table Store и не проникает в application code.
 17. Компонент полностью домен-агностичен.
 18. Core platform-independent; ESP-IDF — адаптер, а не среда выполнения core.
+19. Public Table API не зависит от storage mode; backend задаётся в schema один раз, и
+    caller после `init()` не знает, где физически лежат canonical bytes.
 
 ## 8. Реализация и платформенная независимость
 
@@ -504,12 +650,15 @@ contains(ring, seq, *bool)
 
 ## 9. Открытые вопросы
 
-1. **Аллокация.** Core выделяет сам (через platform allocator) или принимает заранее
-   выделенный буфер. *Предложение: core выделяет, caller-буфер — позже.*
-2. **Lock и итерация.** `iter` вызывает колбэк под lock. *Предложение: документировать
-   «колбэк не мутирует эту же таблицу».*
-3. **Runtime index.** Конкретная hash-table стратегия, deletion policy, load factor и
-   необходимость rebuild/rehash определяются при реализации; сейчас не фиксируются.
-4. **Persistence.** RAM-only или RAM+Flash; CRC/checksum, atomicity, wear, layout и
-   политика записи (write-through vs batched) — открыто.
-5. **`iter` vs `list`.** mstore даёт `iter`; `list(filter)` собирает Domain.
+1. **Аллокация.** Core выделяет сам (сейчас так) или принимает заранее выделенный буфер.
+2. **Lock и итерация.** `iter` под lock; контракт «колбэк не мутирует эту же таблицу»
+   зафиксирован в заголовке.
+3. **Runtime index.** Стратегия зафиксирована (linear probing + backward-shift,
+   load <= 0.5); открыто только возможное изменение по результатам benchmark.
+4. **Durable format.** Append-only/journaled или иное; compaction, erase/write
+   amplification, corruption detection — проектируется на host-simulator'е.
+5. **RAM+FLASH commit policy.** write-through vs batched; recovery/rollback — внутри
+   composite backend.
+6. **Ring persistence.** Нужен ли общий storage abstraction для Ring или
+   специализированный layout — решать после стабилизации Table persistence.
+7. **`iter` vs `list`.** mstore даёт `iter`; `list(filter)` собирает Domain.

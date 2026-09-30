@@ -42,6 +42,8 @@ static void test_lifecycle(void) {
     schema.key_size = sizeof(uint32_t);
     schema.payload_size = sizeof(value_t);
     schema.payload_equals = NULL;
+    schema.backing = MSTORE_BACKING_RAM;
+    schema.persist_key = NULL;
 
     CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
     CHECK(mstore_table_init(&table, &schema) == MSTORE_INVALID_STATE);
@@ -133,6 +135,8 @@ static void test_iter(void) {
     schema.key_size = sizeof(uint32_t);
     schema.payload_size = sizeof(value_t);
     schema.payload_equals = NULL;
+    schema.backing = MSTORE_BACKING_RAM;
+    schema.persist_key = NULL;
     CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
 
     value_t v = value(1, 1);
