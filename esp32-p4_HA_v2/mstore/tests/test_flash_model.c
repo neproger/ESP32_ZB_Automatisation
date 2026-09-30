@@ -176,7 +176,7 @@ static void verify_full(mstore_table_t *table, ref_model_t *ref, handle_t handle
 }
 
 static void run_model(mstore_backing_t backing, const char *persist_key) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(1024, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);

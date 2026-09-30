@@ -7,6 +7,7 @@
 #include "mstore_platform.h"
 #include "nor_sim.h"
 #include "nor_sim_device.h"
+#include "storage/mstore_region.h"
 
 #define CHECK(cond)                                                       \
     do {                                                                  \
@@ -46,13 +47,21 @@ static void open_ok(mstore_table_t *table, const char *persist_key) {
     CHECK(mstore_table_init(table, &schema) == MSTORE_OK);
 }
 
+/* Регион таблицы внутри раздела: инъекции бьют по смещениям внутри него. */
+static size_t region_base(const char *persist_key) {
+    size_t offset = 0;
+    size_t size = 0;
+    CHECK(mstore_region_lookup(persist_key, &offset, &size) == MSTORE_OK);
+    return offset;
+}
+
 static void reopen(mstore_table_t *table, const char *persist_key) {
     CHECK(mstore_table_deinit(table) == MSTORE_OK);
     open_ok(table, persist_key);
 }
 
 static void test_torn_tail(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -94,7 +103,7 @@ static void test_torn_tail(void) {
 }
 
 static void test_fail_erase_on_clear(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -125,7 +134,7 @@ static void test_fail_erase_on_clear(void) {
 }
 
 static void test_fail_program_now(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -155,7 +164,7 @@ static void test_fail_program_now(void) {
 }
 
 static void test_committed_corruption(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -172,7 +181,7 @@ static void test_committed_corruption(void) {
     CHECK(mstore_table_deinit(&table) == MSTORE_OK);
 
     /* active bank 0, header 64, record: payload at 64 + 16 + key_size(4) = 84 */
-    mstore_nor_sim_poke(sim, 84, 0xFF);
+    mstore_nor_sim_poke(sim, region_base("corrupt") + 84, 0xFF);
 
     mstore_table_schema_t schema = schema_for("corrupt");
     mstore_table_t reopened = {0};
@@ -183,7 +192,7 @@ static void test_committed_corruption(void) {
 }
 
 static void test_checkpoint_overflow(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -223,7 +232,7 @@ static void test_checkpoint_overflow(void) {
 }
 
 static void test_header_corruption(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
@@ -240,7 +249,7 @@ static void test_header_corruption(void) {
     CHECK(mstore_table_deinit(&table) == MSTORE_OK);
 
     /* повреждаем byte в bank header: region не erased, валидного header нет */
-    mstore_nor_sim_poke(sim, 4, 0x00);
+    mstore_nor_sim_poke(sim, region_base("hdr") + 4, 0x00);
 
     mstore_table_schema_t schema = schema_for("hdr");
     mstore_table_t reopened = {0};
@@ -251,7 +260,7 @@ static void test_header_corruption(void) {
 }
 
 static void test_same_process_torn_recovery(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(512, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);

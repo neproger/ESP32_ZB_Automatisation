@@ -37,7 +37,7 @@ static mstore_table_schema_t make_schema(void) {
 }
 
 int main(void) {
-    mstore_nor_sim_t *sim = mstore_nor_sim_create(1024, 64);
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;
     nor_sim_device_init(&device, sim);
