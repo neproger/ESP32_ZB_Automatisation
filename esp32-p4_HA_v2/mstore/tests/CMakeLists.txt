@@ -10,6 +10,7 @@ set(MSTORE_CORE
     ../src/mstore_table.c
     ../src/mstore_runtime.c
     ../src/mstore_invariants.c
+    ../src/mstore_ring.c
 )
 set(MSTORE_HOST_PORT ../port/host/mstore_platform_host.c)
 
@@ -26,3 +27,5 @@ endfunction()
 
 mstore_add_test(test_table)
 mstore_add_test(test_model)
+mstore_add_test(test_ring)
+mstore_add_test(test_ring_model)

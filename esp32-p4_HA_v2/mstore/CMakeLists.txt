@@ -3,6 +3,7 @@ idf_component_register(
         "src/mstore_table.c"
         "src/mstore_runtime.c"
         "src/mstore_invariants.c"
+        "src/mstore_ring.c"
         "port/espidf/mstore_platform_espidf.c"
     INCLUDE_DIRS
         "include"
