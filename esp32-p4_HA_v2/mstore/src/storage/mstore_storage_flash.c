@@ -1,7 +1,9 @@
 #include <string.h>
 
 #include "mstore_platform.h"
+#include "storage/mstore_bytes.h"
 #include "storage/mstore_flash_device.h"
+#include "storage/mstore_region.h"
 #include "storage/mstore_storage.h"
 
 #define MSTORE_FLASH_HEADER_MAGIC 0x4D535442u   /* MSTB */
@@ -32,7 +34,8 @@ typedef struct {
     size_t capacity;
     size_t key_size;
     size_t payload_size;
-    const mstore_flash_device_t *device;
+    const mstore_flash_device_t *device; /* region view, а не весь раздел */
+    mstore_region_view_t view;
 
     size_t header_size;
     size_t bank_size;
@@ -47,56 +50,6 @@ typedef struct {
     mstore_flash_latest_t *latest;
     uint8_t *record_buf;
 } mstore_flash_storage_t;
-
-static void put_u16(uint8_t *p, uint16_t v) {
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)(v >> 8);
-}
-
-static void put_u32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
-}
-
-static uint16_t get_u16(const uint8_t *p) {
-    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
-}
-
-static uint32_t get_u32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static uint32_t mstore_crc32(const void *data, size_t len) {
-    const uint8_t *p = data;
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= p[i];
-        for (int bit = 0; bit < 8; bit++) {
-            crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
-        }
-    }
-    return ~crc;
-}
-
-static uint64_t mstore_fnv1a64(const char *text, uint64_t seed) {
-    uint64_t hash = seed;
-    for (const unsigned char *p = (const unsigned char *)text; *p != 0; p++) {
-        hash ^= *p;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
-static void mstore_persist_id(const char *key, uint8_t out[16]) {
-    uint64_t a = mstore_fnv1a64(key, 1469598103934665603ULL);
-    uint64_t b = mstore_fnv1a64(key, 1099511628211ULL);
-    for (int i = 0; i < 8; i++) {
-        out[i] = (uint8_t)(a >> (8 * i));
-        out[8 + i] = (uint8_t)(b >> (8 * i));
-    }
-}
 
 static bool dev_read(const mstore_flash_storage_t *st, size_t offset, void *dst, size_t len) {
     return st->device->ops->read(st->device->ctx, offset, dst, len);
@@ -538,6 +491,7 @@ static mstore_err_t flash_sync(mstore_storage_t *base) {
 
 static void flash_close(mstore_storage_t *base) {
     mstore_flash_storage_t *st = (mstore_flash_storage_t *)base;
+    mstore_region_release(st->persist_key);
     if (st->record_buf != NULL) {
         mstore_platform_free(st->record_buf);
     }
@@ -561,6 +515,43 @@ static const mstore_storage_ops_t MSTORE_FLASH_OPS = {
     .close = flash_close,
 };
 
+/*
+ * Размер региона под геометрию таблицы. Считает backend как владелец формата:
+ * Region Manager не должен повторять раскладку записей у себя.
+ */
+mstore_err_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, size_t payload_size,
+                                              size_t erase_size, size_t *out_region_size) {
+    if (capacity == 0 || key_size == 0 || erase_size == 0) {
+        return MSTORE_INVALID_SIZE;
+    }
+    if (capacity > (size_t)UINT32_MAX || key_size > 0xFFFF || payload_size > 0xFFFF) {
+        return MSTORE_INVALID_SIZE;
+    }
+    const size_t fixed = MSTORE_FLASH_RECORD_FIXED + MSTORE_FLASH_RECORD_TAIL;
+    if (key_size > SIZE_MAX - payload_size - fixed) {
+        return MSTORE_INVALID_SIZE;
+    }
+    const size_t max_record = fixed + key_size + payload_size;
+    const size_t records_needed = capacity + MSTORE_FLASH_APPEND_HEADROOM;
+    if (records_needed < capacity) {
+        return MSTORE_INVALID_SIZE;
+    }
+    if (records_needed > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
+        return MSTORE_INVALID_SIZE;
+    }
+    const size_t bank_content = MSTORE_FLASH_HEADER_SIZE + records_needed * max_record;
+    /* Округление банки вверх до erase-блока арифметикой, а не маской. */
+    if (bank_content > SIZE_MAX - (erase_size - 1)) {
+        return MSTORE_INVALID_SIZE;
+    }
+    const size_t bank_size = ((bank_content + erase_size - 1) / erase_size) * erase_size;
+    if (bank_size > SIZE_MAX / 2) {
+        return MSTORE_INVALID_SIZE;
+    }
+    *out_region_size = bank_size * 2;
+    return MSTORE_OK;
+}
+
 mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
                                        mstore_storage_t **out_storage) {
     if (config->backing != MSTORE_BACKING_FLASH) {
@@ -577,26 +568,16 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
         return MSTORE_INVALID_SIZE;
     }
 
-    const mstore_flash_device_t *device = mstore_platform_flash_device();
-    if (device == NULL) {
-        return MSTORE_INVALID_STATE;
-    }
-    if (device->erase_size == 0 || device->erase_size > SIZE_MAX / 2 ||
-        device->size < 2 * device->erase_size) {
+    const size_t fixed = MSTORE_FLASH_RECORD_FIXED + MSTORE_FLASH_RECORD_TAIL;
+    if (config->key_size > SIZE_MAX - config->payload_size - fixed) {
         return MSTORE_INVALID_SIZE;
     }
-    /* Округление вниз арифметикой, а не маской: маска требует erase_size степени двойки. */
-    const size_t bank_size = (device->size / (2 * device->erase_size)) * device->erase_size;
-    const size_t max_record =
-        MSTORE_FLASH_RECORD_FIXED + config->key_size + config->payload_size + MSTORE_FLASH_RECORD_TAIL;
+    const size_t max_record = fixed + config->key_size + config->payload_size;
     const size_t records_needed = config->capacity + MSTORE_FLASH_APPEND_HEADROOM;
     if (records_needed < config->capacity) {
         return MSTORE_INVALID_SIZE;
     }
     if (records_needed > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
-        return MSTORE_INVALID_SIZE;
-    }
-    if (bank_size < MSTORE_FLASH_HEADER_SIZE + records_needed * max_record) {
         return MSTORE_INVALID_SIZE;
     }
 
@@ -609,10 +590,22 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     st->capacity = config->capacity;
     st->key_size = config->key_size;
     st->payload_size = config->payload_size;
-    st->device = device;
     st->header_size = MSTORE_FLASH_HEADER_SIZE;
-    st->bank_size = bank_size;
     st->record_capacity = max_record;
+
+    /* Регион выделяет Region Manager: backend получает уже готовый view и не знает о соседях. */
+    mstore_err_t bind_err = mstore_region_bind(config->persist_key, config->capacity, config->key_size,
+                                               config->payload_size, &st->view);
+    if (bind_err != MSTORE_OK) {
+        mstore_platform_free(st);
+        return bind_err;
+    }
+    st->device = &st->view.device;
+    st->bank_size = st->view.device.size / 2;
+    if (st->bank_size < MSTORE_FLASH_HEADER_SIZE + records_needed * max_record) {
+        flash_close(&st->base);
+        return MSTORE_INVALID_SIZE;
+    }
 
     size_t key_len = strlen(config->persist_key);
     st->persist_key = mstore_platform_alloc(key_len + 1);

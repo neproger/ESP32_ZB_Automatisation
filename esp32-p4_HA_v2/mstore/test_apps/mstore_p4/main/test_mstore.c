@@ -19,6 +19,13 @@ static void require(bool condition, const char *what) {
     }
 }
 
+static void require_err(mstore_err_t err, const char *what) {
+    if (err != MSTORE_OK) {
+        ESP_LOGE(TAG, "FAIL: %s err=%d", what, (int)err);
+        abort();
+    }
+}
+
 static void run_table_suite(void) {
     mstore_table_t table = {0};
     mstore_table_schema_t schema = {
@@ -148,9 +155,76 @@ static void run_flash_suite(void) {
     ESP_LOGI(TAG, "flash suite: OK");
 }
 
+/* Две FLASH-таблицы на одном разделе: регионы не пересекаются, reboot находит оба. */
+static void run_region_suite(void) {
+    mstore_table_schema_t schema_a = {
+        .capacity = 4,
+        .key_size = sizeof(uint32_t),
+        .payload_size = sizeof(value_t),
+        .payload_equals = NULL,
+        .backing = MSTORE_BACKING_FLASH,
+        .persist_key = "p4_region_a",
+    };
+    mstore_table_schema_t schema_b = schema_a;
+    schema_b.persist_key = "p4_region_b";
+
+    mstore_table_t a = {0};
+    mstore_table_t b = {0};
+    require_err(mstore_table_init(&a, &schema_a), "region A init");
+    require_err(mstore_table_init(&b, &schema_b), "region B init");
+    require_err(mstore_table_clear(&a), "region A clear");
+    require_err(mstore_table_clear(&b), "region B clear");
+
+    uint32_t key_a = 100;
+    uint32_t key_b = 200;
+    value_t va = {7, 8};
+    value_t vb = {9, 10};
+    mstore_slot_t slot_a;
+    mstore_slot_t slot_b;
+    uint32_t gen_a;
+    uint32_t gen_b;
+    require_err(mstore_table_slot_allocate(&a, &key_a, &va, &slot_a, &gen_a), "region A alloc");
+    require_err(mstore_table_slot_allocate(&b, &key_b, &vb, &slot_b, &gen_b), "region B alloc");
+
+    size_t count_a = 0;
+    size_t count_b = 0;
+    require_err(mstore_table_count(&a, &count_a), "region A count");
+    require_err(mstore_table_count(&b, &count_b), "region B count");
+    require(count_a == 1 && count_b == 1, "regions independent");
+
+    require_err(mstore_table_deinit(&a), "region A deinit");
+    require_err(mstore_table_deinit(&b), "region B deinit");
+
+    /* reopen: оба региона остаются на своих местах в directory */
+    mstore_table_t reopened_a = {0};
+    mstore_table_t reopened_b = {0};
+    require_err(mstore_table_init(&reopened_a, &schema_a), "region A reopen");
+    require_err(mstore_table_init(&reopened_b, &schema_b), "region B reopen");
+
+    mstore_slot_t found;
+    mstore_meta_t meta;
+    uint32_t read_key;
+    value_t read_value;
+    require_err(mstore_table_slot_find(&reopened_a, &key_a, &found), "region A find");
+    require_err(mstore_table_slot_read(&reopened_a, found, &meta, &read_key, &read_value),
+                "region A read");
+    require(read_key == key_a && read_value.a == 7 && read_value.b == 8, "region A payload");
+
+    require_err(mstore_table_slot_find(&reopened_b, &key_b, &found), "region B find");
+    require_err(mstore_table_slot_read(&reopened_b, found, &meta, &read_key, &read_value),
+                "region B read");
+    require(read_key == key_b && read_value.a == 9 && read_value.b == 10, "region B payload");
+
+    require_err(mstore_table_deinit(&reopened_a), "region A deinit 2");
+    require_err(mstore_table_deinit(&reopened_b), "region B deinit 2");
+
+    ESP_LOGI(TAG, "region suite: OK");
+}
+
 void app_main(void) {
     run_table_suite();
     run_ring_suite();
     run_flash_suite();
+    run_region_suite();
     ESP_LOGI(TAG, "ALL MSTORE TESTS PASSED");
 }

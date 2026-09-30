@@ -66,6 +66,11 @@ mstore_err_t mstore_storage_ram_open(const mstore_storage_config_t *config,
                                      mstore_storage_t **out_storage);
 mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
                                        mstore_storage_t **out_storage);
+
+/* Размер FLASH-региона под геометрию таблицы. Считает FLASH backend как владелец
+ * формата; Region Manager только резервирует место. */
+mstore_err_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, size_t payload_size,
+                                              size_t erase_size, size_t *out_region_size);
 mstore_err_t mstore_storage_ram_flash_open(const mstore_storage_config_t *config,
                                            mstore_storage_t **out_storage);
 
