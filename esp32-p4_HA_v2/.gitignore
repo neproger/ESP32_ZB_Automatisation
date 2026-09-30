@@ -1,0 +1,19 @@
+# ===== Build artifacts =====
+**/build/
+**/managed_components/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/compile_commands.json
+**/sdkconfig.old
+
+# Firmware artifacts
+**/*.bin
+**/*.elf
+**/*.map
+
+# ===== IDE / OS =====
+.vscode/
+*.user
+Thumbs.db
+desktop.ini

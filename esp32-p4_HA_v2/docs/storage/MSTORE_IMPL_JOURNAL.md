@@ -9,9 +9,9 @@
 |---|---|
 | Компонент | `mstore` (Table Store first) |
 | Архитектура | заморожена, `MICRO_DB.md` Ревизия 4 (`2e6a84b`) |
-| Реализация | не начата |
-| Scope первой ревизии | RAM-only Table Store: без persistence, без Ring Store |
-| Тестовые контуры | host (unit / randomized / sanitizers) + ESP32-P4 test app |
+| Реализация | host core + тесты зелёные; IDF port и P4 app добавлены, не собирались |
+| Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
+| Тестовые контуры | host (unit + randomized model test) + ESP32-P4 test app |
 
 Архитектура Table Store считается **замороженной до результатов первой реализации**:
 новые требования добавляются только если код покажет реальную дыру, а не предположение.
@@ -51,95 +51,66 @@ payload не изменился     -> OK + changed=false
 payload изменился        -> OK + changed=true
 ```
 
-## 3. Scope первой ревизии
-
-Только RAM-модель Table Store, platform-independent C. **Два контура тестирования
-с первого коммита**: core не должен быть «формально platform-independent», проверяясь
-только на Linux.
+## 3. Структура
 
 ```text
-mstore core
-├── host build
-│   ├── unit tests
-│   ├── randomized model test
-│   ├── check_invariants()
-│   └── sanitizers / valgrind
-│
-└── ESP32-P4 test app
-    ├── собирается ESP-IDF
-    ├── гоняет тот же API
-    ├── проверяет allocator/lock integration
-    └── запускается на emulator или реальной P4
-```
-
-Разделение ответственности: host — корректность алгоритма; ESP32-P4 — корректность
-интеграции embedded-кода. Третью среду (ESP-IDF `target=linux`) не вводим в первой
-ревизии: механизм экспериментальный, поддержка компонентов ограничена.
-
-Структура компонента — один core, разные platform ports:
-
-```text
-mstore/
-├── include/
+esp32-p4_HA_v2/mstore/
+├── CMakeLists.txt                 # IDF-компонент: core + port/espidf
+├── include/mstore/
+│   ├── mstore_types.h             # mstore_err_t, mstore_meta_t, mstore_slot_t, schema
+│   └── mstore_table.h             # публичный slot-first API
 ├── src/
+│   ├── mstore_platform.h          # внутренний контракт порта: allocator + lock
+│   ├── mstore_internal.h          # slot layout + состояние instance
+│   ├── mstore_table.c             # canonical slots: lifecycle + API
+│   ├── mstore_runtime.c           # derived: index / free-list / live_count + rebuild
+│   └── mstore_invariants.c        # check_invariants()
 ├── port/
-│   ├── host/
-│   └── espidf/
-└── tests/
+│   ├── host/mstore_platform_host.c      # malloc + CRITICAL_SECTION / pthread
+│   └── espidf/mstore_platform_espidf.c  # heap_caps + FreeRTOS mutex
+├── tests/                         # host build: unit + randomized model test
+└── test_apps/mstore_p4/           # ESP-IDF app: CMakeLists / sdkconfig.defaults / main
 ```
 
-```text
-test_apps/
-└── mstore_p4/
-    ├── CMakeLists.txt
-    ├── sdkconfig.defaults
-    └── main/
-        └── test_mstore.c
-```
+Два контура: host — корректность алгоритма; ESP32-P4 — интеграция embedded-кода.
+Core platform-independent C; ESP-IDF — только порт.
+
+## 4. План и прогресс
+
+- [x] структура компонента
+- [x] два test target: host и ESP32-P4 (`test_apps/mstore_p4/`)
+- [x] platform layer: host + espidf порты
+- [x] `mstore_table_schema_t` (capacity, key_size, payload_size, опц. payload_equals)
+- [x] slot layout `meta + key + payload`, фиксированный stride
+- [x] accessors meta/key/payload
+- [x] generation/version lifecycle (allocate/update/free/reuse)
+- [x] runtime index (`key -> slot`; linear probing + backward-shift deletion)
+- [x] free-list / live_count
+- [x] `rebuild_runtime()` из slots
+- [x] API: slot_find / slot_meta / slot_read / slot_allocate / slot_update / slot_free
+- [x] iter / count / clear
+- [x] `check_invariants()`
+- [x] randomized model test vs reference-модель
+- [ ] собрать IDF-компонент и ESP32-P4 test app (в текущей среде ESP-IDF недоступен)
+
+`rebuild_runtime()` и `check_invariants()` — internal/debug, не публичный API; host tests
+получают к ним доступ через `src/` private include.
+
+Согласованная последовательность работ:
 
 ```text
-mstore_table
-├── slot memory/layout
-├── meta/key/payload access
-├── generation/version lifecycle
-├── runtime index
-├── free-list
-├── live_count
-├── rebuild_runtime
-└── invariants/tests
-```
-
-Вне scope: flash/persistence, CRC/checksum, Ring Store, partition. Тонкий platform port
-(allocator + lock) — в scope; полноценная интеграция ESP-IDF — нет.
-
-## 4. План первой ревизии
-
-- [ ] структура компонента `mstore` (`include/ src/ port/ tests/`)
-- [ ] два test target: host и ESP32-P4 (`test_apps/mstore_p4/`)
-- [ ] минимальный platform layer для обоих портов (allocator + lock)
-- [ ] `mstore_table_schema_t` (capacity, key_size, payload_size, опц. payload_equals)
-- [ ] slot layout: `meta + key + payload`, фиксированный stride
-- [ ] accessors meta/key/payload
-- [ ] generation/version lifecycle (allocate/update/free/reuse)
-- [ ] runtime index (`key -> slot`, bucket хранит slot)
-- [ ] free-list / live_count
-- [ ] `rebuild_runtime()` из slots
-- [ ] API: slot_find / slot_meta / slot_read / slot_allocate / slot_update / slot_free
-- [ ] iter / count / clear
-- [ ] `check_invariants()`
-- [ ] randomized model test vs эталонная модель
-
-Часть разработки, а не «потом»:
-
-```text
-host:
-    check_invariants()      // проверяет инварианты §2.7 архитектуры
-    randomized model test   // после каждой случайной операции сверка с reference-моделью
-    sanitizers / valgrind
-
-esp32-p4:
-    тот же API + allocator/lock integration
-    emulator, затем реальный контроллер — без изменений кода
+1. public types/API skeleton
+2. internal table state + slot layout
+3. host platform port
+4. allocate/update/free/read/meta
+5. runtime index/free-list/live_count
+6. slot_find
+7. rebuild_runtime
+8. invariants
+9. unit tests
+10. randomized reference-model test
+11. ESP-IDF port
+12. ESP32-P4 test app
 ```
 
 ## 5. Решения (decision log)
@@ -147,31 +118,45 @@ esp32-p4:
 | Дата | Решение | Причина |
 |---|---|---|
 | 2026-09-30 | Заведён журнал реализации | фиксировать «делаем / собираемся делать» |
+| 2026-09-30 | Компонент в `esp32-p4_HA_v2/mstore/`, не в `shared_components/` | один потребитель: держим рядом, шарим при втором |
 | 2026-09-30 | Scope v1 — RAM-only Table Store | сначала доказать корректность slots, persistence/Ring позже |
-| 2026-09-30 | Сразу два контура тестирования: host + ESP32-P4 test app | host — алгоритм/скорость/sanitizers; P4 — интеграция embedded-кода |
-| 2026-09-30 | Один core, `port/{host,espidf}`; без отдельного host API | не раздваивать API, различать только port |
-| 2026-09-30 | Не вводить третью среду (IDF `target=linux`) в v1 | экспериментально, ограниченная поддержка компонентов |
-| 2026-09-30 | `check_invariants()` и randomized model test — часть v1 | даёт больше уверенности, чем ручные unit-тесты |
-| 2026-09-30 | Архитектура заморожена до результатов v1 | не проектировать предположения |
+| 2026-09-30 | Два контура тестирования: host + ESP32-P4 | host — алгоритм/скорость; P4 — интеграция embedded-кода |
+| 2026-09-30 | Один core, `port/{host,espidf}`; platform выбирается при сборке | без vtable: compile-time port, ноль накладных |
+| 2026-09-30 | `mstore_platform.h` — internal (`src/`), не публичный | caller его не использует |
+| 2026-09-30 | Handle: `mstore_table_t { void *_state; }` | внутренности скрыты, caller-owned |
+| 2026-09-30 | `meta { bool used; uint32_t generation; uint32_t version; }` | симметрично, без uint64 до необходимости |
+| 2026-09-30 | `count` возвращает `mstore_err_t` + out-параметр | единая модель ошибок во всём API |
+| 2026-09-30 | `rebuild_runtime` и `check_invariants` — internal | maintenance/debug, не пользовательский API |
+| 2026-09-30 | Индекс: linear probing + backward-shift deletion | нет tombstones, не нужен rehash при load <= 0.5 |
+| 2026-09-30 | `check_invariants()` и model test — часть v1 | больше уверенности, чем ручные unit-тесты |
 
 ## 6. Хронология
 
 ### 2026-09-30
 
 - Архитектура `MICRO_DB.md` доведена до Ревизии 4 и зафиксирована.
-- Заведён журнал; определён scope первой ревизии.
+- Заведён журнал; определён scope и согласована последовательность.
+- Реализован host core: `mstore_table.c`, `mstore_runtime.c`, `mstore_invariants.c`,
+  публичный API и host-порт.
+- Добавлены IDF-порт, component `CMakeLists.txt` и ESP32-P4 test app (сборка не проверена).
+
+Результаты сборки и тестов (host, MSVC 14.51, `/W4`, warnings-as-errors):
+
+```text
+test_table  Passed
+test_model  Passed   // 200000 random ops vs reference, rebuild каждые 137, invariants каждый op
+100% tests passed, 0 failed
+```
 
 Следующий шаг:
 
-1. создать структуру компонента `mstore`
-2. сразу создать два test target: host и ESP32-P4
-3. реализовать минимальный platform layer для обоих
-4. начать slot core
+- собрать IDF-компонент и `test_apps/mstore_p4` (нужна среда ESP-IDF), затем запуск на
+  emulator/реальной P4.
 
 ## 7. Открытые вопросы (из архитектуры)
 
-1. Аллокация: core выделяет сам или принимает готовый буфер.
-2. Lock и `iter`: колбэк не мутирует ту же таблицу (зафиксировать контракт).
-3. Runtime index: hash-стратегия, deletion policy, load factor — при реализации.
+1. Аллокация: core выделяет сам (сейчас так) или принимает готовый буфер.
+2. Lock и `iter`: колбэк не мутирует ту же таблицу (контракт зафиксирован в заголовке).
+3. Runtime index: load factor / rebuild — сейчас backward-shift без порогов.
 4. Persistence: RAM-only или RAM+Flash; CRC/atomicity/wear/layout — позже.
 5. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
