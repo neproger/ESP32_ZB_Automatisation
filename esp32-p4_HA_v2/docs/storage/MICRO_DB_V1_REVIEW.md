@@ -1,4 +1,4 @@
-# micro_db v1 — разбор перед реализацией v2
+# micro_db v1 — разбор перед реализацией mstore
 
 > Рабочий артефакт. Источник: `shared_components/micro_db` (core + flash).
 > Цель — использовать v1 как **референс реализации**, а не как контракт v2.
@@ -81,7 +81,7 @@
 ## 5. Ring Store
 
 В v1 **Ring нет** — это полностью новый primitive. Опираться только на design rules
-(`../storage/MICRO_DB.md`): seq как identity, overwrite-oldest, без key/hash/free-list.
+(`../storage/MSTORE.md`): seq как identity, overwrite-oldest, без key/hash/free-list.
 
 ## 6. Что это значит для §9 (mstore)
 

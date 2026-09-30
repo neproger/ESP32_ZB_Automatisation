@@ -118,7 +118,7 @@ Canonical state — сами slots, а `index / free-list / live_count` — пр
 
 На mstore строятся конкретные хранилища Domain: Entity Store (Table),
 Journal и Transient Payload (Ring). Persistence, zero-copy и полный API — тема
-`storage/MICRO_DB.md`.
+`storage/MSTORE.md`.
 
 ## 3. Domain — ядро
 
@@ -219,7 +219,7 @@ docs/
 ├── clients/
 │   └── DISPLAY.md
 └── storage/
-    ├── MICRO_DB.md
+    ├── MSTORE.md
     └── MSTORE_IMPL_JOURNAL.md
 ```
 

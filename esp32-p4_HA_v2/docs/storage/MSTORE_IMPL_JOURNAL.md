@@ -1,6 +1,6 @@
 # mstore — журнал реализации
 
-> Журнал ведётся по мере работы. Архитектура — `MICRO_DB.md`.
+> Журнал ведётся по мере работы. Архитектура — `MSTORE.md`.
 > Здесь: текущий статус, план, хронология и принятые решения.
 
 ## 1. Статус
@@ -8,7 +8,7 @@
 | | |
 |---|---|
 | Компонент | `mstore` (Table Store first) |
-| Архитектура | заморожена, `MICRO_DB.md` Ревизия 4 (`2e6a84b`) |
+| Архитектура | заморожена, `MSTORE.md` Ревизия 4 (`2e6a84b`) |
 | Реализация | host core + тесты зелёные; IDF-компонент и P4 app собираются (esp32p4) |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
 | Тестовые контуры | host (unit + randomized model test) + ESP32-P4 test app |
@@ -128,18 +128,19 @@ Core platform-independent C; ESP-IDF — только порт.
 | 2026-09-30 | `meta { bool used; uint32_t generation; uint32_t version; }` | симметрично, без uint64 до необходимости |
 | 2026-09-30 | `count` возвращает `mstore_err_t` + out-параметр | единая модель ошибок во всём API |
 | 2026-09-30 | `rebuild_runtime` и `check_invariants` — internal | maintenance/debug, не пользовательский API |
-| 2026-09-30 | Индекс: linear probing + backward-shift deletion | нет tombstones, не нужен rehash при load <= 0.5 |
+| 2026-09-30 | Индекс: linear probing + backward-shift deletion; `index_capacity >= 2 * capacity` (load <= 0.5) | нет tombstones, не нужен rehash на этой load |
 | 2026-09-30 | `check_invariants()` и model test — часть v1 | больше уверенности, чем ручные unit-тесты |
 
 ## 6. Хронология
 
 ### 2026-09-30
 
-- Архитектура `MICRO_DB.md` доведена до Ревизии 4 и зафиксирована.
+- Архитектура `MSTORE.md` доведена до Ревизии 4 и зафиксирована.
 - Заведён журнал; определён scope и согласована последовательность.
 - Реализован host core: `mstore_table.c`, `mstore_runtime.c`, `mstore_invariants.c`,
   публичный API и host-порт.
-- Добавлены IDF-порт, component `CMakeLists.txt` и ESP32-P4 test app (сборка не проверена).
+- Добавлены IDF-порт, component `CMakeLists.txt` и ESP32-P4 test app; сборка под
+  ESP-IDF v6.1 / esp32p4 успешно проверена.
 
 Результаты сборки и тестов (host, MSVC 14.51, `/W4`, warnings-as-errors):
 
@@ -167,6 +168,7 @@ mstore_p4.bin     собран (test_apps/mstore_p4)
 
 1. Аллокация: core выделяет сам (сейчас так) или принимает готовый буфер.
 2. Lock и `iter`: колбэк не мутирует ту же таблицу (контракт зафиксирован в заголовке).
-3. Runtime index: load factor / rebuild — сейчас backward-shift без порогов.
+3. Runtime index: стратегия зафиксирована (linear probing + backward-shift, load <= 0.5);
+   открыто только возможное изменение по результатам benchmark.
 4. Persistence: RAM-only или RAM+Flash; CRC/atomicity/wear/layout — позже.
 5. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
