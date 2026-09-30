@@ -129,7 +129,7 @@ Storage phase:
 - [x] зафиксировать storage architecture в документации
 - [x] выделить physical RAM access из Table Engine за internal storage contract
 - [x] подключить RAM backend; host tests зелёные без смены reference-модели
-- [ ] host flash/NOR simulator + fault injection
+- [x] host flash/NOR simulator + fault injection
 - [ ] durable flash format поверх ограничений симулятора
 - [ ] FLASH backend
 - [ ] RAM+FLASH composite backend
@@ -167,6 +167,7 @@ Storage phase:
 | 2026-09-30 | Storage contract: vtable + copy-out (`read_meta/read_key/read_slot`, `write_slot/write_meta`, `clear_all`, `sync`, `close`); `read_key` сохранён | FLASH reserve: `slot_find`/rebuild не читают payload |
 | 2026-09-30 | `write_*` = logical canonical commit; derived runtime меняется только после успешного write | backend сам решает commit/recovery, engine без rollback |
 | 2026-09-30 | `sync()` — внутренний backend flush, не public durability contract | caller не должен знать persistence policy |
+| 2026-09-30 | NOR simulator — в `tests/support/`, не в компоненте; device seam для flash backend пока не вводится | нет потребителя в компоненте до durable format |
 
 ## 6. Хронология
 
@@ -182,11 +183,15 @@ Storage phase:
   (`src/storage/mstore_storage.h`, `mstore_storage.c`, `mstore_storage_ram.c`);
   публичный API и reference-модели не менялись (в schema добавлен только `backing`).
   Host-тесты и IDF-сборка — зелёные.
+- Добавлен host NOR simulator (`tests/support/nor_sim.{h,c}`): erased `0xFF`, program
+  только `1 -> 0`, erase с выравниванием, fault injection (partial program, fail now,
+  fail erase), `poke`, save/load для reboot. Self-test `test_flash_sim` зелёный.
 
 Следующий шаг:
 
-- host flash/NOR simulator (erased=0xFF, write 1->0, erase block, fault injection),
-  затем durable format проектируется поверх его ограничений, а не в вакууме.
+- durable format поверх ограничений симулятора: варианты layout, recovery и
+  power-loss; выбрать по критериям (atomic observable state, bounded RAM, erase/write
+  amplification, compaction, corruption detection).
 
 ## 7. Открытые вопросы
 

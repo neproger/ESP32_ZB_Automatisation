@@ -31,3 +31,13 @@ mstore_add_test(test_table)
 mstore_add_test(test_model)
 mstore_add_test(test_ring)
 mstore_add_test(test_ring_model)
+
+# NOR simulator — host-only support, без core.
+add_executable(test_flash_sim test_flash_sim.c support/nor_sim.c)
+target_include_directories(test_flash_sim PRIVATE support)
+if(MSVC)
+    target_compile_options(test_flash_sim PRIVATE /W4)
+else()
+    target_compile_options(test_flash_sim PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME test_flash_sim COMMAND test_flash_sim)
