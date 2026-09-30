@@ -136,7 +136,8 @@ Storage phase:
 - [x] FLASH backend: power-loss fault injection, checkpoint overflow, corruption tests
       (`test_flash_durability`)
 - [x] общий behavioral suite RAM/FLASH (`test_behavior`)
-- [ ] общий randomized model suite на RAM/FLASH
+- [x] randomized model suite на RAM/FLASH (`test_model`, `test_flash_model` — 100k ops,
+      reboot каждые 5000, checkpoint, invariants каждый op)
 - [ ] RAM+FLASH composite backend
 - [ ] ESP-IDF `esp_partition` backend
 - [ ] единый mstore hardware suite на реальной P4
@@ -213,10 +214,14 @@ Storage phase:
 - Durability hardening: `test_flash_durability` (torn tail, fail erase, fail program
   now, committed corruption -> `MSTORE_CORRUPT`, checkpoint overflow) и
   `test_behavior` (общий behavioral suite RAM + FLASH). Host-тесты 8/8 зелёные.
+- Добавлен randomized model suite поверх FLASH (`test_flash_model`, 100k ops против
+  reference-модели, reboot каждые 5000, checkpoint при переполнении банки, invariants
+  каждый op). Host-тесты 9/9 зелёные.
 
 Следующий шаг:
 
-- общий randomized model suite на RAM/FLASH; затем RAM+FLASH composite и `esp_partition`.
+- RAM|FLASH composite backend (backend-only; публичный API менять не планируется);
+  затем ESP-IDF `esp_partition` adapter.
 
 Следующий шаг:
 
