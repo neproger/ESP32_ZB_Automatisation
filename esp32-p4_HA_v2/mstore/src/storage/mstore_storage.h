@@ -64,6 +64,8 @@ mstore_err_t mstore_storage_open(const mstore_storage_config_t *config,
 /* Backend'ы; наружу (в public API) не выходят. */
 mstore_err_t mstore_storage_ram_open(const mstore_storage_config_t *config,
                                      mstore_storage_t **out_storage);
+mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
+                                       mstore_storage_t **out_storage);
 
 static inline mstore_err_t mstore_storage_read_meta(const mstore_storage_t *storage,
                                                     mstore_slot_t slot, mstore_meta_t *out_meta) {

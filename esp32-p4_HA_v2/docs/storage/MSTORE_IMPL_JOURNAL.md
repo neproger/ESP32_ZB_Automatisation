@@ -131,10 +131,11 @@ Storage phase:
 - [x] подключить RAM backend; host tests зелёные без смены reference-модели
 - [x] host flash/NOR simulator + fault injection
 - [x] спроектировать durable format (`MSTORE_FLASH_FORMAT.md`)
-- [ ] FLASH backend (append-only log, две банки, checkpoint)
+- [x] FLASH backend: append-only log, две банки, recovery scan, checkpoint, atomic clear
+      (базовый lifecycle + reboot recovery; `test_flash` зелёный)
+- [ ] FLASH backend: power-loss fault injection, checkpoint overflow, corruption tests
 - [ ] RAM+FLASH composite backend
 - [ ] общий behavioral/model suite на всех трёх storage modes
-- [ ] reboot / power-loss / corruption tests
 - [ ] ESP-IDF `esp_partition` backend
 - [ ] единый mstore hardware suite на реальной P4
 
@@ -175,6 +176,8 @@ Storage phase:
 | 2026-09-30 | `clear_all` атомарен через новую банку (snapshot `META(used=0)` + header последним) | частичная очистка при power loss исключена; generation сохраняется |
 | 2026-09-30 | Identity таблицы — `persist_id[16]` (digest `persist_key`), не 32-bit hash | устойчивая persistent identity |
 | 2026-09-30 | Новые нейтральные ошибки `MSTORE_IO` / `MSTORE_CORRUPT` (архитектурная фиксация) | caller не видит RAM/flash-специфику; torn tail — не ошибка |
+| 2026-09-30 | NOR device — platform-provided (`mstore_platform_flash_device`), public schema не менялся | host: settable device; IDF: partition позже |
+| 2026-09-30 | Integrity: CRC32 над record/header; identity — `persist_id` (два FNV-1a-64) | CRC для integrity, не для identity |
 
 ## 6. Хронология
 
@@ -200,6 +203,16 @@ Storage phase:
   torn tail и `MSTORE_CORRUPT`; атомарный `clear_all` через новую банку;
   checkpoint = compaction (garbage не переносится); `persist_id[16]`; bank sizing с
   `append_headroom`.
+- Реализован FLASH backend (`src/storage/mstore_storage_flash.c`): append-only записи
+  `SET/META`, две банки, commit marker, recovery scan, checkpoint, atomic `clear_all`;
+  NOR device через platform-provided seam (`mstore_flash_device.h`, host adapter над
+  `nor_sim`). `test_flash` зелёный (lifecycle, duplicate, update changed, free/clear +
+  reboot recovery); IDF-сборка проходит.
+
+Следующий шаг:
+
+- FLASH: power-loss fault injection (partial program, fail before/after commit/erase),
+  checkpoint overflow, corruption tests; затем общий behavioral suite RAM/FLASH.
 
 Следующий шаг:
 

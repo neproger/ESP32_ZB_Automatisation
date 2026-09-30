@@ -13,6 +13,8 @@ mstore_err_t mstore_storage_open(const mstore_storage_config_t *config,
     switch (config->backing) {
         case MSTORE_BACKING_RAM:
             return mstore_storage_ram_open(config, out_storage);
+        case MSTORE_BACKING_FLASH:
+            return mstore_storage_flash_open(config, out_storage);
         default:
             return MSTORE_INVALID_ARG;
     }

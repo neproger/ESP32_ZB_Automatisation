@@ -13,6 +13,7 @@ set(MSTORE_CORE
     ../src/mstore_ring.c
     ../src/storage/mstore_storage.c
     ../src/storage/mstore_storage_ram.c
+    ../src/storage/mstore_storage_flash.c
 )
 set(MSTORE_HOST_PORT ../port/host/mstore_platform_host.c)
 
@@ -41,3 +42,14 @@ else()
     target_compile_options(test_flash_sim PRIVATE -Wall -Wextra -Werror)
 endif()
 add_test(NAME test_flash_sim COMMAND test_flash_sim)
+
+# FLASH backend поверх NOR simulator.
+add_executable(test_flash test_flash.c support/nor_sim.c support/nor_sim_device.c
+    ${MSTORE_CORE} ${MSTORE_HOST_PORT})
+target_include_directories(test_flash PRIVATE ../include ../src support)
+if(MSVC)
+    target_compile_options(test_flash PRIVATE /W4)
+else()
+    target_compile_options(test_flash PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME test_flash COMMAND test_flash)

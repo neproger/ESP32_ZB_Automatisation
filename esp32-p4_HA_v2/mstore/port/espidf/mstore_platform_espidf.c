@@ -27,3 +27,13 @@ void mstore_platform_lock_acquire(void *lock) {
 void mstore_platform_lock_release(void *lock) {
     xSemaphoreGive((SemaphoreHandle_t)lock);
 }
+
+static const mstore_flash_device_t *s_flash_device;
+
+const mstore_flash_device_t *mstore_platform_flash_device(void) {
+    return s_flash_device;
+}
+
+void mstore_platform_flash_set_device(const mstore_flash_device_t *device) {
+    s_flash_device = device;
+}
