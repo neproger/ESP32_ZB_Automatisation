@@ -170,8 +170,11 @@ Storage phase:
 | 2026-09-30 | NOR simulator — в `tests/support/`, не в компоненте; device seam для flash backend пока не вводится | нет потребителя в компоненте до durable format |
 | 2026-09-30 | Flash format: две банки + append-only log + checkpoint (проект `MSTORE_FLASH_FORMAT.md`) | power-loss safety без erase на каждую мутацию; fixed-per-slot и dual-copy отвергнуты |
 | 2026-09-30 | RAM-карта `slot -> latest offset` как bounded derived для FLASH | случайное чтение без полного payload в RAM |
-| 2026-09-30 | `clear_all` = append `META(used=0)` на занятый слот (generation сохраняется) | совпадает с RAM backend |
-| 2026-09-30 | Новые нейтральные ошибки `MSTORE_IO` / `MSTORE_CORRUPT` (архитектурная фиксация) | caller не видит RAM/flash-специфику |
+| 2026-09-30 | Record `commit_marker` пишется последним; `latest[slot]` переключается только после commit | отличать оборванный append от committed corruption |
+| 2026-09-30 | Recovery: нет marker = torn tail (норма), marker valid + CRC bad = `MSTORE_CORRUPT` | power-loss tail != повреждённое committed состояние |
+| 2026-09-30 | `clear_all` атомарен через новую банку (snapshot `META(used=0)` + header последним) | частичная очистка при power loss исключена; generation сохраняется |
+| 2026-09-30 | Identity таблицы — `persist_id[16]` (digest `persist_key`), не 32-bit hash | устойчивая persistent identity |
+| 2026-09-30 | Новые нейтральные ошибки `MSTORE_IO` / `MSTORE_CORRUPT` (архитектурная фиксация) | caller не видит RAM/flash-специфику; torn tail — не ошибка |
 
 ## 6. Хронология
 
@@ -193,6 +196,10 @@ Storage phase:
 - Спроектирован durable format (`MSTORE_FLASH_FORMAT.md`): две log-банки, append-only
   записи `SET/META` с CRC32, RAM-карта `slot -> latest offset`, checkpoint через
   switch банки по `seq`. Реализация — следующий шаг.
+- Формат уточнён (revision 1 draft): `commit_marker` последним; recovery различает
+  torn tail и `MSTORE_CORRUPT`; атомарный `clear_all` через новую банку;
+  checkpoint = compaction (garbage не переносится); `persist_id[16]`; bank sizing с
+  `append_headroom`.
 
 Следующий шаг:
 

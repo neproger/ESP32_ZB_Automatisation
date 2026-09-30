@@ -1,191 +1,288 @@
 # mstore — flash format (design)
 
-> Рабочий артефакт. Статус: **proposal**, не реализовано.
+> Рабочий артефакт. Статус: **proposal**. Format revision: **1 (draft)**.
 > Проектируется поверх host NOR simulator (`tests/support/nor_sim`).
 > Архитектура storage backends — `MSTORE.md` §2.11.
 
-## 1. Что должен дать формат
+## 1. Идея
 
-Backend реализует internal storage contract (`read_meta/read_key/read_slot`,
-`write_slot/write_meta`, `clear_all`, `sync`, `close`) поверх NOR-региона, при этом:
-
-- `write_*` — logical canonical commit (успех = состояние принято целиком);
-- power-loss safety и atomic observable state;
-- recovery при старте;
-- bounded RAM (для FLASH_ONLY полный массив payload в RAM не хранится);
-- без erase/rewrite 4K-сектора на каждую мелкую мутацию (главный дефект v1);
-- детекция повреждений (CRC), compaction, приемлемая write amplification.
-
-## 2. Рассмотренные варианты
+Логический slot **не имеет** фиксированного физического адреса во flash. Update =
+append новой ревизии; старая ревизия становится garbage и физически удаляется при
+checkpoint.
 
 ```text
-A. Fixed per-slot region (v1-стиль)
-   slot по фиксированному offset, у каждого CRC.
-   - update требует erase сектора -> rewrite всех слотов в секторе;
-   - окно потери старого значения на время erase;
-   - write amplification = sector_size / slot_size.
-   -> не подходит.
-
-B. Dual-copy всей таблицы (shadow)
-   две полные копии, пишем по очереди.
-   - amplification = размер всей таблицы на каждую мутацию.
-   -> не подходит.
-
-C. Append-only log + RAM-карта slot -> offset
-   мутации дописываются записями; старые значения становятся stale.
-   - program без erase (erase только при compaction);
-   - power-loss safe (CRC + последовательность);
-   - случайное чтение через RAM-карту (bounded).
-   -> выбирается.
+Table Engine       logical fixed-capacity slots
+      ↓
+FLASH backend      append-only physical records
+      ↓
+latest[slot] -> physical offset
 ```
 
-## 3. Формат (принято к реализации)
+```text
+SET slot=5 v1
+SET slot=5 v2
+SET slot=5 v3
+latest[5] -> v3        // v1, v2 — obsolete/garbage, не история
+```
 
-Регион делится на **две равные log-банки**. В каждой банке — заголовок и
-append-only поток записей. Активна банка с большим `seq` и валидным CRC.
+Причина: NOR не допускает произвольный overwrite, `0 -> 1` только через erase, erase
+крупными блоками, sector rewrite даёт wear/write amplification. Append в заранее
+erased область естественно ложится на физику NOR.
+
+## 2. logical slot != physical location
+
+```text
+RAM backend:    logical slot -> fixed RAM address
+FLASH backend:  logical slot -> latest[slot] -> current log offset
+```
+
+После update физический offset меняется, логический slot — тот же. Это ключевое
+различие backend'ов; Table Engine физический layout не знает.
+
+## 3. Регион: две log-банки
 
 ```text
 region
-├── bank 0
-│   ├── header   { magic, version, seq, capacity, key_size, payload_size,
-│   │              persist_key_hash, crc32 }
-│   └── records  (append-only)
-└── bank 1
-    ├── header
-    └── records
+├── bank 0   header + append-only records
+└── bank 1   header + append-only records
 ```
 
-`bank_size` кратен `erase_size` и вмещает: `header + snapshot + headroom`.
+Активна банка с большим `seq` и валидным header CRC. `bank_size` кратен `erase_size`.
 
-## 4. Запись (record)
-
-Фиксированная часть + опциональные key/payload, в конце CRC32:
+## 4. Bank header
 
 ```text
-u16 magic          // record magic
-u8  kind           // SET | META
-u8  used           // meta.used
+u32 magic
+u16 format_revision
+u16 header_size
+u32 seq
+u32 capacity
+u16 key_size
+u16 payload_size
+u8  persist_id[16]
+u32 crc32
+```
+
+Рекорды начинаются с выровненного `header_size`.
+
+## 5. Record format (commit marker)
+
+```text
+u16 magic
+u8  kind              // SET | META
+u8  used
 u32 slot
 u32 generation
 u32 version
-[ key     ]         // только SET, key_size bytes
-[ payload ]         // только SET, payload_size bytes
-u32 crc32           // над всеми байтами записи до crc
+[key]                 // только SET, key_size bytes
+[payload]             // только SET, payload_size bytes
+u32 crc32             // над всеми байтами записи до crc
+u32 commit_marker     // пишется ПОСЛЕДНИМ
 ```
 
-- `SET` — полное canonical состояние слота (`used=1`).
-- `META` — только meta; в v1 используется для `used=0` (free). Key/payload
-  отсутствуют: для свободного слота они не имеют семантики, писать их незачем.
+- `SET` — полное canonical state слота (`used=1`).
+- `META` — только meta; в v1 используется для `used=0` (free / clear). Key/payload не
+  пишутся: для свободного слота они не имеют семантики.
 
-## 5. RAM-карта
+Порядок записи:
 
-Backend держит `latest[capacity] = { offset, kind }` (offset == 0 = записи не было).
+```text
+1. program body + key/payload + CRC
+2. program commit_marker ПОСЛЕДНИМ
+3. committed = marker успешно записан
+4. только после этого latest[slot] -> new offset
+```
 
-- `read_meta(slot)`: `latest` → запись → meta (payload не читается).
-- `read_key(slot)`: `latest` → key (только SET).
-- `read_slot(slot)`: `latest` → meta + key + payload.
-- отсутствует в карте → default `{ used=0, generation=0, version=0 }`.
+`commit_marker` отделяет оборванный append (power loss) от ранее committed, позже
+повреждённой записи. Это и есть граница атомарности записи.
 
-Карта — bounded (`capacity * sizeof(offset)+kind`) и полностью восстанавливается
-сканированием банки. `generation` свободного слота сохраняется через `META`-запись,
-поэтому reuse даёт `generation+1` как в RAM backend.
+## 6. RAM-карта
 
-## 6. Load / recovery
+`latest[capacity] = { offset, kind }` (offset == 0 → записи не было).
+
+- `read_meta(slot)`: latest → meta (payload не читается).
+- `read_key(slot)`: latest → key (только SET).
+- `read_slot(slot)`: latest → meta + key + payload.
+- нет в карте → default `{ used=0, generation=0, version=0 }`.
+
+Карта bounded и восстанавливается сканированием банки. `generation` свободного слота
+сохраняется через `META`, поэтому reuse даёт `generation+1` как в RAM.
+
+## 7. Load / recovery
 
 ```text
 read bank0.header, bank1.header
-valid = crc ok and magic/version ok
+valid = crc ok and magic/revision ok
 active = valid с максимальным seq
   нет валидных -> fresh: erase bank0, write header seq=1
 scan active.records от header_size:
-    read fixed part -> magic ok? crc ok? slot < capacity?
-      ok  -> latest[slot] = offset; advance на длину записи
-      нет -> stop (хвост считается невалидным)
-live_count / free-list / index восстанавливает Table Engine через read_meta/read_key
+
+    fixed prefix не парсится (magic invalid / erased 0xFF)
+        -> torn tail / конец лога -> stop
+
+    parse kind/slot -> record length
+    read commit_marker:
+        marker отсутствует / partial / erased
+            -> torn uncommitted tail -> stop        // норма, не ошибка
+        marker valid:
+            validate magic/slot/kind/crc32
+                ok   -> latest[slot] = offset; advance
+                bad  -> MSTORE_CORRUPT               // committed повреждён
 ```
 
-## 7. Мутация (append)
+Границы семантики:
 
 ```text
-write_slot(slot, meta, key, payload):
-    если не влезает в активную банку -> checkpoint()
-    append SET-запись
-    передать CRC и program
-    успех -> latest[slot] = offset (derived после write)
-write_meta(slot, meta):
-    аналогично, kind=META (без key/payload)
+torn uncommitted tail      != MSTORE_CORRUPT   (нормальный recovery)
+committed record corrupted  = MSTORE_CORRUPT
 ```
 
-Durability: program завершён и CRC валиден = запись durable (write-through). Публичный
-`sync()` — no-op для этого backend'а.
+Ограничение: если у committed-записи повреждён сам fixed prefix (magic), marker
+локализовать нельзя — такой случай классифицируется как torn tail. Это осознанный
+компромисс: различаем committed corruption там, где структура ещё парсится.
 
-## 8. Checkpoint (compaction)
+## 8. Append и порядок derived state
 
-Когда запись не влезает:
+```text
+prepare new canonical record
+    ↓
+program body/CRC
+    ↓
+program commit_marker
+    ↓ success
+latest[slot] = new_offset
+```
+
+`latest` не переключается до подтверждённого commit. Внутри FLASH backend действует тот
+же принцип, что в Table Engine: canonical write → затем derived.
+
+## 9. Checkpoint (compaction)
 
 ```text
 1. erase inactive bank
-2. append в inactive bank по одной записи на слот:
+2. для каждого logical slot скопировать ТОЛЬКО current canonical state:
        latest SET  -> SET (meta/key/payload)
        latest META -> META (сохранить generation свободного слота)
        нет истории -> пропустить
-3. последним program записать inactive.header { seq+1 }
-       <-- это commit point; до него активна старая банка
+3. program inactive.header { seq+1, persist_id, geometry }   // commit point
 4. erase старую банку (lazily допустимо)
 ```
 
-Power-loss:
+Checkpoint = garbage collection, а не история. Пример:
 
 ```text
-до шага 3  -> активна старая банка (валидна)
-после шага 3 -> активна новая (seq+1)  (старая игнорируется)
+до:   slot5 v1, slot5 v2, slot3 v1, slot5 v3, slot3 v2
+после: slot5 v3, slot3 v2
 ```
 
-Банка обязана вмещать полный snapshot (`header + все слоты`), поэтому
-`bank_size >= header + capacity * max_record`; регион = `2 * bank_size`.
+Power-loss: до шага 3 активна старая банка; после — новая (`seq+1`), старая игнорируется.
 
-## 9. clear_all
+## 10. clear_all (атомарный через новую банку)
 
-В v1: append `META(used=0)` для каждого занятого слота (generation сохраняется,
-семантика совпадает с RAM backend). Альтернатива (checkpoint пустой таблицы) сбрасывает
-generation и отвергнута из-за расхождения с RAM.
-
-## 10. Error model
-
-Семантика Table API для caller'а не меняется. Добавляются нейтральные значения для
-storage-сбоев (архитектурная фиксация):
+Не append N записей (не атомарно). Используем механизм двух банок:
 
 ```text
-MSTORE_IO       — device read/program/erase завершился ошибкой
-MSTORE_CORRUPT  — CRC/структура невалидны
+1. erase inactive bank
+2. для каждого slot с историей: META { used=0, generation=prev, version=prev }
+3. program inactive.header { seq+1 }   // commit point всей операции
+4. erase старую банку
 ```
-
-`check_invariants()` и так различает нарушение инварианта и ошибку storage.
-
-## 11. Geometry / persist_key
-
-Заголовок банки несёт `capacity`, `key_size`, `payload_size`, `persist_key_hash`.
-При open:
 
 ```text
-несовпадение geometry или persist_key_hash -> MSTORE_INVALID_STATE (без erase)
+power loss до нового header -> старая таблица целиком активна
+power loss после header    -> новая таблица целиком считается очищенной
 ```
 
-## 12. Тестовый план (на nor_sim)
+`generation/version` сохраняются → семантика совпадает с RAM backend. Отдельный
+`CLEAR_ALL` record пока не нужен.
 
-- базовый lifecycle поверх FLASH backend, тот же behavioral suite, что для RAM;
-- reboot после каждой мутации (reopen активной банки);
-- power-loss на границах: partial program (fail after N), fail before/after commit,
-  fail during erase/checkpoint;
-- corrupt header / corrupt record / обрезанный хвост;
-- checkpoint при заполнении банки;
-- схемный mismatch и persist_key mismatch;
-- после каждой recovery — `check_invariants()` зелёный.
+## 11. Bank sizing
 
-## 13. Открытые вопросы
+```text
+bank_size >= header_size
+           + capacity * max_slot_record_size
+           + append_headroom
 
-1. Точный `bank_size`/headroom (по измерениям churn).
-2. Нужен ли отдельный `CLEAR_ALL` record вместо N `META`.
-3. Composite RAM+FLASH: log backend + RAM-зеркало; commit policy.
-4. CRC32 vs иной checksum; покрытие заголовка банки и записей.
-5. Erase старой банки сразу vs lazily.
+max_slot_record_size = fixed + key_size + payload_size + crc + commit_marker
+region = 2 * bank_size
+```
+
+`append_headroom` нужен для новых ревизий до следующего checkpoint, а не потому что
+таблица растёт (capacity фиксирована). Точный размер headroom — implementation
+decision / benchmark.
+
+## 12. FLASH_ONLY всё равно использует bounded RAM
+
+FLASH_ONLY ≠ «0 RAM». В RAM остаются:
+
+```text
+latest[capacity]
+index
+free-list
+live_count
+scratch_key / scratch_payload
+backend metadata (bank cursors, geometry)
+```
+
+Полного массива payload таблицы в RAM **нет** — это и есть цель FLASH_ONLY.
+
+## 13. Persistent identity / geometry
+
+`persist_key_hash` (32-bit) как identity недостаточен. Bank header несёт
+`persist_id[16]` — широкий детерминированный digest полного `persist_key`. CRC32
+остаётся только для integrity, не для identity.
+
+```text
+open:
+    geometry mismatch (capacity/key_size/payload_size)
+    или persist_id mismatch
+        -> MSTORE_INVALID_STATE
+        -> ничего автоматически не стирать
+```
+
+## 14. Error model
+
+```text
+MSTORE_IO       — physical read/program/erase failure
+MSTORE_CORRUPT  — committed durable structure invalid
+torn uncommitted tail != MSTORE_CORRUPT   (нормальный recovery scenario)
+```
+
+Семантика Table API для caller'а не меняется; ошибки storage не выходят наружу как
+RAM/flash-специфика.
+
+## 15. Что не меняем
+
+Не возвращаться к:
+
+```text
+fixed physical slot per erase block
+sector read-modify-erase-write на каждую мутацию
+полный table rewrite на каждый update
+```
+
+Ring Store в persistence format пока не втягивать.
+
+## 16. План реализации
+
+1. зафиксировать format revision (этот документ);
+2. FLASH backend поверх `nor_sim`;
+3. базовый lifecycle;
+4. recovery / reboot tests;
+5. power-loss fault injection;
+6. checkpoint / compaction;
+7. atomic clear_all;
+8. corruption tests;
+9. общий behavioral suite: RAM, FLASH (позже RAM|FLASH);
+10. только после зелёного host contour — ESP-IDF `esp_partition`.
+
+Главный критерий: caller observable semantics одинаковы для RAM и FLASH; различается
+только физический способ хранения.
+
+## 17. Открытые вопросы
+
+1. Точный размер `commit_marker` и его значение.
+2. `append_headroom` по измерениям churn.
+3. Алгоритм `persist_id[16]` (детерминированный digest).
+4. Erase старой банки сразу vs lazily.
+5. Composite RAM+FLASH: log backend + RAM-зеркало, commit policy.
