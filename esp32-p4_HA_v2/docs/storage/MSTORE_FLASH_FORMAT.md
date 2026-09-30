@@ -226,8 +226,19 @@ region = 2 * bank_size
 ```
 
 `append_headroom` нужен для новых ревизий до следующего checkpoint, а не потому что
-таблица растёт (capacity фиксирована). Точный размер headroom — implementation
-decision / benchmark.
+таблица растёт (capacity фиксирована).
+
+Политика (Kconfig `MSTORE_FLASH_APPEND_HEADROOM_PERCENT` / `_MIN`):
+
+```text
+headroom = max(MIN, capacity * PERCENT / 100)
+```
+
+Одна запись (первоначальное значение) корректна, но при заполненной таблице даёт
+checkpoint почти на каждый update: измерено 51 134 µs в среднем и до 4.2 с
+worst-case на capacity 5000. При 25% sustained cost падает до 2 618 µs, а
+erase-трафик — в 13 раз; стоимость одной compaction при этом не меняется. Замеры —
+`MSTORE_BENCH.md`.
 
 ## 12. FLASH_ONLY всё равно использует bounded RAM
 

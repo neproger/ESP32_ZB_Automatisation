@@ -216,6 +216,9 @@ Region phase:
 | 2026-09-30 | Плата P4 — rev 1.3: нужны `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, `REV_MIN_100` и явные 360 МГц | иначе boot-loop `assert failed: esp_clk_init`: 400 МГц по умолчанию для rev <3.0 недоступна |
 | 2026-09-30 | Загрязнённый раздел даёт `MSTORE_CORRUPT`, авто-формата нет: ввод требует erase региона | потеря данных не должна быть тихой; подтверждено на железе |
 | 2026-09-30 | **mstore v1 заморожен** | слой хранения закончен и проверен; изменения — только под дефект или доказанную потребность Domain |
+| 2026-09-30 | Benchmark-приложение `test_apps/mstore_bench` + внутренние счётчики FLASH backend (`MSTORE_BENCH_COUNTERS`, не в public API и не в обычной сборке) | performance characterization: latency/throughput по режимам, heap, flash traffic |
+| 2026-09-30 | `append_headroom = max(MIN, capacity * PERCENT / 100)` вместо одной записи | одна запись давала checkpoint почти на каждый update при заполненной таблице: 51 134 µs avg и до 4.2 с worst-case на capacity 5000; при 25% — 2 618 µs и в 13 раз меньше erase-трафика (MSTORE_BENCH.md) |
+| 2026-09-30 | Kconfig `MSTORE_FLASH_APPEND_HEADROOM_PERCENT` / `_MIN`; host-сборка берёт defaults из `mstore_storage_flash.c` | MSVC игнорирует эти `/D` после `#include <string.h>`, поэтому передавать значения флагами компиляции нельзя |
 
 ## 6. Хронология
 
@@ -297,6 +300,13 @@ Region phase:
   Host 12/12, IDF build зелёный.
 - На P4 проверен multi-table: `region suite: OK` (две FLASH-таблицы, reopen находит оба
   региона), повторная загрузка — зелёная. mstore v1 заморожен.
+- Performance characterization (`test_apps/mstore_bench`, `MSTORE_BENCH.md`): RAM
+  `find`/`read` ~5 µs, sustained 118 k ops/sec (61 k под фоновой нагрузкой);
+  FLASH `find` ~51 µs, `read` ~188 µs; RAM\|FLASH читает из RAM, пишет write-through.
+  Обнаружена sizing-проблема: при `headroom = 1` заполненная таблица компактится
+  почти на каждый update (avg 51 ms, max 4.2 с на capacity 5000). Политика заменена
+  на `max(MIN, capacity * PERCENT / 100)`: на 25% avg 2.6 ms, erase-трафик в 13 раз
+  меньше. Свип 10/50/100% не завершён (прогон остановлен).
 
 ## 7. Открытые вопросы
 
@@ -315,4 +325,9 @@ Region phase:
 8. **Concurrency Region Manager.** `bind/release` — общий singleton без блокировки;
    защита и отношение к lock'у таблицы — отдельным шагом, если появится многозадачный
    сценарий инициализации.
+9. **Свип `append_headroom` 10/50/100% не завершён.** Измерено только 25% (и 1 запись
+   до правки). Прогон на FLASH идёт минуты, а смена процента требует стирания раздела.
+10. **Worst-case latency одной compaction не зависит от headroom** (~0.9–1.1 с на
+    capacity 1000): запас снижает частоту, не стоимость. Bounded latency потребует
+    отдельного механизма (меньшие банки / шардинг) — решать, если Domain потребует.
 
