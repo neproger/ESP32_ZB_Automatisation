@@ -37,12 +37,12 @@ Command — намерение что-то сделать
         └───────────────────────────────────────────────┘
                       │
                       ▼
-        ┌──────────────── micro_db ────────────────────┐
+        ┌────────────────── mstore ────────────────────┐
         │  Table Store              Ring Store           │
         └───────────────────────────────────────────────┘
 ```
 
-Три уровня: **хранение** (`micro_db`) → **ядро** (`Domain`) → **потребители**
+Три уровня: **хранение** (`mstore`) → **ядро** (`Domain`) → **потребители**
 (`Services` / `Clients`).
 
 ### 1.3. Модель взаимодействия
@@ -87,11 +87,11 @@ subscriber (contact + filter)
 
 ### 1.4. Правила зависимостей
 
-- `micro_db` линкует только Domain.
+- `mstore` линкует только Domain.
 - Services и Clients зависят только от Domain.
 - Никто не зависит от конкретного сервиса.
 
-## 2. micro_db — слой хранения
+## 2. mstore — слой хранения
 
 **Роль:** fixed-capacity storage primitives для embedded. Предсказуемая память,
 минимум аллокаций. Полностью домен-агностичен.
@@ -107,14 +107,16 @@ subscriber (contact + filter)
 | Ring Store | append, monotonic seq как identity, overwrite-oldest, чтение по seq в пределах окна |
 
 Table Store не выставляет CRUD с key в центре: key (принадлежит storage, хранится в
-слоте) разрешается в физический slot один раз (`slot_find`), дальше hot-path идёт по
-slot (`slot_meta` / `slot_key` / `slot_read` / `slot_allocate` / `slot_update` /
-`slot_free`). `slot_update` не меняет key. Canonical state — сами slots, а
-`index / free-list / live_count` — производные ускорители.
+слоте как часть canonical state) разрешается в физический slot один раз (`slot_find`),
+дальше hot-path идёт по slot (`slot_meta` / `slot_read` / `slot_allocate` /
+`slot_update` / `slot_free`). Мутирующие операции принимают `expected_generation` и
+защищают от stale slot; `slot_read` атомарно отдаёт `meta + key + payload`.
+Canonical state — сами slots, а `index / free-list / live_count` — производные
+ускорители.
 
 **Не знает про:** Domain, Journal, Zigbee, Automation, UI, WebSocket.
 
-На micro_db строятся конкретные хранилища Domain: Entity Store (Table),
+На mstore строятся конкретные хранилища Domain: Entity Store (Table),
 Journal и Transient Payload (Ring). Persistence, zero-copy и полный API — тема
 `storage/MICRO_DB.md`.
 
@@ -164,7 +166,7 @@ Domain-фасад; ring-API наружу не выходит.
 ### 3.5. Domain API
 
 Сервисы видят только Domain API: entity CRUD, commands, payload, subscription/event
-delivery. Типы `micro_db` (seq, slot, generation, ring) наружу не выходят; доменные
+delivery. Типы `mstore` (seq, slot, generation, ring) наружу не выходят; доменные
 identity — opaque-типы Domain.
 
 **Domain не знает про:** pending UI, lifecycle команд, correlation, ownership/TTL
@@ -187,7 +189,7 @@ payload, процедуры создания/удаления устройств
 ## 5. Clients
 
 - **Display** — осознанное исключение: прямой polling Domain read API ради дешёвых
-  LVGL-обновлений. Остаётся клиентом Domain, к `micro_db` не линкуется.
+  LVGL-обновлений. Остаётся клиентом Domain, к `mstore` не линкуется.
 - **Browser** — через Web service.
 
 ## 6. Сквозные правила

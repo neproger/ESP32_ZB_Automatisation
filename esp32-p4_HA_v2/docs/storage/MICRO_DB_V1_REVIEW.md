@@ -83,14 +83,14 @@
 В v1 **Ring нет** — это полностью новый primitive. Опираться только на design rules
 (`../storage/MICRO_DB.md`): seq как identity, overwrite-oldest, без key/hash/free-list.
 
-## 6. Что это значит для §8 (micro_db)
+## 6. Что это значит для §9 (mstore)
 
 1. **Аллокация** → KEEP v1: `calloc` на capacity + free-list LIFO. Проверено.
 2. **Lock/итерация** → KEEP recursive mutex на instance; `iter` под lock с явным
    контрактом «колбэк не мутирует эту же таблицу» (либо позже snapshot).
 3. **Persistence** → REWORK: layout/CRC/recovery сохранить, добавить `generation/version`
    в persisted meta и в checksum; политику записи (write-through vs batched) зафиксировать.
-4. **`iter` vs `list`** → KEEP `iter` в micro_db; `list(filter)` собирает Domain.
+4. **`iter` vs `list`** → KEEP `iter` в mstore; `list(filter)` собирает Domain.
 
 ## 7. Открытое после обзора
 
