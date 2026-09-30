@@ -9,7 +9,7 @@
 |---|---|
 | Компонент | `mstore` (Table Store first) |
 | Архитектура | заморожена, `MICRO_DB.md` Ревизия 4 (`2e6a84b`) |
-| Реализация | host core + тесты зелёные; IDF port и P4 app добавлены, не собирались |
+| Реализация | host core + тесты зелёные; IDF-компонент и P4 app собираются (esp32p4) |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
 | Тестовые контуры | host (unit + randomized model test) + ESP32-P4 test app |
 
@@ -91,7 +91,8 @@ Core platform-independent C; ESP-IDF — только порт.
 - [x] iter / count / clear
 - [x] `check_invariants()`
 - [x] randomized model test vs reference-модель
-- [ ] собрать IDF-компонент и ESP32-P4 test app (в текущей среде ESP-IDF недоступен)
+- [x] собрать IDF-компонент и ESP32-P4 test app (ESP-IDF v6.1, target esp32p4)
+- [ ] запуск на реальной P4 (QEMU для esp32p4 в IDF не поддерживается)
 
 `rebuild_runtime()` и `check_invariants()` — internal/debug, не публичный API; host tests
 получают к ним доступ через `src/` private include.
@@ -148,10 +149,19 @@ test_model  Passed   // 200000 random ops vs reference, rebuild каждые 137
 100% tests passed, 0 failed
 ```
 
+Результаты IDF-сборки (ESP-IDF v6.1, target esp32p4):
+
+```text
+libmstore.a       собрана (src/*.c + port/espidf)
+mstore_p4.bin     собран (test_apps/mstore_p4)
+```
+
+`idf.py qemu` для `esp32p4` IDF не поддерживает — запуск только на реальной P4
+(или вручную через QEMU, если понадобится).
+
 Следующий шаг:
 
-- собрать IDF-компонент и `test_apps/mstore_p4` (нужна среда ESP-IDF), затем запуск на
-  emulator/реальной P4.
+- запуск `mstore_p4` на реальной плате; затем возврат к остальным открытым вопросам.
 
 ## 7. Открытые вопросы (из архитектуры)
 
