@@ -219,7 +219,8 @@ docs/
 ├── clients/
 │   └── DISPLAY.md
 └── storage/
-    └── MICRO_DB.md
+    ├── MICRO_DB.md
+    └── MSTORE_IMPL_JOURNAL.md
 ```
 
 Правило разделения:
