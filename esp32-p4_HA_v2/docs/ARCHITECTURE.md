@@ -221,6 +221,7 @@ docs/
 └── storage/
     ├── MSTORE.md
     ├── MSTORE_FLASH_FORMAT.md
+    ├── MSTORE_FLASH_REGIONS.md
     └── MSTORE_IMPL_JOURNAL.md
 ```
 

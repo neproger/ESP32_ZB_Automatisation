@@ -284,8 +284,7 @@ Storage phase:
 6. **Владение FLASH-регионом (multi-table).** Сейчас одна FLASH-таблица занимает весь
    device целиком: `persist_key` лишь проверка identity, разделения регионов нет. Две
    таблицы с разным ключом не открываются (`INVALID_STATE`), с одинаковым — портят друг
-   друга. Entity Store нужны несколько таблиц одновременно. Решение — отдельный слой
-   распределения регионов над partition: Table Engine → FLASH backend → region → allocator
-   → `esp_partition`. Backend должен получать уже выделенный `offset + size` и не знать о
-   соседях.
+   друга. Entity Store нужны несколько таблиц одновременно. Контракт решения —
+   `../MSTORE_FLASH_REGIONS.md`: Table Engine → FLASH backend → region → allocator →
+   `esp_partition`; backend получает уже выделенный `offset + size` и не знает о соседях.
 
