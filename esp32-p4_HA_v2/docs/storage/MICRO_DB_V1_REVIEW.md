@@ -39,7 +39,7 @@
 | Механизм | Почему |
 |---|---|
 | Primary index: FNV-1a + open addressing + tombstones | просто, предсказуемо, без аллокаций |
-| Schema-колбэки `key_of / key_equals / payload_equals` | домен-агностичность |
+| Schema-колбэк `payload_equals` | решает, вырос ли `version`; домен-агностичность |
 | Free-list LIFO: выделение/переиспользование слотов | O(1), доказано |
 | Recursive mutex на instance | покрывает вложенные вызовы |
 | Flash layout: directory + per-table region | масштабируется, sector-aligned |
@@ -58,6 +58,7 @@
 | Что | Проблема v1 | Направление v2 |
 |---|---|---|
 | `slot_used[]` отдельным массивом | meta не часть записи | свернуть в per-record `meta {used,generation,version}` |
+| `key_of / key_equals` callback'и | key фактически часть payload; mstore зависит от layout клиента | key принадлежит storage, хранится в слоте (fixed layout), сравнение внутри |
 | `record / record_size / record_equals` | «record» = payload | переименовать в `payload*` |
 | Persisted per-slot meta | v1 хранит только `used`+CRC | добавить `generation/version` в meta и в checksum |
 | Синхронный write-through на каждый upsert/remove | тяжёлая запись (erase+write 4КБ на патч) | определить политику persistence явно |
@@ -93,7 +94,7 @@
 
 ## 7. Открытое после обзора
 
-- покрытие checksum: только payload или `meta + payload`;
+- покрытие checksum: только payload или `meta + key + payload`;
 - нужна ли Ring-персистентность (в v1 аналога нет);
 - политика rehash primary index;
 - write-through vs batched persistence.

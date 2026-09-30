@@ -103,14 +103,20 @@ subscriber (contact + filter)
 
 | Подслой | За что отвечает |
 |---|---|
-| Table Store | `get / upsert / remove / list`, key → slot, fixed capacity, дешёвая проверка изменения без чтения payload |
+| Table Store | storage primitive над массивом slots (`meta + key + payload`), key → slot, fixed capacity, дешёвая проверка изменения без чтения payload |
 | Ring Store | append, monotonic seq как identity, overwrite-oldest, чтение по seq в пределах окна |
+
+Table Store не выставляет CRUD с key в центре: key (принадлежит storage, хранится в
+слоте) разрешается в физический slot один раз (`slot_find`), дальше hot-path идёт по
+slot (`slot_meta` / `slot_key` / `slot_read` / `slot_allocate` / `slot_update` /
+`slot_free`). `slot_update` не меняет key. Canonical state — сами slots, а
+`index / free-list / live_count` — производные ускорители.
 
 **Не знает про:** Domain, Journal, Zigbee, Automation, UI, WebSocket.
 
 На micro_db строятся конкретные хранилища Domain: Entity Store (Table),
 Journal и Transient Payload (Ring). Persistence, zero-copy и полный API — тема
-`MICRO_DB_V2_DRAFT`.
+`storage/MICRO_DB.md`.
 
 ## 3. Domain — ядро
 
