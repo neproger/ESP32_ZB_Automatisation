@@ -104,11 +104,21 @@ Caller при `slot_allocate` передаёт `key` и `payload`; `used / gener
 
 ### 2.5. Canonical state и derived runtime state
 
+`meta.used` определяет семантическую валидность `key` и `payload`:
+
+```text
+meta.used == 1:
+    meta + key + payload — действующая запись
+
+meta.used == 0:
+    действующей записи нет; bytes key/payload не имеют семантики и игнорируются
+```
+
 ```text
 source of truth (canonical):
     slots[].meta
-    slots[].key
-    slots[].payload
+    slots[].key      // валиден только при meta.used == 1
+    slots[].payload  // валиден только при meta.used == 1
 
 derived runtime acceleration:
     index        (key → slot)
@@ -130,6 +140,18 @@ rebuild_runtime():
 
 Runtime state можно выбросить и восстановить в любой момент: после init/recovery, при
 подозрении на нарушение инварианта, в тестах/диагностике.
+
+| Понятие | Значение |
+|---|---|
+| `key` | долговечная логическая identity |
+| `slot` | физическое место |
+| `generation` | incarnation физического slot |
+| `version` | редакция payload внутри incarnation; дешёвая проверка изменения |
+| `used` | существуют ли сейчас key/payload |
+| `index` | ускоритель `key → slot` |
+| `free-list` | ускоритель allocate |
+| `live_count` | кеш количества |
+| `slot + generation` | безопасная кешированная ссылка |
 
 ### 2.6. generation / version
 
@@ -198,7 +220,7 @@ slot 5:
     meta.used       = 0
     meta.generation = 13        // free не меняет generation
     meta.version    = 2         // остаётся от прошлого incarnation
-    key/payload     = stale
+    key/payload     = не имеют семантики (used == 0)
 
 // позже тот же физический slot занимает другая запись
 slot_allocate(key=77, payload={state=OFF})
@@ -240,7 +262,7 @@ slot_read(table, slot, *meta, *key, *payload)
 
 slot_allocate(table, key, payload, *slot, *generation)
 
-slot_update(table, slot, expected_generation, payload)
+slot_update(table, slot, expected_generation, payload, *changed)
 
 slot_free(table, slot, expected_generation)
 
@@ -253,7 +275,7 @@ iter / count / clear / rebuild_runtime
 | `slot_meta` | дешёвый `meta` по slot; payload не читается |
 | `slot_read` | атомарный snapshot `meta + key + payload` |
 | `slot_allocate` | занять свободный slot под `(key, payload)`, вернуть `slot + generation` |
-| `slot_update` | обновить payload при совпадении `expected_generation` |
+| `slot_update` | обновить payload при совпадении `expected_generation`; вернуть `changed` |
 | `slot_free` | освободить slot при совпадении `expected_generation` |
 | `iter / count / clear` | обход, размер, очистка |
 | `rebuild_runtime` | перестроить index / free-list / live_count из slots |
@@ -262,8 +284,19 @@ iter / count / clear / rebuild_runtime
 
 **Stale-slot.** Consumer кеширует `slot + generation`. Мутирующие операции принимают
 `expected_generation`: если `meta.used == 0` или generation не совпадает — операция
-возвращает stale/not-found и **не меняет** slot. Отдельного handle-объекта нет;
-`slot + generation` остаётся данными consumer'а.
+возвращает `STALE` и **не меняет** slot. Отдельного handle-объекта нет; `slot + generation`
+остаётся данными consumer'а.
+
+**Результат операций.** `NOT_FOUND` относится к логическому поиску по key, `STALE` — к
+протухшей физической ссылке:
+
+```text
+slot_find(key):    key отсутствует            → NOT_FOUND
+slot_update/free:  used == 0                  → STALE
+                   generation != expected     → STALE
+slot_update:       payload изменился          → *changed = true
+                   payload тот же             → *changed = false, version не растёт
+```
 
 **Атомарность чтения.** `slot_meta` и `slot_read` — разные вызовы, между ними поколение
 slot'а может смениться. Поэтому `slot_read` под одним lock возвращает snapshot минимум
@@ -293,11 +326,15 @@ key → runtime index → slot → meta / key / payload
 
 ```text
 slot_find(key):
-    lookup in index
-    if found:
-        validate slot.used
-        return slot
+    lookup in index          // успешный lookup означает slot.key == key
+    validate slot.used == 1
+    return slot
 ```
+
+Успешный index lookup означает совпадение canonical `slot.key`; `used` slot также
+проверяется. Отдельная повторная проверка key после lookup не нужна — probing и так
+сравнивает ключ, — но контракт фиксирует: найденный slot обязан быть `used` и иметь
+запрошенный key.
 
 Концептуально index хранит `key → slot`, но key **не дублируется** внутри index без
 необходимости: bucket хранит slot, а сравнение key выполняется с canonical `slot.key`.
@@ -322,13 +359,15 @@ live_count — кэшированная статистика
 
 ### 2.10. Schema
 
-Key имеет фиксированный layout и хранится mstore; callback'ов `key_of / key_equals` нет.
+Key в Table Store — **непрозрачная byte sequence фиксированной длины** `key_size`.
+Равенство определяется побайтовым сравнением всех `key_size` bytes, hash считается по
+тем же bytes. Поэтому callback'и `key_of / key_equals` не нужны: key хранится mstore.
 Schema задаёт размеры:
 
 ```c
 typedef struct {
     size_t capacity;
-    size_t key_size;       // фиксированный layout ключа
+    size_t key_size;       // key: opaque bytes фиксированной длины
     size_t payload_size;
 
     bool (*payload_equals)(const void *a, const void *b);  // опц.; иначе memcmp
@@ -437,7 +476,8 @@ contains(ring, seq, *bool)
 3. Storage владеет `meta` и `key`; caller владеет только `payload`.
 4. Самый частый путь самый дешёвый: `key → slot` один раз, дальше доступ по slot.
 5. `slot_meta()` не читает payload.
-6. `slot_update()` не меняет key; смена identity — `free + allocate` (новая generation).
+6. `slot_update()` не меняет key и возвращает `changed`; смена identity — `free + allocate`
+   (новая generation).
 7. Raw pointer не является долгоживущей identity; долгоживущее — key.
 8. Consumer хранит `slot + generation` (и `version`); mstore handles не ведёт.
 9. Мутирующие операции принимают `expected_generation` и защищают от stale slot.
@@ -462,31 +502,14 @@ contains(ring, seq, *bool)
 - В core первой ревизии нет `crc32` и прочей persistence-специфики; checksum появляется
   вместе с persistence layer.
 
-## 9. Порядок работ и открытые вопросы
-
-RAM-модель Table Store доводится до конца до partition, flash, hash-index и Ring:
-
-```text
-1. точный layout slot (meta + key + payload)
-2. тип key (фиксированный layout) и его хранение
-3. тип slot index
-4. semantics used / generation / version
-5. allocate / update / free + stale-защита через expected_generation
-6. meta / read snapshot
-7. slot_find(key)          // сначала линейный, затем index-backed
-8. scan / iter / count / clear
-9. инварианты
-10. runtime index / free-list
-11. persistence
-```
-
-Открыто:
+## 9. Открытые вопросы
 
 1. **Аллокация.** Core выделяет сам (через platform allocator) или принимает заранее
    выделенный буфер. *Предложение: core выделяет, caller-буфер — позже.*
 2. **Lock и итерация.** `iter` вызывает колбэк под lock. *Предложение: документировать
    «колбэк не мутирует эту же таблицу».*
-3. **Rehash индекса.** Порог по доле tombstone; пока не проектируется.
+3. **Runtime index.** Конкретная hash-table стратегия, deletion policy, load factor и
+   необходимость rebuild/rehash определяются при реализации; сейчас не фиксируются.
 4. **Persistence.** RAM-only или RAM+Flash; CRC/checksum, atomicity, wear, layout и
    политика записи (write-through vs batched) — открыто.
 5. **`iter` vs `list`.** mstore даёт `iter`; `list(filter)` собирает Domain.
