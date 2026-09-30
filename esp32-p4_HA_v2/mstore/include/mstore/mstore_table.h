@@ -19,9 +19,14 @@ typedef struct {
     void *_state;
 } mstore_table_t;
 
-/* Обход под lock. Колбэк не должен мутировать эту же table. */
+/*
+ * Обход под lock: колбэк получает и сам key, поэтому вызывать API этой же table
+ * внутри него не нужно (и нельзя — lock уже взят). Буферы key/payload действительны
+ * только на время вызова.
+ */
 typedef bool (*mstore_iter_cb_t)(mstore_slot_t slot,
                                  const mstore_meta_t *meta,
+                                 const void *key,
                                  const void *payload,
                                  void *ctx);
 

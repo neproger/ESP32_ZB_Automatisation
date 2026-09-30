@@ -50,7 +50,8 @@ typedef struct {
     uint32_t *index_of_slot;     /* slot -> bucket, MSTORE_INDEX_NONE = нет */
     size_t index_capacity;       /* power of two, >= 2 * capacity */
 
-    void *scratch_key;     /* key_size bytes; валиден только под lock */
+    void *scratch_key;     /* key_size bytes; буфер чтения key при поиске, только под lock */
+    void *scratch_lookup;  /* key_size bytes; ключ, который проверяет check_invariants */
     void *scratch_payload; /* payload_size bytes; валиден только под lock */
 
     void *lock;
@@ -59,7 +60,11 @@ typedef struct {
 /* runtime.c — derived acceleration */
 void mstore_runtime_reset(mstore_state_t *st);   /* all slots free, без I/O */
 mstore_err_t mstore_runtime_rebuild(mstore_state_t *st); /* из storage */
-mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, mstore_slot_t *out_slot);
+
+/* probe_key — буфер под key пробуемых слотов. Не должен указывать на ту же
+ * память, что key: иначе сравнение станет «ключ с самим собой». */
+mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
+                               mstore_slot_t *out_slot);
 void mstore_index_insert(mstore_state_t *st, mstore_slot_t slot, const void *key);
 void mstore_index_remove(mstore_state_t *st, mstore_slot_t slot);
 mstore_err_t mstore_freelist_pop(mstore_state_t *st, mstore_slot_t *out_slot);

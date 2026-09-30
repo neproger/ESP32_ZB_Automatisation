@@ -36,7 +36,77 @@ static void open_table(mstore_table_t *table) {
     CHECK(mstore_table_init(table, &schema) == MSTORE_OK);
 }
 
+/* Открывает таблицу заданной ёмкости на отдельной NOR-области. */
+static bool try_open_capacity(size_t capacity) {
+    mstore_nor_sim_t *probe_sim = mstore_nor_sim_create(8192, 1024);
+    nor_sim_device_t probe_device;
+    nor_sim_device_init(&probe_device, probe_sim);
+    mstore_platform_flash_set_device(&probe_device.base);
+
+    mstore_table_t table = {0};
+    mstore_table_schema_t schema = make_schema();
+    schema.capacity = capacity;
+    bool opened = mstore_table_init(&table, &schema) == MSTORE_OK;
+    if (opened) {
+        CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    }
+
+    mstore_platform_flash_set_device(NULL);
+    mstore_nor_sim_destroy(probe_sim);
+    return opened;
+}
+
+/* Банка обязана резервировать место под append: иначе при полностью занятой
+ * таблице update существующего слота получал NO_SPACE вместо OK. */
+static void test_bank_reserves_append_headroom(void) {
+    size_t largest = 0;
+    for (size_t capacity = 1; capacity <= 4096; capacity++) {
+        if (!try_open_capacity(capacity)) {
+            break;
+        }
+        largest = capacity;
+    }
+    CHECK(largest > 0 && largest < 4096);
+
+    mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
+    nor_sim_device_t device;
+    nor_sim_device_init(&device, sim);
+    mstore_platform_flash_set_device(&device.base);
+
+    mstore_table_t table = {0};
+    mstore_table_schema_t schema = make_schema();
+    schema.capacity = largest;
+    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+
+    static uint32_t keys[4096];
+    static mstore_slot_t slots[4096];
+    static uint32_t generations[4096];
+    for (size_t i = 0; i < largest; i++) {
+        keys[i] = (uint32_t)i + 1;
+        value_t v = {1, 1};
+        CHECK(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generations[i]) ==
+              MSTORE_OK);
+    }
+
+    size_t count = 0;
+    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == largest);
+
+    for (size_t i = 0; i < largest; i++) {
+        value_t updated = {(int32_t)i + 100, (int32_t)i + 200};
+        bool changed = false;
+        CHECK(mstore_table_slot_update(&table, slots[i], generations[i], &updated, &changed) ==
+              MSTORE_OK);
+        CHECK(changed);
+    }
+
+    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    mstore_platform_flash_set_device(NULL);
+    mstore_nor_sim_destroy(sim);
+}
+
 int main(void) {
+    test_bank_reserves_append_headroom(); /* работает на отдельной NOR-области */
+
     mstore_nor_sim_t *sim = mstore_nor_sim_create(8192, 1024);
     CHECK(sim != NULL);
     nor_sim_device_t device;

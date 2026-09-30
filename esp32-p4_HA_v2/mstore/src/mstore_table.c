@@ -3,9 +3,13 @@
 #include "mstore/mstore_table.h"
 #include "mstore_internal.h"
 
+/* 0 — значение не представимо (переполнение разрядной сетки). */
 static size_t mstore_next_pow2(size_t value) {
     size_t result = 8;
     while (result < value) {
+        if (result > SIZE_MAX / 2) {
+            return 0;
+        }
         result <<= 1;
     }
     return result;
@@ -24,6 +28,7 @@ static void mstore_state_destroy(mstore_state_t *st) {
     }
     mstore_storage_close(st->storage);
     mstore_platform_free(st->scratch_payload);
+    mstore_platform_free(st->scratch_lookup);
     mstore_platform_free(st->scratch_key);
     mstore_platform_free(st->index_of_slot);
     mstore_platform_free(st->index);
@@ -64,6 +69,11 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     st->schema.payload_equals = schema->payload_equals;
     st->backing = schema->backing;
     st->index_capacity = mstore_next_pow2(schema->capacity * 2);
+    if (st->index_capacity == 0 || st->index_capacity > SIZE_MAX / sizeof(mstore_index_entry_t) ||
+        schema->capacity > SIZE_MAX / sizeof(uint32_t)) {
+        mstore_platform_free(st);
+        return MSTORE_INVALID_SIZE;
+    }
 
     mstore_storage_config_t storage_config;
     storage_config.backing = schema->backing;
@@ -82,11 +92,13 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     st->index = mstore_platform_alloc(sizeof(mstore_index_entry_t) * st->index_capacity);
     st->index_of_slot = mstore_platform_alloc(sizeof(uint32_t) * schema->capacity);
     st->scratch_key = mstore_platform_alloc(schema->key_size);
+    st->scratch_lookup = mstore_platform_alloc(schema->key_size);
     st->scratch_payload = mstore_platform_alloc(schema->payload_size == 0 ? 1 : schema->payload_size);
     st->lock = mstore_platform_lock_create();
 
     if (st->free_slots == NULL || st->index == NULL || st->index_of_slot == NULL ||
-        st->scratch_key == NULL || st->scratch_payload == NULL || st->lock == NULL) {
+        st->scratch_key == NULL || st->scratch_lookup == NULL || st->scratch_payload == NULL ||
+        st->lock == NULL) {
         mstore_state_destroy(st);
         return MSTORE_NO_MEM;
     }
@@ -155,7 +167,7 @@ mstore_err_t mstore_table_slot_find(const mstore_table_t *table, const void *key
         return MSTORE_INVALID_STATE;
     }
     mstore_platform_lock_acquire(st->lock);
-    mstore_err_t err = mstore_index_find(st, key, out_slot);
+    mstore_err_t err = mstore_index_find(st, key, st->scratch_key, out_slot);
     mstore_platform_lock_release(st->lock);
     return err;
 }
@@ -228,7 +240,7 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     mstore_platform_lock_acquire(st->lock);
 
     mstore_slot_t existing;
-    mstore_err_t err = mstore_index_find(st, key, &existing);
+    mstore_err_t err = mstore_index_find(st, key, st->scratch_key, &existing);
     if (err == MSTORE_OK) {
         mstore_platform_lock_release(st->lock);
         return MSTORE_ALREADY_EXISTS;
@@ -403,7 +415,7 @@ mstore_err_t mstore_table_iter(const mstore_table_t *table, mstore_iter_cb_t cb,
         if (err != MSTORE_OK) {
             break;
         }
-        if (!cb(slot, &meta, st->scratch_payload, ctx)) {
+        if (!cb(slot, &meta, st->scratch_key, st->scratch_payload, ctx)) {
             break;
         }
     }

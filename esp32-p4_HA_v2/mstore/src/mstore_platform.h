@@ -20,7 +20,8 @@ void mstore_platform_lock_acquire(void *lock);
 void mstore_platform_lock_release(void *lock);
 
 /* NOR-регион для FLASH backing. Host — установленный тестом device;
- * ESP-IDF — partition (позже). NULL означает "flash не сконфигурирован". */
+ * ESP-IDF — data-partition по метке CONFIG_MSTORE_FLASH_PARTITION_LABEL.
+ * NULL означает "flash не сконфигурирован". */
 typedef struct mstore_flash_device mstore_flash_device_t;
 const mstore_flash_device_t *mstore_platform_flash_device(void);
 void mstore_platform_flash_set_device(const mstore_flash_device_t *device);

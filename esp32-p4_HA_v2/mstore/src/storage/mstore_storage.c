@@ -3,7 +3,6 @@
 /*
  * Runtime dispatch по backing. Table Engine не ветвится по режиму хранения:
  * backend выбирается один раз при open().
- * FLASH adapter для esp_partition добавится позже.
  */
 mstore_err_t mstore_storage_open(const mstore_storage_config_t *config,
                                  mstore_storage_t **out_storage) {

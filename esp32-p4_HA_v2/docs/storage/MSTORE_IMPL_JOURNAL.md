@@ -12,7 +12,7 @@
 | RAM core | complete: Table + Ring; host-тесты зелёные, IDF/P4 сборка проходит |
 | Storage backend | RAM, FLASH, RAM\|FLASH composite, ESP-IDF `esp_partition` adapter — реализованы; hardware verification pending |
 | Расположение | `esp32-p4_HA_v2/mstore/` (в `shared_components/` — при втором потребителе) |
-| Осталось | storage backend extraction → flash format → hardware verification |
+| Осталось | region manager для multi-table FLASH → hardware verification |
 
 ## 2. Опорная модель
 
@@ -190,6 +190,11 @@ Storage phase:
 | 2026-09-30 | `version` wraparound запрещён: changed update при version==MAX -> `MSTORE_OVERFLOW` | исключить неоднозначную ревизию |
 | 2026-09-30 | Новая нейтральная ошибка `MSTORE_OVERFLOW` | отделить overflow от `INVALID_STATE` |
 | 2026-09-30 | `esp_partition` adapter: device через partition label (Kconfig), auto-bind при первом обращении | host использует nor_sim, target — реальный partition |
+| 2026-09-30 | `mstore_index_find` принимает probe-буфер параметром; для ключа под проверкой — отдельный `scratch_lookup` | алиасинг давал ложный `INVARIANT_FAILED` при смещении записи из home-бакета и делал проверку фиктивной |
+| 2026-09-30 | Sizing банки учитывает `MSTORE_FLASH_APPEND_HEADROOM = 1` запись сверх capacity | после компакшена банка заполнена ровно; одна запись резерва гарантирует влезший append — иначе update на занятой таблице давал `NO_SPACE` |
+| 2026-09-30 | Гарды `SIZE_MAX` для ring/table/RAM и bounded `next_pow2` | на 32-битном P4 переполнение размера даёт малую аллокацию и запись за границей |
+| 2026-09-30 | `bank_size` округляется арифметикой, не маской | маска требует `erase_size` степени двойки |
+| 2026-09-30 | `mstore_iter_cb_t` получает `key` помимо `meta/payload` | колбэку не нужно вызывать API table ради ключа; контракт не зависит от рекурсивности lock'а |
 
 ## 6. Хронология
 
@@ -248,11 +253,24 @@ Storage phase:
   `CONFIG_MSTORE_FLASH_PARTITION_LABEL` (default `mstore`). В test_apps добавлены
   `partitions.csv` (data-partition `mstore`) и FLASH-секция smoke-теста. IDF build
   под esp32p4 проходит; поведение на реальном flash ещё не проверялось.
+- По код-ревью закрыты четыре дефекта (каждый — с регрессионным тестом, падающим до
+  правки):
+  * алиасинг scratch-буфера в `check_invariants` → ложный `INVARIANT_FAILED` при любой
+    коллизии индекса. Probe-буфер `mstore_index_find` стал явным параметром, добавлен
+    `scratch_lookup`. Тест: `test_table/test_invariants_with_colliding_keys`.
+  * sizing FLASH-банки без `append_headroom` → `slot_update` на занятой таблице давал
+    `NO_SPACE` вместо `OK`. Тест: `test_flash/test_bank_reserves_append_headroom`.
+  * отсутствие SIZE_MAX-гардов (ring/table/RAM) и unbounded `next_pow2`; `bank_size`
+    переведён с маски на арифметическое округление.
+  * `mstore_iter_cb_t` дополнен `key`: колбэк больше не должен входить в API table под
+    lock (поведение не зависит от рекурсивности mutex на порте).
+  Host-тесты 11/11 зелёные, предупреждений компиляции (`/W4`) — 0.
 
 Следующий шаг:
 
-- hardware verification на реальной P4: flash `mstore_p4`, boot, прогон suite
-  (Table + Ring + FLASH), проверка allocator/lock/erase/reboot.
+- class FLASH region manager (multi-table ownership) — отдельное архитектурное решение,
+  см. §7 п.6; затем concurrency hardening ленивой инициализации device и hardware
+  verification на реальной P4.
 
 ## 7. Открытые вопросы
 
@@ -263,4 +281,11 @@ Storage phase:
 3. Ring persistence: общий storage abstraction или специализированный layout — после Table.
 4. Table index: возможное изменение стратегии по результатам benchmark.
 5. `iter` vs `list`: `iter` в mstore, `list(filter)` в Domain.
+6. **Владение FLASH-регионом (multi-table).** Сейчас одна FLASH-таблица занимает весь
+   device целиком: `persist_key` лишь проверка identity, разделения регионов нет. Две
+   таблицы с разным ключом не открываются (`INVALID_STATE`), с одинаковым — портят друг
+   друга. Entity Store нужны несколько таблиц одновременно. Решение — отдельный слой
+   распределения регионов над partition: Table Engine → FLASH backend → region → allocator
+   → `esp_partition`. Backend должен получать уже выделенный `offset + size` и не знать о
+   соседях.
 

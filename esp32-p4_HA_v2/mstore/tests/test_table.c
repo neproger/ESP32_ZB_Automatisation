@@ -118,13 +118,15 @@ static void test_lifecycle(void) {
     CHECK(mstore_table_deinit(&table) == MSTORE_INVALID_STATE);
 }
 
-static bool count_iter_cb(mstore_slot_t slot, const mstore_meta_t *meta, const void *payload,
-                          void *ctx) {
+static bool collect_iter_cb(mstore_slot_t slot, const mstore_meta_t *meta, const void *key,
+                           const void *payload, void *ctx) {
     (void)slot;
-    (void)meta;
-    (void)payload;
-    int *seen = ctx;
-    (*seen)++;
+    const value_t *v = payload;
+    CHECK(meta->used);
+    CHECK(v->a == 1 && v->b == 1);
+    uint32_t k = *(const uint32_t *)key;
+    CHECK(k >= 1 && k <= 3);
+    *(int *)ctx += (int)k;
     return true;
 }
 
@@ -146,9 +148,69 @@ static void test_iter(void) {
         CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &generation) == MSTORE_OK);
     }
 
-    int seen = 0;
-    CHECK(mstore_table_iter(&table, count_iter_cb, &seen) == MSTORE_OK);
-    CHECK(seen == 3);
+    /* key приходит в колбэк: сумма ключей 1+2+3 == 6 */
+    int key_sum = 0;
+    CHECK(mstore_table_iter(&table, collect_iter_cb, &key_sum) == MSTORE_OK);
+    CHECK(key_sum == 6);
+
+    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+}
+
+/* FNV-1a индекса таблицы: нужен, чтобы подобрать ключи с одним home-бакетом. */
+static size_t index_home(uint32_t key, size_t mask) {
+    const uint8_t *bytes = (const uint8_t *)&key;
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < sizeof(key); i++) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash & mask;
+}
+
+/* Записи, смещённые линейным пробингом из своего home-бакета: раньше на них
+ * check_invariants давал ложный INVARIANT_FAILED (алиасинг scratch-буфера). */
+static void test_invariants_with_colliding_keys(void) {
+    mstore_table_t table = {0};
+    mstore_table_schema_t schema;
+    schema.capacity = 8;
+    schema.key_size = sizeof(uint32_t);
+    schema.payload_size = sizeof(value_t);
+    schema.payload_equals = NULL;
+    schema.backing = MSTORE_BACKING_RAM;
+    schema.persist_key = NULL;
+    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+
+    const size_t mask = state_of(&table)->index_capacity - 1;
+    uint32_t keys[2] = {1, 0};
+    for (uint32_t candidate = 2; candidate < 100000; candidate++) {
+        if (index_home(candidate, mask) == index_home(keys[0], mask)) {
+            keys[1] = candidate;
+            break;
+        }
+    }
+    CHECK(keys[1] != 0);
+
+    mstore_slot_t slots[2];
+    for (size_t i = 0; i < 2; i++) {
+        uint32_t generation = 0;
+        value_t v = value((int32_t)i, (int32_t)i);
+        CHECK(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generation) == MSTORE_OK);
+        CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    }
+
+    /* Иначе тест ничего не проверяет: хотя бы одна запись должна быть смещена. */
+    bool displaced = false;
+    for (size_t i = 0; i < 2; i++) {
+        if (state_of(&table)->index_of_slot[slots[i]] != index_home(keys[i], mask)) {
+            displaced = true;
+        }
+    }
+    CHECK(displaced);
+
+    mstore_slot_t found = 0;
+    CHECK(mstore_table_slot_find(&table, &keys[0], &found) == MSTORE_OK && found == slots[0]);
+    CHECK(mstore_table_slot_find(&table, &keys[1], &found) == MSTORE_OK && found == slots[1]);
+    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
 
     CHECK(mstore_table_deinit(&table) == MSTORE_OK);
 }
@@ -156,6 +218,7 @@ static void test_iter(void) {
 int main(void) {
     test_lifecycle();
     test_iter();
+    test_invariants_with_colliding_keys();
     printf("test_table: OK\n");
     return 0;
 }

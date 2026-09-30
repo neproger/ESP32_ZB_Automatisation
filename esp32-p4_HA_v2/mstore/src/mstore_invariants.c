@@ -20,12 +20,12 @@ mstore_err_t mstore_check_invariants(mstore_state_t *st) {
         }
         used_count++;
 
-        err = mstore_storage_read_key(st->storage, slot, st->scratch_key);
+        err = mstore_storage_read_key(st->storage, slot, st->scratch_lookup);
         if (err != MSTORE_OK) {
             return err;
         }
         mstore_slot_t found;
-        err = mstore_index_find(st, st->scratch_key, &found);
+        err = mstore_index_find(st, st->scratch_lookup, st->scratch_key, &found);
         if (err == MSTORE_NOT_FOUND || (err == MSTORE_OK && found != slot)) {
             return MSTORE_INVARIANT_FAILED;
         }

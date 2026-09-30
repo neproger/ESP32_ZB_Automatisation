@@ -42,6 +42,9 @@ mstore_err_t mstore_ring_init(mstore_ring_t *ring, const mstore_ring_config_t *c
     if (config->capacity == 0 || config->record_size == 0) {
         return MSTORE_INVALID_SIZE;
     }
+    if (config->capacity > SIZE_MAX / config->record_size) {
+        return MSTORE_INVALID_SIZE;
+    }
 
     mstore_ring_state_t *st = mstore_platform_alloc(sizeof(*st));
     if (st == NULL) {

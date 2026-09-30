@@ -20,10 +20,16 @@ static const mstore_ram_storage_t *mstore_ram_of_const(const mstore_storage_t *s
     return (const mstore_ram_storage_t *)storage;
 }
 
-static size_t mstore_ram_slot_size(size_t key_size, size_t payload_size) {
-    const size_t raw = sizeof(mstore_meta_t) + key_size + payload_size;
+/* false — размер слота не представим (переполнение при округлении). */
+static bool mstore_ram_slot_size(size_t key_size, size_t payload_size, size_t *out_slot_size) {
     const size_t alignment = _Alignof(mstore_meta_t);
-    return (raw + alignment - 1) & ~(alignment - 1);
+    const size_t raw = sizeof(mstore_meta_t) + key_size + payload_size;
+    const size_t padded = (raw + alignment - 1) & ~(alignment - 1);
+    if (padded < raw) {
+        return false;
+    }
+    *out_slot_size = padded;
+    return true;
 }
 
 static uint8_t *mstore_ram_slot(const mstore_ram_storage_t *st, mstore_slot_t slot) {
@@ -116,6 +122,21 @@ mstore_err_t mstore_storage_ram_open(const mstore_storage_config_t *config,
     if (config->capacity == 0 || config->key_size == 0) {
         return MSTORE_INVALID_SIZE;
     }
+    /* SIZE_MAX-проверки важны на 32-битном целевом (P4): иначе переполнение даёт
+     * маленькую аллокацию и запись за её границей. */
+    const size_t meta_size = sizeof(mstore_meta_t);
+    if (config->key_size > SIZE_MAX - meta_size ||
+        config->payload_size > SIZE_MAX - meta_size - config->key_size) {
+        return MSTORE_INVALID_SIZE;
+    }
+
+    size_t slot_size = 0;
+    if (!mstore_ram_slot_size(config->key_size, config->payload_size, &slot_size)) {
+        return MSTORE_INVALID_SIZE;
+    }
+    if (slot_size > SIZE_MAX / config->capacity) {
+        return MSTORE_INVALID_SIZE;
+    }
 
     mstore_ram_storage_t *st = mstore_platform_alloc(sizeof(*st));
     if (st == NULL) {
@@ -127,7 +148,7 @@ mstore_err_t mstore_storage_ram_open(const mstore_storage_config_t *config,
     st->capacity = config->capacity;
     st->key_size = config->key_size;
     st->payload_size = config->payload_size;
-    st->slot_size = mstore_ram_slot_size(config->key_size, config->payload_size);
+    st->slot_size = slot_size;
 
     st->slots = mstore_platform_alloc(st->slot_size * st->capacity);
     if (st->slots == NULL) {

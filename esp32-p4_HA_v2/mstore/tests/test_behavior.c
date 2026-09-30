@@ -25,12 +25,19 @@ static value_t value(int32_t a, int32_t b) {
     return v;
 }
 
-static bool count_iter_cb(mstore_slot_t slot, const mstore_meta_t *meta, const void *payload,
-                          void *ctx) {
+typedef struct {
+    int seen;
+    long long key_sum;
+} iter_ctx_t;
+
+static bool count_iter_cb(mstore_slot_t slot, const mstore_meta_t *meta, const void *key,
+                          const void *payload, void *ctx) {
     (void)slot;
     (void)meta;
     (void)payload;
-    (*(int *)ctx)++;
+    iter_ctx_t *seen = ctx;
+    seen->seen++;
+    seen->key_sum += *(const uint32_t *)key;
     return true;
 }
 
@@ -93,8 +100,10 @@ static void run_suite(mstore_backing_t backing) {
     CHECK(mstore_table_slot_allocate(&table, &extra, &v, &reused, &reused_gen) == MSTORE_OK);
     CHECK(reused == slots[1] && reused_gen == gens[1] + 1);
 
-    int seen = 0;
-    CHECK(mstore_table_iter(&table, count_iter_cb, &seen) == MSTORE_OK && seen == 4);
+    /* после free key=11 и переиспользования слота под extra=99: 10+12+13+99 == 134 */
+    iter_ctx_t seen = {0, 0};
+    CHECK(mstore_table_iter(&table, count_iter_cb, &seen) == MSTORE_OK && seen.seen == 4);
+    CHECK(seen.key_sum == 134);
     CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 4);
 
     CHECK(mstore_table_clear(&table) == MSTORE_OK);

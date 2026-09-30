@@ -8,6 +8,13 @@
 #define MSTORE_FLASH_RECORD_MAGIC 0x5452u /* "RT", record prefix */
 #define MSTORE_FLASH_COMMIT_MARKER 0x4D53434Du  /* MSCM */
 #define MSTORE_FLASH_FORMAT_REVISION 1u
+/*
+ * Резерв банки в записях сверх capacity. После компакшена в банке лежит не больше
+ * одной записи на слот; одна запись резерва гарантирует, что следующий append
+ * влезет сразу после компакшена — иначе update существующего слота на полностью
+ * занятой таблице получал бы NO_SPACE.
+ */
+#define MSTORE_FLASH_APPEND_HEADROOM 1u
 #define MSTORE_FLASH_HEADER_SIZE 64u
 #define MSTORE_FLASH_HEADER_CRC_LEN 36u
 #define MSTORE_FLASH_RECORD_FIXED 16u
@@ -574,17 +581,22 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     if (device == NULL) {
         return MSTORE_INVALID_STATE;
     }
-    if (device->erase_size == 0 || device->size < 2 * device->erase_size) {
+    if (device->erase_size == 0 || device->erase_size > SIZE_MAX / 2 ||
+        device->size < 2 * device->erase_size) {
         return MSTORE_INVALID_SIZE;
     }
-
-    size_t bank_size = (device->size / 2) & ~(device->erase_size - 1);
-    size_t max_record =
+    /* Округление вниз арифметикой, а не маской: маска требует erase_size степени двойки. */
+    const size_t bank_size = (device->size / (2 * device->erase_size)) * device->erase_size;
+    const size_t max_record =
         MSTORE_FLASH_RECORD_FIXED + config->key_size + config->payload_size + MSTORE_FLASH_RECORD_TAIL;
-    if (config->capacity > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
+    const size_t records_needed = config->capacity + MSTORE_FLASH_APPEND_HEADROOM;
+    if (records_needed < config->capacity) {
         return MSTORE_INVALID_SIZE;
     }
-    if (bank_size < MSTORE_FLASH_HEADER_SIZE + config->capacity * max_record) {
+    if (records_needed > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
+        return MSTORE_INVALID_SIZE;
+    }
+    if (bank_size < MSTORE_FLASH_HEADER_SIZE + records_needed * max_record) {
         return MSTORE_INVALID_SIZE;
     }
 

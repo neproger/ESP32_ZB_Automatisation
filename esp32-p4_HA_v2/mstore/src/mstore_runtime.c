@@ -24,7 +24,8 @@ static bool mstore_home_reachable(size_t hole, size_t cursor, size_t home) {
     return home > hole || home <= cursor;
 }
 
-mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, mstore_slot_t *out_slot) {
+mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
+                               mstore_slot_t *out_slot) {
     size_t mask = st->index_capacity - 1;
     size_t bucket = mstore_hash_key(&st->schema, key) & mask;
     size_t probes = 0;
@@ -33,11 +34,11 @@ mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, mstore_slot_
             return MSTORE_INVARIANT_FAILED;
         }
         mstore_slot_t slot = st->index[bucket].slot;
-        mstore_err_t err = mstore_storage_read_key(st->storage, slot, st->scratch_key);
+        mstore_err_t err = mstore_storage_read_key(st->storage, slot, probe_key);
         if (err != MSTORE_OK) {
             return err;
         }
-        if (mstore_key_equal(&st->schema, st->scratch_key, key)) {
+        if (mstore_key_equal(&st->schema, probe_key, key)) {
             *out_slot = slot;
             return MSTORE_OK;
         }
