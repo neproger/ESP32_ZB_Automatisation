@@ -220,6 +220,7 @@ docs/
 │   └── DISPLAY.md
 └── storage/
     ├── MSTORE.md
+    ├── MSTORE_FLASH_FORMAT.md
     └── MSTORE_IMPL_JOURNAL.md
 ```
 
