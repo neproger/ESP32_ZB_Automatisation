@@ -4,6 +4,9 @@ project(mstore_host_tests C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Политика append headroom задаётся Kconfig; host-сборка идёт без sdkconfig и
+# берёт defaults из mstore_storage_flash.c.
+
 enable_testing()
 
 set(MSTORE_CORE

@@ -1,0 +1,45 @@
+menu "mstore bench"
+
+    choice BENCH_MODE
+        prompt "Storage mode to measure"
+        default BENCH_MODE_ALL
+        help
+            Режимы прогоняются отдельно: у каждого свой persist_key и свой FLASH-регион.
+
+        config BENCH_MODE_ALL
+            bool "all: RAM, FLASH, RAM|FLASH"
+        config BENCH_MODE_RAM
+            bool "RAM only"
+        config BENCH_MODE_FLASH
+            bool "FLASH only"
+        config BENCH_MODE_RAM_FLASH
+            bool "RAM|FLASH only"
+    endchoice
+
+    config BENCH_FIND_READ_OPS
+        int "find/read operations per capacity"
+        default 5000
+        help
+            Количество find и отдельно read на каждой capacity в сценарии fill/read.
+
+    config BENCH_STRESS_OPS
+        int "mixed write-stress operations"
+        default 5000
+
+    config BENCH_CHECKPOINT_CAPACITY
+        int "capacity for worst-case checkpoint scenario"
+        default 200
+
+    config BENCH_CHECKPOINT_UPDATES
+        int "updates in worst-case checkpoint scenario"
+        default 5000
+
+    config BENCH_SOAK_SECONDS
+        int "long soak duration, seconds (0 = skip)"
+        default 0
+
+    config BENCH_LOADED_MODE
+        bool "run write stress also with a background CPU load task"
+        default y
+
+endmenu

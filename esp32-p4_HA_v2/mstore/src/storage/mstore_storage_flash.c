@@ -1,22 +1,64 @@
 #include <string.h>
 
+#include "mstore/mstore_bench.h"
 #include "mstore_platform.h"
 #include "storage/mstore_bytes.h"
 #include "storage/mstore_flash_device.h"
 #include "storage/mstore_region.h"
 #include "storage/mstore_storage.h"
 
+#ifdef MSTORE_BENCH_COUNTERS
+static mstore_bench_counters_t s_bench;
+#endif
+
+#ifdef MSTORE_BENCH_COUNTERS
+void mstore_bench_counters_reset(void) {
+    memset(&s_bench, 0, sizeof(s_bench));
+}
+
+void mstore_bench_counters_read(mstore_bench_counters_t *out) {
+    if (out != NULL) {
+        *out = s_bench;
+    }
+}
+#endif
+
 #define MSTORE_FLASH_HEADER_MAGIC 0x4D535442u   /* MSTB */
 #define MSTORE_FLASH_RECORD_MAGIC 0x5452u /* "RT", record prefix */
 #define MSTORE_FLASH_COMMIT_MARKER 0x4D53434Du  /* MSCM */
 #define MSTORE_FLASH_FORMAT_REVISION 1u
 /*
- * Резерв банки в записях сверх capacity. После компакшена в банке лежит не больше
- * одной записи на слот; одна запись резерва гарантирует, что следующий append
- * влезет сразу после компакшена — иначе update существующего слота на полностью
- * занятой таблице получал бы NO_SPACE.
+ * Политика запаса задаётся Kconfig (mstore/Kconfig). Defaults здесь — чтобы код
+ * собирался и без sdkconfig (host-тесты): в IDF-сборке победит Kconfig, значения
+ * ниже и в Kconfig должны совпадать.
  */
-#define MSTORE_FLASH_APPEND_HEADROOM 1u
+#ifndef CONFIG_MSTORE_FLASH_APPEND_HEADROOM_PERCENT
+#define CONFIG_MSTORE_FLASH_APPEND_HEADROOM_PERCENT 25
+#endif
+#ifndef CONFIG_MSTORE_FLASH_APPEND_HEADROOM_MIN
+#define CONFIG_MSTORE_FLASH_APPEND_HEADROOM_MIN 8
+#endif
+
+/*
+ * Резерв банки в записях сверх capacity: сколько аппендов помещается после
+ * compaction до следующего. Одна запись гарантирует только «следующий append
+ * влезет», но при заполненной таблице даёт checkpoint почти на каждый update —
+ * измеренная worst-case latency до 4.2 с на capacity 5000 (MSTORE_BENCH.md),
+ * поэтому запас пропорционален ёмкости. Резервируется FLASH-регион, не RAM.
+ */
+static mstore_err_t append_headroom(size_t capacity, size_t *out_headroom) {
+    const size_t percent = (size_t)CONFIG_MSTORE_FLASH_APPEND_HEADROOM_PERCENT;
+    const size_t minimum = (size_t)CONFIG_MSTORE_FLASH_APPEND_HEADROOM_MIN;
+    size_t by_percent = 0;
+    if (percent > 0) {
+        if (capacity > SIZE_MAX / percent) {
+            return MSTORE_INVALID_SIZE;
+        }
+        by_percent = capacity * percent / 100u;
+    }
+    *out_headroom = by_percent > minimum ? by_percent : minimum;
+    return MSTORE_OK;
+}
 #define MSTORE_FLASH_HEADER_SIZE 64u
 #define MSTORE_FLASH_HEADER_CRC_LEN 36u
 #define MSTORE_FLASH_RECORD_FIXED 16u
@@ -56,10 +98,18 @@ static bool dev_read(const mstore_flash_storage_t *st, size_t offset, void *dst,
 }
 
 static bool dev_program(const mstore_flash_storage_t *st, size_t offset, const void *src, size_t len) {
+#ifdef MSTORE_BENCH_COUNTERS
+    s_bench.program_calls++;
+    s_bench.program_bytes += len;
+#endif
     return st->device->ops->program(st->device->ctx, offset, src, len);
 }
 
 static bool dev_erase(const mstore_flash_storage_t *st, size_t offset, size_t len) {
+#ifdef MSTORE_BENCH_COUNTERS
+    s_bench.erase_calls++;
+    s_bench.erase_bytes += len;
+#endif
     return st->device->ops->erase(st->device->ctx, offset, len);
 }
 
@@ -284,6 +334,9 @@ static mstore_err_t flash_scan(mstore_flash_storage_t *st, bool *out_torn) {
 }
 
 static mstore_err_t flash_compact(mstore_flash_storage_t *st, bool clear) {
+#ifdef MSTORE_BENCH_COUNTERS
+    s_bench.compactions++;
+#endif
     size_t inactive = 1 - st->active_bank;
     if (!dev_erase(st, bank_offset(st, inactive), st->bank_size)) {
         return MSTORE_IO;
@@ -390,6 +443,9 @@ static mstore_err_t flash_append(mstore_flash_storage_t *st, uint32_t slot, uint
         return MSTORE_NO_SPACE;
     }
     build_record(st, kind, slot, meta, key, payload, len);
+#ifdef MSTORE_BENCH_COUNTERS
+    s_bench.records_appended++;
+#endif
     mstore_err_t err = program_record(st, st->active_bank, st->write_offset, st->record_buf, len);
     if (err != MSTORE_OK) {
         st->needs_checkpoint = true; /* возможен torn append: следующий append сделает compact */
@@ -532,7 +588,12 @@ mstore_err_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, 
         return MSTORE_INVALID_SIZE;
     }
     const size_t max_record = fixed + key_size + payload_size;
-    const size_t records_needed = capacity + MSTORE_FLASH_APPEND_HEADROOM;
+    size_t headroom = 0;
+    mstore_err_t err = append_headroom(capacity, &headroom);
+    if (err != MSTORE_OK) {
+        return err;
+    }
+    const size_t records_needed = capacity + headroom;
     if (records_needed < capacity) {
         return MSTORE_INVALID_SIZE;
     }
@@ -573,7 +634,12 @@ mstore_err_t mstore_storage_flash_open(const mstore_storage_config_t *config,
         return MSTORE_INVALID_SIZE;
     }
     const size_t max_record = fixed + config->key_size + config->payload_size;
-    const size_t records_needed = config->capacity + MSTORE_FLASH_APPEND_HEADROOM;
+    size_t headroom = 0;
+    mstore_err_t headroom_err = append_headroom(config->capacity, &headroom);
+    if (headroom_err != MSTORE_OK) {
+        return headroom_err;
+    }
+    const size_t records_needed = config->capacity + headroom;
     if (records_needed < config->capacity) {
         return MSTORE_INVALID_SIZE;
     }

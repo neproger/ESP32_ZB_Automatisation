@@ -7,4 +7,23 @@ menu "mstore"
             Data partition, используемая как NOR-регион для FLASH / RAM+FLASH
             backing. Партиция ищется по этой метке при первом обращении.
 
+    config MSTORE_FLASH_APPEND_HEADROOM_PERCENT
+        int "FLASH append headroom, percent of capacity"
+        range 0 200
+        default 25
+        help
+            Сколько записей сверх capacity помещается в банку после compaction.
+            Одна запись (прежняя политика) давала checkpoint почти на каждый
+            update при заполненной таблице: worst-case latency до 4.2 с на
+            capacity 5000 (замеры — docs/storage/MSTORE_BENCH.md). Запас
+            резервирует FLASH-регион, а не RAM.
+
+    config MSTORE_FLASH_APPEND_HEADROOM_MIN
+        int "FLASH append headroom, minimum records"
+        range 1 1024
+        default 8
+        help
+            Нижняя граница запаса: маленькие таблицы не должны компактиться
+            на каждой мутации.
+
 endmenu

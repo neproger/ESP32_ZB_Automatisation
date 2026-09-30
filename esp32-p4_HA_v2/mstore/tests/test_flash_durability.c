@@ -208,7 +208,9 @@ static void test_checkpoint_overflow(void) {
     CHECK(mstore_table_slot_allocate(&table, &k0, &v, &slot0, &gen0) == MSTORE_OK);
 
     bool changed = false;
-    for (int i = 1; i <= 20; i++) {
+    /* Аппендов должно хватить на несколько компакшенов: банка capacity 2 с запасом
+     * под append вмещает больше двух десятков записей. */
+    for (int i = 1; i <= 60; i++) {
         value_t vi = value(i, i);
         CHECK(mstore_table_slot_update(&table, slot0, gen0, &vi, &changed) == MSTORE_OK && changed);
     }
@@ -222,7 +224,7 @@ static void test_checkpoint_overflow(void) {
     value_t rv;
     CHECK(mstore_table_slot_find(&table, &k0, &found) == MSTORE_OK);
     CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
-    CHECK(rk == k0 && rv.a == 20 && rv.b == 20);
+    CHECK(rk == k0 && rv.a == 60 && rv.b == 60);
     CHECK(mstore_table_slot_find(&table, &k1, &found) == MSTORE_OK);
     CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
 
