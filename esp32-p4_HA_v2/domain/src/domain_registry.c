@@ -69,6 +69,10 @@ static domain_err_t desc_validate(const domain_entity_desc_t *desc)
     if (desc->payload_size == 0) {
         return DOMAIN_INVALID_SIZE;
     }
+    /* Ключ копируется в запись Journal целиком, поэтому шире лимита он быть не может. */
+    if (desc->key_size > DOMAIN_JOURNAL_KEY_MAX) {
+        return DOMAIN_INVALID_SIZE;
+    }
     if ((desc->backing & DOMAIN_BACKING_FLASH) != 0 && desc->persist_key == NULL) {
         return DOMAIN_INVALID_ARG;
     }
@@ -87,9 +91,9 @@ static mstore_backing_t backing_to_mstore(domain_backing_t backing)
     return result;
 }
 
-domain_err_t domain_init(domain_t *domain, size_t max_entity_types)
+domain_err_t domain_init(domain_t *domain, size_t max_entity_types, size_t journal_capacity)
 {
-    if (domain == NULL || max_entity_types == 0) {
+    if (domain == NULL || max_entity_types == 0 || journal_capacity == 0) {
         return DOMAIN_INVALID_ARG;
     }
     if (domain->_state != NULL) {
@@ -115,6 +119,14 @@ domain_err_t domain_init(domain_t *domain, size_t max_entity_types)
         domain_platform_free(state);
         return DOMAIN_NO_MEM;
     }
+    const domain_err_t journal_err = domain_journal_init(&state->journal, journal_capacity);
+    if (journal_err != DOMAIN_OK) {
+        domain_platform_lock_destroy(state->lock);
+        domain_platform_free(state->entries);
+        domain_platform_free(state);
+        return journal_err;
+    }
+
     state->capacity = max_entity_types;
 
     domain->_state = state;
@@ -128,6 +140,7 @@ domain_err_t domain_deinit(domain_t *domain)
         return DOMAIN_INVALID_STATE;
     }
 
+    (void)domain_journal_deinit(&state->journal);
     for (size_t i = 0; i < state->used; ++i) {
         if (state->entries[i].used) {
             (void)mstore_table_deinit(&state->entries[i].table);

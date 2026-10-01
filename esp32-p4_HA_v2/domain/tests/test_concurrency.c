@@ -66,14 +66,15 @@ static void *writer_main(void *raw)
             record.value = (uint32_t)(round + i);
 
             const domain_err_t put_err =
-                domain_entity_put(arg->domain, TYPE_A, &key, &record, &changed);
+                domain_entity_put(arg->domain, TYPE_A, &key, &record, NULL, &changed);
             if (put_err == DOMAIN_STALE) {
                 arg->stale_seen = 1;
             } else if (put_err != DOMAIN_OK) {
                 return (void *)1;
             }
 
-            const domain_err_t remove_err = domain_entity_remove(arg->domain, TYPE_A, &key);
+            const domain_err_t remove_err =
+                domain_entity_remove(arg->domain, TYPE_A, &key, NULL);
             if (remove_err != DOMAIN_OK && remove_err != DOMAIN_NOT_FOUND) {
                 return (void *)1;
             }
@@ -112,7 +113,7 @@ static DWORD WINAPI win_reader(LPVOID arg)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;
@@ -155,7 +156,7 @@ static void test_serialized_mutation_path(void)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;

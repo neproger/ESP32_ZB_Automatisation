@@ -2,6 +2,10 @@
 
 #include <stdio.h>
 
+/* DOMAIN_JOURNAL_KEY_MAX живёт во внутреннем header'е Journal: проверка размера ключа
+ * типа сущности — часть контракта регистрации. */
+#include "domain_journal.h"
+
 static int g_failures = 0;
 
 #define CHECK(cond)                                                       \
@@ -41,19 +45,20 @@ static domain_entity_desc_t sensor_desc(void)
 static void test_init_deinit(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4) == DOMAIN_OK);
-    CHECK(domain_init(&domain, 4) == DOMAIN_INVALID_STATE);
+    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 4, 8) == DOMAIN_INVALID_STATE);
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
     CHECK(domain_deinit(&domain) == DOMAIN_INVALID_STATE);
-    CHECK(domain_init(NULL, 4) == DOMAIN_INVALID_ARG);
-    CHECK(domain_init(&domain, 0) == DOMAIN_INVALID_ARG);
+    CHECK(domain_init(NULL, 4, 8) == DOMAIN_INVALID_ARG);
+    CHECK(domain_init(&domain, 0, 8) == DOMAIN_INVALID_ARG);
+    CHECK(domain_init(&domain, 4, 0) == DOMAIN_INVALID_ARG);
     (void)domain_deinit(&domain);
 }
 
 static void test_register(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
 
     domain_entity_desc_t sensor = sensor_desc();
     CHECK(domain_register_entity(&domain, &sensor) == DOMAIN_OK);
@@ -76,7 +81,7 @@ static void test_register(void)
 static void test_invalid_desc(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
 
     domain_entity_desc_t no_key = sensor_desc();
     no_key.key_size = 0;
@@ -99,6 +104,12 @@ static void test_invalid_desc(void)
     no_backing.backing = DOMAIN_BACKING_NONE;
     CHECK(domain_register_entity(&domain, &no_backing) == DOMAIN_INVALID_ARG);
 
+    /* Ключ копируется в запись Journal целиком: шире лимита — отказ на регистрации. */
+    domain_entity_desc_t wide_key = sensor_desc();
+    wide_key.type = 7;
+    wide_key.key_size = DOMAIN_JOURNAL_KEY_MAX + 1;
+    CHECK(domain_register_entity(&domain, &wide_key) == DOMAIN_INVALID_SIZE);
+
     CHECK(domain_register_entity(&domain, NULL) == DOMAIN_INVALID_ARG);
 
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
@@ -107,7 +118,7 @@ static void test_invalid_desc(void)
 static void test_registry_full(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
 
     domain_entity_desc_t desc = sensor_desc();
     CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);

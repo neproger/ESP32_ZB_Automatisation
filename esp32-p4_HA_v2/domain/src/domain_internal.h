@@ -4,6 +4,7 @@
 
 #include "domain/domain.h"
 #include "domain/domain_types.h"
+#include "domain_journal.h"
 #include "mstore/mstore_table.h"
 #include "mstore/mstore_types.h"
 
@@ -35,6 +36,8 @@ typedef struct {
      * права вызывать API Domain (docs/domain/DOMAIN_API.md §9).
      */
     void *lock;
+
+    domain_journal_t journal;
 } domain_state_t;
 
 domain_state_t *domain_state(const domain_t *domain);

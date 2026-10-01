@@ -109,28 +109,28 @@ static void test_reopen_preserves_state(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
     domain_entity_desc_t desc = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
     CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &(test_record_t){.value = 10}, &changed) ==
-          DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &(test_record_t){.value = 10}, NULL,
+                            &changed) == DOMAIN_OK);
     CHECK(changed);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key2, &(test_record_t){.value = 20}, &changed) ==
-          DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key2, &(test_record_t){.value = 20}, NULL,
+                            &changed) == DOMAIN_OK);
     CHECK(changed);
 
     test_record_t updated = record_of(11);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, &changed) == DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed) == DOMAIN_OK);
     CHECK(changed);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, &changed) == DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed) == DOMAIN_OK);
     CHECK(!changed);
 
-    CHECK(domain_entity_remove(&domain, TYPE_A, &key2) == DOMAIN_OK);
+    CHECK(domain_entity_remove(&domain, TYPE_A, &key2, NULL) == DOMAIN_OK);
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2) == DOMAIN_OK);
+    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
     CHECK(domain_register_entity(&reopened, &desc) == DOMAIN_OK);
 
     test_record_t out = {0};
@@ -150,13 +150,13 @@ static void test_geometry_mismatch_is_rejected(void)
     flash_on(&sim, &device);
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
     domain_entity_desc_t narrow = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
     CHECK(domain_register_entity(&domain, &narrow) == DOMAIN_OK);
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2) == DOMAIN_OK);
+    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
     domain_entity_desc_t wide = desc_of(TYPE_A, "test_entity", sizeof(test_record_wide_t), 64);
     /* Region Manager не меняет размер региона на месте: смена геометрии — диагноз,
      * а не миграция (MSTORE_FLASH_REGIONS.md §6). */
@@ -176,20 +176,20 @@ static void test_two_flash_types_are_independent(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2) == DOMAIN_OK);
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
     domain_entity_desc_t a = desc_of(TYPE_A, "type_a", sizeof(test_record_t), 8);
     domain_entity_desc_t b = desc_of(TYPE_B, "type_b", sizeof(test_record_t), 8);
     CHECK(domain_register_entity(&domain, &a) == DOMAIN_OK);
     CHECK(domain_register_entity(&domain, &b) == DOMAIN_OK);
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &(test_record_t){.value = 100}, &changed) ==
-          DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_B, &key, &(test_record_t){.value = 200}, &changed) ==
-          DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key, &(test_record_t){.value = 100}, NULL,
+                            &changed) == DOMAIN_OK);
+    CHECK(domain_entity_put(&domain, TYPE_B, &key, &(test_record_t){.value = 200}, NULL,
+                            &changed) == DOMAIN_OK);
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2) == DOMAIN_OK);
+    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
     CHECK(domain_register_entity(&reopened, &a) == DOMAIN_OK);
     CHECK(domain_register_entity(&reopened, &b) == DOMAIN_OK);
 
@@ -201,7 +201,7 @@ static void test_two_flash_types_are_independent(void)
     CHECK(record_count(&reopened, TYPE_A) == 1);
     CHECK(record_count(&reopened, TYPE_B) == 1);
 
-    CHECK(domain_entity_remove(&reopened, TYPE_A, &key) == DOMAIN_OK);
+    CHECK(domain_entity_remove(&reopened, TYPE_A, &key, NULL) == DOMAIN_OK);
     CHECK(domain_entity_get(&reopened, TYPE_A, &key, &out) == DOMAIN_NOT_FOUND);
     CHECK(domain_entity_get(&reopened, TYPE_B, &key, &out) == DOMAIN_OK);
     CHECK(out.value == 200);

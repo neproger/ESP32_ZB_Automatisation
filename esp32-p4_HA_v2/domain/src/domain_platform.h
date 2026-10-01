@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,9 @@ extern "C" {
  */
 void *domain_platform_alloc(size_t size);
 void domain_platform_free(void *ptr);
+
+/* Монотонное время для меток фактов; на target — esp_timer. */
+uint64_t domain_platform_now_ms(void);
 
 void *domain_platform_lock_create(void);
 void domain_platform_lock_destroy(void *lock);

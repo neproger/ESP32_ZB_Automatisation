@@ -1,11 +1,30 @@
 #include "domain_platform.h"
 
 #include <stdlib.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <pthread.h>
+#endif
+
+#ifdef _WIN32
+
+uint64_t domain_platform_now_ms(void)
+{
+    return GetTickCount64();
+}
+
+#else
+
+uint64_t domain_platform_now_ms(void)
+{
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
 #endif
 
 void *domain_platform_alloc(size_t size)

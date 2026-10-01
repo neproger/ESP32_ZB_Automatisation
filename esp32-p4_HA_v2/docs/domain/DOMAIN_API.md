@@ -191,7 +191,7 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 
 | Подсистема | Что даёт сервису | Поведение |
 |---|---|---|
-| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter` | `ENTITY_STORE.md` |
+| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter`; `put`/`remove` пишут факт при реальном изменении | `ENTITY_STORE.md` |
 | Journal | прямой доступ отсутствует: Journal читает только Dispatcher | `JOURNAL.md` |
 | Subscriptions | подписка (`contact + filter`), ожидание события | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |

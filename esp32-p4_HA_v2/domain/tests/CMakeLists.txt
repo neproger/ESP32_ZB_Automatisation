@@ -39,6 +39,7 @@ domain_add_test(test_registry)
 domain_add_test(test_entity)
 domain_add_test(test_concurrency)
 domain_add_test(test_journal)
+domain_add_test(test_facts)
 
 # Persistence-сценарий: Domain поверх FLASH-backed mstore на host NOR simulator.
 # nor_sim — инфраструктура окружения из тестов mstore, не часть Domain.

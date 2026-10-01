@@ -34,32 +34,6 @@ typedef enum {
     DOMAIN_OP_REMOVE = 2,
 } domain_op_t;
 
-typedef enum {
-    DOMAIN_SOURCE_ZIGBEE = 1,
-    DOMAIN_SOURCE_UI = 2,
-    DOMAIN_SOURCE_AUTOMATION = 3,
-    DOMAIN_SOURCE_SYSTEM = 4,
-} domain_source_t;
-
-typedef enum {
-    DOMAIN_VALUE_NONE = 0,
-    DOMAIN_VALUE_BOOL = 1,
-    DOMAIN_VALUE_I32 = 2,
-    DOMAIN_VALUE_U32 = 3,
-    DOMAIN_VALUE_F32 = 4,
-    DOMAIN_VALUE_ENUM = 5,
-} domain_value_type_t;
-
-typedef struct {
-    uint8_t type;
-    uint8_t reserved[3];
-    union {
-        uint32_t u32;
-        int32_t i32;
-        float f32;
-    } v;
-} domain_value_t;
-
 /*
  * Запись Journal. event_id назначается самим Journal'ем: это seq Ring Store, поэтому
  * внутри ring поле смысла не несёт (identity факта и есть seq, MSTORE.md §5) — Journal
