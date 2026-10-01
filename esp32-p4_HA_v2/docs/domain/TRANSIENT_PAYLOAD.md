@@ -40,4 +40,7 @@ domain_payload_get(ref)     → payload | STALE / NOT_FOUND
 ## 4. Открытые вопросы
 
 - критерий «compact value vs transient payload»;
-- typed payload (сейчас — generic bytes + size).
+- typed payload (сейчас — generic bytes + size);
+- **адресат события:** факт `EVENT` от `domain_payload_put` пока пишется без
+  `entity`/`key`. Решать вместе с сервисом-источником событий — тот же вопрос, что и
+  для `COMMAND_SENT` (`COMMANDS.md` §7).
