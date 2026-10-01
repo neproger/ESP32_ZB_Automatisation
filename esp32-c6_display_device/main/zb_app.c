@@ -20,7 +20,7 @@ static const char *TAG = "zb_app";
 
 /* Endpoints */
 #define HA_SWITCH_EP        1   /* On/Off switch (client) - the button */
-#define HA_LIGHT_EP         10  /* Color dimmable light (server) - the RGB LED */
+#define HA_LIGHT_EP         2   /* Color dimmable light (server) - the RGB LED */
 
 /* Coordinator target for button commands (coordinator short addr / endpoint) */
 #define COORDINATOR_SHORT   0x0000
@@ -33,14 +33,13 @@ static const char *TAG = "zb_app";
 #define ESP_MANUFACTURER_NAME "\x09""ESPRESSIF"
 #define ESP_MODEL_IDENTIFIER  "\x0F""ESP32C6-DISPLAY"
 
-#define ESP_ZIGBEE_ZED_CONFIG()                                                   \
+#define ESP_ZIGBEE_ZR_CONFIG()                                                    \
     {                                                                            \
         .device_config = {                                                        \
-            .device_type = EZB_NWK_DEVICE_TYPE_END_DEVICE,                        \
+            .device_type = EZB_NWK_DEVICE_TYPE_ROUTER,                            \
             .install_code_policy = false,                                         \
-            .zed_config = {                                                       \
-                .ed_timeout = EZB_NWK_ED_TIMEOUT_64MIN,                           \
-                .keep_alive = 3000,                                               \
+            .zczr_config = {                                                      \
+                .max_children = 10,                                               \
             },                                                                    \
         },                                                                        \
         .platform_config = {                                                      \
@@ -310,10 +309,24 @@ static void add_basic_info(ezb_af_ep_desc_t ep)
     }
 }
 
+static void log_simple_descriptors(void)
+{
+    ESP_LOGI(TAG, "AF max endpoint num = %u", ezb_af_dev_get_max_endpoint_num());
+    const ezb_af_simple_desc_t *sd = NULL;
+    while ((sd = ezb_af_get_next_simple_desc(sd)) != NULL) {
+        ESP_LOGI(TAG, "SimpleDesc ep=%u profile=0x%04X dev=0x%04X in=%u out=%u",
+                 sd->ep_id, sd->app_profile_id, sd->app_device_id,
+                 sd->app_input_cluster_count, sd->app_output_cluster_count);
+    }
+}
+
 static esp_err_t create_device(void)
 {
     ezb_af_device_desc_t dev_desc = ezb_af_create_device_desc();
     ESP_RETURN_ON_FALSE(dev_desc != EZB_INVALID_AF_DEVICE_DESC, ESP_FAIL, TAG, "device desc");
+
+    /* Allow several endpoints (IDs up to 16). */
+    (void)ezb_af_dev_set_max_endpoint_num(16);
 
     /* Endpoint 1: standard HA On/Off switch (client) */
     ezb_zha_on_off_switch_config_t switch_cfg = EZB_ZHA_ON_OFF_SWITCH_CONFIG();
@@ -334,6 +347,7 @@ static esp_err_t create_device(void)
     ESP_RETURN_ON_ERROR(ezb_af_device_desc_register(dev_desc), TAG, "register device");
 
     ezb_zcl_core_action_handler_register(core_action_handler);
+    log_simple_descriptors();
     return ESP_OK;
 }
 
@@ -341,7 +355,7 @@ static void zb_main_task(void *arg)
 {
     (void)arg;
 
-    esp_zigbee_config_t config = ESP_ZIGBEE_ZED_CONFIG();
+    esp_zigbee_config_t config = ESP_ZIGBEE_ZR_CONFIG();
     ESP_ERROR_CHECK(esp_zigbee_init(&config));
 
     ezb_aps_secur_enable_distributed_security(false);
