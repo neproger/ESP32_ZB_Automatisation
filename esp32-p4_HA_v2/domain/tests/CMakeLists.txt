@@ -38,3 +38,21 @@ endfunction()
 domain_add_test(test_registry)
 domain_add_test(test_entity)
 domain_add_test(test_concurrency)
+
+# Persistence-сценарий: Domain поверх FLASH-backed mstore на host NOR simulator.
+# nor_sim — инфраструктура окружения из тестов mstore, не часть Domain.
+set(NOR_SIM_SUPPORT
+    ../../mstore/tests/support/nor_sim.c
+    ../../mstore/tests/support/nor_sim_device.c
+)
+
+add_executable(test_flash_reopen test_flash_reopen.c ${NOR_SIM_SUPPORT} ${DOMAIN_CORE}
+    ${DOMAIN_HOST_PORT} ${MSTORE_CORE} ${MSTORE_HOST_PORT})
+target_include_directories(test_flash_reopen PRIVATE ../include ../src ../../mstore/include
+    ../../mstore/src ../../mstore/tests/support)
+if(MSVC)
+    target_compile_options(test_flash_reopen PRIVATE /W4)
+else()
+    target_compile_options(test_flash_reopen PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME test_flash_reopen COMMAND test_flash_reopen)
