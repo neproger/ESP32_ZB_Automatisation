@@ -196,10 +196,10 @@ payload (через `payload_equals`).
 ```text
 allocate:
     slot с generation == UINT32_MAX не переиспользуется
-    (все свободные slots исчерпаны -> MSTORE_OVERFLOW)
+    (все свободные slots исчерпаны -> SYS_CODE_OVERFLOW)
 
 update:
-    реальное изменение при version == UINT32_MAX -> MSTORE_OVERFLOW
+    реальное изменение при version == UINT32_MAX -> SYS_CODE_OVERFLOW
 ```
 
 Так исключается ABA по generation и неоднозначная ревизия по version.
@@ -519,7 +519,7 @@ REWORK / DROP:
 Публичная семантика одинакова для всех backing modes:
 `NOT_FOUND / STALE / ALREADY_EXISTS / NO_SPACE / INVALID_ARG / INVALID_STATE /
 INVALID_SIZE / NO_MEM`. Caller не видит RAM/flash-специфику. Новый нейтральный
-`mstore_err_t` для IO/corruption вводится только с отдельной архитектурной фиксацией.
+`sys_error_t` для IO/corruption вводится только с отдельной архитектурной фиксацией.
 
 #### 2.11.6. Тесты поверх storage modes
 
@@ -599,10 +599,10 @@ mstore
 
 Общие соглашения:
 
-- возвращаемое значение — нейтральный `mstore_err_t` (`OK / NOT_FOUND / ALREADY_EXISTS /
-  STALE / INVALID_ARG / NO_MEM / NO_SPACE / INVALID_STATE / INVALID_SIZE /
-  INVARIANT_FAILED / IO / CORRUPT / OVERFLOW`); адаптер ESP-IDF маппит его в
-  `esp_err_t`;
+- возвращаемое значение — `sys_error_t` из общего пространства кодов (`OK / NOT_FOUND /
+  ALREADY_EXISTS / STALE / INVALID_ARG / NO_MEM / NO_SPACE / INVALID_STATE /
+  INVALID_SIZE / INVARIANT_FAILED / IO / CORRUPT / OVERFLOW`); mstore ставит
+  `layer = MSTORE` и ни одну чужую ошибку не перекодирует (`ERRORS.md`);
 - экземпляр table/ring — caller-owned структура; жизненный цикл `init / deinit`;
 - capacity фиксирована; память выделяется core'ом через platform allocator;
 - у экземпляра один внутренний lock (platform lock); все операции thread-safe

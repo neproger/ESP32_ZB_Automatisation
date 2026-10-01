@@ -119,14 +119,14 @@ active = valid с максимальным seq
     обе header-области действительно erased (0xFF)
         -> fresh: erase bank0, write header seq=1
     есть non-erased данные
-        -> MSTORE_CORRUPT        // повреждённый persistent region НЕ форматируем
+        -> SYS_CODE_CORRUPT        // повреждённый persistent region НЕ форматируем
 
 scan active.records от header_size; пока запись валидна и committed:
     parse prefix (magic + kind) -> record length -> commit_marker
     marker valid:
         validate slot/kind/crc32
             ok  -> latest[slot] = offset; advance
-            bad -> MSTORE_CORRUPT
+            bad -> SYS_CODE_CORRUPT
     marker отсутствует / partial / prefix не парсится:
         -> классифицировать хвост (см. ниже), stop
 ```
@@ -139,7 +139,7 @@ scan active.records от header_size; пока запись валидна и co
     один contiguous non-erased run
         длиной <= max_record         -> torn uncommitted append (норма, needs checkpoint)
     non-erased после erased (разрыв)
-        или run > max_record         -> MSTORE_CORRUPT
+        или run > max_record         -> SYS_CODE_CORRUPT
 ```
 
 Смысл: настоящий torn append — это не более одной незавершённой записи подряд, а затем
@@ -150,8 +150,8 @@ erased до конца банки. Если за точкой останова �
 Границы семантики:
 
 ```text
-torn uncommitted tail       != MSTORE_CORRUPT   (нормальный recovery)
-committed record corrupted   = MSTORE_CORRUPT
+torn uncommitted tail       != SYS_CODE_CORRUPT   (нормальный recovery)
+committed record corrupted   = SYS_CODE_CORRUPT
 ```
 
 Ограничение: если у committed-записи повреждён сам prefix (magic) и после неё больше
@@ -265,16 +265,16 @@ backend metadata (bank cursors, geometry)
 open:
     geometry mismatch (capacity/key_size/payload_size)
     или persist_id mismatch
-        -> MSTORE_INVALID_STATE
+        -> SYS_CODE_INVALID_STATE
         -> ничего автоматически не стирать
 ```
 
 ## 14. Error model
 
 ```text
-MSTORE_IO       — physical read/program/erase failure
-MSTORE_CORRUPT  — committed durable structure invalid
-torn uncommitted tail != MSTORE_CORRUPT   (нормальный recovery scenario)
+SYS_CODE_IO       — physical read/program/erase failure
+SYS_CODE_CORRUPT  — committed durable structure invalid
+torn uncommitted tail != SYS_CODE_CORRUPT   (нормальный recovery scenario)
 ```
 
 Семантика Table API для caller'а не меняется; ошибки storage не выходят наружу как
