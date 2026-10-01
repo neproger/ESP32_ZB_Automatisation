@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -22,6 +23,15 @@ void *domain_platform_lock_create(void);
 void domain_platform_lock_destroy(void *lock);
 void domain_platform_lock_acquire(void *lock);
 void domain_platform_lock_release(void *lock);
+
+/*
+ * Сигнал для пробуждения Dispatcher'а: raise после появления факта, wait с таймаутом
+ * в задаче Dispatcher'а. Polling не используется (DISPATCHER.md §5).
+ */
+void *domain_platform_signal_create(void);
+void domain_platform_signal_destroy(void *signal);
+void domain_platform_signal_raise(void *signal);
+bool domain_platform_signal_wait(void *signal, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

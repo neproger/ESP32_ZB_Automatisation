@@ -39,3 +39,23 @@ void domain_platform_lock_release(void *lock)
 {
     xSemaphoreGive((SemaphoreHandle_t)lock);
 }
+
+void *domain_platform_signal_create(void)
+{
+    return xSemaphoreCreateBinary();
+}
+
+void domain_platform_signal_destroy(void *signal)
+{
+    vSemaphoreDelete((SemaphoreHandle_t)signal);
+}
+
+void domain_platform_signal_raise(void *signal)
+{
+    xSemaphoreGive((SemaphoreHandle_t)signal);
+}
+
+bool domain_platform_signal_wait(void *signal, uint32_t timeout_ms)
+{
+    return xSemaphoreTake((SemaphoreHandle_t)signal, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}

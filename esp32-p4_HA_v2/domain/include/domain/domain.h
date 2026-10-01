@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "domain/domain_event.h"
 #include "domain/domain_types.h"
 
 #ifdef __cplusplus
@@ -64,6 +65,38 @@ domain_err_t domain_entity_remove(domain_t *domain, domain_entity_t type, const 
                                   const domain_fact_meta_t *meta);
 domain_err_t domain_entity_iter(domain_t *domain, domain_entity_t type,
                                 domain_entity_iter_cb_t cb, void *ctx);
+
+/*
+ * Подписка на факты. Фильтр задаётся при подписке и применяется Dispatcher'ом
+ * (DISPATCHER.md §5): маска 0 / entity 0 — «любые».
+ *
+ * try_push вызывается в контексте Dispatcher'а и обязан быть коротким: он только
+ * кладёт событие в inbox подписчика. false означает «inbox полон» — это локальная
+ * потеря сервиса, Dispatcher продолжает. wake будит задачу подписчика.
+ * Внутри try_push/wake нельзя вызывать API Domain.
+ */
+typedef struct {
+    uint32_t kind_mask;
+    uint32_t source_mask;
+    domain_entity_t entity;
+    bool (*try_push)(const domain_event_t *event, void *ctx);
+    void (*wake)(void *ctx);
+    void *ctx;
+} domain_subscription_desc_t;
+
+typedef struct domain_subscription domain_subscription_t;
+
+domain_err_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t *desc,
+                              domain_subscription_t **out_sub);
+domain_err_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub);
+
+/*
+ * Доставка: читает Journal от cursor до newest и раскладывает по подписчикам.
+ * Вызывается задачей Dispatcher'а; возвращает число доставленных событий.
+ * domain_dispatch_wait блокирует до появления нового факта (сигнал, не polling).
+ */
+domain_err_t domain_dispatch_once(domain_t *domain, size_t *out_delivered);
+domain_err_t domain_dispatch_wait(domain_t *domain, uint32_t timeout_ms, bool *out_signalled);
 
 #ifdef __cplusplus
 }

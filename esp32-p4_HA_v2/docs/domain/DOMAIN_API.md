@@ -183,7 +183,10 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
   возвращается, когда команда передана (`COMMANDS.md:26`). Executor обязан быть коротким
   и не ждать подтверждения от устройства;
 - логика подписчика выполняется в его собственной задаче, а не в контексте producer'а и
-  не в контексте Dispatcher'а.
+  не в контексте Dispatcher'а;
+- `try_push` / `wake` подписчика вызываются **в контексте Dispatcher'а** и обязаны быть
+  короткими: положить событие в inbox и разбудить задачу. Вызывать API Domain из них
+  нельзя — Domain-lock в этот момент удерживается.
 
 ## 10. Точки входа подсистем
 
@@ -192,7 +195,8 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 | Подсистема | Что даёт сервису | Поведение |
 |---|---|---|
 | Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter`; `put`/`remove` пишут факт при реальном изменении | `ENTITY_STORE.md` |
-| Journal | прямой доступ отсутствует: Journal читает только Dispatcher | `JOURNAL.md` |
+| Journal | прямой доступ отсутствует: Journal читает только Dispatcher, публичного `domain_journal_read()` для сервисов нет | `JOURNAL.md` |
+| Subscriptions | `domain_subscribe` / `domain_unsubscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
 | Subscriptions | подписка (`contact + filter`), ожидание события | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |
 | Transient payload | `domain_payload_put / get` по opaque ref | `TRANSIENT_PAYLOAD.md` |
@@ -214,9 +218,8 @@ Zigbee-семантика и семантика автоматизаций
 
 ## 12. Открытые вопросы
 
-1. **Нейминг.** Фасад — `put / get / remove / iter`, а `ENTITY_STORE.md:29-34` описывает
-   операции как `get / list / upsert / remove`. Привести документ подсистемы к именам
-   фасада.
+1. ~~**Нейминг.**~~ Решено: фасад — `put / get / remove / iter`; `ENTITY_STORE.md §3`
+   приведён к тем же именам, `list(filter)` отложен до потребителя.
 2. ~~**Put без изменения.**~~ Решено: повторение не считается изменением — запись
    `ENTITY_UPSERTED` не создаётся, подписчики не будятся, вызывающий получает
    `changed = false` (`ENTITY_STORE.md` §8). Факт «что-то произошло» при неизменном

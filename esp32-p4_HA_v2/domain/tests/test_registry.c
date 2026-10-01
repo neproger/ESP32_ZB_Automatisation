@@ -2,9 +2,8 @@
 
 #include <stdio.h>
 
-/* DOMAIN_JOURNAL_KEY_MAX живёт во внутреннем header'е Journal: проверка размера ключа
- * типа сущности — часть контракта регистрации. */
-#include "domain_journal.h"
+/* DOMAIN_EVENT_KEY_MAX — публичный лимит записи факта; проверка размера ключа типа
+ * сущности — часть контракта регистрации. */
 
 static int g_failures = 0;
 
@@ -107,7 +106,7 @@ static void test_invalid_desc(void)
     /* Ключ копируется в запись Journal целиком: шире лимита — отказ на регистрации. */
     domain_entity_desc_t wide_key = sensor_desc();
     wide_key.type = 7;
-    wide_key.key_size = DOMAIN_JOURNAL_KEY_MAX + 1;
+    wide_key.key_size = DOMAIN_EVENT_KEY_MAX + 1;
     CHECK(domain_register_entity(&domain, &wide_key) == DOMAIN_INVALID_SIZE);
 
     CHECK(domain_register_entity(&domain, NULL) == DOMAIN_INVALID_ARG);

@@ -31,7 +31,7 @@ static void fact_fill(domain_event_t *out, domain_entity_t type, const void *key
      * не пропускает ключ шире DOMAIN_JOURNAL_KEY_MAX. Проверять это на каждом факте
      * незачем — в release assert стоит ноль.
      */
-    assert(key_size <= DOMAIN_JOURNAL_KEY_MAX);
+    assert(key_size <= DOMAIN_EVENT_KEY_MAX);
 
     memset(out, 0, sizeof(*out));
     out->ts = domain_platform_now_ms();
@@ -53,6 +53,7 @@ static void journal_append_fact(domain_state_t *state, domain_event_t *fact)
 {
     domain_event_id_t id = 0;
     (void)domain_journal_append(&state->journal, fact, &id);
+    domain_dispatch_signal(state);
 }
 
 /*

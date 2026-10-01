@@ -69,8 +69,8 @@ static domain_err_t desc_validate(const domain_entity_desc_t *desc)
     if (desc->payload_size == 0) {
         return DOMAIN_INVALID_SIZE;
     }
-    /* Ключ копируется в запись Journal целиком, поэтому шире лимита он быть не может. */
-    if (desc->key_size > DOMAIN_JOURNAL_KEY_MAX) {
+    /* Ключ копируется в запись факта целиком, поэтому шире лимита он быть не может. */
+    if (desc->key_size > DOMAIN_EVENT_KEY_MAX) {
         return DOMAIN_INVALID_SIZE;
     }
     if ((desc->backing & DOMAIN_BACKING_FLASH) != 0 && desc->persist_key == NULL) {
@@ -125,6 +125,16 @@ domain_err_t domain_init(domain_t *domain, size_t max_entity_types, size_t journ
         domain_platform_free(state->entries);
         domain_platform_free(state);
         return journal_err;
+    }
+
+    const domain_err_t dispatch_err = domain_dispatch_init(state);
+    if (dispatch_err != DOMAIN_OK) {
+    domain_dispatch_deinit(state);
+    (void)domain_journal_deinit(&state->journal);
+        domain_platform_lock_destroy(state->lock);
+        domain_platform_free(state->entries);
+        domain_platform_free(state);
+        return dispatch_err;
     }
 
     state->capacity = max_entity_types;

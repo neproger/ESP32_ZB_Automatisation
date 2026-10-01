@@ -38,10 +38,25 @@ typedef struct {
     void *lock;
 
     domain_journal_t journal;
+
+    /*
+     * Dispatcher: подписки, курсор чтения Journal и сигнал пробуждения.
+     * Cursor — следующий ожидаемый event_id; gap фиксируется, если курсор ушёл
+     * левее oldest (JOURNAL.md §5).
+     */
+    struct domain_subscription *subscriptions;
+    domain_event_id_t cursor;
+    uint32_t gap_count;
+    void *signal;
 } domain_state_t;
 
 domain_state_t *domain_state(const domain_t *domain);
 domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t type);
+
+/* Подписки и доставка (src/domain_dispatch.c). */
+domain_err_t domain_dispatch_init(domain_state_t *state);
+void domain_dispatch_deinit(domain_state_t *state);
+void domain_dispatch_signal(domain_state_t *state);
 
 domain_err_t domain_err_from_mstore(mstore_err_t err);
 

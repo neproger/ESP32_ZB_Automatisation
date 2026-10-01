@@ -6,7 +6,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 enable_testing()
 
-set(DOMAIN_CORE ../src/domain_registry.c ../src/domain_entity.c ../src/domain_journal.c)
+set(DOMAIN_CORE ../src/domain_registry.c ../src/domain_entity.c ../src/domain_journal.c
+    ../src/domain_dispatch.c)
 
 set(MSTORE_CORE
     ../../mstore/src/mstore_table.c
@@ -40,6 +41,7 @@ domain_add_test(test_entity)
 domain_add_test(test_concurrency)
 domain_add_test(test_journal)
 domain_add_test(test_facts)
+domain_add_test(test_dispatch)
 
 # Persistence-сценарий: Domain поверх FLASH-backed mstore на host NOR simulator.
 # nor_sim — инфраструктура окружения из тестов mstore, не часть Domain.

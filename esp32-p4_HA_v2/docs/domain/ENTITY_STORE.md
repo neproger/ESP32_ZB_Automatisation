@@ -31,16 +31,20 @@ entity_type → { таблица/schema, optional validate }
 
 ## 3. API
 
+Имена соответствуют фасаду (`DOMAIN_API.md`):
+
 ```text
-get(entity, key)
-list(entity, filter?)
-upsert(entity, key, record, event_meta)
-remove(entity, key, event_meta)
+domain_entity_put(type, key, record, meta, *changed)  — создать или обновить
+domain_entity_get(type, key, *record)                 — прочитать
+domain_entity_remove(type, key, meta)                 — удалить
+domain_entity_iter(type, cb, ctx)                     — обход записей типа
 ```
 
 - Все entity проходят один жизненный цикл.
 - Большие payload (например automation на несколько КБ) живут здесь и в Journal
   не копируются.
+- Фильтры списков: сейчас только полный обход; `list(filter)` и prefix-запросы
+  добавляются под конкретного потребителя, а не заранее.
 
 ## 4. Кто описывает факт
 
