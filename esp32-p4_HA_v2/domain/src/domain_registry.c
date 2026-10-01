@@ -1,0 +1,176 @@
+#include "domain/domain.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "domain_internal.h"
+#include "mstore/mstore_table.h"
+
+domain_err_t domain_err_from_mstore(mstore_err_t err)
+{
+    switch (err) {
+    case MSTORE_OK:
+        return DOMAIN_OK;
+    case MSTORE_NOT_FOUND:
+        return DOMAIN_NOT_FOUND;
+    case MSTORE_STALE:
+        return DOMAIN_STALE;
+    case MSTORE_NO_SPACE:
+        return DOMAIN_NO_SPACE;
+    case MSTORE_INVALID_ARG:
+        return DOMAIN_INVALID_ARG;
+    case MSTORE_INVALID_SIZE:
+        return DOMAIN_INVALID_SIZE;
+    case MSTORE_INVALID_STATE:
+        return DOMAIN_INVALID_STATE;
+    case MSTORE_NO_MEM:
+        return DOMAIN_NO_MEM;
+    case MSTORE_INVARIANT_FAILED:
+        return DOMAIN_CORRUPT;
+    case MSTORE_IO:
+        return DOMAIN_IO;
+    case MSTORE_CORRUPT:
+        return DOMAIN_CORRUPT;
+    case MSTORE_OVERFLOW:
+        return DOMAIN_OVERFLOW;
+    default:
+        return DOMAIN_INVALID_STATE;
+    }
+}
+
+domain_state_t *domain_state(const domain_t *domain)
+{
+    if (domain == NULL) {
+        return NULL;
+    }
+    return (domain_state_t *)domain->_state;
+}
+
+domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t type)
+{
+    if (state == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < state->used; ++i) {
+        if (state->entries[i].used && state->entries[i].desc.type == type) {
+            return &state->entries[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Проверяет только то, чего не проверяет mstore: capacity / key_size / backing он
+ * валидирует сам и вернёт свой код, который мы маппим. persist_key при FLASH оставлен
+ * здесь намеренно — это требование контракта Domain (RECORD_MODEL.md §3), а не storage.
+ */
+static domain_err_t desc_validate(const domain_entity_desc_t *desc)
+{
+    if (desc->payload_size == 0) {
+        return DOMAIN_INVALID_SIZE;
+    }
+    if ((desc->backing & DOMAIN_BACKING_FLASH) != 0 && desc->persist_key == NULL) {
+        return DOMAIN_INVALID_ARG;
+    }
+    return DOMAIN_OK;
+}
+
+static mstore_backing_t backing_to_mstore(domain_backing_t backing)
+{
+    mstore_backing_t result = MSTORE_BACKING_NONE;
+    if ((backing & DOMAIN_BACKING_RAM) != 0) {
+        result |= MSTORE_BACKING_RAM;
+    }
+    if ((backing & DOMAIN_BACKING_FLASH) != 0) {
+        result |= MSTORE_BACKING_FLASH;
+    }
+    return result;
+}
+
+domain_err_t domain_init(domain_t *domain, size_t max_entity_types)
+{
+    if (domain == NULL || max_entity_types == 0) {
+        return DOMAIN_INVALID_ARG;
+    }
+    if (domain->_state != NULL) {
+        return DOMAIN_INVALID_STATE;
+    }
+
+    domain_state_t *state = calloc(1, sizeof(*state));
+    if (state == NULL) {
+        return DOMAIN_NO_MEM;
+    }
+    state->entries = calloc(max_entity_types, sizeof(*state->entries));
+    if (state->entries == NULL) {
+        free(state);
+        return DOMAIN_NO_MEM;
+    }
+    state->capacity = max_entity_types;
+
+    domain->_state = state;
+    return DOMAIN_OK;
+}
+
+domain_err_t domain_deinit(domain_t *domain)
+{
+    domain_state_t *state = domain_state(domain);
+    if (state == NULL) {
+        return DOMAIN_INVALID_STATE;
+    }
+
+    for (size_t i = 0; i < state->used; ++i) {
+        if (state->entries[i].used) {
+            (void)mstore_table_deinit(&state->entries[i].table);
+            free(state->entries[i].scratch_key);
+        }
+    }
+    free(state->entries);
+    free(state);
+    domain->_state = NULL;
+    return DOMAIN_OK;
+}
+
+domain_err_t domain_register_entity(domain_t *domain, const domain_entity_desc_t *desc)
+{
+    domain_state_t *state = domain_state(domain);
+    if (state == NULL || desc == NULL) {
+        return DOMAIN_INVALID_ARG;
+    }
+
+    const domain_err_t checked = desc_validate(desc);
+    if (checked != DOMAIN_OK) {
+        return checked;
+    }
+    if (domain_entry_find(state, desc->type) != NULL) {
+        return DOMAIN_INVALID_STATE;
+    }
+    if (state->used == state->capacity) {
+        return DOMAIN_NO_SPACE;
+    }
+
+    mstore_table_schema_t schema = {0};
+    schema.capacity = desc->capacity;
+    schema.key_size = desc->key_size;
+    schema.payload_size = desc->payload_size;
+    schema.payload_equals = NULL;
+    schema.backing = backing_to_mstore(desc->backing);
+    schema.persist_key = desc->persist_key;
+
+    domain_entity_entry_t *entry = &state->entries[state->used];
+    entry->scratch_key = malloc(desc->key_size);
+    if (entry->scratch_key == NULL) {
+        return DOMAIN_NO_MEM;
+    }
+
+    const mstore_err_t err = mstore_table_init(&entry->table, &schema);
+    if (err != MSTORE_OK) {
+        free(entry->scratch_key);
+        entry->scratch_key = NULL;
+        return domain_err_from_mstore(err);
+    }
+
+    entry->desc = *desc;
+    entry->used = true;
+    state->used++;
+    return DOMAIN_OK;
+}
