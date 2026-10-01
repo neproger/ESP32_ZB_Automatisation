@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 
+#include "domain/domain.h"
 #include "domain/domain_types.h"
 #include "mstore/mstore_table.h"
 #include "mstore/mstore_types.h"
