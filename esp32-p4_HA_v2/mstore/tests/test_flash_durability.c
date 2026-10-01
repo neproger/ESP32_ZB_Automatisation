@@ -44,19 +44,19 @@ static mstore_table_schema_t schema_for(const char *persist_key) {
 
 static void open_ok(mstore_table_t *table, const char *persist_key) {
     mstore_table_schema_t schema = schema_for(persist_key);
-    CHECK(mstore_table_init(table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(table, &schema)));
 }
 
 /* Регион таблицы внутри раздела: инъекции бьют по смещениям внутри него. */
 static size_t region_base(const char *persist_key) {
     size_t offset = 0;
     size_t size = 0;
-    CHECK(mstore_region_lookup(persist_key, &offset, &size) == MSTORE_OK);
+    CHECK(sys_ok(mstore_region_lookup(persist_key, &offset, &size)));
     return offset;
 }
 
 static void reopen(mstore_table_t *table, const char *persist_key) {
-    CHECK(mstore_table_deinit(table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(table)));
     open_ok(table, persist_key);
 }
 
@@ -75,29 +75,29 @@ static void test_torn_tail(void) {
     uint32_t k1 = 1, k2 = 2;
     mstore_slot_t slot;
     uint32_t gen;
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
 
     /* power loss посреди append: body оборван */
     mstore_nor_sim_fail_program_after(sim, 3);
-    CHECK(mstore_table_slot_allocate(&table, &k2, &v2, &slot, &gen) == MSTORE_IO);
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &k2, &v2, &slot, &gen), SYS_CODE_IO));
 
     size_t count = 0;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 1);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 1);
 
     reopen(&table, "torn");
-    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_NOT_FOUND);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 1);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &slot)));
+    CHECK(sys_is(mstore_table_slot_find(&table, &k2, &slot), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 1);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     /* после torn tail следующий append делает checkpoint и проходит */
-    CHECK(mstore_table_slot_allocate(&table, &k2, &v2, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k2, &v2, &slot, &gen)));
     reopen(&table, "torn");
-    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &slot)));
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k2, &slot)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: torn tail OK\n");
 }
@@ -116,19 +116,19 @@ static void test_fail_erase_on_clear(void) {
     uint32_t k1 = 1;
     mstore_slot_t slot;
     uint32_t gen;
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
 
     mstore_nor_sim_fail_erase(sim);
-    CHECK(mstore_table_clear(&table) == MSTORE_IO);
+    CHECK(sys_is(mstore_table_clear(&table), SYS_CODE_IO));
 
     size_t count = 0;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 1);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 1);
 
     reopen(&table, "erase");
-    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &slot)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: fail erase OK\n");
 }
@@ -148,17 +148,17 @@ static void test_fail_program_now(void) {
     mstore_slot_t slot;
     uint32_t gen;
     mstore_nor_sim_fail_program_now(sim);
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_IO);
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen), SYS_CODE_IO));
 
     size_t count = 0;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
 
     reopen(&table, "now");
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: fail program now OK\n");
 }
@@ -177,15 +177,15 @@ static void test_committed_corruption(void) {
     uint32_t gen;
     uint32_t k1 = 1;
     value_t v1 = value(1, 1);
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     /* active bank 0, header 64, record: payload at 64 + 16 + key_size(4) = 84 */
     mstore_nor_sim_poke(sim, region_base("corrupt") + 84, 0xFF);
 
     mstore_table_schema_t schema = schema_for("corrupt");
     mstore_table_t reopened = {0};
-    CHECK(mstore_table_init(&reopened, &schema) == MSTORE_CORRUPT);
+    CHECK(sys_is(mstore_table_init(&reopened, &schema), SYS_CODE_CORRUPT));
 
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: committed corruption OK\n");
@@ -205,30 +205,30 @@ static void test_checkpoint_overflow(void) {
     mstore_slot_t slot0, slot1;
     uint32_t gen0, gen1;
     value_t v = value(0, 0);
-    CHECK(mstore_table_slot_allocate(&table, &k0, &v, &slot0, &gen0) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k0, &v, &slot0, &gen0)));
 
     bool changed = false;
     /* Аппендов должно хватить на несколько компакшенов: банка capacity 2 с запасом
      * под append вмещает больше двух десятков записей. */
     for (int i = 1; i <= 60; i++) {
         value_t vi = value(i, i);
-        CHECK(mstore_table_slot_update(&table, slot0, gen0, &vi, &changed) == MSTORE_OK && changed);
+        CHECK(sys_ok(mstore_table_slot_update(&table, slot0, gen0, &vi, &changed)) && changed);
     }
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v, &slot1, &gen1) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v, &slot1, &gen1)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     reopen(&table, "checkpoint");
     mstore_slot_t found;
     mstore_meta_t meta;
     uint32_t rk;
     value_t rv;
-    CHECK(mstore_table_slot_find(&table, &k0, &found) == MSTORE_OK);
-    CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k0, &found)));
+    CHECK(sys_ok(mstore_table_slot_read(&table, found, &meta, &rk, &rv)));
     CHECK(rk == k0 && rv.a == 60 && rv.b == 60);
-    CHECK(mstore_table_slot_find(&table, &k1, &found) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &found)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: checkpoint overflow OK\n");
 }
@@ -247,15 +247,15 @@ static void test_header_corruption(void) {
     uint32_t gen;
     uint32_t k1 = 1;
     value_t v1 = value(1, 1);
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     /* повреждаем byte в bank header: region не erased, валидного header нет */
     mstore_nor_sim_poke(sim, region_base("hdr") + 4, 0x00);
 
     mstore_table_schema_t schema = schema_for("hdr");
     mstore_table_t reopened = {0};
-    CHECK(mstore_table_init(&reopened, &schema) == MSTORE_CORRUPT);
+    CHECK(sys_is(mstore_table_init(&reopened, &schema), SYS_CODE_CORRUPT));
 
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: header corruption OK\n");
@@ -276,27 +276,27 @@ static void test_same_process_torn_recovery(void) {
     uint32_t gen;
     value_t v1 = value(1, 1);
     value_t v2 = value(2, 2);
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
 
     /* повреждаем append и НЕ перезагружаемся */
     mstore_nor_sim_fail_program_after(sim, 3);
     bool changed = false;
-    CHECK(mstore_table_slot_update(&table, slot, gen, &v2, &changed) == MSTORE_IO);
+    CHECK(sys_is(mstore_table_slot_update(&table, slot, gen, &v2, &changed), SYS_CODE_IO));
 
     /* следующая мутация должна сначала сделать checkpoint и пройти */
     mstore_slot_t slot2;
     uint32_t gen2;
-    CHECK(mstore_table_slot_allocate(&table, &k2, &v2, &slot2, &gen2) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k2, &v2, &slot2, &gen2)));
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &slot)));
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k2, &slot)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     reopen(&table, "torn_same");
-    CHECK(mstore_table_slot_find(&table, &k1, &slot) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k2, &slot) == MSTORE_OK);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &slot)));
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k2, &slot)));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_nor_sim_destroy(sim);
     printf("test_flash_durability: same-process torn recovery OK\n");
 }

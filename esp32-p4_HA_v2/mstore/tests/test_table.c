@@ -34,8 +34,8 @@ static void test_lifecycle(void) {
     value_t v = value(10, 20);
 
     size_t count = 99;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_INVALID_STATE);
-    CHECK(mstore_table_deinit(&table) == MSTORE_INVALID_STATE);
+    CHECK(sys_is(mstore_table_count(&table, &count), SYS_CODE_INVALID_STATE));
+    CHECK(sys_is(mstore_table_deinit(&table), SYS_CODE_INVALID_STATE));
 
     mstore_table_schema_t schema;
     schema.capacity = 4;
@@ -45,77 +45,74 @@ static void test_lifecycle(void) {
     schema.backing = MSTORE_BACKING_RAM;
     schema.persist_key = NULL;
 
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_INVALID_STATE);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
+    CHECK(sys_is(mstore_table_init(&table, &schema), SYS_CODE_INVALID_STATE));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&table, &count)));
     CHECK(count == 0);
 
     mstore_slot_t slots[4];
     uint32_t generations[4];
     for (int i = 0; i < 4; i++) {
-        CHECK(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generations[i]) ==
-              MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generations[i])));
         CHECK(generations[i] == 1);
     }
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_slot_allocate(&table, &keys[0], &v, &slots[0], &generations[0]) ==
-          MSTORE_ALREADY_EXISTS);
-    CHECK(mstore_table_slot_allocate(&table, &keys[4], &v, &slots[0], &generations[0]) ==
-          MSTORE_NO_SPACE);
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &keys[0], &v, &slots[0], &generations[0]), SYS_CODE_ALREADY_EXISTS));
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &keys[4], &v, &slots[0], &generations[0]), SYS_CODE_NO_SPACE));
 
     mstore_slot_t found = MSTORE_SLOT_NONE;
-    CHECK(mstore_table_slot_find(&table, &keys[2], &found) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &keys[2], &found)));
     CHECK(found == slots[2]);
-    CHECK(mstore_table_slot_find(&table, &keys[4], &found) == MSTORE_NOT_FOUND);
+    CHECK(sys_is(mstore_table_slot_find(&table, &keys[4], &found), SYS_CODE_NOT_FOUND));
 
     mstore_meta_t meta;
     uint32_t read_key = 0;
     value_t read_value = value(0, 0);
-    CHECK(mstore_table_slot_read(&table, slots[2], &meta, &read_key, &read_value) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(&table, slots[2], &meta, &read_key, &read_value)));
     CHECK(read_key == keys[2]);
     CHECK(read_value.a == v.a && read_value.b == v.b);
     CHECK(meta.version == 1);
 
     bool changed = true;
-    CHECK(mstore_table_slot_update(&table, slots[2], generations[2] + 1, &v, &changed) == MSTORE_STALE);
-    CHECK(mstore_table_slot_update(&table, slots[2], generations[2], &v, &changed) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_slot_update(&table, slots[2], generations[2] + 1, &v, &changed), SYS_CODE_STALE));
+    CHECK(sys_ok(mstore_table_slot_update(&table, slots[2], generations[2], &v, &changed)));
     CHECK(changed == false);
 
     value_t v2 = value(30, 40);
-    CHECK(mstore_table_slot_update(&table, slots[2], generations[2], &v2, &changed) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_update(&table, slots[2], generations[2], &v2, &changed)));
     CHECK(changed == true);
-    CHECK(mstore_table_slot_read(&table, slots[2], &meta, &read_key, &read_value) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(&table, slots[2], &meta, &read_key, &read_value)));
     CHECK(read_value.a == v2.a && read_value.b == v2.b);
     CHECK(meta.version == 2);
 
-    CHECK(mstore_table_slot_free(&table, slots[2], generations[2] + 1) == MSTORE_STALE);
-    CHECK(mstore_table_slot_free(&table, slots[2], generations[2]) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &keys[2], &found) == MSTORE_NOT_FOUND);
-    CHECK(mstore_table_slot_meta(&table, slots[2], &meta) == MSTORE_STALE);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_slot_free(&table, slots[2], generations[2] + 1), SYS_CODE_STALE));
+    CHECK(sys_ok(mstore_table_slot_free(&table, slots[2], generations[2])));
+    CHECK(sys_is(mstore_table_slot_find(&table, &keys[2], &found), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(mstore_table_slot_meta(&table, slots[2], &meta), SYS_CODE_STALE));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     mstore_slot_t reused = MSTORE_SLOT_NONE;
     uint32_t reused_generation = 0;
-    CHECK(mstore_table_slot_allocate(&table, &keys[4], &v, &reused, &reused_generation) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &keys[4], &v, &reused, &reused_generation)));
     CHECK(reused == slots[2]);
     CHECK(reused_generation == generations[2] + 1);
-    CHECK(mstore_table_slot_read(&table, reused, &meta, &read_key, &read_value) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(&table, reused, &meta, &read_key, &read_value)));
     CHECK(meta.version == 1);
 
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&table, &count)));
     CHECK(count == 4);
 
-    CHECK(mstore_table_clear(&table) == MSTORE_OK);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_clear(&table)));
+    CHECK(sys_ok(mstore_table_count(&table, &count)));
     CHECK(count == 0);
-    CHECK(mstore_table_slot_find(&table, &keys[0], &found) == MSTORE_NOT_FOUND);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_slot_find(&table, &keys[0], &found), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_INVALID_STATE);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
+    CHECK(sys_is(mstore_table_deinit(&table), SYS_CODE_INVALID_STATE));
 }
 
 static bool collect_iter_cb(mstore_slot_t slot, const mstore_meta_t *meta, const void *key,
@@ -139,21 +136,21 @@ static void test_iter(void) {
     schema.payload_equals = NULL;
     schema.backing = MSTORE_BACKING_RAM;
     schema.persist_key = NULL;
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     value_t v = value(1, 1);
     for (uint32_t key = 1; key <= 3; key++) {
         mstore_slot_t slot;
         uint32_t generation;
-        CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &generation) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_allocate(&table, &key, &v, &slot, &generation)));
     }
 
     /* key приходит в колбэк: сумма ключей 1+2+3 == 6 */
     int key_sum = 0;
-    CHECK(mstore_table_iter(&table, collect_iter_cb, &key_sum) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_iter(&table, collect_iter_cb, &key_sum)));
     CHECK(key_sum == 6);
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 }
 
 /* FNV-1a индекса таблицы: нужен, чтобы подобрать ключи с одним home-бакетом. */
@@ -178,7 +175,7 @@ static void test_invariants_with_colliding_keys(void) {
     schema.payload_equals = NULL;
     schema.backing = MSTORE_BACKING_RAM;
     schema.persist_key = NULL;
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     const size_t mask = state_of(&table)->index_capacity - 1;
     uint32_t keys[2] = {1, 0};
@@ -194,8 +191,8 @@ static void test_invariants_with_colliding_keys(void) {
     for (size_t i = 0; i < 2; i++) {
         uint32_t generation = 0;
         value_t v = value((int32_t)i, (int32_t)i);
-        CHECK(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generation) == MSTORE_OK);
-        CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generation)));
+        CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
     }
 
     /* Иначе тест ничего не проверяет: хотя бы одна запись должна быть смещена. */
@@ -208,11 +205,11 @@ static void test_invariants_with_colliding_keys(void) {
     CHECK(displaced);
 
     mstore_slot_t found = 0;
-    CHECK(mstore_table_slot_find(&table, &keys[0], &found) == MSTORE_OK && found == slots[0]);
-    CHECK(mstore_table_slot_find(&table, &keys[1], &found) == MSTORE_OK && found == slots[1]);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &keys[0], &found)) && found == slots[0]);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &keys[1], &found)) && found == slots[1]);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 }
 
 int main(void) {

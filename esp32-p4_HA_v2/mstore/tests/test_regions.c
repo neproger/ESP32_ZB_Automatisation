@@ -39,18 +39,18 @@ static void fill(mstore_table_t *table, uint32_t key, int32_t value) {
     mstore_slot_t slot;
     uint32_t gen;
     value_t v = {value, value};
-    CHECK(mstore_table_slot_allocate(table, &key, &v, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(table, &key, &v, &slot, &gen)));
 }
 
 static bool read_value(mstore_table_t *table, uint32_t key, int32_t *out) {
     mstore_slot_t found;
-    if (mstore_table_slot_find(table, &key, &found) != MSTORE_OK) {
+    if (sys_failed(mstore_table_slot_find(table, &key, &found))) {
         return false;
     }
     mstore_meta_t meta;
     uint32_t read_key;
     value_t read_value;
-    CHECK(mstore_table_slot_read(table, found, &meta, &read_key, &read_value) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(table, found, &meta, &read_key, &read_value)));
     CHECK(read_key == key);
     *out = read_value.a;
     return true;
@@ -67,8 +67,8 @@ static void test_two_tables_share_partition(void) {
     mstore_table_t beta = {0};
     mstore_table_schema_t alpha_schema = schema_for("alpha", 2);
     mstore_table_schema_t beta_schema = schema_for("beta", 2);
-    CHECK(mstore_table_init(&alpha, &alpha_schema) == MSTORE_OK);
-    CHECK(mstore_table_init(&beta, &beta_schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&alpha, &alpha_schema)));
+    CHECK(sys_ok(mstore_table_init(&beta, &beta_schema)));
 
     fill(&alpha, 1, 11);
     fill(&alpha, 2, 12);
@@ -79,8 +79,8 @@ static void test_two_tables_share_partition(void) {
     size_t alpha_size = 0;
     size_t beta_offset = 0;
     size_t beta_size = 0;
-    CHECK(mstore_region_lookup("alpha", &alpha_offset, &alpha_size) == MSTORE_OK);
-    CHECK(mstore_region_lookup("beta", &beta_offset, &beta_size) == MSTORE_OK);
+    CHECK(sys_ok(mstore_region_lookup("alpha", &alpha_offset, &alpha_size)));
+    CHECK(sys_ok(mstore_region_lookup("beta", &beta_offset, &beta_size)));
     CHECK(alpha_size == beta_size);
     CHECK(alpha_offset != beta_offset);
     CHECK(alpha_offset >= 2 * ERASE_SIZE);
@@ -94,24 +94,24 @@ static void test_two_tables_share_partition(void) {
     CHECK(read_value(&beta, 2, &value) && value == 22);
     CHECK(!read_value(&alpha, 3, &value));
 
-    CHECK(mstore_table_deinit(&alpha) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&beta) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&alpha)));
+    CHECK(sys_ok(mstore_table_deinit(&beta)));
 
     /* reopen: оба региона находятся в directory на своих местах */
-    CHECK(mstore_table_init(&alpha, &alpha_schema) == MSTORE_OK);
-    CHECK(mstore_table_init(&beta, &beta_schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&alpha, &alpha_schema)));
+    CHECK(sys_ok(mstore_table_init(&beta, &beta_schema)));
     size_t reopen_offset = 0;
     size_t reopen_size = 0;
-    CHECK(mstore_region_lookup("alpha", &reopen_offset, &reopen_size) == MSTORE_OK);
+    CHECK(sys_ok(mstore_region_lookup("alpha", &reopen_offset, &reopen_size)));
     CHECK(reopen_offset == alpha_offset && reopen_size == alpha_size);
     CHECK(read_value(&alpha, 1, &value) && value == 11);
     CHECK(read_value(&beta, 2, &value) && value == 22);
 
     size_t count = 0;
-    CHECK(mstore_table_count(&alpha, &count) == MSTORE_OK && count == 2);
-    CHECK(mstore_table_count(&beta, &count) == MSTORE_OK && count == 2);
-    CHECK(mstore_table_deinit(&alpha) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&beta) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&alpha, &count)) && count == 2);
+    CHECK(sys_ok(mstore_table_count(&beta, &count)) && count == 2);
+    CHECK(sys_ok(mstore_table_deinit(&alpha)));
+    CHECK(sys_ok(mstore_table_deinit(&beta)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_regions: two tables share partition OK\n");
@@ -127,12 +127,12 @@ static void test_double_bind_while_bound(void) {
     mstore_table_schema_t schema = schema_for("busy", 2);
     mstore_table_t first = {0};
     mstore_table_t second = {0};
-    CHECK(mstore_table_init(&first, &schema) == MSTORE_OK);
-    CHECK(mstore_table_init(&second, &schema) == MSTORE_INVALID_STATE);
+    CHECK(sys_ok(mstore_table_init(&first, &schema)));
+    CHECK(sys_is(mstore_table_init(&second, &schema), SYS_CODE_INVALID_STATE));
 
-    CHECK(mstore_table_deinit(&first) == MSTORE_OK);
-    CHECK(mstore_table_init(&second, &schema) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&second) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&first)));
+    CHECK(sys_ok(mstore_table_init(&second, &schema)));
+    CHECK(sys_ok(mstore_table_deinit(&second)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_regions: double bind OK\n");
@@ -153,20 +153,20 @@ static void test_region_does_not_grow(void) {
 
     mstore_table_t table = {0};
     mstore_table_schema_t schema = schema_for("grow", 2);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     mstore_table_t same_bank = {0};
     mstore_table_schema_t within_bank = schema_for("grow", 4);
-    CHECK(mstore_table_init(&same_bank, &within_bank) == MSTORE_INVALID_STATE);
+    CHECK(sys_is(mstore_table_init(&same_bank, &within_bank), SYS_CODE_INVALID_STATE));
 
     mstore_table_t grown = {0};
     mstore_table_schema_t bigger = schema_for("grow", 30);
-    CHECK(mstore_table_init(&grown, &bigger) == MSTORE_INVALID_SIZE);
+    CHECK(sys_is(mstore_table_init(&grown, &bigger), SYS_CODE_INVALID_SIZE));
 
     /* исходная геометрия продолжает открываться */
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_regions: region does not grow OK\n");
@@ -184,18 +184,18 @@ static void test_directory_capacity(void) {
     for (size_t i = 0; i < MSTORE_REGION_MAX_ENTRIES; i++) {
         snprintf(keys[i], sizeof(keys[i]), "t%zu", i);
         mstore_table_schema_t schema = schema_for(keys[i], 2);
-        CHECK(mstore_table_init(&tables[i], &schema) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_init(&tables[i], &schema)));
         fill(&tables[i], (uint32_t)i + 1, (int32_t)i + 100);
     }
 
     mstore_table_t overflow = {0};
     mstore_table_schema_t overflow_schema = schema_for("overflow", 2);
-    CHECK(mstore_table_init(&overflow, &overflow_schema) == MSTORE_NO_SPACE);
+    CHECK(sys_is(mstore_table_init(&overflow, &overflow_schema), SYS_CODE_NO_SPACE));
 
     for (size_t i = 0; i < MSTORE_REGION_MAX_ENTRIES; i++) {
         int32_t value = 0;
         CHECK(read_value(&tables[i], (uint32_t)i + 1, &value) && value == (int32_t)i + 100);
-        CHECK(mstore_table_deinit(&tables[i]) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_deinit(&tables[i])));
     }
 
     mstore_nor_sim_destroy(sim);
@@ -211,12 +211,12 @@ static void test_region_does_not_fit_tail(void) {
 
     mstore_table_t first = {0};
     mstore_table_schema_t schema = schema_for("first", 2);
-    CHECK(mstore_table_init(&first, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&first, &schema)));
 
     mstore_table_t second = {0};
     mstore_table_schema_t other = schema_for("second", 2);
-    CHECK(mstore_table_init(&second, &other) == MSTORE_INVALID_SIZE);
-    CHECK(mstore_table_deinit(&first) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_init(&second, &other), SYS_CODE_INVALID_SIZE));
+    CHECK(sys_ok(mstore_table_deinit(&first)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_regions: region does not fit tail OK\n");
@@ -233,7 +233,7 @@ static void test_dirty_partition_is_corrupt(void) {
 
     mstore_table_t table = {0};
     mstore_table_schema_t schema = schema_for("dirty", 2);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_CORRUPT);
+    CHECK(sys_is(mstore_table_init(&table, &schema), SYS_CODE_CORRUPT));
 
     mstore_nor_sim_destroy(sim);
     printf("test_regions: dirty partition is CORRUPT OK\n");

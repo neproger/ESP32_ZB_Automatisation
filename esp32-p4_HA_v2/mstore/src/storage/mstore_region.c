@@ -141,21 +141,21 @@ static size_t dir_free_offset(const mstore_region_dir_t *dir, size_t erase_size)
 }
 
 /*
- * Читает активный слот directory. MSTORE_NOT_FOUND — раздел ещё пустой: вызывающий
+ * Читает активный слот directory. NOT_FOUND — раздел ещё пустой: вызывающий
  * создаёт directory первым bind'ом. Активный слот при этом считается вторым, чтобы
  * первая запись пошла в слот 0 и ping-pong начался оттуда.
  */
-static mstore_err_t dir_load(const mstore_flash_device_t *partition, uint8_t *out_raw,
+static sys_error_t dir_load(const mstore_flash_device_t *partition, uint8_t *out_raw,
                              size_t *out_slot, mstore_region_dir_t *out_dir) {
     uint8_t slot0[MSTORE_REGION_SLOT_BYTES];
     uint8_t slot1[MSTORE_REGION_SLOT_BYTES];
     if (!partition->ops->read(partition->ctx, slot_offset(0, partition->erase_size), slot0,
                               sizeof(slot0))) {
-        return MSTORE_IO;
+        return mstore_fail(SYS_CODE_IO);
     }
     if (!partition->ops->read(partition->ctx, slot_offset(1, partition->erase_size), slot1,
                               sizeof(slot1))) {
-        return MSTORE_IO;
+        return mstore_fail(SYS_CODE_IO);
     }
 
     bool valid0 = dir_slot_valid(slot0);
@@ -172,37 +172,37 @@ static mstore_err_t dir_load(const mstore_flash_device_t *partition, uint8_t *ou
             memset(out_raw, 0xFF, MSTORE_REGION_SLOT_BYTES);
             memset(out_dir, 0, sizeof(*out_dir));
             *out_slot = 1u;
-            return MSTORE_NOT_FOUND;
+            return mstore_fail(SYS_CODE_NOT_FOUND);
         }
         /* Валидного header нет, но раздел не erased: тихо переразмечать нельзя. */
-        return MSTORE_CORRUPT;
+        return mstore_fail(SYS_CODE_CORRUPT);
     }
 
     const uint8_t *active = (slot == 0) ? slot0 : slot1;
     memcpy(out_raw, active, MSTORE_REGION_SLOT_BYTES);
     dir_parse(active, out_dir);
     *out_slot = slot;
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
 /* Ping-pong: неактивный слот стирается и пишется, старый остаётся валидным до конца записи. */
-static mstore_err_t dir_commit(const mstore_flash_device_t *partition, size_t active_slot,
+static sys_error_t dir_commit(const mstore_flash_device_t *partition, size_t active_slot,
                               const uint8_t *raw) {
     size_t inactive = 1u - active_slot;
     size_t base = slot_offset(inactive, partition->erase_size);
     if (!partition->ops->erase(partition->ctx, base, partition->erase_size)) {
-        return MSTORE_IO;
+        return mstore_fail(SYS_CODE_IO);
     }
     if (!partition->ops->program(partition->ctx, base + MSTORE_REGION_HEADER_SIZE,
                                  raw + MSTORE_REGION_HEADER_SIZE,
                                  MSTORE_REGION_SLOT_BYTES - MSTORE_REGION_HEADER_SIZE)) {
-        return MSTORE_IO;
+        return mstore_fail(SYS_CODE_IO);
     }
     /* Header пишется последним: это точка committed-состояния directory. */
     if (!partition->ops->program(partition->ctx, base, raw, MSTORE_REGION_HEADER_SIZE)) {
-        return MSTORE_IO;
+        return mstore_fail(SYS_CODE_IO);
     }
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
 static bool owner_busy(const uint8_t id[16]) {
@@ -280,47 +280,47 @@ static const mstore_flash_device_ops_t MSTORE_REGION_VIEW_OPS = {
     .erase = region_view_erase,
 };
 
-static mstore_err_t partition_geometry_ok(const mstore_flash_device_t *partition) {
+static sys_error_t partition_geometry_ok(const mstore_flash_device_t *partition) {
     if (partition->erase_size < MSTORE_REGION_SLOT_BYTES) {
-        return MSTORE_INVALID_SIZE; /* слот directory не влезает в erase-блок */
+        return mstore_fail(SYS_CODE_INVALID_SIZE); /* слот directory не влезает в erase-блок */
     }
     if (partition->erase_size > SIZE_MAX / 2 || partition->size < 2 * partition->erase_size) {
-        return MSTORE_INVALID_SIZE;
+        return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-static mstore_err_t dir_read(const mstore_flash_device_t *partition, mstore_region_dir_t *out_dir,
+static sys_error_t dir_read(const mstore_flash_device_t *partition, mstore_region_dir_t *out_dir,
                              uint8_t *out_raw, size_t *out_slot) {
-    mstore_err_t err = partition_geometry_ok(partition);
-    if (err != MSTORE_OK) {
+    sys_error_t err = partition_geometry_ok(partition);
+    if (sys_failed(err)) {
         return err;
     }
     return dir_load(partition, out_raw, out_slot, out_dir);
 }
 
-mstore_err_t mstore_region_bind(const char *persist_key, size_t capacity, size_t key_size,
+sys_error_t mstore_region_bind(const char *persist_key, size_t capacity, size_t key_size,
                                 size_t payload_size, mstore_region_view_t *out_view) {
     if (persist_key == NULL || persist_key[0] == '\0' || out_view == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     const mstore_flash_device_t *partition = mstore_platform_flash_device();
     if (partition == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
 
     uint8_t raw[MSTORE_REGION_SLOT_BYTES];
     mstore_region_dir_t dir;
     size_t slot = 0;
-    mstore_err_t err = dir_read(partition, &dir, raw, &slot);
-    if (err != MSTORE_OK && err != MSTORE_NOT_FOUND) {
+    sys_error_t err = dir_read(partition, &dir, raw, &slot);
+    if (sys_failed(err) && !sys_is(err, SYS_CODE_NOT_FOUND)) {
         return err;
     }
 
     size_t region_size = 0;
     err = mstore_storage_flash_region_size(capacity, key_size, payload_size, partition->erase_size,
                                            &region_size);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         return err;
     }
 
@@ -332,26 +332,26 @@ mstore_err_t mstore_region_bind(const char *persist_key, size_t capacity, size_t
     size_t region_offset;
     if (dir_find(&dir, id, &index)) {
         if (owner_busy(id)) {
-            return MSTORE_INVALID_STATE;
+            return mstore_fail(SYS_CODE_INVALID_STATE);
         }
         if (dir.entries[index].size != region_size) {
-            return MSTORE_INVALID_SIZE; /* v1: регион не растёт */
+            return mstore_fail(SYS_CODE_INVALID_SIZE); /* v1: регион не растёт */
         }
         region_offset = dir.entries[index].offset;
         if (region_offset < 2 * partition->erase_size ||
             region_offset % partition->erase_size != 0 || region_offset > partition->size ||
             region_size > partition->size - region_offset) {
-            return MSTORE_CORRUPT;
+            return mstore_fail(SYS_CODE_CORRUPT);
         }
     } else {
         for (index = 0; index < MSTORE_REGION_MAX_ENTRIES && dir.entries[index].used; index++) {
         }
         if (index == MSTORE_REGION_MAX_ENTRIES) {
-            return MSTORE_NO_SPACE;
+            return mstore_fail(SYS_CODE_NO_SPACE);
         }
         region_offset = dir_free_offset(&dir, partition->erase_size);
         if (region_offset > partition->size || region_size > partition->size - region_offset) {
-            return MSTORE_INVALID_SIZE; /* free tail меньше региона */
+            return mstore_fail(SYS_CODE_INVALID_SIZE); /* free tail меньше региона */
         }
         dir.entries[index].used = true;
         memcpy(dir.entries[index].id, id, 16);
@@ -360,7 +360,7 @@ mstore_err_t mstore_region_bind(const char *persist_key, size_t capacity, size_t
         uint32_t generation = dir.generation + 1;
         dir_build(raw, &dir, generation);
         err = dir_commit(partition, slot, raw);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return err;
         }
     }
@@ -373,7 +373,7 @@ mstore_err_t mstore_region_bind(const char *persist_key, size_t capacity, size_t
     out_view->device.ctx = &out_view->ctx;
     out_view->device.size = region_size;
     out_view->device.erase_size = partition->erase_size;
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
 void mstore_region_release(const char *persist_key) {
@@ -385,20 +385,20 @@ void mstore_region_release(const char *persist_key) {
     owner_remove(id);
 }
 
-mstore_err_t mstore_region_lookup(const char *persist_key, size_t *out_offset, size_t *out_size) {
+sys_error_t mstore_region_lookup(const char *persist_key, size_t *out_offset, size_t *out_size) {
     if (persist_key == NULL || out_offset == NULL || out_size == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     const mstore_flash_device_t *partition = mstore_platform_flash_device();
     if (partition == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
 
     uint8_t raw[MSTORE_REGION_SLOT_BYTES];
     mstore_region_dir_t dir;
     size_t slot = 0;
-    mstore_err_t err = dir_read(partition, &dir, raw, &slot);
-    if (err != MSTORE_OK) {
+    sys_error_t err = dir_read(partition, &dir, raw, &slot);
+    if (sys_failed(err)) {
         return err;
     }
 
@@ -406,9 +406,9 @@ mstore_err_t mstore_region_lookup(const char *persist_key, size_t *out_offset, s
     mstore_persist_id(persist_key, id);
     size_t index = 0;
     if (!dir_find(&dir, id, &index)) {
-        return MSTORE_NOT_FOUND;
+        return mstore_fail(SYS_CODE_NOT_FOUND);
     }
     *out_offset = dir.entries[index].offset;
     *out_size = dir.entries[index].size;
-    return MSTORE_OK;
+    return SYS_OK;
 }

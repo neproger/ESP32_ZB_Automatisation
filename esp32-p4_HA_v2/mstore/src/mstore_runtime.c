@@ -24,27 +24,27 @@ static bool mstore_home_reachable(size_t hole, size_t cursor, size_t home) {
     return home > hole || home <= cursor;
 }
 
-mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
+sys_error_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
                                mstore_slot_t *out_slot) {
     size_t mask = st->index_capacity - 1;
     size_t bucket = mstore_hash_key(&st->schema, key) & mask;
     size_t probes = 0;
     while (st->index[bucket].slot != MSTORE_SLOT_NONE) {
         if (probes++ >= st->index_capacity) {
-            return MSTORE_INVARIANT_FAILED;
+            return mstore_fail(SYS_CODE_INVARIANT_FAILED);
         }
         mstore_slot_t slot = st->index[bucket].slot;
-        mstore_err_t err = mstore_storage_read_key(st->storage, slot, probe_key);
-        if (err != MSTORE_OK) {
+        sys_error_t err = mstore_storage_read_key(st->storage, slot, probe_key);
+        if (sys_failed(err)) {
             return err;
         }
         if (mstore_key_equal(&st->schema, probe_key, key)) {
             *out_slot = slot;
-            return MSTORE_OK;
+            return SYS_OK;
         }
         bucket = (bucket + 1) & mask;
     }
-    return MSTORE_NOT_FOUND;
+    return mstore_fail(SYS_CODE_NOT_FOUND);
 }
 
 void mstore_index_insert(mstore_state_t *st, mstore_slot_t slot, const void *key) {
@@ -84,13 +84,13 @@ void mstore_index_remove(mstore_state_t *st, mstore_slot_t slot) {
     st->index_of_slot[slot] = MSTORE_INDEX_NONE;
 }
 
-mstore_err_t mstore_freelist_pop(mstore_state_t *st, mstore_slot_t *out_slot) {
+sys_error_t mstore_freelist_pop(mstore_state_t *st, mstore_slot_t *out_slot) {
     if (st->free_count == 0) {
-        return MSTORE_NO_SPACE;
+        return mstore_fail(SYS_CODE_NO_SPACE);
     }
     st->free_count--;
     *out_slot = st->free_slots[st->free_count];
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
 void mstore_freelist_push(mstore_state_t *st, mstore_slot_t slot) {
@@ -111,7 +111,7 @@ void mstore_runtime_reset(mstore_state_t *st) {
     st->live_count = 0;
 }
 
-mstore_err_t mstore_runtime_rebuild(mstore_state_t *st) {
+sys_error_t mstore_runtime_rebuild(mstore_state_t *st) {
     for (size_t i = 0; i < st->index_capacity; i++) {
         st->index[i].slot = MSTORE_SLOT_NONE;
         st->index[i].home = 0;
@@ -125,13 +125,13 @@ mstore_err_t mstore_runtime_rebuild(mstore_state_t *st) {
     for (size_t i = 0; i < st->schema.capacity; i++) {
         mstore_slot_t slot = (mstore_slot_t)i;
         mstore_meta_t meta;
-        mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
-        if (err != MSTORE_OK) {
+        sys_error_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+        if (sys_failed(err)) {
             return err;
         }
         if (meta.used) {
             err = mstore_storage_read_key(st->storage, slot, st->scratch_key);
-            if (err != MSTORE_OK) {
+            if (sys_failed(err)) {
                 return err;
             }
             mstore_index_insert(st, slot, st->scratch_key);
@@ -140,5 +140,5 @@ mstore_err_t mstore_runtime_rebuild(mstore_state_t *st) {
             mstore_freelist_push(st, slot);
         }
     }
-    return MSTORE_OK;
+    return SYS_OK;
 }

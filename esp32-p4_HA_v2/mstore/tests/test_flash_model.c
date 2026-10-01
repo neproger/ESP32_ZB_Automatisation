@@ -90,17 +90,15 @@ static void run_op(mstore_table_t *table, ref_model_t *ref, handle_t handles[KEY
 
     if (choice < 55) {
         if (entry != NULL) {
-            CHECK(mstore_table_slot_allocate(table, &key, &dummy, &slot, &generation) ==
-                  MSTORE_ALREADY_EXISTS);
+            CHECK(sys_is(mstore_table_slot_allocate(table, &key, &dummy, &slot, &generation), SYS_CODE_ALREADY_EXISTS));
             return;
         }
         if (ref->live == CAPACITY) {
-            CHECK(mstore_table_slot_allocate(table, &key, &dummy, &slot, &generation) ==
-                  MSTORE_NO_SPACE);
+            CHECK(sys_is(mstore_table_slot_allocate(table, &key, &dummy, &slot, &generation), SYS_CODE_NO_SPACE));
             return;
         }
         value_t v = random_value();
-        CHECK(mstore_table_slot_allocate(table, &key, &v, &slot, &generation) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_allocate(table, &key, &v, &slot, &generation)));
         CHECK(slot < CAPACITY);
         ref_entry_t *fresh = ref_free_entry(ref);
         fresh->used = true;
@@ -120,8 +118,8 @@ static void run_op(mstore_table_t *table, ref_model_t *ref, handle_t handles[KEY
         value_t v = random_value();
         bool same = v.a == entry->value.a && v.b == entry->value.b;
         changed = true;
-        CHECK(mstore_table_slot_update(table, handles[key].slot, handles[key].generation, &v,
-                                       &changed) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_update(table, handles[key].slot, handles[key].generation, &v,
+                                       &changed)));
         CHECK(changed == !same);
         entry->value = v;
         return;
@@ -131,7 +129,7 @@ static void run_op(mstore_table_t *table, ref_model_t *ref, handle_t handles[KEY
         if (entry == NULL) {
             return;
         }
-        CHECK(mstore_table_slot_free(table, handles[key].slot, handles[key].generation) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_free(table, handles[key].slot, handles[key].generation)));
         entry->used = false;
         ref->live--;
         handles[key].valid = false;
@@ -139,37 +137,37 @@ static void run_op(mstore_table_t *table, ref_model_t *ref, handle_t handles[KEY
     }
 
     if (entry == NULL) {
-        CHECK(mstore_table_slot_find(table, &key, &slot) == MSTORE_NOT_FOUND);
+        CHECK(sys_is(mstore_table_slot_find(table, &key, &slot), SYS_CODE_NOT_FOUND));
         return;
     }
-    CHECK(mstore_table_slot_find(table, &key, &slot) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(table, &key, &slot)));
     CHECK(slot == handles[key].slot);
     mstore_meta_t meta;
     uint32_t read_key;
     value_t read_value;
-    CHECK(mstore_table_slot_read(table, slot, &meta, &read_key, &read_value) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(table, slot, &meta, &read_key, &read_value)));
     CHECK(read_key == key);
     CHECK(read_value.a == entry->value.a && read_value.b == entry->value.b);
 }
 
 static void verify_full(mstore_table_t *table, ref_model_t *ref, handle_t handles[KEYS]) {
     size_t count = 0;
-    CHECK(mstore_table_count(table, &count) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(table, &count)));
     CHECK(count == ref->live);
 
     for (uint32_t key = 0; key < KEYS; key++) {
         ref_entry_t *entry = ref_find(ref, key);
         mstore_slot_t slot;
         if (entry == NULL) {
-            CHECK(mstore_table_slot_find(table, &key, &slot) == MSTORE_NOT_FOUND);
+            CHECK(sys_is(mstore_table_slot_find(table, &key, &slot), SYS_CODE_NOT_FOUND));
             continue;
         }
-        CHECK(mstore_table_slot_find(table, &key, &slot) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_find(table, &key, &slot)));
         CHECK(slot == handles[key].slot);
         mstore_meta_t meta;
         uint32_t read_key;
         value_t read_value;
-        CHECK(mstore_table_slot_read(table, slot, &meta, &read_key, &read_value) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_read(table, slot, &meta, &read_key, &read_value)));
         CHECK(read_key == key);
         CHECK(read_value.a == entry->value.a && read_value.b == entry->value.b);
     }
@@ -191,31 +189,31 @@ static void run_model(mstore_backing_t backing, const char *persist_key) {
     schema.persist_key = persist_key;
 
     mstore_table_t table = {0};
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     ref_model_t ref = {0};
     handle_t handles[KEYS] = {0};
 
     for (int op = 0; op < OPS; op++) {
         run_op(&table, &ref, handles);
-        CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+        CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
         if (op % 1000 == 0) {
             verify_full(&table, &ref, handles);
         }
         if (op != 0 && op % REBOOT_EVERY == 0) {
-            CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-            CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+            CHECK(sys_ok(mstore_table_deinit(&table)));
+            CHECK(sys_ok(mstore_table_init(&table, &schema)));
             verify_full(&table, &ref, handles);
-            CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+            CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
         }
     }
 
     verify_full(&table, &ref, handles);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
     verify_full(&table, &ref, handles);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     mstore_nor_sim_destroy(sim);
 }

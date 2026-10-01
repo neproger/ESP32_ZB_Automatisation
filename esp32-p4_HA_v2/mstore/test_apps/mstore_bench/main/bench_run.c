@@ -93,8 +93,8 @@ static bool bench_open(mstore_table_t *table, bench_mode_t mode, size_t capacity
     schema.backing = mode_backing(mode);
     schema.persist_key = mode_persist_key(mode, capacity);
 
-    mstore_err_t err = mstore_table_init(table, &schema);
-    if (err != MSTORE_OK) {
+    sys_error_t err = mstore_table_init(table, &schema);
+    if (sys_failed(err)) {
         printf("SKIP mode=%s capacity=%u err=%d\n", mode_name(mode), (unsigned)capacity, (int)err);
         return false;
     }
@@ -189,8 +189,7 @@ static bool bench_fill(mstore_table_t *table, size_t capacity, uint32_t first_ke
     for (size_t i = 0; i < capacity; i++) {
         s_keys[i] = first_key + (uint32_t)i;
         bench_value_t value = make_value((uint32_t)i);
-        if (mstore_table_slot_allocate(table, &s_keys[i], &value, &s_slots[i], &s_gens[i]) !=
-            MSTORE_OK) {
+        if (sys_failed(mstore_table_slot_allocate(table, &s_keys[i], &value, &s_slots[i], &s_gens[i]))) {
             printf("FAIL fill err\n");
             return false;
         }
@@ -241,10 +240,10 @@ void bench_run_fill_read(bench_mode_t mode, size_t capacity, size_t ops) {
         s_keys[i] = (uint32_t)(i + 1);
         bench_value_t value = make_value((uint32_t)i);
         int64_t t0 = now_us();
-        mstore_err_t err =
+        sys_error_t err =
             mstore_table_slot_allocate(&table, &s_keys[i], &value, &s_slots[i], &s_gens[i]);
         int64_t t1 = now_us();
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             printf("FAIL allocate err=%d\n", (int)err);
             return;
         }
@@ -369,7 +368,7 @@ static bool mixed_step(mstore_table_t *table, uint32_t *next_key) {
     mstore_slot_t slot = s_live_slots[index];
     uint32_t generation = s_live_gens[index];
     int64_t t0;
-    mstore_err_t err;
+    sys_error_t err;
 
     if (roll < 400) {
         bench_value_t value = make_value(s_values[slot] + 1);
@@ -377,10 +376,10 @@ static bool mixed_step(mstore_table_t *table, uint32_t *next_key) {
         t0 = now_us();
         err = mstore_table_slot_update(table, slot, generation, &value, &changed);
         bench_samples_add(&s_update_changed, (uint32_t)(now_us() - t0));
-        if (err == MSTORE_OK) {
+        if (sys_ok(err)) {
             s_values[slot] = value.fields.a;
         }
-        return err == MSTORE_OK;
+        return sys_ok(err);
     }
     if (roll < 700) {
         mstore_meta_t meta;
@@ -389,20 +388,20 @@ static bool mixed_step(mstore_table_t *table, uint32_t *next_key) {
         t0 = now_us();
         err = mstore_table_slot_read(table, slot, &meta, &read_key, &read_value);
         bench_samples_add(&s_read, (uint32_t)(now_us() - t0));
-        return err == MSTORE_OK;
+        return sys_ok(err);
     }
     if (roll < 850) {
         mstore_slot_t found;
         t0 = now_us();
         err = mstore_table_slot_find(table, &s_live_keys[index], &found);
         bench_samples_add(&s_find, (uint32_t)(now_us() - t0));
-        return err == MSTORE_OK;
+        return sys_ok(err);
     }
     if (roll < 950) {
         t0 = now_us();
         err = mstore_table_slot_free(table, slot, generation);
         bench_samples_add(&s_free, (uint32_t)(now_us() - t0));
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return false;
         }
         bench_live_drop(index);
@@ -413,7 +412,7 @@ static bool mixed_step(mstore_table_t *table, uint32_t *next_key) {
         t0 = now_us();
         err = mstore_table_slot_allocate(table, &key, &value, &fresh_slot, &fresh_generation);
         bench_samples_add(&s_allocate, (uint32_t)(now_us() - t0));
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return false;
         }
         s_values[fresh_slot] = value.fields.a;
@@ -428,16 +427,16 @@ static bool mixed_step(mstore_table_t *table, uint32_t *next_key) {
     t0 = now_us();
     err = mstore_table_slot_update(table, slot, generation, &same, &changed);
     bench_samples_add(&s_update_unchanged, (uint32_t)(now_us() - t0));
-    return err == MSTORE_OK;
+    return sys_ok(err);
 }
 
 static bool live_count_matches(mstore_table_t *table) {
     size_t count = 0;
-    if (mstore_table_count(table, &count) != MSTORE_OK) {
+    if (sys_failed(mstore_table_count(table, &count))) {
         return false;
     }
     size_t seen = 0;
-    if (mstore_table_iter(table, count_iter_cb, &seen) != MSTORE_OK) {
+    if (sys_failed(mstore_table_iter(table, count_iter_cb, &seen))) {
         return false;
     }
     return count == s_live_count && seen == s_live_count;
@@ -527,12 +526,12 @@ void bench_run_checkpoint(bench_mode_t mode, size_t capacity, size_t updates) {
 #endif
         bool changed = false;
         int64_t t0 = now_us();
-        mstore_err_t err = mstore_table_slot_update(&table, slot, s_gens[index], &value, &changed);
+        sys_error_t err = mstore_table_slot_update(&table, slot, s_gens[index], &value, &changed);
         uint32_t elapsed = (uint32_t)(now_us() - t0);
 #ifdef MSTORE_BENCH_COUNTERS
         mstore_bench_counters_read(&after);
 #endif
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             printf("FAIL checkpoint update err=%d\n", (int)err);
             break;
         }

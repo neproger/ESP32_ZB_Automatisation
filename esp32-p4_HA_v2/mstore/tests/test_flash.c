@@ -33,7 +33,7 @@ static mstore_table_schema_t make_schema(void) {
 
 static void open_table(mstore_table_t *table) {
     mstore_table_schema_t schema = make_schema();
-    CHECK(mstore_table_init(table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(table, &schema)));
 }
 
 /* Открывает таблицу заданной ёмкости на отдельной NOR-области. */
@@ -46,9 +46,9 @@ static bool try_open_capacity(size_t capacity) {
     mstore_table_t table = {0};
     mstore_table_schema_t schema = make_schema();
     schema.capacity = capacity;
-    bool opened = mstore_table_init(&table, &schema) == MSTORE_OK;
+    bool opened = sys_ok(mstore_table_init(&table, &schema));
     if (opened) {
-        CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+        CHECK(sys_ok(mstore_table_deinit(&table)));
     }
 
     mstore_platform_flash_set_device(NULL);
@@ -76,7 +76,7 @@ static void test_bank_reserves_append_headroom(void) {
     mstore_table_t table = {0};
     mstore_table_schema_t schema = make_schema();
     schema.capacity = largest;
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     static uint32_t keys[4096];
     static mstore_slot_t slots[4096];
@@ -84,22 +84,20 @@ static void test_bank_reserves_append_headroom(void) {
     for (size_t i = 0; i < largest; i++) {
         keys[i] = (uint32_t)i + 1;
         value_t v = {1, 1};
-        CHECK(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generations[i]) ==
-              MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_allocate(&table, &keys[i], &v, &slots[i], &generations[i])));
     }
 
     size_t count = 0;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == largest);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == largest);
 
     for (size_t i = 0; i < largest; i++) {
         value_t updated = {(int32_t)i + 100, (int32_t)i + 200};
         bool changed = false;
-        CHECK(mstore_table_slot_update(&table, slots[i], generations[i], &updated, &changed) ==
-              MSTORE_OK);
+        CHECK(sys_ok(mstore_table_slot_update(&table, slots[i], generations[i], &updated, &changed)));
         CHECK(changed);
     }
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     mstore_platform_flash_set_device(NULL);
     mstore_nor_sim_destroy(sim);
 }
@@ -122,50 +120,50 @@ int main(void) {
     mstore_slot_t slot1, slot2;
     uint32_t gen1, gen2;
 
-    CHECK(mstore_table_slot_allocate(&table, &key1, &v1, &slot1, &gen1) == MSTORE_OK);
-    CHECK(mstore_table_slot_allocate(&table, &key2, &v2, &slot2, &gen2) == MSTORE_OK);
-    CHECK(mstore_table_slot_allocate(&table, &key1, &v1, &slot1, &gen1) == MSTORE_ALREADY_EXISTS);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &key1, &v1, &slot1, &gen1)));
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &key2, &v2, &slot2, &gen2)));
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &key1, &v1, &slot1, &gen1), SYS_CODE_ALREADY_EXISTS));
 
     mstore_slot_t found = 0;
-    CHECK(mstore_table_slot_find(&table, &key1, &found) == MSTORE_OK && found == slot1);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &key1, &found)) && found == slot1);
 
     bool changed = false;
     value_t v1b = {11, 11};
-    CHECK(mstore_table_slot_update(&table, slot1, gen1, &v1b, &changed) == MSTORE_OK && changed);
-    CHECK(mstore_table_slot_update(&table, slot1, gen1, &v1b, &changed) == MSTORE_OK && !changed);
+    CHECK(sys_ok(mstore_table_slot_update(&table, slot1, gen1, &v1b, &changed)) && changed);
+    CHECK(sys_ok(mstore_table_slot_update(&table, slot1, gen1, &v1b, &changed)) && !changed);
 
     size_t count = 0;
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 2);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 2);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     /* reboot: та же flash-область, новая table */
     open_table(&table);
-    CHECK(mstore_table_slot_find(&table, &key1, &found) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &key1, &found)));
     mstore_meta_t meta;
     uint32_t rk;
     value_t rv;
-    CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_read(&table, found, &meta, &rk, &rv)));
     CHECK(rk == key1 && rv.a == v1b.a && rv.b == v1b.b && meta.version == 2);
 
-    CHECK(mstore_table_slot_free(&table, found, gen1) == MSTORE_OK);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 1);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_free(&table, found, gen1)));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 1);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     /* reboot после free */
     open_table(&table);
-    CHECK(mstore_table_slot_find(&table, &key1, &found) == MSTORE_NOT_FOUND);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 1);
-    CHECK(mstore_table_slot_find(&table, &key2, &found) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_slot_find(&table, &key1, &found), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 1);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &key2, &found)));
 
-    CHECK(mstore_table_clear(&table) == MSTORE_OK);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_clear(&table)));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     /* reboot после clear */
     open_table(&table);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
-    CHECK(mstore_table_slot_find(&table, &key2, &found) == MSTORE_NOT_FOUND);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
+    CHECK(sys_is(mstore_table_slot_find(&table, &key2, &found), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_flash: OK\n");

@@ -77,34 +77,34 @@ static uint64_t random_seq(const ring_ref_t *ref) {
 
 static void verify_get(const mstore_ring_t *ring, const ring_ref_t *ref, uint64_t seq) {
     int32_t value = 0;
-    mstore_err_t err = mstore_ring_get_by_seq(ring, seq, &value);
+    sys_error_t err = mstore_ring_get_by_seq(ring, seq, &value);
 
     if (seq == 0 || seq >= ref->next_seq) {
-        CHECK(err == MSTORE_NOT_FOUND);
+        CHECK(sys_is(err, SYS_CODE_NOT_FOUND));
     } else if (ref->count == 0 || seq < ref_oldest(ref)) {
-        CHECK(err == MSTORE_STALE);
+        CHECK(sys_is(err, SYS_CODE_STALE));
     } else {
         int32_t expected = 0;
         CHECK(ref_lookup(ref, seq, &expected));
-        CHECK(err == MSTORE_OK);
+        CHECK(sys_ok(err));
         CHECK(value == expected);
     }
 }
 
 static void verify_full(const mstore_ring_t *ring, const ring_ref_t *ref) {
     size_t count = 0;
-    CHECK(mstore_ring_count(ring, &count) == MSTORE_OK);
+    CHECK(sys_ok(mstore_ring_count(ring, &count)));
     CHECK(count == ref->count);
 
     uint64_t oldest = 0;
     uint64_t newest = 0;
     if (ref->count == 0) {
-        CHECK(mstore_ring_oldest_seq(ring, &oldest) == MSTORE_NOT_FOUND);
-        CHECK(mstore_ring_newest_seq(ring, &newest) == MSTORE_NOT_FOUND);
+        CHECK(sys_is(mstore_ring_oldest_seq(ring, &oldest), SYS_CODE_NOT_FOUND));
+        CHECK(sys_is(mstore_ring_newest_seq(ring, &newest), SYS_CODE_NOT_FOUND));
         return;
     }
-    CHECK(mstore_ring_oldest_seq(ring, &oldest) == MSTORE_OK);
-    CHECK(mstore_ring_newest_seq(ring, &newest) == MSTORE_OK);
+    CHECK(sys_ok(mstore_ring_oldest_seq(ring, &oldest)));
+    CHECK(sys_ok(mstore_ring_newest_seq(ring, &newest)));
     CHECK(oldest == ref_oldest(ref));
     CHECK(newest == ref->next_seq - 1);
 
@@ -119,7 +119,7 @@ static void run_op(mstore_ring_t *ring, ring_ref_t *ref) {
     if (choice < 50) {
         int32_t value = (int32_t)(rng() % 100000);
         uint64_t seq = 0;
-        CHECK(mstore_ring_append(ring, &value, &seq) == MSTORE_OK);
+        CHECK(sys_ok(mstore_ring_append(ring, &value, &seq)));
         CHECK(seq == ref->next_seq);
         ref_append(ref, value, seq);
         ref->next_seq++;
@@ -135,7 +135,7 @@ static void run_op(mstore_ring_t *ring, ring_ref_t *ref) {
 
     if (choice < 85) {
         bool contains = true;
-        CHECK(mstore_ring_contains(ring, seq, &contains) == MSTORE_OK);
+        CHECK(sys_ok(mstore_ring_contains(ring, seq, &contains)));
         bool expected = ref->count > 0 && seq >= ref_oldest(ref) && seq < ref->next_seq;
         CHECK(contains == expected);
         return;
@@ -147,7 +147,7 @@ static void run_op(mstore_ring_t *ring, ring_ref_t *ref) {
 int main(void) {
     mstore_ring_t ring = {0};
     mstore_ring_config_t config = {.capacity = CAPACITY, .record_size = sizeof(int32_t)};
-    CHECK(mstore_ring_init(&ring, &config) == MSTORE_OK);
+    CHECK(sys_ok(mstore_ring_init(&ring, &config)));
 
     ring_ref_t ref = {.capacity = CAPACITY, .next_seq = 1, .count = 0};
 
@@ -159,7 +159,7 @@ int main(void) {
     }
 
     verify_full(&ring, &ref);
-    CHECK(mstore_ring_deinit(&ring) == MSTORE_OK);
+    CHECK(sys_ok(mstore_ring_deinit(&ring)));
 
     printf("test_ring_model: OK (%d ops)\n", OPS);
     return 0;

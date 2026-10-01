@@ -50,14 +50,14 @@ typedef struct {
  * ключа без release — INVALID_STATE. Свободное место под регион считается от конца
  * directory; запись directory пишется до того, как backend начнёт писать в регион.
  */
-mstore_err_t mstore_region_bind(const char *persist_key, size_t capacity, size_t key_size,
+sys_error_t mstore_region_bind(const char *persist_key, size_t capacity, size_t key_size,
                                 size_t payload_size, mstore_region_view_t *out_view);
 
 /* Снимает признак занятости. Вызывается на закрытии storage: reopen — разрешённый сценарий. */
 void mstore_region_release(const char *persist_key);
 
 /* Положение региона в разделе. Для тестов, которым нужно искажать байты внутри региона. */
-mstore_err_t mstore_region_lookup(const char *persist_key, size_t *out_offset, size_t *out_size);
+sys_error_t mstore_region_lookup(const char *persist_key, size_t *out_offset, size_t *out_size);
 
 #ifdef __cplusplus
 }

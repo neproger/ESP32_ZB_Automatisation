@@ -45,54 +45,54 @@ int main(void) {
 
     mstore_table_schema_t schema = make_schema();
     mstore_table_t table = {0};
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     uint32_t k1 = 1;
     mstore_slot_t slot;
     uint32_t gen;
     value_t v1 = {1, 1};
     value_t v2 = {2, 2};
-    CHECK(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &k1, &v1, &slot, &gen)));
     bool changed = false;
-    CHECK(mstore_table_slot_update(&table, slot, gen, &v2, &changed) == MSTORE_OK && changed);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_update(&table, slot, gen, &v2, &changed)) && changed);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     /* reboot: состояние восстанавливается из durable FLASH */
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
     mstore_meta_t meta;
     uint32_t rk;
     value_t rv;
     mstore_slot_t found;
-    CHECK(mstore_table_slot_find(&table, &k1, &found) == MSTORE_OK);
-    CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &found)));
+    CHECK(sys_ok(mstore_table_slot_read(&table, found, &meta, &rk, &rv)));
     CHECK(rv.a == v2.a && rv.b == v2.b);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     /* FLASH write падает: RAM не меняется (write-through) */
     value_t v3 = {3, 3};
     mstore_nor_sim_fail_program_after(sim, 3);
-    CHECK(mstore_table_slot_update(&table, found, gen, &v3, &changed) == MSTORE_IO);
-    CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
+    CHECK(sys_is(mstore_table_slot_update(&table, found, gen, &v3, &changed), SYS_CODE_IO));
+    CHECK(sys_ok(mstore_table_slot_read(&table, found, &meta, &rk, &rv)));
     CHECK(rv.a == v2.a && rv.b == v2.b);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     /* reopen: durable FLASH тоже остался на v2 */
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
-    CHECK(mstore_table_slot_find(&table, &k1, &found) == MSTORE_OK);
-    CHECK(mstore_table_slot_read(&table, found, &meta, &rk, &rv) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
+    CHECK(sys_ok(mstore_table_slot_find(&table, &k1, &found)));
+    CHECK(sys_ok(mstore_table_slot_read(&table, found, &meta, &rk, &rv)));
     CHECK(rv.a == v2.a && rv.b == v2.b);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
 
     size_t count = 0;
-    CHECK(mstore_table_clear(&table) == MSTORE_OK);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
-    CHECK(mstore_table_count(&table, &count) == MSTORE_OK && count == 0);
-    CHECK(mstore_check_invariants(state_of(&table)) == MSTORE_OK);
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_clear(&table)));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
+    CHECK(sys_ok(mstore_table_count(&table, &count)) && count == 0);
+    CHECK(sys_ok(mstore_check_invariants(state_of(&table))));
+    CHECK(sys_ok(mstore_table_deinit(&table)));
 
     mstore_nor_sim_destroy(sim);
     printf("test_composite: OK\n");

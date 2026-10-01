@@ -59,19 +59,19 @@ typedef struct {
 
 /* runtime.c — derived acceleration */
 void mstore_runtime_reset(mstore_state_t *st);   /* all slots free, без I/O */
-mstore_err_t mstore_runtime_rebuild(mstore_state_t *st); /* из storage */
+sys_error_t mstore_runtime_rebuild(mstore_state_t *st); /* из storage */
 
 /* probe_key — буфер под key пробуемых слотов. Не должен указывать на ту же
  * память, что key: иначе сравнение станет «ключ с самим собой». */
-mstore_err_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
+sys_error_t mstore_index_find(mstore_state_t *st, const void *key, void *probe_key,
                                mstore_slot_t *out_slot);
 void mstore_index_insert(mstore_state_t *st, mstore_slot_t slot, const void *key);
 void mstore_index_remove(mstore_state_t *st, mstore_slot_t slot);
-mstore_err_t mstore_freelist_pop(mstore_state_t *st, mstore_slot_t *out_slot);
+sys_error_t mstore_freelist_pop(mstore_state_t *st, mstore_slot_t *out_slot);
 void mstore_freelist_push(mstore_state_t *st, mstore_slot_t slot);
 
 /* invariants.c — диагностика корректности; отличает нарушение от ошибки storage */
-mstore_err_t mstore_check_invariants(mstore_state_t *st);
+sys_error_t mstore_check_invariants(mstore_state_t *st);
 
 #ifdef __cplusplus
 }

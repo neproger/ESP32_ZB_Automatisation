@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 project(mstore_host_tests C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Политика append headroom задаётся Kconfig; host-сборка идёт без sdkconfig и
-# берёт defaults из mstore_storage_flash.c.
+# РџРѕР»РёС‚РёРєР° append headroom Р·Р°РґР°С‘С‚СЃСЏ Kconfig; host-СЃР±РѕСЂРєР° РёРґС‘С‚ Р±РµР· sdkconfig Рё
+# Р±РµСЂС‘С‚ defaults РёР· mstore_storage_flash.c.
 
 enable_testing()
 
@@ -25,7 +25,7 @@ set(MSTORE_HOST_PORT ../port/host/mstore_platform_host.c)
 
 function(mstore_add_test name)
     add_executable(${name} ${name}.c ${MSTORE_CORE} ${MSTORE_HOST_PORT})
-    target_include_directories(${name} PRIVATE ../include ../src)
+    target_include_directories(${name} PRIVATE ../include ../src ../../sys/include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
     else()
@@ -40,7 +40,7 @@ mstore_add_test(test_ring)
 mstore_add_test(test_ring_model)
 mstore_add_test(test_boundaries)
 
-# NOR simulator — host-only support, без core.
+# NOR simulator вЂ” host-only support, Р±РµР· core.
 add_executable(test_flash_sim test_flash_sim.c support/nor_sim.c)
 target_include_directories(test_flash_sim PRIVATE support)
 if(MSVC)
@@ -50,11 +50,11 @@ else()
 endif()
 add_test(NAME test_flash_sim COMMAND test_flash_sim)
 
-# FLASH backend и Region Manager поверх NOR simulator.
+# FLASH backend Рё Region Manager РїРѕРІРµСЂС… NOR simulator.
 foreach(flash_test IN ITEMS test_flash test_regions)
     add_executable(${flash_test} ${flash_test}.c support/nor_sim.c support/nor_sim_device.c
         ${MSTORE_CORE} ${MSTORE_HOST_PORT})
-    target_include_directories(${flash_test} PRIVATE ../include ../src support)
+    target_include_directories(${flash_test} PRIVATE ../include ../src support ../../sys/include)
     if(MSVC)
         target_compile_options(${flash_test} PRIVATE /W4)
     else()
@@ -63,12 +63,12 @@ foreach(flash_test IN ITEMS test_flash test_regions)
     add_test(NAME ${flash_test} COMMAND ${flash_test})
 endforeach()
 
-# Общий behavioral suite (RAM + FLASH) и FLASH durability.
+# РћР±С‰РёР№ behavioral suite (RAM + FLASH) Рё FLASH durability.
 foreach(flash_test IN ITEMS test_behavior test_flash_durability test_flash_model test_composite)
     add_executable(${flash_test} ${flash_test}.c
         support/nor_sim.c support/nor_sim_device.c
         ${MSTORE_CORE} ${MSTORE_HOST_PORT})
-    target_include_directories(${flash_test} PRIVATE ../include ../src support)
+    target_include_directories(${flash_test} PRIVATE ../include ../src support ../../sys/include)
     if(MSVC)
         target_compile_options(${flash_test} PRIVATE /W4)
     else()

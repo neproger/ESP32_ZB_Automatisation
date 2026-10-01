@@ -39,27 +39,27 @@ static void mstore_state_destroy(mstore_state_t *st) {
     mstore_platform_free(st);
 }
 
-mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_t *schema) {
+sys_error_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_t *schema) {
     if (table == NULL || schema == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     if (table->_state != NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     if (schema->capacity == 0 || schema->key_size == 0) {
-        return MSTORE_INVALID_SIZE;
+        return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
     if (schema->capacity > (size_t)UINT32_MAX || schema->capacity > SIZE_MAX / 2) {
-        return MSTORE_INVALID_SIZE;
+        return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
     if (schema->backing != MSTORE_BACKING_RAM && schema->backing != MSTORE_BACKING_FLASH &&
         schema->backing != (MSTORE_BACKING_RAM | MSTORE_BACKING_FLASH)) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
 
     mstore_state_t *st = mstore_platform_alloc(sizeof(*st));
     if (st == NULL) {
-        return MSTORE_NO_MEM;
+        return mstore_fail(SYS_CODE_NO_MEM);
     }
     memset(st, 0, sizeof(*st));
 
@@ -72,7 +72,7 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     if (st->index_capacity == 0 || st->index_capacity > SIZE_MAX / sizeof(mstore_index_entry_t) ||
         schema->capacity > SIZE_MAX / sizeof(uint32_t)) {
         mstore_platform_free(st);
-        return MSTORE_INVALID_SIZE;
+        return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
 
     mstore_storage_config_t storage_config;
@@ -82,8 +82,8 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
     storage_config.payload_size = schema->payload_size;
     storage_config.persist_key = schema->persist_key;
 
-    mstore_err_t err = mstore_storage_open(&storage_config, &st->storage);
-    if (err != MSTORE_OK) {
+    sys_error_t err = mstore_storage_open(&storage_config, &st->storage);
+    if (sys_failed(err)) {
         mstore_state_destroy(st);
         return err;
     }
@@ -100,56 +100,56 @@ mstore_err_t mstore_table_init(mstore_table_t *table, const mstore_table_schema_
         st->scratch_key == NULL || st->scratch_lookup == NULL || st->scratch_payload == NULL ||
         st->lock == NULL) {
         mstore_state_destroy(st);
-        return MSTORE_NO_MEM;
+        return mstore_fail(SYS_CODE_NO_MEM);
     }
 
     err = mstore_runtime_rebuild(st);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         mstore_state_destroy(st);
         return err;
     }
 
     table->_state = st;
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_deinit(mstore_table_t *table) {
+sys_error_t mstore_table_deinit(mstore_table_t *table) {
     if (table == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     if (table->_state == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     mstore_state_destroy((mstore_state_t *)table->_state);
     table->_state = NULL;
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_count(const mstore_table_t *table, size_t *out_count) {
+sys_error_t mstore_table_count(const mstore_table_t *table, size_t *out_count) {
     if (table == NULL || out_count == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     mstore_platform_lock_acquire(st->lock);
     *out_count = st->live_count;
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_clear(mstore_table_t *table) {
+sys_error_t mstore_table_clear(mstore_table_t *table) {
     if (table == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     mstore_platform_lock_acquire(st->lock);
-    mstore_err_t err = mstore_storage_clear_all(st->storage);
-    if (err == MSTORE_OK) {
+    sys_error_t err = mstore_storage_clear_all(st->storage);
+    if (sys_ok(err)) {
         /* После успешного clear_all runtime reset детерминирован и без I/O. */
         mstore_runtime_reset(st);
     }
@@ -157,102 +157,102 @@ mstore_err_t mstore_table_clear(mstore_table_t *table) {
     return err;
 }
 
-mstore_err_t mstore_table_slot_find(const mstore_table_t *table, const void *key,
+sys_error_t mstore_table_slot_find(const mstore_table_t *table, const void *key,
                                     mstore_slot_t *out_slot) {
     if (table == NULL || key == NULL || out_slot == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     mstore_platform_lock_acquire(st->lock);
-    mstore_err_t err = mstore_index_find(st, key, st->scratch_key, out_slot);
+    sys_error_t err = mstore_index_find(st, key, st->scratch_key, out_slot);
     mstore_platform_lock_release(st->lock);
     return err;
 }
 
-mstore_err_t mstore_table_slot_meta(const mstore_table_t *table, mstore_slot_t slot,
+sys_error_t mstore_table_slot_meta(const mstore_table_t *table, mstore_slot_t slot,
                                     mstore_meta_t *out_meta) {
     if (table == NULL || out_meta == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     if (slot >= st->schema.capacity) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
 
     mstore_platform_lock_acquire(st->lock);
     mstore_meta_t meta;
-    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
-    if (err == MSTORE_OK) {
+    sys_error_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (sys_ok(err)) {
         if (meta.used) {
             *out_meta = meta;
         } else {
-            err = MSTORE_STALE;
+            err = mstore_fail(SYS_CODE_STALE);
         }
     }
     mstore_platform_lock_release(st->lock);
     return err;
 }
 
-mstore_err_t mstore_table_slot_read(const mstore_table_t *table, mstore_slot_t slot,
+sys_error_t mstore_table_slot_read(const mstore_table_t *table, mstore_slot_t slot,
                                     mstore_meta_t *out_meta, void *out_key, void *out_payload) {
     if (table == NULL || out_meta == NULL || out_key == NULL || out_payload == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     if (slot >= st->schema.capacity) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
 
     mstore_platform_lock_acquire(st->lock);
     mstore_meta_t meta;
-    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
-    if (err == MSTORE_OK) {
+    sys_error_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (sys_ok(err)) {
         if (meta.used) {
             err = mstore_storage_read_slot(st->storage, slot, out_meta, out_key, out_payload);
         } else {
-            err = MSTORE_STALE;
+            err = mstore_fail(SYS_CODE_STALE);
         }
     }
     mstore_platform_lock_release(st->lock);
     return err;
 }
 
-mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, const void *payload,
+sys_error_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, const void *payload,
                                         mstore_slot_t *out_slot, uint32_t *out_generation) {
     if (table == NULL || key == NULL || payload == NULL || out_slot == NULL ||
         out_generation == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
 
     mstore_platform_lock_acquire(st->lock);
 
     mstore_slot_t existing;
-    mstore_err_t err = mstore_index_find(st, key, st->scratch_key, &existing);
-    if (err == MSTORE_OK) {
+    sys_error_t err = mstore_index_find(st, key, st->scratch_key, &existing);
+    if (sys_ok(err)) {
         mstore_platform_lock_release(st->lock);
-        return MSTORE_ALREADY_EXISTS;
+        return mstore_fail(SYS_CODE_ALREADY_EXISTS);
     }
-    if (err != MSTORE_NOT_FOUND) {
+    if (!sys_is(err, SYS_CODE_NOT_FOUND)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
 
     if (st->free_count == 0) {
         mstore_platform_lock_release(st->lock);
-        return MSTORE_NO_SPACE;
+        return mstore_fail(SYS_CODE_NO_SPACE);
     }
 
     /* Берём первый свободный slot с неисчерпанной generation; исчерпанные
@@ -262,7 +262,7 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     for (size_t i = st->free_count; i > 0; i--) {
         mstore_slot_t candidate = st->free_slots[i - 1];
         err = mstore_storage_read_meta(st->storage, candidate, &meta);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             mstore_platform_lock_release(st->lock);
             return err;
         }
@@ -273,7 +273,7 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     }
     if (pick == SIZE_MAX) {
         mstore_platform_lock_release(st->lock);
-        return MSTORE_OVERFLOW;
+        return mstore_fail(SYS_CODE_OVERFLOW);
     }
 
     mstore_slot_t slot = st->free_slots[pick];
@@ -282,7 +282,7 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     meta.version = 1;
 
     err = mstore_storage_write_slot(st->storage, slot, &meta, key, payload);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
@@ -295,37 +295,37 @@ mstore_err_t mstore_table_slot_allocate(mstore_table_t *table, const void *key, 
     *out_slot = slot;
     *out_generation = meta.generation;
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_slot_update(mstore_table_t *table, mstore_slot_t slot,
+sys_error_t mstore_table_slot_update(mstore_table_t *table, mstore_slot_t slot,
                                       uint32_t expected_generation, const void *payload,
                                       bool *out_changed) {
     if (table == NULL || payload == NULL || out_changed == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     if (slot >= st->schema.capacity) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
 
     mstore_platform_lock_acquire(st->lock);
     mstore_meta_t meta;
-    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
-    if (err != MSTORE_OK) {
+    sys_error_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (sys_failed(err)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
     if (!meta.used || meta.generation != expected_generation) {
         mstore_platform_lock_release(st->lock);
-        return MSTORE_STALE;
+        return mstore_fail(SYS_CODE_STALE);
     }
 
     err = mstore_storage_read_slot(st->storage, slot, &meta, st->scratch_key, st->scratch_payload);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
@@ -334,48 +334,48 @@ mstore_err_t mstore_table_slot_update(mstore_table_t *table, mstore_slot_t slot,
     if (changed) {
         if (meta.version == UINT32_MAX) {
             mstore_platform_lock_release(st->lock);
-            return MSTORE_OVERFLOW;
+            return mstore_fail(SYS_CODE_OVERFLOW);
         }
         meta.version++;
         err = mstore_storage_write_slot(st->storage, slot, &meta, st->scratch_key, payload);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             mstore_platform_lock_release(st->lock);
             return err;
         }
     }
     *out_changed = changed;
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
+sys_error_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
                                     uint32_t expected_generation) {
     if (table == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
     if (slot >= st->schema.capacity) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
 
     mstore_platform_lock_acquire(st->lock);
     mstore_meta_t meta;
-    mstore_err_t err = mstore_storage_read_meta(st->storage, slot, &meta);
-    if (err != MSTORE_OK) {
+    sys_error_t err = mstore_storage_read_meta(st->storage, slot, &meta);
+    if (sys_failed(err)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
     if (!meta.used || meta.generation != expected_generation) {
         mstore_platform_lock_release(st->lock);
-        return MSTORE_STALE;
+        return mstore_fail(SYS_CODE_STALE);
     }
 
     meta.used = false;
     err = mstore_storage_write_meta(st->storage, slot, &meta);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         mstore_platform_lock_release(st->lock);
         return err;
     }
@@ -386,25 +386,25 @@ mstore_err_t mstore_table_slot_free(mstore_table_t *table, mstore_slot_t slot,
     st->live_count--;
 
     mstore_platform_lock_release(st->lock);
-    return MSTORE_OK;
+    return SYS_OK;
 }
 
-mstore_err_t mstore_table_iter(const mstore_table_t *table, mstore_iter_cb_t cb, void *ctx) {
+sys_error_t mstore_table_iter(const mstore_table_t *table, mstore_iter_cb_t cb, void *ctx) {
     if (table == NULL || cb == NULL) {
-        return MSTORE_INVALID_ARG;
+        return mstore_fail(SYS_CODE_INVALID_ARG);
     }
     mstore_state_t *st = table->_state;
     if (st == NULL) {
-        return MSTORE_INVALID_STATE;
+        return mstore_fail(SYS_CODE_INVALID_STATE);
     }
 
     mstore_platform_lock_acquire(st->lock);
-    mstore_err_t err = MSTORE_OK;
+    sys_error_t err = SYS_OK;
     for (size_t i = 0; i < st->schema.capacity; i++) {
         mstore_slot_t slot = (mstore_slot_t)i;
         mstore_meta_t meta;
         err = mstore_storage_read_meta(st->storage, slot, &meta);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             break;
         }
         if (!meta.used) {
@@ -412,7 +412,7 @@ mstore_err_t mstore_table_iter(const mstore_table_t *table, mstore_iter_cb_t cb,
         }
         err = mstore_storage_read_slot(st->storage, slot, &meta, st->scratch_key,
                                        st->scratch_payload);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             break;
         }
         if (!cb(slot, &meta, st->scratch_key, st->scratch_payload, ctx)) {

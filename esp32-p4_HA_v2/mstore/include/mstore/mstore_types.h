@@ -4,25 +4,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sys/sys_error.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef enum {
-    MSTORE_OK = 0,
-    MSTORE_NOT_FOUND,      /* логический поиск по key не нашёл запись */
-    MSTORE_STALE,          /* cached slot + generation больше не актуален */
-    MSTORE_ALREADY_EXISTS, /* key уже занят в этой table */
-    MSTORE_NO_SPACE,       /* свободных slots не осталось */
-    MSTORE_INVALID_ARG,
-    MSTORE_NO_MEM,
-    MSTORE_INVALID_STATE,  /* table не инициализирована или уже инициализирована */
-    MSTORE_INVALID_SIZE,
-    MSTORE_INVARIANT_FAILED,
-    MSTORE_IO,      /* physical read/program/erase failure */
-    MSTORE_CORRUPT, /* committed durable structure invalid */
-    MSTORE_OVERFLOW, /* generation/version исчерпаны */
-} mstore_err_t;
+/*
+ * mstore создаёт свою ошибку сам и больше ни одну не перекодирует: layer помечает
+ * источник, смысл несёт общий code (docs/ERRORS.md).
+ */
+static inline sys_error_t mstore_fail(sys_code_t code)
+{
+    return sys_error_make(SYS_LAYER_MSTORE, code);
+}
 
 /* slot — физическое место в table, не долговечная identity. */
 typedef uint32_t mstore_slot_t;

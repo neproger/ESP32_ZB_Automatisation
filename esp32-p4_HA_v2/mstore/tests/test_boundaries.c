@@ -23,7 +23,7 @@ static mstore_state_t *state_of(const mstore_table_t *table) {
 }
 
 static void write_slot_meta(mstore_table_t *table, mstore_slot_t slot, mstore_meta_t meta) {
-    CHECK(mstore_storage_write_meta(state_of(table)->storage, slot, &meta) == MSTORE_OK);
+    CHECK(sys_ok(mstore_storage_write_meta(state_of(table)->storage, slot, &meta)));
 }
 
 static void test_generation_overflow(void) {
@@ -35,7 +35,7 @@ static void test_generation_overflow(void) {
     schema.payload_equals = NULL;
     schema.backing = MSTORE_BACKING_RAM;
     schema.persist_key = NULL;
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     uint32_t key = 1;
     value_t v = {1, 1};
@@ -45,17 +45,17 @@ static void test_generation_overflow(void) {
     /* slot на пределе generation -> новый allocate не переиспользует его */
     mstore_meta_t meta = {false, UINT32_MAX, 0};
     write_slot_meta(&table, 0, meta);
-    CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen) == MSTORE_OVERFLOW);
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen), SYS_CODE_OVERFLOW));
 
     /* generation = MAX-1 -> allocate доводит до MAX, следующий reuse -> OVERFLOW */
     meta.generation = UINT32_MAX - 1;
     write_slot_meta(&table, 0, meta);
-    CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen)));
     CHECK(gen == UINT32_MAX);
-    CHECK(mstore_table_slot_free(&table, slot, gen) == MSTORE_OK);
-    CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen) == MSTORE_OVERFLOW);
+    CHECK(sys_ok(mstore_table_slot_free(&table, slot, gen)));
+    CHECK(sys_is(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen), SYS_CODE_OVERFLOW));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     printf("test_boundaries: generation overflow OK\n");
 }
 
@@ -68,25 +68,25 @@ static void test_version_overflow(void) {
     schema.payload_equals = NULL;
     schema.backing = MSTORE_BACKING_RAM;
     schema.persist_key = NULL;
-    CHECK(mstore_table_init(&table, &schema) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_init(&table, &schema)));
 
     uint32_t key = 1;
     value_t v = {1, 1};
     mstore_slot_t slot;
     uint32_t gen;
-    CHECK(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_slot_allocate(&table, &key, &v, &slot, &gen)));
 
     /* version на пределе: реальное изменение -> OVERFLOW, unchanged -> OK */
     mstore_meta_t meta = {true, gen, UINT32_MAX};
     write_slot_meta(&table, slot, meta);
 
     bool changed = true;
-    CHECK(mstore_table_slot_update(&table, slot, gen, &v, &changed) == MSTORE_OK && !changed);
+    CHECK(sys_ok(mstore_table_slot_update(&table, slot, gen, &v, &changed)) && !changed);
 
     value_t v2 = {2, 2};
-    CHECK(mstore_table_slot_update(&table, slot, gen, &v2, &changed) == MSTORE_OVERFLOW);
+    CHECK(sys_is(mstore_table_slot_update(&table, slot, gen, &v2, &changed), SYS_CODE_OVERFLOW));
 
-    CHECK(mstore_table_deinit(&table) == MSTORE_OK);
+    CHECK(sys_ok(mstore_table_deinit(&table)));
     printf("test_boundaries: version overflow OK\n");
 }
 
