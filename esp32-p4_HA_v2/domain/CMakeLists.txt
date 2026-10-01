@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "src/domain_registry.c"
+        "src/domain_entity.c"
+        "src/domain_journal.c"
+        "src/domain_dispatch.c"
+        "port/espidf/domain_platform_espidf.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    REQUIRES
+        sys
+        mstore
+        esp_common
+        esp_timer
+)

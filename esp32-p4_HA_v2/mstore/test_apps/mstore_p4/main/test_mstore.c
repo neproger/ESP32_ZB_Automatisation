@@ -21,7 +21,7 @@ static void require(bool condition, const char *what) {
 
 static void require_err(sys_error_t err, const char *what) {
     if (sys_failed(err)) {
-        ESP_LOGE(TAG, "FAIL: %s err=%d", what, (int)err);
+        ESP_LOGE(TAG, "FAIL: %s layer=%u code=%u", what, (unsigned)err.layer, (unsigned)err.code);
         abort();
     }
 }
