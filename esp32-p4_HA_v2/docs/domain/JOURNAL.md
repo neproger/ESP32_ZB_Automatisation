@@ -18,12 +18,13 @@ Journal **не** является транспортом доставки: ко�
 ```text
 event_id    — identity этой Journal-записи (opaque доменный тип)
 ts
-kind        — ENTITY_UPSERTED | ENTITY_REMOVED | EVENT | COMMAND_SENT
-op          — UPSERT | REMOVE | <command op>
+kind        — ENTITY_UPSERTED | ENTITY_REMOVED | EVENT | COMMAND_SENT | ERROR
+op          — ENTITY_PUT | ENTITY_REMOVE | COMMAND | PAYLOAD_PUT
 source      — ZIGBEE | UI | AUTOMATION | SYSTEM | ...
 entity, key
 value       — optional компактный snapshot (history / diagnostics)
 payload_ref — optional ссылка на Transient Payload (см. TRANSIENT_PAYLOAD.md)
+error       — только для kind = ERROR: код результата операции
 ```
 
 Категории:
@@ -32,10 +33,44 @@ payload_ref — optional ссылка на Transient Payload (см. TRANSIENT_PA
 ENTITY_UPSERTED / ENTITY_REMOVED  — изменился persistent/current state
 EVENT                             — что-то произошло, state из этого не следует
 COMMAND_SENT                      — Domain передал intent исполнителю
+ERROR                             — операция Domain завершилась runtime-ошибкой
 ```
 
 Одна и та же структура живёт в Journal и доставляется подписчикам — отдельного
 event-lookup нет.
+
+## 2.1. Journal фиксирует результат операции
+
+Journal не подтверждает запись и не участвует в принятии решения. Domain выполняет
+операцию, получает результат и классифицирует его:
+
+```text
+SUCCESS + state изменилось   → ENTITY_UPSERTED / ENTITY_REMOVED
+SUCCESS + state не изменилось→ ничего
+SUCCESS + произошло событие  → EVENT
+SUCCESS + команда передана   → COMMAND_SENT
+FAILURE (runtime)            → ERROR { op, error, entity/key если применимо }
+```
+
+Результат операции возвращается вызывающему **тем же кодом**: Journal — параллельный
+след, а не второй уровень проверки (§2.2).
+
+**ERROR — event-like факт.** Он не меняет state, поэтому Dispatcher и подписчики
+трактуют его так же, как `EVENT`: «произошло, состояния из этого не следует». Неверно
+считать ERROR состоянием устройства.
+
+**Что не журналируется:** ошибки программирования (`NULL`, `INVALID_ARG`,
+неинициализированный Domain) — это assert/diagnostic; `NOT_FOUND` — нормальный исход
+(например, удаление отсутствующего ключа), а не сбой. Runtime-множество: `IO`,
+`CORRUPT`, `NO_SPACE`, `NO_MEM`, `OVERFLOW`, `BUSY`, а позже — «executor не найден».
+
+## 2.2. Append в штатном пути не отказывает
+
+Journal не валидирует и не решает: при заполнении ring вытесняет oldest. Ошибка append
+означает нарушение внутреннего контракта, а не бизнес-исход. Поэтому «состояние
+записано, а факт не добавился» не образует отдельной семантики partial commit:
+откатывать mstore-транзакцию нечем, и операция не превращается в транзакцию ради
+гипотетического отказа Journal.
 
 ## 3. Что хранится
 
@@ -61,14 +96,9 @@ event-lookup нет.
 - События **не** схлопываются: каждый факт — отдельная запись (`on on on off` —
   четыре факта).
 - Длинная история / persistence — не проектируется.
-
-**Append в штатном пути не отказывает.** Journal не валидирует и не принимает решений:
-при заполнении ring вытесняет oldest. Ошибка `append` означает нарушение внутреннего
-контракта (Journal не инициализирован, `key_size` типа шире лимита записи, исчерпан
-технический счётчик) — аварийная ветка, а не бизнес-исход. Поэтому «состояние записано,
-а факт не добавился» не образует отдельной семантики partial commit: откатывать
-mstore-транзакцию нечем, и `domain_entity_put()` не превращается в транзакцию ради
-гипотетического отказа Journal.
+- Следствие bounded ring: пачка однотипных ERROR (например, от устройства, шлющего
+  мусор) вытесняет факты состояния. ERROR — это trace, а не журнал ошибок: если
+  понадобится надёжная диагностика, ей место в счётчиках/логе, а не в Journal.
 
 ## 5. Gap
 

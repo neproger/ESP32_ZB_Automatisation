@@ -27,11 +27,14 @@ typedef enum {
     DOMAIN_FACT_ENTITY_REMOVED = 2,
     DOMAIN_FACT_EVENT = 3,
     DOMAIN_FACT_COMMAND_SENT = 4,
+    DOMAIN_FACT_ERROR = 5,
 } domain_fact_kind_t;
 
 typedef enum {
-    DOMAIN_OP_UPSERT = 1,
-    DOMAIN_OP_REMOVE = 2,
+    DOMAIN_OP_ENTITY_PUT = 1,
+    DOMAIN_OP_ENTITY_REMOVE = 2,
+    DOMAIN_OP_COMMAND = 3,
+    DOMAIN_OP_PAYLOAD_PUT = 4,
 } domain_op_t;
 
 /*
@@ -52,6 +55,9 @@ typedef struct {
     uint8_t key[DOMAIN_JOURNAL_KEY_MAX];
     domain_value_t value;
     uint64_t payload_ref;
+
+    /* Только для kind = ERROR: код domain_err_t операции. */
+    uint32_t error;
 } domain_event_t;
 
 #ifdef __cplusplus
@@ -63,6 +69,14 @@ _Static_assert(sizeof(domain_event_t) <= 128, "domain_event_t слишком б�
 typedef struct {
     mstore_ring_t ring;
 } domain_journal_t;
+
+/*
+ * Журналируются только ошибки нормальной runtime-работы: IO, CORRUPT, NO_SPACE,
+ * NO_MEM, OVERFLOW, BUSY. Ошибки программирования (NULL, INVALID_ARG,
+ * неинициализированный Domain) — assert/diagnostic, в Journal не идут.
+ * NOT_FOUND — нормальный исход (например, удаление отсутствующего ключа), а не сбой.
+ */
+bool domain_journal_is_runtime_error(domain_err_t err);
 
 domain_err_t domain_journal_init(domain_journal_t *journal, size_t capacity);
 domain_err_t domain_journal_deinit(domain_journal_t *journal);

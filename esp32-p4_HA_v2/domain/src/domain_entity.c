@@ -11,6 +11,10 @@
  *   - mutation path: slot_find → slot_meta → slot_update/free должны быть одной
  *     серией, иначе слот успевают переиспользовать и получаем STALE;
  *   - get пишет ключ в scratch entry, поэтому read path тоже сериализован.
+ *
+ * Journal здесь — параллельный след операции, а не второй уровень проверки:
+ * операция возвращает свой результат вызывающему, а факт пишется по_classify_
+ * outcome (ERROR / STATE_CHANGED). Отказ append'а не меняет результат операции.
  */
 
 /*
@@ -37,6 +41,31 @@ static void fact_fill(domain_event_t *out, domain_entity_t type, const void *key
     memcpy(out->key, key, key_size);
 }
 
+static void journal_append_fact(domain_state_t *state, domain_event_t *fact)
+{
+    domain_event_id_t id = 0;
+    (void)domain_journal_append(&state->journal, fact, &id);
+}
+
+/*
+ * Классификация outcome операции. Возвращает тот же результат, что был:
+ * Journal не влияет на решение, а только фиксирует значимый исход.
+ */
+static domain_err_t journal_outcome(domain_state_t *state, domain_entity_t type,
+                                    const void *key, uint8_t key_size, uint8_t op,
+                                    const domain_fact_meta_t *meta, domain_err_t outcome)
+{
+    if (!domain_journal_is_runtime_error(outcome)) {
+        return outcome;
+    }
+
+    domain_event_t fact = {0};
+    fact_fill(&fact, type, key, key_size, (uint8_t)DOMAIN_FACT_ERROR, op, meta);
+    fact.error = (uint32_t)outcome;
+    journal_append_fact(state, &fact);
+    return outcome;
+}
+
 static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *entry,
                                const void *key, const void *record,
                                const domain_fact_meta_t *meta, bool *out_changed)
@@ -44,9 +73,9 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
     *out_changed = false;
 
     bool changed = false;
-
     mstore_slot_t slot = 0;
     mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
+
     if (err == MSTORE_NOT_FOUND) {
         uint32_t generation = 0;
         err = mstore_table_slot_allocate(&entry->table, key, record, &slot, &generation);
@@ -75,12 +104,8 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
 
     domain_event_t fact = {0};
     fact_fill(&fact, entry->desc.type, key, (uint8_t)entry->desc.key_size,
-              (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED, (uint8_t)DOMAIN_OP_UPSERT, meta);
-    domain_event_id_t fact_id = 0;
-    const domain_err_t fact_err = domain_journal_append(&state->journal, &fact, &fact_id);
-    if (fact_err != DOMAIN_OK) {
-        return fact_err;
-    }
+              (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED, (uint8_t)DOMAIN_OP_ENTITY_PUT, meta);
+    journal_append_fact(state, &fact);
 
     *out_changed = changed;
     return DOMAIN_OK;
@@ -121,9 +146,9 @@ static domain_err_t remove_locked(domain_state_t *state, domain_entity_entry_t *
 
     domain_event_t fact = {0};
     fact_fill(&fact, entry->desc.type, key, (uint8_t)entry->desc.key_size,
-              (uint8_t)DOMAIN_FACT_ENTITY_REMOVED, (uint8_t)DOMAIN_OP_REMOVE, meta);
-    domain_event_id_t fact_id = 0;
-    return domain_journal_append(&state->journal, &fact, &fact_id);
+              (uint8_t)DOMAIN_FACT_ENTITY_REMOVED, (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta);
+    journal_append_fact(state, &fact);
+    return DOMAIN_OK;
 }
 
 typedef struct {
@@ -154,8 +179,13 @@ domain_err_t domain_entity_put(domain_t *domain, domain_entity_t type,
     const domain_err_t result = (entry == NULL)
                                     ? DOMAIN_NOT_FOUND
                                     : put_locked(state, entry, key, record, meta, out_changed);
+    const domain_err_t journaled =
+        (entry == NULL)
+            ? result
+            : journal_outcome(state, type, key, (uint8_t)entry->desc.key_size,
+                              (uint8_t)DOMAIN_OP_ENTITY_PUT, meta, result);
     domain_platform_lock_release(state->lock);
-    return result;
+    return journaled;
 }
 
 domain_err_t domain_entity_get(domain_t *domain, domain_entity_t type,
@@ -186,8 +216,13 @@ domain_err_t domain_entity_remove(domain_t *domain, domain_entity_t type, const 
     domain_entity_entry_t *entry = domain_entry_find(state, type);
     const domain_err_t result =
         (entry == NULL) ? DOMAIN_NOT_FOUND : remove_locked(state, entry, key, meta);
+    const domain_err_t journaled =
+        (entry == NULL)
+            ? result
+            : journal_outcome(state, type, key, (uint8_t)entry->desc.key_size,
+                              (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta, result);
     domain_platform_lock_release(state->lock);
-    return result;
+    return journaled;
 }
 
 domain_err_t domain_entity_iter(domain_t *domain, domain_entity_t type,

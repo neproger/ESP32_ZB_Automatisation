@@ -20,7 +20,7 @@ static domain_event_t event_of(uint32_t entity, uint32_t value)
     domain_event_t event = {0};
     event.ts = 1000 + value;
     event.kind = DOMAIN_FACT_ENTITY_UPSERTED;
-    event.op = DOMAIN_OP_UPSERT;
+    event.op = DOMAIN_OP_ENTITY_PUT;
     event.source = DOMAIN_SOURCE_ZIGBEE;
     event.key_size = 4;
     event.entity = entity;

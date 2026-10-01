@@ -130,7 +130,7 @@ static void test_fact_carries_identity_and_meta(void)
 
     const domain_event_t fact = last_fact(&domain);
     CHECK(fact.kind == DOMAIN_FACT_ENTITY_UPSERTED);
-    CHECK(fact.op == DOMAIN_OP_UPSERT);
+    CHECK(fact.op == DOMAIN_OP_ENTITY_PUT);
     CHECK(fact.entity == TYPE_A);
     CHECK(fact.source == DOMAIN_SOURCE_ZIGBEE);
     CHECK(fact.value.type == DOMAIN_VALUE_U32);
@@ -167,7 +167,7 @@ static void test_remove_writes_fact_with_key(void)
 
     const domain_event_t fact = last_fact(&domain);
     CHECK(fact.kind == DOMAIN_FACT_ENTITY_REMOVED);
-    CHECK(fact.op == DOMAIN_OP_REMOVE);
+    CHECK(fact.op == DOMAIN_OP_ENTITY_REMOVE);
     CHECK(fact.source == DOMAIN_SOURCE_UI);
     CHECK(fact.entity == TYPE_A);
 
@@ -221,12 +221,83 @@ static void test_facts_are_ordered_across_types(void)
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
 }
 
+static void test_runtime_error_is_recorded(void)
+{
+    domain_t domain = {0};
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+
+    domain_entity_desc_t desc = {0};
+    desc_fill(&desc, TYPE_A);
+    desc.capacity = 1; /* вторая запись не влезет */
+    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+
+    const test_key_t first = key_of(1);
+    const test_key_t second = key_of(2);
+    test_record_t record = {0};
+    bool changed = false;
+    domain_fact_meta_t meta = {0};
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 1);
+
+    CHECK(domain_entity_put(&domain, TYPE_A, &first, &record, &meta, &changed) == DOMAIN_OK);
+    CHECK(fact_count(&domain) == 1);
+
+    CHECK(domain_entity_put(&domain, TYPE_A, &second, &record, &meta, &changed) ==
+          DOMAIN_NO_SPACE);
+    CHECK(fact_count(&domain) == 2);
+
+    const domain_event_t fact = last_fact(&domain);
+    CHECK(fact.kind == DOMAIN_FACT_ERROR);
+    CHECK(fact.op == DOMAIN_OP_ENTITY_PUT);
+    CHECK(fact.error == (uint32_t)DOMAIN_NO_SPACE);
+    CHECK(fact.entity == TYPE_A);
+
+    test_key_t carried = {0};
+    memcpy(&carried, fact.key, sizeof(carried));
+    CHECK(carried.id == 2);
+
+    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+}
+
+static void test_programming_errors_are_not_recorded(void)
+{
+    domain_t domain = {0};
+    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    domain_entity_desc_t desc = {0};
+    desc_fill(&desc, TYPE_A);
+    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+
+    const test_key_t key = key_of(1);
+    const test_key_t absent = key_of(9);
+    test_record_t record = {0};
+    test_record_t out = {0};
+    bool changed = false;
+    domain_fact_meta_t meta = {0};
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 1);
+
+    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed) == DOMAIN_OK);
+    const size_t after_success = fact_count(&domain);
+
+    /* NULL и неверные аргументы — ошибки программирования, в Journal не идут. */
+    CHECK(domain_entity_put(&domain, TYPE_A, &key, NULL, &meta, &changed) == DOMAIN_INVALID_ARG);
+    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, NULL) == DOMAIN_INVALID_ARG);
+
+    /* Удаление отсутствующего ключа — нормальный исход, а не сбой системы. */
+    CHECK(domain_entity_remove(&domain, TYPE_A, &absent, &meta) == DOMAIN_NOT_FOUND);
+
+    CHECK(domain_entity_get(&domain, TYPE_A, &absent, &out) == DOMAIN_NOT_FOUND);
+    CHECK(fact_count(&domain) == after_success);
+
+    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+}
+
 int main(void)
 {
     test_put_writes_fact_only_on_change();
     test_fact_carries_identity_and_meta();
     test_remove_writes_fact_with_key();
     test_facts_are_ordered_across_types();
+    test_runtime_error_is_recorded();
+    test_programming_errors_are_not_recorded();
 
     if (g_failures != 0) {
         printf("test_facts: %d failure(s)\n", g_failures);

@@ -13,6 +13,21 @@
  *   id меньше oldest → STALE (вытеснен; это и есть признак Journal-gap)
  *   id больше newest → NOT_FOUND (ещё не случился)
  */
+bool domain_journal_is_runtime_error(domain_err_t err)
+{
+    switch (err) {
+    case DOMAIN_IO:
+    case DOMAIN_CORRUPT:
+    case DOMAIN_NO_SPACE:
+    case DOMAIN_NO_MEM:
+    case DOMAIN_OVERFLOW:
+    case DOMAIN_BUSY:
+        return true;
+    default:
+        return false;
+    }
+}
+
 domain_err_t domain_journal_init(domain_journal_t *journal, size_t capacity)
 {
     if (journal == NULL || capacity == 0) {
