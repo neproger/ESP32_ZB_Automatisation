@@ -29,7 +29,7 @@ function(domain_add_test name)
     add_executable(${name} ${name}.c ${DOMAIN_CORE} ${DOMAIN_HOST_PORT} ${MSTORE_CORE}
         ${MSTORE_HOST_PORT})
     target_include_directories(${name} PRIVATE ../include ../src ../../mstore/include
-        ../../mstore/src ../../sys/include)
+        ../../mstore/src ../../sys/include ../../ha_model/include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
     else()

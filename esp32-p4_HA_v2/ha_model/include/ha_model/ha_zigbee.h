@@ -22,6 +22,14 @@
 extern "C" {
 #endif
 
+/*
+ * Идентичность устройства — IEEE EUI-64. Stable identity: не зависит от сети,
+ * остаётся той же после перепривязки и смены короткого адреса. Short address здесь
+ * не определяется сознательно: это текущее сетевое состояние, а не identity, и
+ * разрешает его Zigbee-сервис.
+ */
+typedef uint64_t ha_device_uid_t;
+
 /* Профиль Zigbee Home Automation. */
 #define HA_ZB_PROFILE_HA 0x0104u
 

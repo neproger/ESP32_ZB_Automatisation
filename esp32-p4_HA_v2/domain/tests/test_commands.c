@@ -3,6 +3,8 @@
 #include <stdio.h>
 
 #include "domain_internal.h"
+#include "ha_model/ha_commands.h"
+#include "ha_model/ha_zigbee.h"
 
 /*
  * Команды: маршрутизация напрямую executor'у и COMMAND_SENT только после передачи
@@ -153,11 +155,64 @@ static void rejected_command_writes_no_fact(void)
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
+/*
+ * Контракт из COMMANDS.md §7: адресация живёт в payload формы ha_model, Domain несёт
+ * байты как есть и не разбирает их. Проверяем, что форма доезжает до executor'а
+ * целиком и Domain при этом о Zigbee не знает.
+ */
+static sys_error_t zigbee_executor(domain_command_t type, const void *args, size_t args_size,
+                                   void *ctx)
+{
+    (void)type;
+    ha_zb_command_t *seen = (ha_zb_command_t *)ctx;
+    if (args == NULL || args_size != sizeof(*seen)) {
+        return domain_fail(SYS_CODE_INVALID_SIZE);
+    }
+    *seen = *(const ha_zb_command_t *)args;
+    return SYS_OK;
+}
+
+static void zigbee_payload_reaches_executor(void)
+{
+    domain_t domain = {0};
+    CHECK(sys_ok(domain_init(&domain, 1, 8, 4, 32)));
+
+    ha_zb_command_t received = {0};
+    CHECK(sys_ok(domain_register_command(&domain, HA_CMD_ZIGBEE_CLUSTER, zigbee_executor,
+                                         &received)));
+
+    const ha_zb_command_t cmd = {
+        .device_uid = 0x00124B00ABCD1234ull,
+        .dst_endpoint = 1,
+        .cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL,
+        .command_id = HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL_WITH_ON_OFF,
+        .args_len = 2,
+        .args = {128, 10}, /* level + transition */
+    };
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_AUTOMATION;
+    meta.value.type = (uint8_t)DOMAIN_VALUE_U32;
+    meta.value.v.u32 = 128;
+
+    CHECK(sys_ok(domain_post(&domain, HA_CMD_ZIGBEE_CLUSTER, &cmd, sizeof(cmd), &meta)));
+    CHECK(received.device_uid == cmd.device_uid);
+    CHECK(received.dst_endpoint == cmd.dst_endpoint);
+    CHECK(received.cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL);
+    CHECK(received.command_id == HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL_WITH_ON_OFF);
+    CHECK(received.args_len == 2);
+    CHECK(received.args[0] == 128);
+    CHECK(received.args[1] == 10);
+
+    CHECK(sys_ok(domain_deinit(&domain)));
+}
+
 int main(void)
 {
     command_reaches_executor();
     command_sent_is_journaled();
     rejected_command_writes_no_fact();
+    zigbee_payload_reaches_executor();
 
     if (failures != 0) {
         printf("%d checks failed\n", failures);
