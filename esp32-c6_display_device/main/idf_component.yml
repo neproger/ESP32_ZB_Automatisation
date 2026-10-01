@@ -1,0 +1,16 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf: ">=6.0"
+
+  ## Espressif Zigbee SDK 2.x (new ezbee API). No esp-zboss-lib needed.
+  espressif/esp-zigbee-lib:
+    version: "^2.0.0"
+
+  lvgl/lvgl:
+    version: "^9.2.0"
+
+  espressif/esp_lvgl_port:
+    version: "^2.9.0"
+
+  espressif/led_strip:
+    version: "^3.0.0"

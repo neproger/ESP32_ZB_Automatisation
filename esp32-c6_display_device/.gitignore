@@ -1,0 +1,58 @@
+# ===== ESP-IDF build artifacts =====
+/build/
+build/
+*.o
+*.a
+*.out
+*.bin
+*.elf
+*.map
+flasher_args.json
+ldgen_libraries*
+
+# ===== ESP-IDF generated config =====
+sdkconfig
+sdkconfig.old
+
+# ===== ESP-IDF component manager =====
+managed_components/
+dependencies.lock
+
+# ===== CMake generated =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+project_description.json
+install_manifest.txt
+CTestTestfile.cmake
+
+# ===== Language servers / IDE =====
+.vscode/
+.clangd/
+.ccls-cache/
+.cache/
+*.user
+*.code-workspace
+*.suo
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ===== Logs / temp =====
+*.log
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
