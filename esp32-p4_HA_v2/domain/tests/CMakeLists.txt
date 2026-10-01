@@ -21,9 +21,11 @@ set(MSTORE_CORE
     ../../mstore/src/storage/mstore_storage_ram_flash.c
 )
 set(MSTORE_HOST_PORT ../../mstore/port/host/mstore_platform_host.c)
+set(DOMAIN_HOST_PORT ../port/host/domain_platform_host.c)
 
 function(domain_add_test name)
-    add_executable(${name} ${name}.c ${DOMAIN_CORE} ${MSTORE_CORE} ${MSTORE_HOST_PORT})
+    add_executable(${name} ${name}.c ${DOMAIN_CORE} ${DOMAIN_HOST_PORT} ${MSTORE_CORE}
+        ${MSTORE_HOST_PORT})
     target_include_directories(${name} PRIVATE ../include ../src ../../mstore/include ../../mstore/src)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
@@ -35,3 +37,4 @@ endfunction()
 
 domain_add_test(test_registry)
 domain_add_test(test_entity)
+domain_add_test(test_concurrency)

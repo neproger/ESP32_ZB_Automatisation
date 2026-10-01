@@ -27,6 +27,13 @@ typedef struct {
     domain_entity_entry_t *entries;
     size_t used;
     size_t capacity;
+
+    /*
+     * Сериализует весь mutation path и read path: порядок «запись + факт»,
+     * доступ к scratch_key и обход. Lock не рекурсивный — колбэк iter не имеет
+     * права вызывать API Domain (docs/domain/DOMAIN_API.md §9).
+     */
+    void *lock;
 } domain_state_t;
 
 domain_state_t *domain_state(const domain_t *domain);

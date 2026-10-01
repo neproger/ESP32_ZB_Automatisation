@@ -1,9 +1,9 @@
 #include "domain/domain.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "domain_internal.h"
+#include "domain_platform.h"
 #include "mstore/mstore_table.h"
 
 domain_err_t domain_err_from_mstore(mstore_err_t err)
@@ -96,13 +96,23 @@ domain_err_t domain_init(domain_t *domain, size_t max_entity_types)
         return DOMAIN_INVALID_STATE;
     }
 
-    domain_state_t *state = calloc(1, sizeof(*state));
+    domain_state_t *state = domain_platform_alloc(sizeof(*state));
     if (state == NULL) {
         return DOMAIN_NO_MEM;
     }
-    state->entries = calloc(max_entity_types, sizeof(*state->entries));
+    memset(state, 0, sizeof(*state));
+
+    state->entries = domain_platform_alloc(max_entity_types * sizeof(*state->entries));
     if (state->entries == NULL) {
-        free(state);
+        domain_platform_free(state);
+        return DOMAIN_NO_MEM;
+    }
+    memset(state->entries, 0, max_entity_types * sizeof(*state->entries));
+
+    state->lock = domain_platform_lock_create();
+    if (state->lock == NULL) {
+        domain_platform_free(state->entries);
+        domain_platform_free(state);
         return DOMAIN_NO_MEM;
     }
     state->capacity = max_entity_types;
@@ -121,11 +131,12 @@ domain_err_t domain_deinit(domain_t *domain)
     for (size_t i = 0; i < state->used; ++i) {
         if (state->entries[i].used) {
             (void)mstore_table_deinit(&state->entries[i].table);
-            free(state->entries[i].scratch_key);
+            domain_platform_free(state->entries[i].scratch_key);
         }
     }
-    free(state->entries);
-    free(state);
+    domain_platform_free(state->entries);
+    domain_platform_lock_destroy(state->lock);
+    domain_platform_free(state);
     domain->_state = NULL;
     return DOMAIN_OK;
 }
@@ -141,13 +152,6 @@ domain_err_t domain_register_entity(domain_t *domain, const domain_entity_desc_t
     if (checked != DOMAIN_OK) {
         return checked;
     }
-    if (domain_entry_find(state, desc->type) != NULL) {
-        return DOMAIN_INVALID_STATE;
-    }
-    if (state->used == state->capacity) {
-        return DOMAIN_NO_SPACE;
-    }
-
     mstore_table_schema_t schema = {0};
     schema.capacity = desc->capacity;
     schema.key_size = desc->key_size;
@@ -156,21 +160,44 @@ domain_err_t domain_register_entity(domain_t *domain, const domain_entity_desc_t
     schema.backing = backing_to_mstore(desc->backing);
     schema.persist_key = desc->persist_key;
 
-    domain_entity_entry_t *entry = &state->entries[state->used];
-    entry->scratch_key = malloc(desc->key_size);
-    if (entry->scratch_key == NULL) {
+    domain_platform_lock_acquire(state->lock);
+    domain_err_t result = DOMAIN_OK;
+    if (domain_entry_find(state, desc->type) != NULL) {
+        result = DOMAIN_INVALID_STATE;
+    } else if (state->used == state->capacity) {
+        result = DOMAIN_NO_SPACE;
+    }
+    domain_platform_lock_release(state->lock);
+    if (result != DOMAIN_OK) {
+        return result;
+    }
+
+    void *scratch_key = domain_platform_alloc(desc->key_size);
+    if (scratch_key == NULL) {
         return DOMAIN_NO_MEM;
     }
 
-    const mstore_err_t err = mstore_table_init(&entry->table, &schema);
+    mstore_table_t table = {0};
+    const mstore_err_t err = mstore_table_init(&table, &schema);
     if (err != MSTORE_OK) {
-        free(entry->scratch_key);
-        entry->scratch_key = NULL;
+        domain_platform_free(scratch_key);
         return domain_err_from_mstore(err);
     }
 
+    domain_platform_lock_acquire(state->lock);
+    if (domain_entry_find(state, desc->type) != NULL || state->used == state->capacity) {
+        domain_platform_lock_release(state->lock);
+        (void)mstore_table_deinit(&table);
+        domain_platform_free(scratch_key);
+        return DOMAIN_INVALID_STATE;
+    }
+
+    domain_entity_entry_t *entry = &state->entries[state->used];
     entry->desc = *desc;
+    entry->table = table;
+    entry->scratch_key = scratch_key;
     entry->used = true;
     state->used++;
+    domain_platform_lock_release(state->lock);
     return DOMAIN_OK;
 }
