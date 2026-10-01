@@ -67,7 +67,7 @@ static bool count_cb(const void *key, const void *record, void *ctx)
 static size_t record_count(domain_t *domain, domain_entity_t type)
 {
     count_ctx_t ctx = {0};
-    CHECK(domain_entity_iter(domain, type, count_cb, &ctx) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_iter(domain, type, count_cb, &ctx)));
     return ctx.seen;
 }
 
@@ -109,37 +109,37 @@ static void test_reopen_preserves_state(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t desc = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &(test_record_t){.value = 10}, NULL,
-                            &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key1, &(test_record_t){.value = 10}, NULL,
+                            &changed)));
     CHECK(changed);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key2, &(test_record_t){.value = 20}, NULL,
-                            &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key2, &(test_record_t){.value = 20}, NULL,
+                            &changed)));
     CHECK(changed);
 
     test_record_t updated = record_of(11);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed)));
     CHECK(changed);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key1, &updated, NULL, &changed)));
     CHECK(!changed);
 
-    CHECK(domain_entity_remove(&domain, TYPE_A, &key2, NULL) == DOMAIN_OK);
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_remove(&domain, TYPE_A, &key2, NULL)));
+    CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
-    CHECK(domain_register_entity(&reopened, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
+    CHECK(sys_ok(domain_register_entity(&reopened, &desc)));
 
     test_record_t out = {0};
-    CHECK(domain_entity_get(&reopened, TYPE_A, &key1, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_get(&reopened, TYPE_A, &key1, &out)));
     CHECK(out.value == 11);
-    CHECK(domain_entity_get(&reopened, TYPE_A, &key2, &out) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_entity_get(&reopened, TYPE_A, &key2, &out), SYS_CODE_NOT_FOUND));
     CHECK(record_count(&reopened, TYPE_A) == 1);
 
-    CHECK(domain_deinit(&reopened) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&reopened)));
     flash_off(sim);
 }
 
@@ -150,18 +150,18 @@ static void test_geometry_mismatch_is_rejected(void)
     flash_on(&sim, &device);
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t narrow = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
-    CHECK(domain_register_entity(&domain, &narrow) == DOMAIN_OK);
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &narrow)));
+    CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
     domain_entity_desc_t wide = desc_of(TYPE_A, "test_entity", sizeof(test_record_wide_t), 64);
     /* Region Manager не меняет размер региона на месте: смена геометрии — диагноз,
      * а не миграция (MSTORE_FLASH_REGIONS.md §6). */
-    CHECK(domain_register_entity(&reopened, &wide) == DOMAIN_INVALID_SIZE);
-    CHECK(domain_deinit(&reopened) == DOMAIN_OK);
+    CHECK(sys_is(domain_register_entity(&reopened, &wide), SYS_CODE_INVALID_SIZE));
+    CHECK(sys_ok(domain_deinit(&reopened)));
 
     flash_off(sim);
 }
@@ -176,37 +176,37 @@ static void test_two_flash_types_are_independent(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t a = desc_of(TYPE_A, "type_a", sizeof(test_record_t), 8);
     domain_entity_desc_t b = desc_of(TYPE_B, "type_b", sizeof(test_record_t), 8);
-    CHECK(domain_register_entity(&domain, &a) == DOMAIN_OK);
-    CHECK(domain_register_entity(&domain, &b) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &a)));
+    CHECK(sys_ok(domain_register_entity(&domain, &b)));
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &(test_record_t){.value = 100}, NULL,
-                            &changed) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_B, &key, &(test_record_t){.value = 200}, NULL,
-                            &changed) == DOMAIN_OK);
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &(test_record_t){.value = 100}, NULL,
+                            &changed)));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_B, &key, &(test_record_t){.value = 200}, NULL,
+                            &changed)));
+    CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(domain_init(&reopened, 2, 8) == DOMAIN_OK);
-    CHECK(domain_register_entity(&reopened, &a) == DOMAIN_OK);
-    CHECK(domain_register_entity(&reopened, &b) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
+    CHECK(sys_ok(domain_register_entity(&reopened, &a)));
+    CHECK(sys_ok(domain_register_entity(&reopened, &b)));
 
     test_record_t out = {0};
-    CHECK(domain_entity_get(&reopened, TYPE_A, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_get(&reopened, TYPE_A, &key, &out)));
     CHECK(out.value == 100);
-    CHECK(domain_entity_get(&reopened, TYPE_B, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_get(&reopened, TYPE_B, &key, &out)));
     CHECK(out.value == 200);
     CHECK(record_count(&reopened, TYPE_A) == 1);
     CHECK(record_count(&reopened, TYPE_B) == 1);
 
-    CHECK(domain_entity_remove(&reopened, TYPE_A, &key, NULL) == DOMAIN_OK);
-    CHECK(domain_entity_get(&reopened, TYPE_A, &key, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_get(&reopened, TYPE_B, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_remove(&reopened, TYPE_A, &key, NULL)));
+    CHECK(sys_is(domain_entity_get(&reopened, TYPE_A, &key, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(domain_entity_get(&reopened, TYPE_B, &key, &out)));
     CHECK(out.value == 200);
 
-    CHECK(domain_deinit(&reopened) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&reopened)));
     flash_off(sim);
 }
 

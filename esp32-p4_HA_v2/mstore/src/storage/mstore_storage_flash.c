@@ -228,7 +228,7 @@ static sys_error_t header_region_state(const mstore_flash_storage_t *st, size_t 
  * Классифицирует хвост банки от offset:
  *   полностью erased                -> clean end (torn=false)
  *   один не-erased run <= max_record -> torn uncommitted append (torn=true)
- *   не-erased после erased / run > max_record -> MSTORE_CORRUPT
+ *   не-erased после erased / run > max_record -> CORRUPT
  */
 static sys_error_t flash_classify_tail(const mstore_flash_storage_t *st, size_t from, bool *out_torn) {
     uint8_t buf[64];

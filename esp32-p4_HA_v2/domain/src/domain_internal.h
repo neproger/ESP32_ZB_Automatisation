@@ -57,15 +57,22 @@ typedef struct {
     void *dispatch_lock;
 } domain_state_t;
 
+/*
+ * Domain создаёт свою ошибку только тогда, когда она возникла в нём. Ошибку ниже-
+ * лежащего слоя он передаёт как есть (docs/ERRORS.md §1).
+ */
+static inline sys_error_t domain_fail(sys_code_t code)
+{
+    return sys_error_make(SYS_LAYER_DOMAIN, code);
+}
+
 domain_state_t *domain_state(const domain_t *domain);
 domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t type);
 
 /* Подписки и доставка (src/domain_dispatch.c). */
-domain_err_t domain_dispatch_init(domain_state_t *state);
+sys_error_t domain_dispatch_init(domain_state_t *state);
 void domain_dispatch_deinit(domain_state_t *state);
 void domain_dispatch_signal(domain_state_t *state);
-
-domain_err_t domain_err_from_mstore(mstore_err_t err);
 
 #ifdef __cplusplus
 }

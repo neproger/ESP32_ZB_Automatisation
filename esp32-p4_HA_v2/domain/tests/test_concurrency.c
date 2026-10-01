@@ -65,17 +65,17 @@ static void *writer_main(void *raw)
             const test_key_t key = key_of((uint32_t)i);
             record.value = (uint32_t)(round + i);
 
-            const domain_err_t put_err =
+            const sys_error_t put_err =
                 domain_entity_put(arg->domain, TYPE_A, &key, &record, NULL, &changed);
-            if (put_err == DOMAIN_STALE) {
+            if (sys_is(put_err, SYS_CODE_STALE)) {
                 arg->stale_seen = 1;
-            } else if (put_err != DOMAIN_OK) {
+            } else if (sys_failed(put_err)) {
                 return (void *)1;
             }
 
-            const domain_err_t remove_err =
+            const sys_error_t remove_err =
                 domain_entity_remove(arg->domain, TYPE_A, &key, NULL);
-            if (remove_err != DOMAIN_OK && remove_err != DOMAIN_NOT_FOUND) {
+            if (sys_failed(remove_err) && !sys_is(remove_err, SYS_CODE_NOT_FOUND)) {
                 return (void *)1;
             }
         }
@@ -90,8 +90,8 @@ static void *reader_main(void *raw)
 
     for (size_t round = 0; round < ROUNDS; ++round) {
         const test_key_t key = key_of((uint32_t)(round % SHARED_KEYS));
-        const domain_err_t err = domain_entity_get(domain, TYPE_A, &key, &out);
-        if (err != DOMAIN_OK && err != DOMAIN_NOT_FOUND) {
+        const sys_error_t err = domain_entity_get(domain, TYPE_A, &key, &out);
+        if (sys_failed(err) && !sys_is(err, SYS_CODE_NOT_FOUND)) {
             return (void *)1;
         }
     }
@@ -113,7 +113,7 @@ static DWORD WINAPI win_reader(LPVOID arg)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;
@@ -121,7 +121,7 @@ static void test_serialized_mutation_path(void)
     desc.payload_size = sizeof(test_record_t);
     desc.capacity = SHARED_KEYS + 4;
     desc.backing = DOMAIN_BACKING_RAM;
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     writer_arg_t args[WRITER_COUNT] = {0};
     HANDLE threads[WRITER_COUNT + 1] = {NULL};
@@ -148,7 +148,7 @@ static void test_serialized_mutation_path(void)
         CHECK(args[i].stale_seen == 0);
     }
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 #else
@@ -156,7 +156,7 @@ static void test_serialized_mutation_path(void)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;
@@ -164,7 +164,7 @@ static void test_serialized_mutation_path(void)
     desc.payload_size = sizeof(test_record_t);
     desc.capacity = SHARED_KEYS + 4;
     desc.backing = DOMAIN_BACKING_RAM;
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     pthread_t threads[WRITER_COUNT + 1] = {0};
     writer_arg_t args[WRITER_COUNT] = {0};
@@ -184,7 +184,7 @@ static void test_serialized_mutation_path(void)
         CHECK(args[i].stale_seen == 0);
     }
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 #endif

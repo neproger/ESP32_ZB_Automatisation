@@ -74,7 +74,7 @@ static domain_t *start(domain_entity_desc_t *desc_a, domain_entity_desc_t *desc_
 {
     static domain_t domain;
     memset(&domain, 0, sizeof(domain));
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 4, 8)));
 
     memset(desc_a, 0, sizeof(*desc_a));
     desc_a->type = TYPE_A;
@@ -82,7 +82,7 @@ static domain_t *start(domain_entity_desc_t *desc_a, domain_entity_desc_t *desc_
     desc_a->payload_size = sizeof(test_record_t);
     desc_a->capacity = 4;
     desc_a->backing = DOMAIN_BACKING_RAM;
-    CHECK(domain_register_entity(&domain, desc_a) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, desc_a)));
 
     if (desc_b != NULL) {
         memset(desc_b, 0, sizeof(*desc_b));
@@ -91,7 +91,7 @@ static domain_t *start(domain_entity_desc_t *desc_a, domain_entity_desc_t *desc_
         desc_b->payload_size = sizeof(test_record_t);
         desc_b->capacity = 4;
         desc_b->backing = DOMAIN_BACKING_RAM;
-        CHECK(domain_register_entity(&domain, desc_b) == DOMAIN_OK);
+        CHECK(sys_ok(domain_register_entity(&domain, desc_b)));
     }
     return &domain;
 }
@@ -104,7 +104,7 @@ static void put(domain_t *domain, domain_entity_t type, uint32_t id)
     bool changed = false;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-    CHECK(domain_entity_put(domain, type, &key, &record, &meta, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(domain, type, &key, &record, &meta, &changed)));
 }
 
 static void test_delivery(void)
@@ -116,12 +116,12 @@ static void test_delivery(void)
     inbox.accept = true;
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     put(domain, TYPE_A, 1);
 
     size_t delivered = 0;
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 1);
     CHECK(inbox.count == 1);
     CHECK(inbox.events[0].kind == DOMAIN_FACT_ENTITY_UPSERTED);
@@ -130,15 +130,15 @@ static void test_delivery(void)
     CHECK(inbox.wakes == 1);
 
     /* Повторная доставка без новых фактов — ноль. */
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 0);
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
     put(domain, TYPE_A, 2);
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 0);
 
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_filter_by_kind(void)
@@ -151,11 +151,11 @@ static void test_filter_by_kind(void)
     domain_subscription_desc_t desc = sub_all(&errors);
     desc.kind_mask = 1u << DOMAIN_FACT_ERROR;
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     put(domain, TYPE_A, 1);
     size_t delivered = 0;
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 0); /* успешный upsert под фильтр не прошёл */
 
     /* Переполняем таблицу: capacity 4, пятый ключ даёт NO_SPACE → ERROR. */
@@ -167,15 +167,14 @@ static void test_filter_by_kind(void)
     bool changed = false;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-    CHECK(domain_entity_put(domain, TYPE_A, &overflow_key, &overflow_record, &meta, &changed) ==
-          DOMAIN_NO_SPACE);
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_is(domain_entity_put(domain, TYPE_A, &overflow_key, &overflow_record, &meta, &changed), SYS_CODE_NO_SPACE));
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(errors.count == 1);
     CHECK(errors.events[0].kind == DOMAIN_FACT_ERROR);
-    CHECK(errors.events[0].error == (uint32_t)DOMAIN_NO_SPACE);
+    CHECK(sys_is(errors.events[0].error, SYS_CODE_NO_SPACE));
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_filter_by_entity(void)
@@ -189,19 +188,19 @@ static void test_filter_by_entity(void)
     domain_subscription_desc_t desc = sub_all(&inbox);
     desc.entity = TYPE_B;
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     put(domain, TYPE_A, 1);
     put(domain, TYPE_B, 2);
 
     size_t delivered = 0;
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 1);
     CHECK(inbox.count == 1);
     CHECK(inbox.events[0].entity == TYPE_B);
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_inbox_overflow_is_local_loss(void)
@@ -213,43 +212,43 @@ static void test_inbox_overflow_is_local_loss(void)
     inbox.accept = false; /* inbox полон */
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     put(domain, TYPE_A, 1);
     size_t delivered = 0;
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 0);
     CHECK(inbox.wakes == 0);
 
     /* Курсор всё равно продвинулся: потеря локальная и не блокирует доставку дальше. */
     inbox.accept = true;
     put(domain, TYPE_A, 2);
-    CHECK(domain_dispatch_once(domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 1);
     CHECK(inbox.events[0].event_id == 2);
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_gap_is_detected(void)
 {
     /* Таблица сущностей должна вместить 10 ключей, а Journal — только 8 фактов. */
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 4, 8)));
     domain_entity_desc_t entity_desc = {0};
     entity_desc.type = TYPE_A;
     entity_desc.key_size = sizeof(test_key_t);
     entity_desc.payload_size = sizeof(test_record_t);
     entity_desc.capacity = 32;
     entity_desc.backing = DOMAIN_BACKING_RAM;
-    CHECK(domain_register_entity(&domain, &entity_desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &entity_desc)));
 
     inbox_t inbox = {0};
     inbox.accept = true;
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(&domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(&domain, &desc, &sub)));
 
     /* Ёмкость Journal — 8, пишем 10 фактов: первые два вытеснены до доставки. */
     for (uint32_t i = 1; i <= 10; ++i) {
@@ -257,15 +256,15 @@ static void test_gap_is_detected(void)
     }
 
     size_t delivered = 0;
-    CHECK(domain_dispatch_once(&domain, &delivered) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(&domain, &delivered)));
 
     domain_state_t *state = domain_state(&domain);
     CHECK(state->gap_count == 1);
     CHECK(delivered == 8);
     CHECK(inbox.events[0].event_id == 3);
 
-    CHECK(domain_unsubscribe(&domain, sub) == DOMAIN_OK);
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_dispatch_once_without_counter_still_delivers(void)
@@ -277,14 +276,14 @@ static void test_dispatch_once_without_counter_still_delivers(void)
     inbox.accept = true;
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     put(domain, TYPE_A, 1);
-    CHECK(domain_dispatch_once(domain, NULL) == DOMAIN_OK);
+    CHECK(sys_ok(domain_dispatch_once(domain, NULL)));
     CHECK(inbox.count == 1);
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_unsubscribe_is_idempotent_and_rejects_foreign(void)
@@ -297,14 +296,14 @@ static void test_unsubscribe_is_idempotent_and_rejects_foreign(void)
     inbox.accept = true;
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
     /* Повторная отписка не освобождает память дважды. */
-    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_NOT_FOUND);
-    CHECK(domain_unsubscribe(domain, NULL) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_unsubscribe(domain, sub), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(domain_unsubscribe(domain, NULL), SYS_CODE_INVALID_ARG));
 
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 static void test_deinit_with_active_subscription(void)
@@ -316,10 +315,10 @@ static void test_deinit_with_active_subscription(void)
     inbox.accept = true;
     domain_subscription_desc_t desc = sub_all(&inbox);
     domain_subscription_t *sub = NULL;
-    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
 
     /* deinit освобождает подписки и сигнал; обращаться к sub после этого нельзя. */
-    CHECK(domain_deinit(domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(domain)));
 }
 
 int main(void)

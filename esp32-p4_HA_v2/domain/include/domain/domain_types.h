@@ -4,29 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sys/sys_error.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
  * Публичные типы Domain.
- * Ошибки нейтральны: сервис не должен отличать слой хранения от фасада
- * (docs/domain/DOMAIN_API.md §3).
+ * Ошибка нейтральна: сервис сравнивает код и не отличает слой хранения от фасада
+ * (docs/domain/DOMAIN_API.md §3, docs/ERRORS.md).
  */
-typedef enum {
-    DOMAIN_OK = 0,
-    DOMAIN_NOT_FOUND,     /* сущность, ключ или тип не найден */
-    DOMAIN_NO_SPACE,      /* место закончилось: слоты таблицы или registry */
-    DOMAIN_INVALID_ARG,   /* аргумент не задан или вне диапазона */
-    DOMAIN_INVALID_SIZE,  /* размер записи/ключа не совпадает с типом */
-    DOMAIN_INVALID_STATE, /* тип уже зарегистрирован или Domain не инициализирован */
-    DOMAIN_NO_MEM,
-    DOMAIN_STALE,   /* ссылка на transient payload больше не действительна */
-    DOMAIN_BUSY,
-    DOMAIN_IO,
-    DOMAIN_CORRUPT,
-    DOMAIN_OVERFLOW,
-} domain_err_t;
 
 /* Storage policy задаётся в descriptor один раз при регистрации. */
 typedef enum {

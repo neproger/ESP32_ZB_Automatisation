@@ -33,37 +33,37 @@ static domain_event_t event_of(uint32_t entity, uint32_t value)
 static void test_init_deinit(void)
 {
     domain_journal_t journal = {0};
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_OK);
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_INVALID_STATE);
+    CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
+    CHECK(sys_is(domain_journal_init(&journal, CAPACITY), SYS_CODE_INVALID_STATE));
 
     size_t count = 0;
-    CHECK(domain_journal_count(&journal, &count) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_count(&journal, &count)));
     CHECK(count == 0);
 
     domain_event_id_t id = 0;
-    CHECK(domain_journal_oldest(&journal, &id) == DOMAIN_NOT_FOUND);
-    CHECK(domain_journal_newest(&journal, &id) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_journal_oldest(&journal, &id), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(domain_journal_newest(&journal, &id), SYS_CODE_NOT_FOUND));
 
-    CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_deinit(&journal)));
 }
 
 static void test_append_assigns_identity(void)
 {
     domain_journal_t journal = {0};
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
 
     domain_event_t event = event_of(1, 42);
     domain_event_id_t id = 0;
-    CHECK(domain_journal_append(&journal, &event, &id) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_append(&journal, &event, &id)));
     CHECK(id == 1);
     CHECK(event.event_id == 1);
 
     domain_event_t second = event_of(1, 43);
-    CHECK(domain_journal_append(&journal, &second, &id) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_append(&journal, &second, &id)));
     CHECK(id == 2);
 
     domain_event_t out = {0};
-    CHECK(domain_journal_get(&journal, 1, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_get(&journal, 1, &out)));
     CHECK(out.event_id == 1);
     CHECK(out.ts == 1042);
     CHECK(out.kind == DOMAIN_FACT_ENTITY_UPSERTED);
@@ -77,64 +77,64 @@ static void test_append_assigns_identity(void)
     memcpy(&key_value, out.key, sizeof(key_value));
     CHECK(key_value == 42);
 
-    CHECK(domain_journal_get(&journal, 2, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_get(&journal, 2, &out)));
     CHECK(out.value.v.u32 == 43);
 
-    CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_deinit(&journal)));
 }
 
 static void test_bounds_and_gap(void)
 {
     domain_journal_t journal = {0};
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
 
     domain_event_id_t id = 0;
     domain_event_t out = {0};
 
-    CHECK(domain_journal_get(&journal, 1, &out) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_journal_get(&journal, 1, &out), SYS_CODE_NOT_FOUND));
 
     for (uint32_t i = 0; i < CAPACITY; ++i) {
         domain_event_t event = event_of(1, i);
-        CHECK(domain_journal_append(&journal, &event, &id) == DOMAIN_OK);
+        CHECK(sys_ok(domain_journal_append(&journal, &event, &id)));
     }
 
     domain_event_id_t oldest = 0;
     domain_event_id_t newest = 0;
-    CHECK(domain_journal_oldest(&journal, &oldest) == DOMAIN_OK);
-    CHECK(domain_journal_newest(&journal, &newest) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_oldest(&journal, &oldest)));
+    CHECK(sys_ok(domain_journal_newest(&journal, &newest)));
     CHECK(oldest == 1);
     CHECK(newest == CAPACITY);
 
     bool contained = false;
-    CHECK(domain_journal_contains(&journal, 1, &contained) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_contains(&journal, 1, &contained)));
     CHECK(contained);
-    CHECK(domain_journal_contains(&journal, CAPACITY + 1, &contained) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_contains(&journal, CAPACITY + 1, &contained)));
     CHECK(!contained);
 
-    CHECK(domain_journal_get(&journal, CAPACITY + 1, &out) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_journal_get(&journal, CAPACITY + 1, &out), SYS_CODE_NOT_FOUND));
 
     /* Переполнение: самая старая запись вытеснена — это и есть признак gap. */
     domain_event_t overflow = event_of(1, 99);
-    CHECK(domain_journal_append(&journal, &overflow, &id) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_append(&journal, &overflow, &id)));
     CHECK(id == CAPACITY + 1);
 
     size_t count = 0;
-    CHECK(domain_journal_count(&journal, &count) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_count(&journal, &count)));
     CHECK(count == CAPACITY);
 
-    CHECK(domain_journal_oldest(&journal, &oldest) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_oldest(&journal, &oldest)));
     CHECK(oldest == 2);
-    CHECK(domain_journal_get(&journal, 1, &out) == DOMAIN_STALE);
-    CHECK(domain_journal_get(&journal, CAPACITY + 1, &out) == DOMAIN_OK);
+    CHECK(sys_is(domain_journal_get(&journal, 1, &out), SYS_CODE_STALE));
+    CHECK(sys_ok(domain_journal_get(&journal, CAPACITY + 1, &out)));
     CHECK(out.value.v.u32 == 99);
 
-    CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_deinit(&journal)));
 }
 
 static void test_events_are_not_collapsed(void)
 {
     domain_journal_t journal = {0};
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
 
     domain_event_id_t first = 0;
     domain_event_id_t last = 0;
@@ -142,7 +142,7 @@ static void test_events_are_not_collapsed(void)
     for (uint32_t i = 0; i < CAPACITY; ++i) {
         domain_event_t event = event_of(1, 7); /* один и тот же факт */
         domain_event_id_t id = 0;
-        CHECK(domain_journal_append(&journal, &event, &id) == DOMAIN_OK);
+        CHECK(sys_ok(domain_journal_append(&journal, &event, &id)));
         if (i == 0) {
             first = id;
         }
@@ -152,28 +152,28 @@ static void test_events_are_not_collapsed(void)
     CHECK(last - first == (domain_event_id_t)(CAPACITY - 1));
 
     size_t count = 0;
-    CHECK(domain_journal_count(&journal, &count) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_count(&journal, &count)));
     CHECK(count == CAPACITY);
 
-    CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_deinit(&journal)));
 }
 
 static void test_invalid_args(void)
 {
     domain_journal_t journal = {0};
-    CHECK(domain_journal_init(&journal, 0) == DOMAIN_INVALID_ARG);
-    CHECK(domain_journal_init(NULL, CAPACITY) == DOMAIN_INVALID_ARG);
-    CHECK(domain_journal_init(&journal, CAPACITY) == DOMAIN_OK);
+    CHECK(sys_is(domain_journal_init(&journal, 0), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_journal_init(NULL, CAPACITY), SYS_CODE_INVALID_ARG));
+    CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
 
     domain_event_t event = event_of(1, 1);
     domain_event_id_t id = 0;
-    CHECK(domain_journal_append(&journal, NULL, &id) == DOMAIN_INVALID_ARG);
-    CHECK(domain_journal_append(&journal, &event, NULL) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_journal_append(&journal, NULL, &id), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_journal_append(&journal, &event, NULL), SYS_CODE_INVALID_ARG));
 
     /* Ключ шире лимита — нарушение инварианта, отвергается при регистрации типа,
      * а не здесь: Journal факты не проверяет. */
 
-    CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
+    CHECK(sys_ok(domain_journal_deinit(&journal)));
 }
 
 int main(void)

@@ -49,8 +49,11 @@ typedef struct {
     domain_value_t value;
     uint64_t payload_ref;
 
-    /* Только для kind = ERROR: код результата операции. */
-    uint32_t error;
+    /*
+     * Только для kind = ERROR: результат операции как он есть. Journal хранит ошибку
+     * источника без перекодирования — layer пометит, кто её создал (docs/ERRORS.md).
+     */
+    sys_error_t error;
 } domain_event_t;
 
 #ifdef __cplusplus

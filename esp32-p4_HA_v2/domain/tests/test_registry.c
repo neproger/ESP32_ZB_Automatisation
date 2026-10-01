@@ -44,27 +44,27 @@ static domain_entity_desc_t sensor_desc(void)
 static void test_init_deinit(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_INVALID_STATE);
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
-    CHECK(domain_deinit(&domain) == DOMAIN_INVALID_STATE);
-    CHECK(domain_init(NULL, 4, 8) == DOMAIN_INVALID_ARG);
-    CHECK(domain_init(&domain, 0, 8) == DOMAIN_INVALID_ARG);
-    CHECK(domain_init(&domain, 4, 0) == DOMAIN_INVALID_ARG);
+    CHECK(sys_ok(domain_init(&domain, 4, 8)));
+    CHECK(sys_is(domain_init(&domain, 4, 8), SYS_CODE_INVALID_STATE));
+    CHECK(sys_ok(domain_deinit(&domain)));
+    CHECK(sys_is(domain_deinit(&domain), SYS_CODE_INVALID_STATE));
+    CHECK(sys_is(domain_init(NULL, 4, 8), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_init(&domain, 0, 8), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_init(&domain, 4, 0), SYS_CODE_INVALID_ARG));
     (void)domain_deinit(&domain);
 }
 
 static void test_register(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 4, 8)));
 
     domain_entity_desc_t sensor = sensor_desc();
-    CHECK(domain_register_entity(&domain, &sensor) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &sensor)));
 
     domain_entity_desc_t duplicate = sensor_desc();
     duplicate.capacity = 16;
-    CHECK(domain_register_entity(&domain, &duplicate) == DOMAIN_INVALID_STATE);
+    CHECK(sys_is(domain_register_entity(&domain, &duplicate), SYS_CODE_INVALID_STATE));
 
     domain_entity_desc_t sw = {0};
     sw.type = TYPE_SWITCH;
@@ -72,65 +72,65 @@ static void test_register(void)
     sw.payload_size = sizeof(test_record_t);
     sw.capacity = 4;
     sw.backing = DOMAIN_BACKING_RAM;
-    CHECK(domain_register_entity(&domain, &sw) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &sw)));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_invalid_desc(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 4, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 4, 8)));
 
     domain_entity_desc_t no_key = sensor_desc();
     no_key.key_size = 0;
-    CHECK(domain_register_entity(&domain, &no_key) == DOMAIN_INVALID_SIZE);
+    CHECK(sys_is(domain_register_entity(&domain, &no_key), SYS_CODE_INVALID_SIZE));
 
     domain_entity_desc_t no_payload = sensor_desc();
     no_payload.payload_size = 0;
-    CHECK(domain_register_entity(&domain, &no_payload) == DOMAIN_INVALID_SIZE);
+    CHECK(sys_is(domain_register_entity(&domain, &no_payload), SYS_CODE_INVALID_SIZE));
 
     domain_entity_desc_t no_capacity = sensor_desc();
     no_capacity.capacity = 0;
-    CHECK(domain_register_entity(&domain, &no_capacity) == DOMAIN_INVALID_SIZE);
+    CHECK(sys_is(domain_register_entity(&domain, &no_capacity), SYS_CODE_INVALID_SIZE));
 
     domain_entity_desc_t flash_without_key = sensor_desc();
     flash_without_key.backing = DOMAIN_BACKING_FLASH;
     flash_without_key.persist_key = NULL;
-    CHECK(domain_register_entity(&domain, &flash_without_key) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_register_entity(&domain, &flash_without_key), SYS_CODE_INVALID_ARG));
 
     domain_entity_desc_t no_backing = sensor_desc();
     no_backing.backing = DOMAIN_BACKING_NONE;
-    CHECK(domain_register_entity(&domain, &no_backing) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_register_entity(&domain, &no_backing), SYS_CODE_INVALID_ARG));
 
     /* Ключ копируется в запись Journal целиком: шире лимита — отказ на регистрации. */
     domain_entity_desc_t wide_key = sensor_desc();
     wide_key.type = 7;
     wide_key.key_size = DOMAIN_EVENT_KEY_MAX + 1;
-    CHECK(domain_register_entity(&domain, &wide_key) == DOMAIN_INVALID_SIZE);
+    CHECK(sys_is(domain_register_entity(&domain, &wide_key), SYS_CODE_INVALID_SIZE));
 
-    CHECK(domain_register_entity(&domain, NULL) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_register_entity(&domain, NULL), SYS_CODE_INVALID_ARG));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_registry_full(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
 
     domain_entity_desc_t desc = sensor_desc();
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     domain_entity_desc_t second = sensor_desc();
     second.type = TYPE_SWITCH;
-    CHECK(domain_register_entity(&domain, &second) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &second)));
 
     domain_entity_desc_t third = sensor_desc();
     third.type = 3;
-    CHECK(domain_register_entity(&domain, &third) == DOMAIN_NO_SPACE);
+    CHECK(sys_is(domain_register_entity(&domain, &third), SYS_CODE_NO_SPACE));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 int main(void)

@@ -36,28 +36,28 @@ static bool matches(const domain_subscription_desc_t *desc, const domain_event_t
     return true;
 }
 
-domain_err_t domain_dispatch_init(domain_state_t *state)
+sys_error_t domain_dispatch_init(domain_state_t *state)
 {
     state->subscriptions = NULL;
     state->gap_count = 0;
 
     state->dispatch_lock = domain_platform_lock_create();
     if (state->dispatch_lock == NULL) {
-        return DOMAIN_NO_MEM;
+        return domain_fail(SYS_CODE_NO_MEM);
     }
 
     state->signal = domain_platform_signal_create();
     if (state->signal == NULL) {
         domain_platform_lock_destroy(state->dispatch_lock);
         state->dispatch_lock = NULL;
-        return DOMAIN_NO_MEM;
+        return domain_fail(SYS_CODE_NO_MEM);
     }
 
     /* Курсор встаёт на следующий ожидаемый факт: история при старте не реплеится. */
     domain_event_id_t newest = 0;
-    state->cursor = (domain_journal_newest(&state->journal, &newest) == DOMAIN_OK) ? newest + 1
+    state->cursor = (sys_ok(domain_journal_newest(&state->journal, &newest))) ? newest + 1
                                                                                   : 1;
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
 void domain_dispatch_deinit(domain_state_t *state)
@@ -87,17 +87,17 @@ void domain_dispatch_signal(domain_state_t *state)
     }
 }
 
-domain_err_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t *desc,
+sys_error_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t *desc,
                               domain_subscription_t **out_sub)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || desc == NULL || out_sub == NULL || desc->try_push == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     domain_subscription_t *sub = domain_platform_alloc(sizeof(*sub));
     if (sub == NULL) {
-        return DOMAIN_NO_MEM;
+        return domain_fail(SYS_CODE_NO_MEM);
     }
     sub->desc = *desc;
     sub->next = NULL;
@@ -108,14 +108,14 @@ domain_err_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t
     domain_platform_lock_release(state->dispatch_lock);
 
     *out_sub = sub;
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
-domain_err_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub)
+sys_error_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || sub == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     domain_platform_lock_acquire(state->dispatch_lock);
@@ -131,32 +131,32 @@ domain_err_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub)
 
     if (!found) {
         /* Чужой или уже отписанный handle: освобождать его Domain не имеет права. */
-        return DOMAIN_NOT_FOUND;
+        return domain_fail(SYS_CODE_NOT_FOUND);
     }
 
     domain_platform_free(sub);
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
-domain_err_t domain_dispatch_wait(domain_t *domain, uint32_t timeout_ms, bool *out_signalled)
+sys_error_t domain_dispatch_wait(domain_t *domain, uint32_t timeout_ms, bool *out_signalled)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || out_signalled == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
     if (state->signal == NULL) {
-        return DOMAIN_INVALID_STATE;
+        return domain_fail(SYS_CODE_INVALID_STATE);
     }
 
     *out_signalled = domain_platform_signal_wait(state->signal, timeout_ms);
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
-domain_err_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
+sys_error_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     size_t delivered = 0;
@@ -164,16 +164,16 @@ domain_err_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
     domain_platform_lock_acquire(state->dispatch_lock);
 
     domain_event_id_t newest = 0;
-    if (domain_journal_newest(&state->journal, &newest) != DOMAIN_OK) {
+    if (sys_failed(domain_journal_newest(&state->journal, &newest))) {
         domain_platform_lock_release(state->dispatch_lock);
         if (out_delivered != NULL) {
             *out_delivered = 0;
         }
-        return DOMAIN_OK;
+        return SYS_OK;
     }
 
     domain_event_id_t oldest = 0;
-    if (domain_journal_oldest(&state->journal, &oldest) == DOMAIN_OK && state->cursor < oldest) {
+    if (sys_ok(domain_journal_oldest(&state->journal, &oldest)) && state->cursor < oldest) {
         /* Факты вытеснены раньше, чем их прочитали: фиксируем и догоняем с oldest. */
         state->gap_count++;
         state->cursor = oldest;
@@ -182,9 +182,9 @@ domain_err_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
     const domain_event_id_t last = newest;
     while (state->cursor <= last) {
         domain_event_t event = {0};
-        const domain_err_t err = domain_journal_get(&state->journal, state->cursor, &event);
+        const sys_error_t err = domain_journal_get(&state->journal, state->cursor, &event);
         state->cursor++;
-        if (err != DOMAIN_OK) {
+        if (sys_failed(err)) {
             continue; /* вытеснено во время разбора */
         }
 
@@ -207,5 +207,5 @@ domain_err_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
     if (out_delivered != NULL) {
         *out_delivered = delivered;
     }
-    return DOMAIN_OK;
+    return SYS_OK;
 }

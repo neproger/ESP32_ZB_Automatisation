@@ -25,18 +25,18 @@ typedef struct {
     mstore_ring_t ring;
 } domain_journal_t;
 
-domain_err_t domain_journal_init(domain_journal_t *journal, size_t capacity);
-domain_err_t domain_journal_deinit(domain_journal_t *journal);
+sys_error_t domain_journal_init(domain_journal_t *journal, size_t capacity);
+sys_error_t domain_journal_deinit(domain_journal_t *journal);
 
-domain_err_t domain_journal_append(domain_journal_t *journal, domain_event_t *event,
+sys_error_t domain_journal_append(domain_journal_t *journal, domain_event_t *event,
                                    domain_event_id_t *out_id);
-domain_err_t domain_journal_get(const domain_journal_t *journal, domain_event_id_t id,
+sys_error_t domain_journal_get(const domain_journal_t *journal, domain_event_id_t id,
                                 domain_event_t *out);
 
-domain_err_t domain_journal_oldest(const domain_journal_t *journal, domain_event_id_t *out);
-domain_err_t domain_journal_newest(const domain_journal_t *journal, domain_event_id_t *out);
-domain_err_t domain_journal_count(const domain_journal_t *journal, size_t *out);
-domain_err_t domain_journal_contains(const domain_journal_t *journal, domain_event_id_t id,
+sys_error_t domain_journal_oldest(const domain_journal_t *journal, domain_event_id_t *out);
+sys_error_t domain_journal_newest(const domain_journal_t *journal, domain_event_id_t *out);
+sys_error_t domain_journal_count(const domain_journal_t *journal, size_t *out);
+sys_error_t domain_journal_contains(const domain_journal_t *journal, domain_event_id_t id,
                                      bool *out);
 
 #ifdef __cplusplus

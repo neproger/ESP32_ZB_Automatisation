@@ -54,38 +54,38 @@ static domain_entity_desc_t desc_of(domain_entity_t type, size_t capacity)
 static void test_put_changed(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     const test_key_t key = key_of(1);
     test_record_t record = record_of(10);
     bool changed = false;
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
     CHECK(changed);
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
     CHECK(!changed);
 
     record.value = 11;
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
     CHECK(changed);
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, NULL, NULL, &changed) == DOMAIN_INVALID_ARG);
-    CHECK(domain_entity_put(&domain, TYPE_A, NULL, &record, NULL, &changed) == DOMAIN_INVALID_ARG);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, NULL) == DOMAIN_INVALID_ARG);
-    CHECK(domain_entity_put(&domain, 99, &key, &record, NULL, &changed) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_entity_put(&domain, TYPE_A, &key, NULL, NULL, &changed), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_put(&domain, TYPE_A, NULL, &record, NULL, &changed), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, NULL), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_put(&domain, 99, &key, &record, NULL, &changed), SYS_CODE_NOT_FOUND));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_get_remove(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     const test_key_t key = key_of(1);
     const test_key_t absent = key_of(2);
@@ -93,30 +93,30 @@ static void test_get_remove(void)
     test_record_t out = {0};
     bool changed = false;
 
-    CHECK(domain_entity_get(&domain, TYPE_A, &key, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed) == DOMAIN_OK);
-    CHECK(domain_entity_get(&domain, TYPE_A, &key, &out) == DOMAIN_OK);
+    CHECK(sys_is(domain_entity_get(&domain, TYPE_A, &key, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
+    CHECK(sys_ok(domain_entity_get(&domain, TYPE_A, &key, &out)));
     CHECK(out.value == 10);
-    CHECK(domain_entity_get(&domain, TYPE_A, &absent, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_get(&domain, 99, &key, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_get(&domain, TYPE_A, NULL, &out) == DOMAIN_INVALID_ARG);
+    CHECK(sys_is(domain_entity_get(&domain, TYPE_A, &absent, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(domain_entity_get(&domain, 99, &key, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(domain_entity_get(&domain, TYPE_A, NULL, &out), SYS_CODE_INVALID_ARG));
 
-    CHECK(domain_entity_remove(&domain, TYPE_A, &key, NULL) == DOMAIN_OK);
-    CHECK(domain_entity_get(&domain, TYPE_A, &key, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_remove(&domain, TYPE_A, &key, NULL) == DOMAIN_NOT_FOUND);
+    CHECK(sys_ok(domain_entity_remove(&domain, TYPE_A, &key, NULL)));
+    CHECK(sys_is(domain_entity_get(&domain, TYPE_A, &key, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(domain_entity_remove(&domain, TYPE_A, &key, NULL), SYS_CODE_NOT_FOUND));
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
     CHECK(changed);
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_no_space(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 2);
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     test_record_t record = record_of(1);
     bool changed = false;
@@ -125,14 +125,14 @@ static void test_no_space(void)
     const test_key_t second = key_of(2);
     const test_key_t third = key_of(3);
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &first, &record, NULL, &changed) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_A, &second, &record, NULL, &changed) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_A, &third, &record, NULL, &changed) == DOMAIN_NO_SPACE);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &first, &record, NULL, &changed)));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &second, &record, NULL, &changed)));
+    CHECK(sys_is(domain_entity_put(&domain, TYPE_A, &third, &record, NULL, &changed), SYS_CODE_NO_SPACE));
 
-    CHECK(domain_entity_remove(&domain, TYPE_A, &second, NULL) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_A, &third, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_remove(&domain, TYPE_A, &second, NULL)));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &third, &record, NULL, &changed)));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 typedef struct {
@@ -161,66 +161,66 @@ static bool iter_stop(const void *key, const void *record, void *ctx)
 static void test_iter(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
-    CHECK(domain_register_entity(&domain, &desc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
     iter_acc_t acc = {0};
-    CHECK(domain_entity_iter(&domain, TYPE_A, iter_count, &acc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_iter(&domain, TYPE_A, iter_count, &acc)));
     CHECK(acc.seen == 0);
 
     test_record_t record = record_of(5);
     bool changed = false;
     const test_key_t first = key_of(1);
     const test_key_t second = key_of(2);
-    CHECK(domain_entity_put(&domain, TYPE_A, &first, &record, NULL, &changed) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_A, &second, &record, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &first, &record, NULL, &changed)));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &second, &record, NULL, &changed)));
 
     acc = (iter_acc_t){0};
-    CHECK(domain_entity_iter(&domain, TYPE_A, iter_count, &acc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_iter(&domain, TYPE_A, iter_count, &acc)));
     CHECK(acc.seen == 2);
     CHECK(acc.sum == 10);
 
     acc = (iter_acc_t){0};
-    CHECK(domain_entity_iter(&domain, TYPE_A, iter_stop, &acc) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_iter(&domain, TYPE_A, iter_stop, &acc)));
     CHECK(acc.seen == 0);
 
-    CHECK(domain_entity_iter(&domain, TYPE_A, NULL, &acc) == DOMAIN_INVALID_ARG);
-    CHECK(domain_entity_iter(&domain, 99, iter_count, &acc) == DOMAIN_NOT_FOUND);
+    CHECK(sys_is(domain_entity_iter(&domain, TYPE_A, NULL, &acc), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_iter(&domain, 99, iter_count, &acc), SYS_CODE_NOT_FOUND));
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 static void test_two_types_are_independent(void)
 {
     domain_t domain = {0};
-    CHECK(domain_init(&domain, 2, 8) == DOMAIN_OK);
+    CHECK(sys_ok(domain_init(&domain, 2, 8)));
 
     domain_entity_desc_t a = desc_of(TYPE_A, 4);
     domain_entity_desc_t b = desc_of(TYPE_B, 4);
-    CHECK(domain_register_entity(&domain, &a) == DOMAIN_OK);
-    CHECK(domain_register_entity(&domain, &b) == DOMAIN_OK);
+    CHECK(sys_ok(domain_register_entity(&domain, &a)));
+    CHECK(sys_ok(domain_register_entity(&domain, &b)));
 
     const test_key_t key = key_of(1);
     test_record_t in_a = record_of(100);
     test_record_t in_b = record_of(200);
     bool changed = false;
 
-    CHECK(domain_entity_put(&domain, TYPE_A, &key, &in_a, NULL, &changed) == DOMAIN_OK);
-    CHECK(domain_entity_put(&domain, TYPE_B, &key, &in_b, NULL, &changed) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &in_a, NULL, &changed)));
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_B, &key, &in_b, NULL, &changed)));
 
     test_record_t out = {0};
-    CHECK(domain_entity_get(&domain, TYPE_A, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_get(&domain, TYPE_A, &key, &out)));
     CHECK(out.value == 100);
-    CHECK(domain_entity_get(&domain, TYPE_B, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_get(&domain, TYPE_B, &key, &out)));
     CHECK(out.value == 200);
 
-    CHECK(domain_entity_remove(&domain, TYPE_A, &key, NULL) == DOMAIN_OK);
-    CHECK(domain_entity_get(&domain, TYPE_A, &key, &out) == DOMAIN_NOT_FOUND);
-    CHECK(domain_entity_get(&domain, TYPE_B, &key, &out) == DOMAIN_OK);
+    CHECK(sys_ok(domain_entity_remove(&domain, TYPE_A, &key, NULL)));
+    CHECK(sys_is(domain_entity_get(&domain, TYPE_A, &key, &out), SYS_CODE_NOT_FOUND));
+    CHECK(sys_ok(domain_entity_get(&domain, TYPE_B, &key, &out)));
     CHECK(out.value == 200);
 
-    CHECK(domain_deinit(&domain) == DOMAIN_OK);
+    CHECK(sys_ok(domain_deinit(&domain)));
 }
 
 int main(void)

@@ -61,7 +61,7 @@ static entity_op_t entity_op_begin(domain_state_t *state, domain_entity_entry_t 
     return op_ctx;
 }
 
-static void entity_op_write_fact(const entity_op_t *op, uint8_t kind, uint32_t error)
+static void entity_op_write_fact(const entity_op_t *op, uint8_t kind, sys_error_t error)
 {
     /*
      * Инварианты, а не проверки: key_size приходит из descriptor'а, а регистрация типа
@@ -93,21 +93,20 @@ static void entity_op_write_fact(const entity_op_t *op, uint8_t kind, uint32_t e
 
 static void entity_op_state(const entity_op_t *op, uint8_t kind)
 {
-    entity_op_write_fact(op, kind, 0);
+    entity_op_write_fact(op, kind, SYS_OK);
 }
 
 /*
- * Сбой операции: фиксируется фактом ERROR и возвращается вызывающему тем же кодом.
+ * Сбой операции: фиксируется фактом ERROR и возвращается вызывающему той же ошибкой.
  * Journal не влияет на решение — решение принято на месте вызова.
  */
-static domain_err_t entity_op_error(const entity_op_t *op, mstore_err_t err)
+static sys_error_t entity_op_error(const entity_op_t *op, sys_error_t err)
 {
-    const domain_err_t result = domain_err_from_mstore(err);
-    entity_op_write_fact(op, (uint8_t)DOMAIN_FACT_ERROR, (uint32_t)result);
-    return result;
+    entity_op_write_fact(op, (uint8_t)DOMAIN_FACT_ERROR, err);
+    return err;
 }
 
-static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *entry,
+static sys_error_t put_locked(domain_state_t *state, domain_entity_entry_t *entry,
                                const void *key, const void *record,
                                const domain_fact_meta_t *meta, bool *out_changed)
 {
@@ -118,25 +117,25 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
 
     bool changed = false;
     mstore_slot_t slot = 0;
-    mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
+    sys_error_t err = mstore_table_slot_find(&entry->table, key, &slot);
 
-    if (err == MSTORE_NOT_FOUND) {
+    if (sys_is(err, SYS_CODE_NOT_FOUND)) {
         /* Ожидаемая ветка: записи ещё нет. */
         uint32_t generation = 0;
         err = mstore_table_slot_allocate(&entry->table, key, record, &slot, &generation);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return entity_op_error(&op, err);
         }
         changed = true;
-    } else if (err == MSTORE_OK) {
+    } else if (sys_ok(err)) {
         mstore_meta_t slot_meta = {0};
         err = mstore_table_slot_meta(&entry->table, slot, &slot_meta);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return entity_op_error(&op, err);
         }
         err = mstore_table_slot_update(&entry->table, slot, slot_meta.generation, record,
                                        &changed);
-        if (err != MSTORE_OK) {
+        if (sys_failed(err)) {
             return entity_op_error(&op, err);
         }
     } else {
@@ -144,15 +143,15 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
     }
 
     if (!changed) {
-        return DOMAIN_OK;
+        return SYS_OK;
     }
 
     entity_op_state(&op, (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED);
     *out_changed = changed;
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
-static domain_err_t get_locked(domain_state_t *state, domain_entity_entry_t *entry,
+static sys_error_t get_locked(domain_state_t *state, domain_entity_entry_t *entry,
                                const void *key, void *out_record,
                                const domain_fact_meta_t *meta)
 {
@@ -160,10 +159,10 @@ static domain_err_t get_locked(domain_state_t *state, domain_entity_entry_t *ent
         entity_op_begin(state, entry, key, (uint8_t)DOMAIN_OP_ENTITY_GET, meta);
 
     mstore_slot_t slot = 0;
-    mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
-    if (err != MSTORE_OK) {
-        if (err == MSTORE_NOT_FOUND) {
-            return DOMAIN_NOT_FOUND; /* читать нечего — норма */
+    sys_error_t err = mstore_table_slot_find(&entry->table, key, &slot);
+    if (sys_failed(err)) {
+        if (sys_is(err, SYS_CODE_NOT_FOUND)) {
+            return domain_fail(SYS_CODE_NOT_FOUND); /* читать нечего — норма */
         }
         return entity_op_error(&op, err);
     }
@@ -171,40 +170,40 @@ static domain_err_t get_locked(domain_state_t *state, domain_entity_entry_t *ent
     mstore_meta_t slot_meta = {0};
     err = mstore_table_slot_read(&entry->table, slot, &slot_meta, entry->scratch_key,
                                  out_record);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         return entity_op_error(&op, err);
     }
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
-static domain_err_t remove_locked(domain_state_t *state, domain_entity_entry_t *entry,
+static sys_error_t remove_locked(domain_state_t *state, domain_entity_entry_t *entry,
                                   const void *key, const domain_fact_meta_t *meta)
 {
     const entity_op_t op =
         entity_op_begin(state, entry, key, (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta);
 
     mstore_slot_t slot = 0;
-    mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
-    if (err != MSTORE_OK) {
-        if (err == MSTORE_NOT_FOUND) {
-            return DOMAIN_NOT_FOUND; /* удалять нечего — норма */
+    sys_error_t err = mstore_table_slot_find(&entry->table, key, &slot);
+    if (sys_failed(err)) {
+        if (sys_is(err, SYS_CODE_NOT_FOUND)) {
+            return domain_fail(SYS_CODE_NOT_FOUND); /* удалять нечего — норма */
         }
         return entity_op_error(&op, err);
     }
 
     mstore_meta_t slot_meta = {0};
     err = mstore_table_slot_meta(&entry->table, slot, &slot_meta);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         return entity_op_error(&op, err);
     }
 
     err = mstore_table_slot_free(&entry->table, slot, slot_meta.generation);
-    if (err != MSTORE_OK) {
+    if (sys_failed(err)) {
         return entity_op_error(&op, err);
     }
 
     entity_op_state(&op, (uint8_t)DOMAIN_FACT_ENTITY_REMOVED);
-    return DOMAIN_OK;
+    return SYS_OK;
 }
 
 typedef struct {
@@ -221,73 +220,73 @@ static bool iter_bridge(mstore_slot_t slot, const mstore_meta_t *meta,
     return bridge->cb(key, payload, bridge->ctx);
 }
 
-domain_err_t domain_entity_put(domain_t *domain, domain_entity_t type,
+sys_error_t domain_entity_put(domain_t *domain, domain_entity_t type,
                                const void *key, const void *record,
                                const domain_fact_meta_t *meta, bool *out_changed)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || key == NULL || record == NULL || out_changed == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
-    const domain_err_t result = (entry == NULL)
-                                    ? DOMAIN_NOT_FOUND
+    const sys_error_t result = (entry == NULL)
+                                    ? domain_fail(SYS_CODE_NOT_FOUND)
                                     : put_locked(state, entry, key, record, meta, out_changed);
     domain_platform_lock_release(state->lock);
     return result;
 }
 
-domain_err_t domain_entity_get(domain_t *domain, domain_entity_t type,
+sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type,
                                const void *key, void *out_record)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || key == NULL || out_record == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
-    const domain_err_t result =
-        (entry == NULL) ? DOMAIN_NOT_FOUND : get_locked(state, entry, key, out_record, NULL);
+    const sys_error_t result =
+        (entry == NULL) ? domain_fail(SYS_CODE_NOT_FOUND) : get_locked(state, entry, key, out_record, NULL);
     domain_platform_lock_release(state->lock);
     return result;
 }
 
-domain_err_t domain_entity_remove(domain_t *domain, domain_entity_t type, const void *key,
+sys_error_t domain_entity_remove(domain_t *domain, domain_entity_t type, const void *key,
                                   const domain_fact_meta_t *meta)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || key == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
-    const domain_err_t result =
-        (entry == NULL) ? DOMAIN_NOT_FOUND : remove_locked(state, entry, key, meta);
+    const sys_error_t result =
+        (entry == NULL) ? domain_fail(SYS_CODE_NOT_FOUND) : remove_locked(state, entry, key, meta);
     domain_platform_lock_release(state->lock);
     return result;
 }
 
-domain_err_t domain_entity_iter(domain_t *domain, domain_entity_t type,
+sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,
                                 domain_entity_iter_cb_t cb, void *ctx)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || cb == NULL) {
-        return DOMAIN_INVALID_ARG;
+        return domain_fail(SYS_CODE_INVALID_ARG);
     }
 
     iter_bridge_t bridge = {.cb = cb, .ctx = ctx};
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
-    domain_err_t result = DOMAIN_NOT_FOUND;
+    sys_error_t result = domain_fail(SYS_CODE_NOT_FOUND);
     if (entry != NULL) {
         const entity_op_t op =
             entity_op_begin(state, entry, NULL, (uint8_t)DOMAIN_OP_ENTITY_ITER, NULL);
-        const mstore_err_t err = mstore_table_iter(&entry->table, iter_bridge, &bridge);
-        result = (err == MSTORE_OK) ? DOMAIN_OK : entity_op_error(&op, err);
+        const sys_error_t err = mstore_table_iter(&entry->table, iter_bridge, &bridge);
+        result = (sys_ok(err)) ? SYS_OK : entity_op_error(&op, err);
     }
     domain_platform_lock_release(state->lock);
     return result;

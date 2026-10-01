@@ -27,7 +27,8 @@ set(DOMAIN_HOST_PORT ../port/host/domain_platform_host.c)
 function(domain_add_test name)
     add_executable(${name} ${name}.c ${DOMAIN_CORE} ${DOMAIN_HOST_PORT} ${MSTORE_CORE}
         ${MSTORE_HOST_PORT})
-    target_include_directories(${name} PRIVATE ../include ../src ../../mstore/include ../../mstore/src)
+    target_include_directories(${name} PRIVATE ../include ../src ../../mstore/include
+        ../../mstore/src ../../sys/include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
     else()
@@ -53,7 +54,7 @@ set(NOR_SIM_SUPPORT
 add_executable(test_flash_reopen test_flash_reopen.c ${NOR_SIM_SUPPORT} ${DOMAIN_CORE}
     ${DOMAIN_HOST_PORT} ${MSTORE_CORE} ${MSTORE_HOST_PORT})
 target_include_directories(test_flash_reopen PRIVATE ../include ../src ../../mstore/include
-    ../../mstore/src ../../mstore/tests/support)
+    ../../mstore/src ../../mstore/tests/support ../../sys/include)
 if(MSVC)
     target_compile_options(test_flash_reopen PRIVATE /W4)
 else()
