@@ -73,6 +73,11 @@ FAILURE (runtime)            → ERROR { op, error, entity/key если прим
 `IO`, `CORRUPT`, `NO_SPACE`, `NO_MEM`, `OVERFLOW`, `STALE`, а позже — «executor не
 найден».
 
+В entity-слое это свёрнуто в контекст операции (`entity_op_t`): тип, ключ и `op` уже
+известны на входе, поэтому каждый вызов mstore пишет факт одной строкой —
+`entity_op_error(&op, err)` или `entity_op_state(&op, kind)` — и решение, что считать
+ошибкой, остаётся видимым на месте вызова.
+
 ## 2.2. Append в штатном пути не отказывает
 
 Journal не валидирует и не решает: при заполнении ring вытесняет oldest, а запись
