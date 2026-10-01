@@ -20,7 +20,7 @@ Services        владеют семантикой и используют об
 
 | Кто | Что знает о записи |
 |---|---|
-| **Domain** | только descriptor: `key_size`, `payload_size`, `capacity`, `backing` |
+| **Domain** | только descriptor: `type`, `key_size`, `payload_size`, `capacity`, `backing`, `persist_key`, optional validator |
 | **Сервис-владелец** | семантика полей, допустимые значения |
 | **Остальные сервисы** | layout (читают те же поля) |
 | **App bootstrap** | какие типы существуют и как они хранятся |

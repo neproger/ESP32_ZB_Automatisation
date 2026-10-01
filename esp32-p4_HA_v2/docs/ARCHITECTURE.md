@@ -25,9 +25,14 @@ Command — намерение что-то сделать
 ### 1.2. Слои
 
 ```text
-                 Services / Clients
-      Zigbee | Automation | Web | Display
-                      │
+           ha_model — общий словарь форм данных
+           линкуют сервисы и bootstrap, но не Domain
+             ╱              │              ╲
+        Zigbee          Automation        Web / Display
+
+                  Services / Clients
+       Zigbee | Automation | Web | Display
+                       │
                       ▼
         ┌───────────────── Domain API ─────────────────┐
         │  Entity Store       — state                   │
@@ -88,8 +93,12 @@ subscriber (contact + filter)
 ### 1.4. Правила зависимостей
 
 - `mstore` линкует только Domain.
-- Services и Clients зависят только от Domain.
-- Никто не зависит от конкретного сервиса.
+- Services и Clients **не зависят друг от друга** и не видят `mstore`.
+- Для работы с системой они зависят от Domain API; для общей формы canonical records —
+  от `ha_model` (`RECORD_MODEL.md`). `ha_model` — словарь, а не слой: он не находится
+  между сервисами и Domain и не является runtime-посредником.
+- `ha_model` не линкует Domain и не содержит логики: только формы, лимиты и стабильный
+  словарь идентификаторов.
 
 ## 2. mstore — слой хранения
 
