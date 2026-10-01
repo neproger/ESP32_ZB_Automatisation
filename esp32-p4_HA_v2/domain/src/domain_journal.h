@@ -39,13 +39,6 @@ domain_err_t domain_journal_count(const domain_journal_t *journal, size_t *out);
 domain_err_t domain_journal_contains(const domain_journal_t *journal, domain_event_id_t id,
                                      bool *out);
 
-/*
- * Классификация исхода операции живёт здесь не потому, что её дело — Journal, а потому
- * что это единственное место, где перечислены runtime-ошибки Domain. Решение
- * «журналировать или нет» принимает операция, а не хранилище фактов.
- */
-bool domain_journal_is_runtime_error(domain_err_t err);
-
 #ifdef __cplusplus
 }
 #endif

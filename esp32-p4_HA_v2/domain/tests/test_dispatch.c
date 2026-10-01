@@ -268,6 +268,60 @@ static void test_gap_is_detected(void)
     CHECK(domain_deinit(&domain) == DOMAIN_OK);
 }
 
+static void test_dispatch_once_without_counter_still_delivers(void)
+{
+    domain_entity_desc_t desc_a;
+    domain_t *domain = start(&desc_a, NULL);
+
+    inbox_t inbox = {0};
+    inbox.accept = true;
+    domain_subscription_desc_t desc = sub_all(&inbox);
+    domain_subscription_t *sub = NULL;
+    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+
+    put(domain, TYPE_A, 1);
+    CHECK(domain_dispatch_once(domain, NULL) == DOMAIN_OK);
+    CHECK(inbox.count == 1);
+
+    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
+    CHECK(domain_deinit(domain) == DOMAIN_OK);
+}
+
+static void test_unsubscribe_is_idempotent_and_rejects_foreign(void)
+{
+    domain_entity_desc_t desc_a;
+    domain_entity_desc_t desc_b;
+    domain_t *domain = start(&desc_a, &desc_b);
+
+    inbox_t inbox = {0};
+    inbox.accept = true;
+    domain_subscription_desc_t desc = sub_all(&inbox);
+    domain_subscription_t *sub = NULL;
+    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+
+    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_OK);
+    /* Повторная отписка не освобождает память дважды. */
+    CHECK(domain_unsubscribe(domain, sub) == DOMAIN_NOT_FOUND);
+    CHECK(domain_unsubscribe(domain, NULL) == DOMAIN_INVALID_ARG);
+
+    CHECK(domain_deinit(domain) == DOMAIN_OK);
+}
+
+static void test_deinit_with_active_subscription(void)
+{
+    domain_entity_desc_t desc_a;
+    domain_t *domain = start(&desc_a, NULL);
+
+    inbox_t inbox = {0};
+    inbox.accept = true;
+    domain_subscription_desc_t desc = sub_all(&inbox);
+    domain_subscription_t *sub = NULL;
+    CHECK(domain_subscribe(domain, &desc, &sub) == DOMAIN_OK);
+
+    /* deinit освобождает подписки и сигнал; обращаться к sub после этого нельзя. */
+    CHECK(domain_deinit(domain) == DOMAIN_OK);
+}
+
 int main(void)
 {
     test_delivery();
@@ -275,6 +329,9 @@ int main(void)
     test_filter_by_entity();
     test_inbox_overflow_is_local_loss();
     test_gap_is_detected();
+    test_dispatch_once_without_counter_still_delivers();
+    test_unsubscribe_is_idempotent_and_rejects_foreign();
+    test_deinit_with_active_subscription();
 
     if (g_failures != 0) {
         printf("test_dispatch: %d failure(s)\n", g_failures);

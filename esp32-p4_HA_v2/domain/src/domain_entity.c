@@ -32,6 +32,7 @@ static void fact_fill(domain_event_t *out, domain_entity_t type, const void *key
      * незачем — в release assert стоит ноль.
      */
     assert(key_size <= DOMAIN_EVENT_KEY_MAX);
+    assert(meta == NULL || meta->source < DOMAIN_SOURCE_ID_MAX);
 
     memset(out, 0, sizeof(*out));
     out->ts = domain_platform_now_ms();
@@ -64,7 +65,7 @@ static domain_err_t journal_outcome(domain_state_t *state, domain_entity_t type,
                                     const void *key, uint8_t key_size, uint8_t op,
                                     const domain_fact_meta_t *meta, domain_err_t outcome)
 {
-    if (!domain_journal_is_runtime_error(outcome)) {
+    if (!domain_outcome_is_runtime_error(outcome)) {
         return outcome;
     }
 

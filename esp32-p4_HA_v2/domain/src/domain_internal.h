@@ -48,6 +48,13 @@ typedef struct {
     domain_event_id_t cursor;
     uint32_t gap_count;
     void *signal;
+
+    /*
+     * Отдельный lock доставки: защищает список подписок и курсор Journal.
+     * Общий Domain-lock здесь не используется: подписчик не должен блокировать
+     * Entity Store (DISPATCHER.md §5).
+     */
+    void *dispatch_lock;
 } domain_state_t;
 
 domain_state_t *domain_state(const domain_t *domain);
@@ -57,6 +64,13 @@ domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t 
 domain_err_t domain_dispatch_init(domain_state_t *state);
 void domain_dispatch_deinit(domain_state_t *state);
 void domain_dispatch_signal(domain_state_t *state);
+
+/*
+ * Классификация исхода операции Domain. Живёт здесь, а не в Journal: решение
+ * «журналировать или нет» принимает операция, а не хранилище фактов
+ * (JOURNAL.md §2.1-2.2).
+ */
+bool domain_outcome_is_runtime_error(domain_err_t err);
 
 domain_err_t domain_err_from_mstore(mstore_err_t err);
 

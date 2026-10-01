@@ -194,10 +194,9 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 
 | Подсистема | Что даёт сервису | Поведение |
 |---|---|---|
-| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter`; `put`/`remove` пишут факт при реальном изменении | `ENTITY_STORE.md` |
+| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter`; `put`/`remove` пишут факт по исходу операции | `ENTITY_STORE.md` |
 | Journal | прямой доступ отсутствует: Journal читает только Dispatcher, публичного `domain_journal_read()` для сервисов нет | `JOURNAL.md` |
 | Subscriptions | `domain_subscribe` / `domain_unsubscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
-| Subscriptions | подписка (`contact + filter`), ожидание события | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |
 | Transient payload | `domain_payload_put / get` по opaque ref | `TRANSIENT_PAYLOAD.md` |
 
@@ -230,5 +229,6 @@ Zigbee-семантика и семантика автоматизаций
    отдельный read-путь.
 5. **`BUSY`.** Есть ли сценарий, где Domain вынужден отказать в приёме, а не вытеснить
    старое (политика ring утверждает обратное: `JOURNAL.md:56-63`).
-6. Фильтрация подписок и владение inbox — открыты в `DISPATCHER.md:51-55`; здесь не
-   дублируются.
+6. ~~Фильтрация подписок и владение inbox.~~ Решено в `DISPATCHER.md §5`: фильтр в
+   Dispatcher'е, inbox принадлежит подписчику, Domain знает только контакт
+   `try_push + wake`.
