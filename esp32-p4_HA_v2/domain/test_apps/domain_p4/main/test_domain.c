@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "domain/domain.h"
 #include "esp_log.h"
@@ -21,6 +22,7 @@ typedef struct {
 } sensor_state_t;
 
 #define TYPE_SENSOR 1
+#define CMD_SET_LEVEL 1
 
 static void require(bool condition, const char *what)
 {
@@ -123,6 +125,67 @@ static void delivery_slice(domain_t *domain)
     require_ok(domain_unsubscribe(domain, sub), "unsubscribe");
 }
 
+static sys_error_t set_level_executor(domain_command_t type, const void *args, size_t args_size,
+                                      void *ctx)
+{
+    size_t *calls = (size_t *)ctx;
+    (*calls)++;
+    const uint8_t level = (args != NULL && args_size >= sizeof(level))
+                              ? *(const uint8_t *)args
+                              : 0;
+    ESP_LOGI(TAG, "executor got command=%u level=%u", (unsigned)type, (unsigned)level);
+    return SYS_OK;
+}
+
+static void payload_slice(domain_t *domain)
+{
+    size_t received = 0;
+    domain_subscription_desc_t desc = {0};
+    desc.try_push = inbox_push;
+    desc.ctx = &received;
+    domain_subscription_t *sub = NULL;
+    require_ok(domain_subscribe(domain, &desc, &sub), "subscribe for payload");
+
+    const char *details = "vendor-specific details";
+    domain_payload_ref_t ref = 0;
+    require_ok(domain_payload_put(domain, NULL, details, strlen(details) + 1, &ref),
+               "payload put");
+
+    size_t delivered = 0;
+    require_ok(domain_dispatch_once(domain, &delivered), "dispatch payload event");
+    require(received > 0, "payload event reached subscriber");
+
+    char read_back[64] = {0};
+    require_ok(domain_payload_get(domain, ref, read_back, strlen(details) + 1), "payload get");
+    require(strcmp(read_back, details) == 0, "payload survived the round trip");
+
+    require_ok(domain_unsubscribe(domain, sub), "unsubscribe after payload");
+}
+
+static void command_slice(domain_t *domain)
+{
+    size_t received = 0;
+    domain_subscription_desc_t desc = {0};
+    desc.try_push = inbox_push;
+    desc.ctx = &received;
+    domain_subscription_t *sub = NULL;
+    require_ok(domain_subscribe(domain, &desc, &sub), "subscribe for command");
+
+    size_t calls = 0;
+    require_ok(domain_register_command(domain, CMD_SET_LEVEL, set_level_executor, &calls),
+               "register command");
+
+    const uint8_t level = 32;
+    require_ok(domain_post(domain, CMD_SET_LEVEL, &level, sizeof(level), NULL), "post command");
+    require(calls == 1, "executor was called once");
+
+    size_t delivered = 0;
+    require_ok(domain_dispatch_once(domain, &delivered), "dispatch command fact");
+    require(received > 0, "COMMAND_SENT reached subscriber");
+
+    require_ok(domain_unsubscribe(domain, sub), "unsubscribe after command");
+}
+
 static void flash_slice(void)
 {
     domain_entity_desc_t desc = ram_desc;
@@ -135,7 +198,7 @@ static void flash_slice(void)
     bool changed = false;
 
     domain_t domain = {0};
-    require_ok(domain_init(&domain, 2, 16), "domain init (flash writer)");
+    require_ok(domain_init(&domain, 2, 16, 8, 64), "domain init (flash writer)");
     require_ok(domain_register_entity(&domain, &desc), "register flash entity");
     require_ok(domain_entity_put(&domain, TYPE_SENSOR, &key, &written, NULL, &changed),
                "flash put");
@@ -146,7 +209,7 @@ static void flash_slice(void)
      * записанное состояние. Это и есть проверка persistence на целевом железе.
      */
     domain_t reopened = {0};
-    require_ok(domain_init(&reopened, 2, 16), "domain reopen");
+    require_ok(domain_init(&reopened, 2, 16, 8, 64), "domain reopen");
     require_ok(domain_register_entity(&reopened, &desc), "register after reopen");
     require_ok(domain_entity_get(&reopened, TYPE_SENSOR, &key, &read_back), "read after reopen");
     require(read_back.value == written.value, "state survived reopen");
@@ -156,11 +219,13 @@ static void flash_slice(void)
 void app_main(void)
 {
     domain_t domain = {0};
-    require_ok(domain_init(&domain, 2, 16), "domain init");
+    require_ok(domain_init(&domain, 2, 16, 8, 64), "domain init");
     require_ok(domain_register_entity(&domain, &ram_desc), "register ram entity");
 
     entity_store_slice(&domain);
     delivery_slice(&domain);
+    payload_slice(&domain);
+    command_slice(&domain);
 
     require_ok(domain_deinit(&domain), "domain deinit");
     flash_slice();

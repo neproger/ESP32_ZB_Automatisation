@@ -59,9 +59,11 @@ static mstore_backing_t backing_to_mstore(domain_backing_t backing)
     return result;
 }
 
-sys_error_t domain_init(domain_t *domain, size_t max_entity_types, size_t journal_capacity)
+sys_error_t domain_init(domain_t *domain, size_t max_entity_types, size_t journal_capacity,
+                        size_t payload_capacity, size_t payload_max_size)
 {
-    if (domain == NULL || max_entity_types == 0 || journal_capacity == 0) {
+    if (domain == NULL || max_entity_types == 0 || journal_capacity == 0 ||
+        payload_capacity == 0 || payload_max_size == 0) {
         return domain_fail(SYS_CODE_INVALID_ARG);
     }
     if (domain->_state != NULL) {
@@ -95,10 +97,21 @@ sys_error_t domain_init(domain_t *domain, size_t max_entity_types, size_t journa
         return journal_err;
     }
 
+    const sys_error_t payload_err = domain_payload_init(&state->payload, payload_capacity,
+                                                        payload_max_size);
+    if (sys_failed(payload_err)) {
+        (void)domain_journal_deinit(&state->journal);
+        domain_platform_lock_destroy(state->lock);
+        domain_platform_free(state->entries);
+        domain_platform_free(state);
+        return payload_err;
+    }
+
     const sys_error_t dispatch_err = domain_dispatch_init(state);
     if (sys_failed(dispatch_err)) {
-    domain_dispatch_deinit(state);
-    (void)domain_journal_deinit(&state->journal);
+        domain_payload_deinit(&state->payload);
+        domain_dispatch_deinit(state);
+        (void)domain_journal_deinit(&state->journal);
         domain_platform_lock_destroy(state->lock);
         domain_platform_free(state->entries);
         domain_platform_free(state);
@@ -118,6 +131,9 @@ sys_error_t domain_deinit(domain_t *domain)
         return domain_fail(SYS_CODE_INVALID_STATE);
     }
 
+    domain_commands_deinit(state);
+    domain_dispatch_deinit(state);
+    domain_payload_deinit(&state->payload);
     (void)domain_journal_deinit(&state->journal);
     for (size_t i = 0; i < state->used; ++i) {
         if (state->entries[i].used) {

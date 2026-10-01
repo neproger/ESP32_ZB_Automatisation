@@ -27,6 +27,15 @@ typedef enum {
  * Domain воспринимает их как opaque-число. */
 typedef uint32_t domain_entity_t;
 
+/*
+ * Ссылка на transient payload: opaque, как event_id. Разбирать её сервис не может —
+ * только копировать и сравнивать (docs/domain/DOMAIN_API.md §4).
+ */
+typedef uint64_t domain_payload_ref_t;
+
+/* Дискриминатор команды: Domain знает только число и callback исполнителя. */
+typedef uint32_t domain_command_t;
+
 /* Кто инициировал факт. Domain смысла источника не знает — это подпись вызывающего. */
 typedef enum {
     DOMAIN_SOURCE_ZIGBEE = 1,

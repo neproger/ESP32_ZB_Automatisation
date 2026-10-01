@@ -4,6 +4,9 @@ idf_component_register(
         "src/domain_entity.c"
         "src/domain_journal.c"
         "src/domain_dispatch.c"
+        "src/domain_fact.c"
+        "src/domain_payload.c"
+        "src/domain_command.c"
         "port/espidf/domain_platform_espidf.c"
     INCLUDE_DIRS
         "include"

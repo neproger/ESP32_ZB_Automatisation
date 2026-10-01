@@ -80,7 +80,7 @@ static domain_event_t last_fact(domain_t *domain)
 static void test_put_writes_fact_only_on_change(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = {0};
     desc_fill(&desc, TYPE_A);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
@@ -115,7 +115,7 @@ static void test_put_writes_fact_only_on_change(void)
 static void test_fact_carries_identity_and_meta(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = {0};
     desc_fill(&desc, TYPE_A);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
@@ -148,7 +148,7 @@ static void test_fact_carries_identity_and_meta(void)
 static void test_remove_writes_fact_with_key(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = {0};
     desc_fill(&desc, TYPE_A);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
@@ -185,7 +185,7 @@ static void test_remove_writes_fact_with_key(void)
 static void test_facts_are_ordered_across_types(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc_a = {0};
     domain_entity_desc_t desc_b = {0};
     desc_fill(&desc_a, TYPE_A);
@@ -224,7 +224,7 @@ static void test_facts_are_ordered_across_types(void)
 static void test_runtime_error_is_recorded(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
 
     domain_entity_desc_t desc = {0};
     desc_fill(&desc, TYPE_A);
@@ -260,7 +260,7 @@ static void test_runtime_error_is_recorded(void)
 static void test_programming_errors_are_not_recorded(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = {0};
     desc_fill(&desc, TYPE_A);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));

@@ -74,7 +74,7 @@ static domain_t *start(domain_entity_desc_t *desc_a, domain_entity_desc_t *desc_
 {
     static domain_t domain;
     memset(&domain, 0, sizeof(domain));
-    CHECK(sys_ok(domain_init(&domain, 4, 8)));
+    CHECK(sys_ok(domain_init(&domain, 4, 8, 8, 64)));
 
     memset(desc_a, 0, sizeof(*desc_a));
     desc_a->type = TYPE_A;
@@ -235,7 +235,7 @@ static void test_gap_is_detected(void)
 {
     /* Таблица сущностей должна вместить 10 ключей, а Journal — только 8 фактов. */
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 4, 8)));
+    CHECK(sys_ok(domain_init(&domain, 4, 8, 8, 64)));
     domain_entity_desc_t entity_desc = {0};
     entity_desc.type = TYPE_A;
     entity_desc.key_size = sizeof(test_key_t);

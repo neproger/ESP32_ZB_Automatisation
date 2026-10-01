@@ -113,7 +113,7 @@ static DWORD WINAPI win_reader(LPVOID arg)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;
@@ -156,7 +156,7 @@ static void test_serialized_mutation_path(void)
 static void test_serialized_mutation_path(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
 
     domain_entity_desc_t desc = {0};
     desc.type = TYPE_A;

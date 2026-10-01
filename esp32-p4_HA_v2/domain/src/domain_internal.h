@@ -25,6 +25,23 @@ typedef struct {
     void *scratch_key;
 } domain_entity_entry_t;
 
+/*
+ * Transient payload — bounded ring поверх Ring Store. Запись одна на payload и
+ * фиксированного размера (размер + байты), поэтому ring вытесняет целиком.
+ */
+typedef struct {
+    mstore_ring_t ring;
+    size_t max_size;
+    void *scratch; /* буфер одной записи: put/get не аллоцируют */
+} domain_payload_t;
+
+struct domain_command_entry {
+    domain_command_t type;
+    domain_command_fn executor;
+    void *ctx;
+    struct domain_command_entry *next;
+};
+
 typedef struct {
     domain_entity_entry_t *entries;
     size_t used;
@@ -38,6 +55,15 @@ typedef struct {
     void *lock;
 
     domain_journal_t journal;
+
+    /* Transient payload: отдельный bounded ring, живёт по тем же правилам вытеснения. */
+    domain_payload_t payload;
+
+    /*
+     * Регистрация команд: command_type → executor. Список, а не таблица: команд мало,
+     * а регистрация — часть инициализации, поэтому ёмкость задавать нечем.
+     */
+    struct domain_command_entry *commands;
 
     /*
      * Dispatcher: подписки, курсор чтения Journal и сигнал пробуждения.
@@ -66,8 +92,24 @@ static inline sys_error_t domain_fail(sys_code_t code)
     return sys_error_make(SYS_LAYER_DOMAIN, code);
 }
 
+/*
+ * Сборка и запись факта — единственное место, где факт обретает форму. Операции
+ * (entity / payload / command) решают, что писать, но не как (JOURNAL.md §2.2).
+ */
+void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
+                       domain_entity_t type, const void *key, uint8_t key_size, uint8_t kind,
+                       uint8_t op, sys_error_t error, uint64_t payload_ref);
+
 domain_state_t *domain_state(const domain_t *domain);
 domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t type);
+
+/* Transient payload (src/domain_payload.c). */
+sys_error_t domain_payload_init(domain_payload_t *payload, size_t capacity, size_t max_size);
+void domain_payload_deinit(domain_payload_t *payload);
+
+/* Реестр команд (src/domain_command.c). Поиск идёт под lock'ом вызывающего. */
+struct domain_command_entry *domain_command_find(domain_state_t *state, domain_command_t type);
+void domain_commands_deinit(domain_state_t *state);
 
 /* Подписки и доставка (src/domain_dispatch.c). */
 sys_error_t domain_dispatch_init(domain_state_t *state);

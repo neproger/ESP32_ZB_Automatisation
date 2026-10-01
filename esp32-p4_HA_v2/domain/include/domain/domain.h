@@ -20,8 +20,11 @@ typedef struct {
 /*
  * Поднимает Domain и его registry типов. max_entity_types — максимальное число
  * зарегистрированных типов сущностей; ёмкость самих таблиц задаётся в descriptor.
+ * payload_capacity / payload_max_size — bounded ring под transient payload: сколько
+ * payload одновременно живы и какой максимальный размер одного (§TRANSIENT_PAYLOAD.md).
  */
-sys_error_t domain_init(domain_t *domain, size_t max_entity_types, size_t journal_capacity);
+sys_error_t domain_init(domain_t *domain, size_t max_entity_types, size_t journal_capacity,
+                        size_t payload_capacity, size_t payload_max_size);
 sys_error_t domain_deinit(domain_t *domain);
 
 /*
@@ -66,6 +69,40 @@ sys_error_t domain_entity_remove(domain_t *domain, domain_entity_t type, const v
                                   const domain_fact_meta_t *meta);
 sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,
                                 domain_entity_iter_cb_t cb, void *ctx);
+
+/*
+ * Transient payload: best-effort окно для данных, которым тесно в compact value.
+ *
+ * put копирует payload в ring и публикует факт EVENT с payload_ref — это и есть
+ * «опубликовать событие с данными» (docs/domain/TRANSIENT_PAYLOAD.md §2-3).
+ * get отдаёт payload в буфер вызывающего; вытесненный payload читается как STALE,
+ * а неизвестная ссылка — как NOT_FOUND. Никакого ownership и release: payload живёт,
+ * пока его не вытеснит ring.
+ */
+sys_error_t domain_payload_put(domain_t *domain, const domain_fact_meta_t *meta,
+                               const void *payload, size_t size,
+                               domain_payload_ref_t *out_ref);
+sys_error_t domain_payload_get(domain_t *domain, domain_payload_ref_t ref, void *out,
+                               size_t out_size);
+
+/*
+ * Регистрация исполнителя команды: command_type → callback. Это часть инициализации,
+ * а не runtime-механизма (docs/domain/COMMANDS.md §3).
+ */
+typedef sys_error_t (*domain_command_fn)(domain_command_t type, const void *args,
+                                         size_t args_size, void *ctx);
+
+sys_error_t domain_register_command(domain_t *domain, domain_command_t type,
+                                    domain_command_fn executor, void *ctx);
+
+/*
+ * Передаёт команду исполнителю синхронно: вызов возвращается, когда команда передана.
+ * Результат выполнения не ожидается (fire-and-forget). При успешной передаче пишется
+ * COMMAND_SENT; если executor не найден или отклонил команду — возвращается его ошибка
+ * и факта нет (docs/domain/COMMANDS.md §2).
+ */
+sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *args,
+                        size_t args_size, const domain_fact_meta_t *meta);
 
 /*
  * Подписка на факты. Фильтр задаётся при подписке и применяется Dispatcher'ом

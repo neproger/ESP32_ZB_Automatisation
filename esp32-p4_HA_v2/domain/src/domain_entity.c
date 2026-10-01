@@ -19,17 +19,6 @@
  */
 
 /*
- * domain_fact_meta_t описан в публичном header'е, но Journal — внутренняя подсистема:
- * собирать запись Journal умеет только Domain (см. entity_op_write_fact).
- */
-static void journal_append_fact(domain_state_t *state, domain_event_t *fact)
-{
-    domain_event_id_t id = 0;
-    (void)domain_journal_append(&state->journal, fact, &id);
-    domain_dispatch_signal(state);
-}
-
-/*
  * Контекст операции над одной записью. Все шаги операции (find/allocate/update/…)
  * работают с одним ключом и одним типом, поэтому факт собирается из этого контекста
  * одной строкой, а не повторяет type и key_size на каждом вызове mstore.
@@ -63,32 +52,8 @@ static entity_op_t entity_op_begin(domain_state_t *state, domain_entity_entry_t 
 
 static void entity_op_write_fact(const entity_op_t *op, uint8_t kind, sys_error_t error)
 {
-    /*
-     * Инварианты, а не проверки: key_size приходит из descriptor'а, а регистрация типа
-     * не пропускает ключ шире DOMAIN_JOURNAL_KEY_MAX и source ≥ DOMAIN_SOURCE_ID_MAX.
-     * Проверять это на каждом факте незачем — в release assert стоит ноль.
-     */
-    assert(op->key_size <= DOMAIN_EVENT_KEY_MAX);
-    assert(op->meta == NULL || op->meta->source < DOMAIN_SOURCE_ID_MAX);
-
-    domain_event_t fact = {0};
-    fact.ts = domain_platform_now_ms();
-    fact.kind = kind;
-    fact.op = op->op;
-    fact.key_size = op->key_size;
-    fact.entity = op->entry->desc.type;
-    fact.error = error;
-    if (op->meta != NULL) {
-        fact.source = op->meta->source;
-        fact.value = op->meta->value;
-        fact.payload_ref = op->meta->payload_ref;
-    } else {
-        fact.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    }
-    if (op->key != NULL && op->key_size > 0) {
-        memcpy(fact.key, op->key, op->key_size);
-    }
-    journal_append_fact(op->state, &fact);
+    domain_fact_write(op->state, op->meta, op->entry->desc.type, op->key, op->key_size, kind,
+                      op->op, error, 0);
 }
 
 static void entity_op_state(const entity_op_t *op, uint8_t kind)

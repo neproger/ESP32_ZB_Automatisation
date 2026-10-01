@@ -54,7 +54,7 @@ static domain_entity_desc_t desc_of(domain_entity_t type, size_t capacity)
 static void test_put_changed(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
@@ -83,7 +83,7 @@ static void test_put_changed(void)
 static void test_get_remove(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
@@ -114,7 +114,7 @@ static void test_get_remove(void)
 static void test_no_space(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 2);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
@@ -161,7 +161,7 @@ static bool iter_stop(const void *key, const void *record, void *ctx)
 static void test_iter(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = desc_of(TYPE_A, 4);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
@@ -194,7 +194,7 @@ static void test_iter(void)
 static void test_two_types_are_independent(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
 
     domain_entity_desc_t a = desc_of(TYPE_A, 4);
     domain_entity_desc_t b = desc_of(TYPE_B, 4);

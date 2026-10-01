@@ -109,7 +109,7 @@ static void test_reopen_preserves_state(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t desc = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
 
@@ -130,7 +130,7 @@ static void test_reopen_preserves_state(void)
     CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
+    CHECK(sys_ok(domain_init(&reopened, 2, 8, 8, 64)));
     CHECK(sys_ok(domain_register_entity(&reopened, &desc)));
 
     test_record_t out = {0};
@@ -150,13 +150,13 @@ static void test_geometry_mismatch_is_rejected(void)
     flash_on(&sim, &device);
 
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t narrow = desc_of(TYPE_A, "test_entity", sizeof(test_record_t), 8);
     CHECK(sys_ok(domain_register_entity(&domain, &narrow)));
     CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
+    CHECK(sys_ok(domain_init(&reopened, 2, 8, 8, 64)));
     domain_entity_desc_t wide = desc_of(TYPE_A, "test_entity", sizeof(test_record_wide_t), 64);
     /* Region Manager не меняет размер региона на месте: смена геометрии — диагноз,
      * а не миграция (MSTORE_FLASH_REGIONS.md §6). */
@@ -176,7 +176,7 @@ static void test_two_flash_types_are_independent(void)
     bool changed = false;
 
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
     domain_entity_desc_t a = desc_of(TYPE_A, "type_a", sizeof(test_record_t), 8);
     domain_entity_desc_t b = desc_of(TYPE_B, "type_b", sizeof(test_record_t), 8);
     CHECK(sys_ok(domain_register_entity(&domain, &a)));
@@ -189,7 +189,7 @@ static void test_two_flash_types_are_independent(void)
     CHECK(sys_ok(domain_deinit(&domain)));
 
     domain_t reopened = {0};
-    CHECK(sys_ok(domain_init(&reopened, 2, 8)));
+    CHECK(sys_ok(domain_init(&reopened, 2, 8, 8, 64)));
     CHECK(sys_ok(domain_register_entity(&reopened, &a)));
     CHECK(sys_ok(domain_register_entity(&reopened, &b)));
 

@@ -44,20 +44,20 @@ static domain_entity_desc_t sensor_desc(void)
 static void test_init_deinit(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 4, 8)));
-    CHECK(sys_is(domain_init(&domain, 4, 8), SYS_CODE_INVALID_STATE));
+    CHECK(sys_ok(domain_init(&domain, 4, 8, 8, 64)));
+    CHECK(sys_is(domain_init(&domain, 4, 8, 8, 64), SYS_CODE_INVALID_STATE));
     CHECK(sys_ok(domain_deinit(&domain)));
     CHECK(sys_is(domain_deinit(&domain), SYS_CODE_INVALID_STATE));
-    CHECK(sys_is(domain_init(NULL, 4, 8), SYS_CODE_INVALID_ARG));
-    CHECK(sys_is(domain_init(&domain, 0, 8), SYS_CODE_INVALID_ARG));
-    CHECK(sys_is(domain_init(&domain, 4, 0), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_init(NULL, 4, 8, 8, 64), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_init(&domain, 0, 8, 8, 64), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_init(&domain, 4, 0, 8, 64), SYS_CODE_INVALID_ARG));
     (void)domain_deinit(&domain);
 }
 
 static void test_register(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 4, 8)));
+    CHECK(sys_ok(domain_init(&domain, 4, 8, 8, 64)));
 
     domain_entity_desc_t sensor = sensor_desc();
     CHECK(sys_ok(domain_register_entity(&domain, &sensor)));
@@ -80,7 +80,7 @@ static void test_register(void)
 static void test_invalid_desc(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 4, 8)));
+    CHECK(sys_ok(domain_init(&domain, 4, 8, 8, 64)));
 
     domain_entity_desc_t no_key = sensor_desc();
     no_key.key_size = 0;
@@ -117,7 +117,7 @@ static void test_invalid_desc(void)
 static void test_registry_full(void)
 {
     domain_t domain = {0};
-    CHECK(sys_ok(domain_init(&domain, 2, 8)));
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
 
     domain_entity_desc_t desc = sensor_desc();
     CHECK(sys_ok(domain_register_entity(&domain, &desc)));
