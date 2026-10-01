@@ -46,3 +46,33 @@ void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
     (void)domain_journal_append(&state->journal, &fact, &id);
     domain_dispatch_signal(state);
 }
+
+sys_error_t domain_fact_target_resolve(domain_state_t *state, const domain_fact_target_t *target,
+                                       domain_entity_t *out_entity, const void **out_key,
+                                       uint8_t *out_key_size)
+{
+    if (state == NULL || out_entity == NULL || out_key == NULL || out_key_size == NULL) {
+        return domain_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    *out_entity = 0;
+    *out_key = NULL;
+    *out_key_size = 0;
+
+    if (target == NULL) {
+        return SYS_OK; /* факт без адресата: команда или событие «ни о ком» */
+    }
+    if (target->key == NULL) {
+        return domain_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    const domain_entity_entry_t *entry = domain_entry_find(state, target->entity);
+    if (entry == NULL) {
+        return domain_fail(SYS_CODE_NOT_FOUND);
+    }
+
+    *out_entity = target->entity;
+    *out_key = target->key;
+    *out_key_size = (uint8_t)entry->desc.key_size;
+    return SYS_OK;
+}

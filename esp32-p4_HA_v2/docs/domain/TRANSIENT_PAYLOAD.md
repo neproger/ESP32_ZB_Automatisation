@@ -41,6 +41,6 @@ domain_payload_get(ref)     → payload | STALE / NOT_FOUND
 
 - критерий «compact value vs transient payload»;
 - typed payload (сейчас — generic bytes + size);
-- **адресат события:** факт `EVENT` от `domain_payload_put` пока пишется без
-  `entity`/`key`. Решать вместе с сервисом-источником событий — тот же вопрос, что и
-  для `COMMAND_SENT` (`COMMANDS.md` §7).
+- ~~**адресат события.**~~ Решено: `domain_payload_put` принимает адресата
+  `domain_fact_target_t { entity, key }`, факт `EVENT` несёт `entity` и ключ — тот же
+  механизм, что у `COMMAND_SENT` (`COMMANDS.md` §8).

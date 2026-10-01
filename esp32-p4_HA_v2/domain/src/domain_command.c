@@ -46,11 +46,24 @@ sys_error_t domain_register_command(domain_t *domain, domain_command_t type,
 }
 
 sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *args,
-                        size_t args_size, const domain_fact_meta_t *meta)
+                        size_t args_size, const domain_fact_target_t *target,
+                        const domain_fact_meta_t *meta)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL) {
         return domain_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    /* Адресат проверяем до executor'а: при неизвестном типе факта не будет вовсе. */
+    domain_platform_lock_acquire(state->lock);
+    domain_entity_t target_entity = 0;
+    const void *target_key = NULL;
+    uint8_t target_key_size = 0;
+    const sys_error_t resolved =
+        domain_fact_target_resolve(state, target, &target_entity, &target_key, &target_key_size);
+    domain_platform_lock_release(state->lock);
+    if (sys_failed(resolved)) {
+        return resolved;
     }
 
     /* Executor ищем под lock'ом, а вызываем уже без него: executor — внешний код и
@@ -71,8 +84,8 @@ sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *arg
     }
 
     domain_platform_lock_acquire(state->lock);
-    domain_fact_write(state, meta, 0, NULL, 0, (uint8_t)DOMAIN_FACT_COMMAND_SENT,
-                      (uint8_t)DOMAIN_OP_COMMAND, SYS_OK, 0);
+    domain_fact_write(state, meta, target_entity, target_key, target_key_size,
+                      (uint8_t)DOMAIN_FACT_COMMAND_SENT, (uint8_t)DOMAIN_OP_COMMAND, SYS_OK, 0);
     domain_platform_lock_release(state->lock);
     return SYS_OK;
 }

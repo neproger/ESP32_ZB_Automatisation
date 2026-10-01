@@ -64,8 +64,9 @@ void domain_payload_deinit(domain_payload_t *payload)
  * уходит факт EVENT со ссылкой. Факт осмыслен и без payload (JOURNAL.md §3), поэтому
  * вытеснение payload — потеря деталей, а не потеря события.
  */
-sys_error_t domain_payload_put(domain_t *domain, const domain_fact_meta_t *meta,
-                               const void *payload, size_t size, domain_payload_ref_t *out_ref)
+sys_error_t domain_payload_put(domain_t *domain, const domain_fact_target_t *target,
+                               const domain_fact_meta_t *meta, const void *payload, size_t size,
+                               domain_payload_ref_t *out_ref)
 {
     domain_state_t *state = domain_state(domain);
     if (state == NULL || payload == NULL || out_ref == NULL || size == 0) {
@@ -77,6 +78,16 @@ sys_error_t domain_payload_put(domain_t *domain, const domain_fact_meta_t *meta,
 
     domain_platform_lock_acquire(state->lock);
 
+    domain_entity_t target_entity = 0;
+    const void *target_key = NULL;
+    uint8_t target_key_size = 0;
+    const sys_error_t resolved =
+        domain_fact_target_resolve(state, target, &target_entity, &target_key, &target_key_size);
+    if (sys_failed(resolved)) {
+        domain_platform_lock_release(state->lock);
+        return resolved;
+    }
+
     uint8_t *scratch = (uint8_t *)state->payload.scratch;
     const uint32_t stored_size = (uint32_t)size;
     memcpy(scratch, &stored_size, PAYLOAD_SIZE_FIELD);
@@ -85,14 +96,14 @@ sys_error_t domain_payload_put(domain_t *domain, const domain_fact_meta_t *meta,
     uint64_t seq = 0;
     sys_error_t err = mstore_ring_append(&state->payload.ring, scratch, &seq);
     if (sys_failed(err)) {
-        domain_fact_write(state, meta, 0, NULL, 0, (uint8_t)DOMAIN_FACT_ERROR,
-                          (uint8_t)DOMAIN_OP_PAYLOAD_PUT, err, 0);
+        domain_fact_write(state, meta, target_entity, target_key, target_key_size,
+                          (uint8_t)DOMAIN_FACT_ERROR, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, err, 0);
         domain_platform_lock_release(state->lock);
         return err;
     }
 
-    domain_fact_write(state, meta, 0, NULL, 0, (uint8_t)DOMAIN_FACT_EVENT,
-                      (uint8_t)DOMAIN_OP_PAYLOAD_PUT, SYS_OK, seq);
+    domain_fact_write(state, meta, target_entity, target_key, target_key_size,
+                      (uint8_t)DOMAIN_FACT_EVENT, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, SYS_OK, seq);
     domain_platform_lock_release(state->lock);
 
     *out_ref = seq;

@@ -1,6 +1,7 @@
-#include "domain/domain.h"
+﻿#include "domain/domain.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "domain_internal.h"
 #include "ha_model/ha_commands.h"
@@ -75,7 +76,7 @@ static void command_reaches_executor(void)
     CHECK(sys_ok(domain_register_command(&domain, CMD_SET_LEVEL, set_level_executor, &seen)));
 
     const set_level_args_t args = {.level = 32};
-    CHECK(sys_ok(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), NULL)));
+    CHECK(sys_ok(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), NULL, NULL)));
     CHECK(seen.calls == 1);
     CHECK(seen.last_type == CMD_SET_LEVEL);
     CHECK(seen.last_level == 32);
@@ -85,7 +86,7 @@ static void command_reaches_executor(void)
                  SYS_CODE_INVALID_STATE));
 
     /* Исполнителя нет — команда не молча теряется. */
-    CHECK(sys_is(domain_post(&domain, CMD_UNKNOWN, &args, sizeof(args), NULL),
+    CHECK(sys_is(domain_post(&domain, CMD_UNKNOWN, &args, sizeof(args), NULL, NULL),
                  SYS_CODE_NOT_FOUND));
 
     CHECK(sys_ok(domain_deinit(&domain)));
@@ -113,7 +114,7 @@ static void command_sent_is_journaled(void)
     meta.value.v.u32 = 32;
 
     const set_level_args_t args = {.level = 32};
-    CHECK(sys_ok(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), &meta)));
+    CHECK(sys_ok(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), NULL, &meta)));
 
     size_t delivered = 0;
     CHECK(sys_ok(domain_dispatch_once(&domain, &delivered)));
@@ -144,7 +145,7 @@ static void rejected_command_writes_no_fact(void)
     CHECK(sys_ok(domain_register_command(&domain, CMD_SET_LEVEL, set_level_executor, &seen)));
 
     const set_level_args_t args = {.level = 5};
-    CHECK(sys_is(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), NULL), SYS_CODE_BUSY));
+    CHECK(sys_is(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), NULL, NULL), SYS_CODE_BUSY));
     CHECK(seen.calls == 1);
 
     size_t delivered = 0;
@@ -195,7 +196,7 @@ static void zigbee_payload_reaches_executor(void)
     meta.value.type = (uint8_t)DOMAIN_VALUE_U32;
     meta.value.v.u32 = 128;
 
-    CHECK(sys_ok(domain_post(&domain, HA_CMD_ZIGBEE_CLUSTER, &cmd, sizeof(cmd), &meta)));
+    CHECK(sys_ok(domain_post(&domain, HA_CMD_ZIGBEE_CLUSTER, &cmd, sizeof(cmd), NULL, &meta)));
     CHECK(received.device_uid == cmd.device_uid);
     CHECK(received.dst_endpoint == cmd.dst_endpoint);
     CHECK(received.cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL);
@@ -207,11 +208,69 @@ static void zigbee_payload_reaches_executor(void)
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
+/*
+ * Адресат команды (COMMANDS.md §8): подписчик должен относить COMMAND_SENT к
+ * устройству, поэтому факт несёт entity и key, а не только payload команды.
+ */
+#define TYPE_DEVICE 1
+
+static void command_fact_carries_target(void)
+{
+    domain_t domain = {0};
+    CHECK(sys_ok(domain_init(&domain, 1, 8, 4, 32)));
+
+    domain_entity_desc_t desc = {0};
+    desc.type = TYPE_DEVICE;
+    desc.key_size = sizeof(uint64_t);
+    desc.payload_size = sizeof(uint32_t);
+    desc.capacity = 4;
+    desc.backing = DOMAIN_BACKING_RAM;
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
+    CHECK(sys_ok(domain_register_command(&domain, CMD_SET_LEVEL, set_level_executor,
+                                         &(executor_state_t){.result = SYS_OK})));
+
+    inbox_t inbox = {.accept = true};
+    domain_subscription_desc_t sub_desc = {0};
+    sub_desc.try_push = inbox_push;
+    sub_desc.ctx = &inbox;
+    domain_subscription_t *sub = NULL;
+    CHECK(sys_ok(domain_subscribe(&domain, &sub_desc, &sub)));
+
+    const uint64_t uid = 0x00124B000A1B2C3Dull;
+    const domain_fact_target_t target = {.entity = TYPE_DEVICE, .key = &uid};
+    const set_level_args_t args = {.level = 32};
+
+    CHECK(sys_ok(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), &target, NULL)));
+
+    size_t delivered = 0;
+    CHECK(sys_ok(domain_dispatch_once(&domain, &delivered)));
+    CHECK(delivered == 1);
+    CHECK(inbox.count == 1);
+    CHECK(inbox.events[0].kind == (uint8_t)DOMAIN_FACT_COMMAND_SENT);
+    CHECK(inbox.events[0].entity == TYPE_DEVICE);
+    CHECK(inbox.events[0].key_size == sizeof(uid));
+    CHECK(memcmp(inbox.events[0].key, &uid, sizeof(uid)) == 0);
+
+    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
+
+    /* Неизвестный тип адресата — отказ до executor'а: факта нет. */
+    const domain_fact_target_t unknown = {.entity = 99, .key = &uid};
+    CHECK(sys_is(domain_post(&domain, CMD_SET_LEVEL, &args, sizeof(args), &unknown, NULL),
+                 SYS_CODE_NOT_FOUND));
+
+    inbox.count = 0;
+    CHECK(sys_ok(domain_dispatch_once(&domain, &delivered)));
+    CHECK(inbox.count == 0);
+
+    CHECK(sys_ok(domain_deinit(&domain)));
+}
+
 int main(void)
 {
     command_reaches_executor();
     command_sent_is_journaled();
     rejected_command_writes_no_fact();
+    command_fact_carries_target();
     zigbee_payload_reaches_executor();
 
     if (failures != 0) {

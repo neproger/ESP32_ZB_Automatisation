@@ -4,8 +4,8 @@
 и сборка идут из окружения Visual Studio.
 
 ```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
-set CMAKE=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+set CMAKE=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
 "%CMAKE%" -S esp32-p4_HA_v2\domain\tests -B esp32-p4_HA_v2\domain\tests\build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 "%CMAKE%" --build esp32-p4_HA_v2\domain\tests\build
 "%CMAKE%" --build esp32-p4_HA_v2\domain\tests\build --target test

@@ -7,65 +7,82 @@
 
 | Компонент | Состояние | Проверено |
 |---|---|---|
-| `mstore` | Table + Ring, RAM/flash, полностью по `storage/MSTORE.md` | host-тесты 12/12 |
-| `sys` | единая модель ошибки `sys_error_t` (`ERRORS.md`) | тестами mstore/domain |
-| `domain` | Entity Store, Journal, Dispatcher, Transient Payload, Commands | host-тесты 9/9 |
-| `ha_model` | словарь Zigbee/ZCL (`ha_zigbee.h`) + форма команды (`ha_commands.h`) | сборкой тестов |
-| `domain/test_apps/domain_p4` | IDF-приложение: вертикальный срез на P4 | **не запускалось** — нет платы |
-| `domain/CMakeLists.txt` | компонент ESP-IDF (`REQUIRES sys mstore esp_common esp_timer`) | **не собиралось** — нет IDF-сборки |
+| `mstore` | Table + Ring, RAM/flash, region manager; заморожен (`storage/MSTORE_IMPL_JOURNAL.md`) | host-тесты 12/12, hardware verified на P4 |
+| `sys` | единая модель ошибки `sys_error_t` (`ERRORS.md`) | тестами всех слоёв |
+| `domain` | Entity Store, Journal, Transient Payload, Dispatcher, Commands | host-тесты 9/9, IDF-сборка и запуск на P4 |
+| `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
+| `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, executor и отправка команд, счётчики диагностики | host-тесты 3/3, запуск на P4 |
+| `zigbee_radio` | ESP-Hosted по SDIO → RCP на C6 → стек Zigbee, репорты и команды ZCL | SDIO и C6 видны, ждёт прошивку RCP на C6 |
+| `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
-## 2. Что не проверено
-
-```text
-IDF-сборка компонента domain и приложения domain_p4
-запуск вертикального сценария на железе (особенно FLASH-часть: нужен раздел mstore)
-```
-
-Host-проверка приложения ограничена компиляцией и линковкой с заглушкой `esp_log.h`:
-сам `app_main` на хосте не запускался, потому что `flash_slice` требует реального
-flash-устройства.
-
-Как проверять (когда появится плата):
-
-```bat
-cd esp32-p4_HA_v2/domain/test_apps/domain_p4
-idf.py set-target esp32p4
-idf.py build flash monitor
-```
-
-Ожидаемый финал лога — `vertical slice OK`.
-
-## 3. Что дальше
+## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
 
 ```text
-1. P4: сборка и smoke всей цепочки            — ждёт плату
-2. Стенд для наблюдения: консоль/демо Domain  — без новых архитектурных решений
-3. Доменная часть ha_model: типы сущностей, layout ключа состояния, формы значений
-4. Сервисы: Zigbee → Automation → Web
+топология endpoint'а  → ENTITY_UPSERTED entity=3
+репорт атрибута       → ENTITY_UPSERTED entity=2 (отдельный факт на атрибут)
+команда от UI         → COMMAND_SENT с адресатом (entity=1, key=uid)
+устройство            → пишется во flash один раз, переживает перезагрузку
+канал диагностики     → zigbee.diag, отдельно от журнала фактов
+радиоканал            → SDIO 4-bit CLK=18 CMD=19 D0..D3=14..17 RESET=54 поднят
+C6 по SDIO            → esp32c6, host fw 3.0.9; RCP запрошен, но CP fw 2.3.2 его не знает
 ```
 
-Порядок сервисов обусловлен тем, что Zigbee — единственный реальный источник
-состояния; Web (BFF) и Automation потребляют то, что он produces. Пункт 3 нужен
-любому сервису и не зависит от железа.
+Платы хватает на сборку и наблюдение: `idf.py build flash monitor` из корня проекта.
 
-## 4. Открытые вопросы (где решение, а не здесь)
-
-- **Адресат команды и события в факте** — `COMMAND_SENT` и `EVENT` пишутся без
-  `entity`/`key`, поэтому подписчик не фильтрует их по устройству
-  (`domain/COMMANDS.md` §8, `domain/TRANSIENT_PAYLOAD.md` §4).
-- **Ключ состояния: числовой или семантический.** Определяет, живут ли
-  Zigbee-идентификаторы в `ha_model` или уходят внутрь Zigbee-сервиса
-  (`RECORD_MODEL.md` §10).
-- **Типы сущностей и формы значений Domain** — определяются на реальной Zigbee
-  state-модели, а не заранее (`RECORD_MODEL.md` §10).
-- **`detail` в ошибке, границы layer-specific кодов** — `ERRORS.md` §5.
-
-## 5. Как собирать и проверять локально
+## 3. Что осталось заглушкой
 
 ```text
-mstore host-тесты   — см. команды в domain/tests/README.md, те же шаги для mstore/tests
-domain host-тесты   — domain/tests/README.md
+прошивка C6              на нём стоковый Wi-Fi-slave 2.3.2 без RCP. CP-прошивка
+                         (ESP-Hosted 3.0.9 + FEAT_OPENTHREAD) уже собрана; C6
+                         шьётся внешним 3.3 В USB-TTL в JP1 — у C6 нет своего USB
+                         (процедура: services/ZIGBEE_IMPL_JOURNAL.md §5)
+источник кадров          zigbee_stub_feed.c — больше не стартует, удалить после первого устройства
+интервью устройства      нет: топология публикуется stub_feed
 ```
 
-Оба набора обязательны перед коммитом: `-W4` на MSVC и `-Wall -Wextra -Werror` на
+Отправка команд (`zigbee_radio_send`) и приём репортов идут настоящим кодом; пока
+C6 не перепрошит, `zigbee.radio` логирует «RCP on the co-processor not started».
+
+## 4. Что дальше
+
+```text
+1. Прошить C6 CP-прошивкой через USB-TTL в JP1   — снимает блокер радиоканала
+2. Отладка на живом устройстве      — сеть, репорты, команды; затем удалить stub_feed
+3. Automation service               — подписчик фактов, правила по состоянию
+4. Web service (BFF)                — проекция записей в DTO, приём команд
+```
+
+Порядок прежний: Zigbee — единственный источник состояния, Automation и Web
+потребляют то, что он produces.
+
+## 5. Открытые вопросы (где решение, а не здесь)
+
+- **`device_meta`.** Отдельный тип сущности или поля внутри `device`
+  (`RECORD_MODEL.md` §10.3). Operational metadata (last_seen, rssi, lqi) пока не
+  хранится нигде.
+- **Гранулярность дискриминатора команды.** Сейчас один `HA_CMD_ZIGBEE_CLUSTER` на
+  весь кластерный путь (`COMMANDS.md` §8).
+- **Устройство без интервью.** Сейчас запись устройства создаётся первым репортом,
+  до завершения интервью (`services/ZIGBEE.md` §9.4).
+- **Фильтр по ключу в Dispatcher'е.** Подписчик фильтрует по устройству сам, сравнивая
+  ключ; фильтр в самом Dispatcher'е не вводился — ждёт потребителя (`DISPATCHER.md` §5).
+- **Concurrency Region Manager.** `bind/release` не синхронизированы между задачами
+  (`storage/MSTORE_FLASH_REGIONS.md` §9.6).
+- **Размер раздела.** Под реальное число устройств не пересчитывался: сейчас занято
+  16 КБ из 256 КБ, расчёт — `services/ZIGBEE.md` §10.
+
+## 6. Как собирать и проверять локально
+
+```text
+приложение на P4   — idf.py build flash monitor (из корня esp32-p4_HA_v2)
+domain host-тесты  — domain/tests/README.md
+mstore host-тесты  — те же шаги для mstore/tests
+zigbee host-тесты  — те же шаги для zigbee/tests
+```
+
+Все наборы обязательны перед коммитом: `/W4` на MSVC и `-Wall -Wextra -Werror` на
 GCC/Clang, предупреждения недопустимы.
+
+**Нюанс окружения.** `export.ps1` по умолчанию подхватывает python-окружение от
+IDF 5.5 и падает. Рабочий запуск — с явным
+`IDF_PYTHON_ENV_PATH=...\.espressif\python_env\idf6.1_py3.10_env`.

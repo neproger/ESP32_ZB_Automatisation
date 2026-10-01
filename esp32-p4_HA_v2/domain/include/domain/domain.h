@@ -52,6 +52,19 @@ typedef struct {
 } domain_fact_meta_t;
 
 /*
+ * Адресат факта для команд и событий: к какой сущности факт относится. Операции над
+ * сущностями адресат не передают — он известен из самой операции (type + key).
+ *
+ * key — по layout'у типа сущности; размер ключа Domain берёт из descriptor'а, поэтому
+ * передавать его не нужно (docs/domain/COMMANDS.md §8). Адресат может отсутствовать:
+ * тогда факт пишется без entity/key.
+ */
+typedef struct {
+    domain_entity_t entity;
+    const void *key;
+} domain_fact_target_t;
+
+/*
  * Запись сущности. Размеры key и record заданы descriptor'ом типа.
  * out_changed обязателен: «записали» и «ничего не изменилось» — разные исходы.
  *
@@ -79,8 +92,8 @@ sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,
  * а неизвестная ссылка — как NOT_FOUND. Никакого ownership и release: payload живёт,
  * пока его не вытеснит ring.
  */
-sys_error_t domain_payload_put(domain_t *domain, const domain_fact_meta_t *meta,
-                               const void *payload, size_t size,
+sys_error_t domain_payload_put(domain_t *domain, const domain_fact_target_t *target,
+                               const domain_fact_meta_t *meta, const void *payload, size_t size,
                                domain_payload_ref_t *out_ref);
 sys_error_t domain_payload_get(domain_t *domain, domain_payload_ref_t ref, void *out,
                                size_t out_size);
@@ -100,9 +113,12 @@ sys_error_t domain_register_command(domain_t *domain, domain_command_t type,
  * Результат выполнения не ожидается (fire-and-forget). При успешной передаче пишется
  * COMMAND_SENT; если executor не найден или отклонил команду — возвращается его ошибка
  * и факта нет (docs/domain/COMMANDS.md §2).
+ *
+ * target — адресат факта: чтобы подписчик мог отнести команду к устройству. Адресат
+ * проверяется до вызова executor'а: неизвестный тип — отказ, факта нет.
  */
-sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *args,
-                        size_t args_size, const domain_fact_meta_t *meta);
+sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *args, size_t args_size,
+                        const domain_fact_target_t *target, const domain_fact_meta_t *meta);
 
 /*
  * Подписка на факты. Фильтр задаётся при подписке и применяется Dispatcher'ом

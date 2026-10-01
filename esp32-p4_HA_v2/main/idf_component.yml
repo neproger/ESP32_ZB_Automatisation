@@ -1,0 +1,9 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=5.2'
+  # ESP-Hosted: шина до встроенного C6 (SDIO) и управление RCP.
+  espressif/esp_hosted: '*'
+  # Стек Zigbee на хосте (P4); радио — RCP на C6.
+  espressif/esp-zigbee-lib: '>=2.0.0'

@@ -100,6 +100,14 @@ void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
                        domain_entity_t type, const void *key, uint8_t key_size, uint8_t kind,
                        uint8_t op, sys_error_t error, uint64_t payload_ref);
 
+/*
+ * Разбор адресата факта для команд и событий: размер ключа берётся из descriptor'а
+ * типа, поэтому вызывающий передаёт только entity и key. Вызывается под lock'ом.
+ */
+sys_error_t domain_fact_target_resolve(domain_state_t *state, const domain_fact_target_t *target,
+                                       domain_entity_t *out_entity, const void **out_key,
+                                       uint8_t *out_key_size);
+
 domain_state_t *domain_state(const domain_t *domain);
 domain_entity_entry_t *domain_entry_find(domain_state_t *state, domain_entity_t type);
 

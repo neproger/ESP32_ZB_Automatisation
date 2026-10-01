@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "src/zigbee.c"
+        "src/zigbee_state.c"
+        "src/zigbee_command.c"
+        "src/zigbee_topology.c"
+        "src/zigbee_diag.c"
+        "src/zigbee_radio.c"
+        "src/zigbee_stub_feed.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        domain
+        ha_model
+        sys
+        nvs_flash
+        esp_hosted
+        esp-zigbee-lib
+)
