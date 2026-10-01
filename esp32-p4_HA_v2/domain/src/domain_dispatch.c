@@ -22,21 +22,6 @@ struct domain_subscription {
     struct domain_subscription *next;
 };
 
-bool domain_outcome_is_runtime_error(domain_err_t err)
-{
-    switch (err) {
-    case DOMAIN_IO:
-    case DOMAIN_CORRUPT:
-    case DOMAIN_NO_SPACE:
-    case DOMAIN_NO_MEM:
-    case DOMAIN_OVERFLOW:
-    case DOMAIN_BUSY:
-        return true;
-    default:
-        return false;
-    }
-}
-
 static bool matches(const domain_subscription_desc_t *desc, const domain_event_t *event)
 {
     if (desc->kind_mask != 0 && (desc->kind_mask & (1u << event->kind)) == 0) {

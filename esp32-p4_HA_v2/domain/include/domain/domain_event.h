@@ -33,6 +33,7 @@ typedef enum {
     DOMAIN_OP_ENTITY_REMOVE = 2,
     DOMAIN_OP_COMMAND = 3,
     DOMAIN_OP_PAYLOAD_PUT = 4,
+    DOMAIN_OP_ENTITY_ITER = 5,
 } domain_op_t;
 
 typedef struct {

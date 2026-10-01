@@ -65,13 +65,6 @@ domain_err_t domain_dispatch_init(domain_state_t *state);
 void domain_dispatch_deinit(domain_state_t *state);
 void domain_dispatch_signal(domain_state_t *state);
 
-/*
- * Классификация исхода операции Domain. Живёт здесь, а не в Journal: решение
- * «журналировать или нет» принимает операция, а не хранилище фактов
- * (JOURNAL.md §2.1-2.2).
- */
-bool domain_outcome_is_runtime_error(domain_err_t err);
-
 domain_err_t domain_err_from_mstore(mstore_err_t err);
 
 #ifdef __cplusplus

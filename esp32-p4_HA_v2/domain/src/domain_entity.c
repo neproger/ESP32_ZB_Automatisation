@@ -47,7 +47,9 @@ static void fact_fill(domain_event_t *out, domain_entity_t type, const void *key
     } else {
         out->source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     }
-    memcpy(out->key, key, key_size);
+    if (key != NULL && key_size > 0) {
+        memcpy(out->key, key, key_size);
+    }
 }
 
 static void journal_append_fact(domain_state_t *state, domain_event_t *fact)
@@ -58,22 +60,18 @@ static void journal_append_fact(domain_state_t *state, domain_event_t *fact)
 }
 
 /*
- * Классификация outcome операции. Возвращает тот же результат, что был:
- * Journal не влияет на решение, а только фиксирует значимый исход.
+ * Ошибка операции: фиксируется фактом ERROR и возвращается вызывающему тем же кодом.
+ * Journal не влияет на решение и не классифицирует — решение принято на месте вызова.
  */
-static domain_err_t journal_outcome(domain_state_t *state, domain_entity_t type,
-                                    const void *key, uint8_t key_size, uint8_t op,
-                                    const domain_fact_meta_t *meta, domain_err_t outcome)
+static domain_err_t journal_error(domain_state_t *state, domain_entity_t type, const void *key,
+                                  uint8_t key_size, uint8_t op,
+                                  const domain_fact_meta_t *meta, domain_err_t err)
 {
-    if (!domain_outcome_is_runtime_error(outcome)) {
-        return outcome;
-    }
-
     domain_event_t fact = {0};
     fact_fill(&fact, type, key, key_size, (uint8_t)DOMAIN_FACT_ERROR, op, meta);
-    fact.error = (uint32_t)outcome;
+    fact.error = (uint32_t)err;
     journal_append_fact(state, &fact);
-    return outcome;
+    return err;
 }
 
 static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *entry,
@@ -87,25 +85,33 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
     mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
 
     if (err == MSTORE_NOT_FOUND) {
+        /* Ожидаемая ветка: записи ещё нет. */
         uint32_t generation = 0;
         err = mstore_table_slot_allocate(&entry->table, key, record, &slot, &generation);
         if (err != MSTORE_OK) {
-            return domain_err_from_mstore(err);
+            return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                                 (uint8_t)DOMAIN_OP_ENTITY_PUT, meta,
+                                 domain_err_from_mstore(err));
         }
         changed = true;
     } else if (err == MSTORE_OK) {
         mstore_meta_t slot_meta = {0};
         err = mstore_table_slot_meta(&entry->table, slot, &slot_meta);
         if (err != MSTORE_OK) {
-            return domain_err_from_mstore(err);
+            return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                                 (uint8_t)DOMAIN_OP_ENTITY_PUT, meta,
+                                 domain_err_from_mstore(err));
         }
         err = mstore_table_slot_update(&entry->table, slot, slot_meta.generation, record,
                                        &changed);
         if (err != MSTORE_OK) {
-            return domain_err_from_mstore(err);
+            return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                                 (uint8_t)DOMAIN_OP_ENTITY_PUT, meta,
+                                 domain_err_from_mstore(err));
         }
     } else {
-        return domain_err_from_mstore(err);
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_PUT, meta, domain_err_from_mstore(err));
     }
 
     if (!changed) {
@@ -121,17 +127,28 @@ static domain_err_t put_locked(domain_state_t *state, domain_entity_entry_t *ent
     return DOMAIN_OK;
 }
 
-static domain_err_t get_locked(domain_entity_entry_t *entry, const void *key, void *out_record)
+static domain_err_t get_locked(domain_state_t *state, domain_entity_entry_t *entry,
+                               const void *key, void *out_record,
+                               const domain_fact_meta_t *meta)
 {
     mstore_slot_t slot = 0;
-    const mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
+    mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
     if (err != MSTORE_OK) {
-        return domain_err_from_mstore(err);
+        if (err == MSTORE_NOT_FOUND) {
+            return DOMAIN_NOT_FOUND; /* чтение отсутствующей записи — норма */
+        }
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_PUT, meta, domain_err_from_mstore(err));
     }
 
-    mstore_meta_t meta = {0};
-    return domain_err_from_mstore(
-        mstore_table_slot_read(&entry->table, slot, &meta, entry->scratch_key, out_record));
+    mstore_meta_t slot_meta = {0};
+    err = mstore_table_slot_read(&entry->table, slot, &slot_meta, entry->scratch_key,
+                                 out_record);
+    if (err != MSTORE_OK) {
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_PUT, meta, domain_err_from_mstore(err));
+    }
+    return DOMAIN_OK;
 }
 
 static domain_err_t remove_locked(domain_state_t *state, domain_entity_entry_t *entry,
@@ -140,18 +157,27 @@ static domain_err_t remove_locked(domain_state_t *state, domain_entity_entry_t *
     mstore_slot_t slot = 0;
     mstore_err_t err = mstore_table_slot_find(&entry->table, key, &slot);
     if (err != MSTORE_OK) {
-        return domain_err_from_mstore(err);
+        if (err == MSTORE_NOT_FOUND) {
+            return DOMAIN_NOT_FOUND; /* удалять нечего — норма */
+        }
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta,
+                             domain_err_from_mstore(err));
     }
 
     mstore_meta_t slot_meta = {0};
     err = mstore_table_slot_meta(&entry->table, slot, &slot_meta);
     if (err != MSTORE_OK) {
-        return domain_err_from_mstore(err);
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta,
+                             domain_err_from_mstore(err));
     }
 
     err = mstore_table_slot_free(&entry->table, slot, slot_meta.generation);
     if (err != MSTORE_OK) {
-        return domain_err_from_mstore(err);
+        return journal_error(state, entry->desc.type, key, (uint8_t)entry->desc.key_size,
+                             (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta,
+                             domain_err_from_mstore(err));
     }
 
     domain_event_t fact = {0};
@@ -189,13 +215,8 @@ domain_err_t domain_entity_put(domain_t *domain, domain_entity_t type,
     const domain_err_t result = (entry == NULL)
                                     ? DOMAIN_NOT_FOUND
                                     : put_locked(state, entry, key, record, meta, out_changed);
-    const domain_err_t journaled =
-        (entry == NULL)
-            ? result
-            : journal_outcome(state, type, key, (uint8_t)entry->desc.key_size,
-                              (uint8_t)DOMAIN_OP_ENTITY_PUT, meta, result);
     domain_platform_lock_release(state->lock);
-    return journaled;
+    return result;
 }
 
 domain_err_t domain_entity_get(domain_t *domain, domain_entity_t type,
@@ -209,7 +230,7 @@ domain_err_t domain_entity_get(domain_t *domain, domain_entity_t type,
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
     const domain_err_t result =
-        (entry == NULL) ? DOMAIN_NOT_FOUND : get_locked(entry, key, out_record);
+        (entry == NULL) ? DOMAIN_NOT_FOUND : get_locked(state, entry, key, out_record, NULL);
     domain_platform_lock_release(state->lock);
     return result;
 }
@@ -226,13 +247,8 @@ domain_err_t domain_entity_remove(domain_t *domain, domain_entity_t type, const 
     domain_entity_entry_t *entry = domain_entry_find(state, type);
     const domain_err_t result =
         (entry == NULL) ? DOMAIN_NOT_FOUND : remove_locked(state, entry, key, meta);
-    const domain_err_t journaled =
-        (entry == NULL)
-            ? result
-            : journal_outcome(state, type, key, (uint8_t)entry->desc.key_size,
-                              (uint8_t)DOMAIN_OP_ENTITY_REMOVE, meta, result);
     domain_platform_lock_release(state->lock);
-    return journaled;
+    return result;
 }
 
 domain_err_t domain_entity_iter(domain_t *domain, domain_entity_t type,
@@ -246,10 +262,14 @@ domain_err_t domain_entity_iter(domain_t *domain, domain_entity_t type,
     iter_bridge_t bridge = {.cb = cb, .ctx = ctx};
     domain_platform_lock_acquire(state->lock);
     domain_entity_entry_t *entry = domain_entry_find(state, type);
-    const domain_err_t result = (entry == NULL)
-                                    ? DOMAIN_NOT_FOUND
-                                    : domain_err_from_mstore(
-                                          mstore_table_iter(&entry->table, iter_bridge, &bridge));
+    domain_err_t result = DOMAIN_NOT_FOUND;
+    if (entry != NULL) {
+        const mstore_err_t err = mstore_table_iter(&entry->table, iter_bridge, &bridge);
+        result = (err == MSTORE_OK)
+                     ? DOMAIN_OK
+                     : journal_error(state, type, NULL, 0, (uint8_t)DOMAIN_OP_ENTITY_ITER, NULL,
+                                     domain_err_from_mstore(err));
+    }
     domain_platform_lock_release(state->lock);
     return result;
 }
