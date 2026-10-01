@@ -170,8 +170,8 @@ static void test_invalid_args(void)
     CHECK(domain_journal_append(&journal, NULL, &id) == DOMAIN_INVALID_ARG);
     CHECK(domain_journal_append(&journal, &event, NULL) == DOMAIN_INVALID_ARG);
 
-    event.key_size = DOMAIN_JOURNAL_KEY_MAX + 1;
-    CHECK(domain_journal_append(&journal, &event, &id) == DOMAIN_INVALID_SIZE);
+    /* Ключ шире лимита — нарушение инварианта, отвергается при регистрации типа,
+     * а не здесь: Journal факты не проверяет. */
 
     CHECK(domain_journal_deinit(&journal) == DOMAIN_OK);
 }

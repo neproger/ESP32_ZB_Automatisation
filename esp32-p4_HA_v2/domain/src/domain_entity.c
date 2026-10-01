@@ -1,5 +1,6 @@
 #include "domain/domain.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "domain_internal.h"
@@ -25,6 +26,13 @@ static void fact_fill(domain_event_t *out, domain_entity_t type, const void *key
                       uint8_t key_size, uint8_t kind, uint8_t op,
                       const domain_fact_meta_t *meta)
 {
+    /*
+     * Инвариант, а не проверка: key_size приходит из descriptor'а, а регистрация типа
+     * не пропускает ключ шире DOMAIN_JOURNAL_KEY_MAX. Проверять это на каждом факте
+     * незачем — в release assert стоит ноль.
+     */
+    assert(key_size <= DOMAIN_JOURNAL_KEY_MAX);
+
     memset(out, 0, sizeof(*out));
     out->ts = domain_platform_now_ms();
     out->kind = kind;

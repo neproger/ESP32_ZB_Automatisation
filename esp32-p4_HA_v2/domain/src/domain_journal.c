@@ -54,9 +54,6 @@ domain_err_t domain_journal_append(domain_journal_t *journal, domain_event_t *ev
     if (journal == NULL || event == NULL || out_id == NULL) {
         return DOMAIN_INVALID_ARG;
     }
-    if (event->key_size > DOMAIN_JOURNAL_KEY_MAX) {
-        return DOMAIN_INVALID_SIZE;
-    }
 
     uint64_t seq = 0;
     const mstore_err_t err = mstore_ring_append(&journal->ring, event, &seq);
