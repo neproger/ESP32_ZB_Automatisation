@@ -166,8 +166,8 @@ Domain-фасад; ring-API наружу не выходит.
 ### 3.5. Domain API
 
 Сервисы видят только Domain API: entity CRUD, commands, payload, subscription/event
-delivery. Типы `mstore` (seq, slot, generation, ring) наружу не выходят; доменные
-identity — opaque-типы Domain.
+delivery. Контракт фасада — `domain/DOMAIN_API.md`. Типы `mstore` (seq, slot, generation,
+ring) наружу не выходят; доменные identity — opaque-типы Domain.
 
 **Domain не знает про:** pending UI, lifecycle команд, correlation, ownership/TTL
 payload, процедуры создания/удаления устройств, связи между сущностями, роли/permissions.
@@ -206,7 +206,9 @@ payload, процедуры создания/удаления устройств
 ```text
 docs/
 ├── ARCHITECTURE.md          — карта: что существует и зачем
+├── RECORD_MODEL.md          — единая модель записей, обязательна для всех слоёв
 ├── domain/
+│   ├── DOMAIN_API.md
 │   ├── ENTITY_STORE.md
 │   ├── JOURNAL.md
 │   ├── DISPATCHER.md

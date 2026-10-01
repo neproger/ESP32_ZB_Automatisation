@@ -1,6 +1,7 @@
 # Entity Store
 
 Слой: **Domain / Entity Store**. Карта системы — `../ARCHITECTURE.md`.
+Дисциплина записей — `../RECORD_MODEL.md`.
 Документ описывает контракт и поведение; конкретная реализация — в коде.
 
 ## 1. Роль
@@ -13,11 +14,15 @@ Entity Store хранит **последнее известное состоян
 
 ## 2. Registry
 
-Простая routing-таблица:
+Простая routing-таблица, собранная при регистрации типов:
 
 ```text
 entity_type → { таблица/schema, optional validate }
 ```
+
+Состав таблиц, их ёмкость и backing задаёт bootstrap приложения через
+`domain_register_entity()`; Entity Store хранит descriptors и не знает форм данных
+(`../RECORD_MODEL.md` §1.1).
 
 - Registry не framework; никаких pre/post hooks, стадий коммита и schema-хуков для
   Journal.
