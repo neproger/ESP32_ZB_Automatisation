@@ -136,6 +136,9 @@ static void test_fact_carries_identity_and_meta(void)
     CHECK(fact.value.type == DOMAIN_VALUE_U32);
     CHECK(fact.value.v.u32 == 42);
     CHECK(fact.key_size == sizeof(test_key_t));
+    /* Факт без payload: ссылки и размера нет. */
+    CHECK(fact.payload_ref == 0);
+    CHECK(fact.payload_size == 0);
 
     test_key_t carried = {0};
     memcpy(&carried, fact.key, sizeof(carried));

@@ -41,7 +41,7 @@ Dispatcher
 ```text
 subscriber task просыпается с event
   ├─ state fact  → читает актуальный state через Domain (get/list)
-  ├─ EVENT       → value / domain_payload_get(payload_ref)
+  ├─ EVENT       → value / domain_payload_get(payload_ref, payload_size)
   └─ при необходимости → domain_post(command)
 ```
 

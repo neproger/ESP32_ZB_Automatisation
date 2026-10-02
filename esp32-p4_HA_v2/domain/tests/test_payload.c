@@ -116,6 +116,8 @@ static void put_publishes_event_with_ref(void)
     CHECK(inbox.events[0].kind == DOMAIN_FACT_EVENT);
     CHECK(inbox.events[0].op == DOMAIN_OP_PAYLOAD_PUT);
     CHECK(inbox.events[0].payload_ref == ref);
+    /* Размер тела едет в самом факте: подписчику не нужен отдельный запрос. */
+    CHECK(inbox.events[0].payload_size == sizeof(written));
 
     CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));

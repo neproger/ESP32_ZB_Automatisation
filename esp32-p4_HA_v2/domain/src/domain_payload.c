@@ -29,6 +29,10 @@ sys_error_t domain_payload_init(domain_payload_t *payload, size_t capacity, size
     if (payload == NULL || capacity == 0 || max_size == 0) {
         return domain_fail(SYS_CODE_INVALID_ARG);
     }
+    /* Размер тела хранится как uint32: max_size шире этого не поместится. */
+    if (max_size > UINT32_MAX) {
+        return domain_fail(SYS_CODE_INVALID_SIZE);
+    }
 
     memset(payload, 0, sizeof(*payload));
     payload->max_size = max_size;
@@ -97,13 +101,15 @@ sys_error_t domain_payload_put(domain_t *domain, const domain_fact_target_t *tar
     sys_error_t err = mstore_ring_append(&state->payload.ring, scratch, &seq);
     if (sys_failed(err)) {
         domain_fact_write(state, meta, target_entity, target_key, target_key_size,
-                          (uint8_t)DOMAIN_FACT_ERROR, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, err, 0);
+                          (uint8_t)DOMAIN_FACT_ERROR, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, err, NULL);
         domain_platform_lock_release(state->lock);
         return err;
     }
 
+    const domain_fact_payload_t payload_fact = {.ref = seq, .size = (uint32_t)size};
     domain_fact_write(state, meta, target_entity, target_key, target_key_size,
-                      (uint8_t)DOMAIN_FACT_EVENT, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, SYS_OK, seq);
+                      (uint8_t)DOMAIN_FACT_EVENT, (uint8_t)DOMAIN_OP_PAYLOAD_PUT, SYS_OK,
+                      &payload_fact);
     domain_platform_lock_release(state->lock);
 
     *out_ref = seq;

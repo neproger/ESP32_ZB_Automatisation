@@ -44,11 +44,13 @@ typedef bool (*domain_entity_iter_cb_t)(const void *key, const void *record, voi
  * Компактное описание факта от того, кто меняет состояние: Domain не «догадывается»,
  * что писать в Journal, а получает это от вызывающего (ENTITY_STORE.md §4).
  * ts / event_id / entity / key / op добавляет сам Domain.
+ *
+ * Ссылки на payload здесь нет: её выдаёт ring при domain_payload_put, а не вызывающий,
+ * поэтому ref/size факта задаёт только сам put.
  */
 typedef struct {
     uint8_t source;
     domain_value_t value;
-    uint64_t payload_ref;
 } domain_fact_meta_t;
 
 /*
@@ -86,11 +88,11 @@ sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,
 /*
  * Transient payload: best-effort окно для данных, которым тесно в compact value.
  *
- * put копирует payload в ring и публикует факт EVENT с payload_ref — это и есть
- * «опубликовать событие с данными» (docs/domain/TRANSIENT_PAYLOAD.md §2-3).
- * get отдаёт payload в буфер вызывающего; вытесненный payload читается как STALE,
- * а неизвестная ссылка — как NOT_FOUND. Никакого ownership и release: payload живёт,
- * пока его не вытеснит ring.
+ * put копирует payload в ring и публикует факт EVENT с payload_ref и payload_size —
+ * это и есть «опубликовать событие с данными» (docs/domain/TRANSIENT_PAYLOAD.md §2-3).
+ * get отдаёт payload в буфер вызывающего: размер берётся из факта (payload_size), чтобы
+ * не гадать о длине. Вытесненный payload читается как STALE, а неизвестная ссылка — как
+ * NOT_FOUND. Никакого ownership и release: payload живёт, пока его не вытеснит ring.
  */
 sys_error_t domain_payload_put(domain_t *domain, const domain_fact_target_t *target,
                                const domain_fact_meta_t *meta, const void *payload, size_t size,

@@ -52,11 +52,12 @@ Domain не открывает запись, чтобы «догадаться»
 состояние, передаёт компактное описание факта:
 
 ```text
-event_meta = { source, value, payload_ref? }
+event_meta = { source, value }
 ```
 
 Domain добавляет `event_id / ts / entity / key / op` и не вычисляет, почему значение
-важно.
+важно. Ссылка на payload в meta не входит: её выдаёт ring, а факт получает ref/size
+только через `domain_payload_put` (`TRANSIENT_PAYLOAD.md`).
 
 ## 5. Ключи и связи
 

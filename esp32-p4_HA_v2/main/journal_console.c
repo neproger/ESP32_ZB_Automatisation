@@ -102,12 +102,13 @@ static bool journal_log(const domain_event_t *event, void *ctx)
     char value[24] = {0};
     value_text(&event->value, value, sizeof(value));
 
-    char tail[32] = {0};
+    char tail[48] = {0};
     if (event->kind == (uint8_t)DOMAIN_FACT_ERROR) {
         snprintf(tail, sizeof(tail), "err layer=%u code=%u", (unsigned)event->error.layer,
                  (unsigned)event->error.code);
     } else if (event->payload_ref != 0) {
-        snprintf(tail, sizeof(tail), "payload=%u", (unsigned)event->payload_ref);
+        snprintf(tail, sizeof(tail), "payload=%llu size=%u",
+                 (unsigned long long)event->payload_ref, (unsigned)event->payload_size);
     }
 
     ESP_LOGI(TAG, "#%llu ts=%llums %s op=%s src=%s entity=%lu key=[%s] %s %s",

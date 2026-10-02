@@ -93,12 +93,22 @@ static inline sys_error_t domain_fail(sys_code_t code)
 }
 
 /*
+ * Ссылка на payload неразрывна с его размером: обе величины рождаются в одном месте
+ * (ring выдаёт ref, put знает size) и попадают в факт только вместе. NULL — факт без
+ * payload.
+ */
+typedef struct {
+    uint64_t ref;
+    uint32_t size;
+} domain_fact_payload_t;
+
+/*
  * Сборка и запись факта — единственное место, где факт обретает форму. Операции
  * (entity / payload / command) решают, что писать, но не как (JOURNAL.md §2.2).
  */
 void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
                        domain_entity_t type, const void *key, uint8_t key_size, uint8_t kind,
-                       uint8_t op, sys_error_t error, uint64_t payload_ref);
+                       uint8_t op, sys_error_t error, const domain_fact_payload_t *payload);
 
 /*
  * Разбор адресата факта для команд и событий: размер ключа берётся из descriptor'а

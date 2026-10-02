@@ -16,15 +16,16 @@ Journal **не** является транспортом доставки: ко�
 `domain_event_t` — compact runtime-descriptor факта, он же запись Journal:
 
 ```text
-event_id    — identity этой Journal-записи (opaque доменный тип)
+event_id     — identity этой Journal-записи (opaque доменный тип)
 ts
-kind        — ENTITY_UPSERTED | ENTITY_REMOVED | EVENT | COMMAND_SENT | ERROR
-op          — ENTITY_PUT | ENTITY_REMOVE | COMMAND | PAYLOAD_PUT
-source      — ZIGBEE | UI | AUTOMATION | SYSTEM | ...
+kind         — ENTITY_UPSERTED | ENTITY_REMOVED | EVENT | COMMAND_SENT | ERROR
+op           — ENTITY_PUT | ENTITY_REMOVE | COMMAND | PAYLOAD_PUT
+source       — ZIGBEE | UI | AUTOMATION | SYSTEM | ...
 entity, key
-value       — optional компактный snapshot (history / diagnostics)
-payload_ref — optional ссылка на Transient Payload (см. TRANSIENT_PAYLOAD.md)
-error       — только для kind = ERROR: код результата операции
+value        — optional компактный snapshot (history / diagnostics)
+payload_ref  — optional ссылка на Transient Payload (см. TRANSIENT_PAYLOAD.md)
+payload_size — размер тела payload в байтах; 0, если payload_ref == 0
+error        — только для kind = ERROR: код результата операции
 ```
 
 Категории:

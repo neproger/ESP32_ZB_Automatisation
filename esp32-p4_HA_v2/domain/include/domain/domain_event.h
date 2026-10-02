@@ -50,6 +50,13 @@ typedef struct {
     uint64_t payload_ref;
 
     /*
+     * Размер тела payload в байтах; 0, если payload_ref == 0. Как key_size для ключа:
+     * подписчик узнаёт размер из самого факта и по нему готовит буфер под
+     * domain_payload_get (docs/domain/TRANSIENT_PAYLOAD.md §2).
+     */
+    uint32_t payload_size;
+
+    /*
      * Только для kind = ERROR: результат операции как он есть. Journal хранит ошибку
      * источника без перекодирования — layer пометит, кто её создал (docs/ERRORS.md).
      */

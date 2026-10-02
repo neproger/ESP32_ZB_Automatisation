@@ -16,7 +16,7 @@
  */
 void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
                        domain_entity_t type, const void *key, uint8_t key_size, uint8_t kind,
-                       uint8_t op, sys_error_t error, uint64_t payload_ref)
+                       uint8_t op, sys_error_t error, const domain_fact_payload_t *payload)
 {
     assert(state != NULL);
     assert(key_size <= DOMAIN_EVENT_KEY_MAX);
@@ -29,9 +29,10 @@ void domain_fact_write(domain_state_t *state, const domain_fact_meta_t *meta,
     fact.key_size = key_size;
     fact.entity = type;
     fact.error = error;
-    /* Ссылку на payload операция передаёт явно (put знает seq); из meta берём только
-     * если самой операции ссылки неоткуда взять. */
-    fact.payload_ref = (payload_ref != 0 || meta == NULL) ? payload_ref : meta->payload_ref;
+    if (payload != NULL) {
+        fact.payload_ref = payload->ref;
+        fact.payload_size = payload->size;
+    }
     if (meta != NULL) {
         fact.source = meta->source;
         fact.value = meta->value;

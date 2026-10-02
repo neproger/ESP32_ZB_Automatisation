@@ -85,7 +85,7 @@ sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *arg
 
     domain_platform_lock_acquire(state->lock);
     domain_fact_write(state, meta, target_entity, target_key, target_key_size,
-                      (uint8_t)DOMAIN_FACT_COMMAND_SENT, (uint8_t)DOMAIN_OP_COMMAND, SYS_OK, 0);
+                      (uint8_t)DOMAIN_FACT_COMMAND_SENT, (uint8_t)DOMAIN_OP_COMMAND, SYS_OK, NULL);
     domain_platform_lock_release(state->lock);
     return SYS_OK;
 }

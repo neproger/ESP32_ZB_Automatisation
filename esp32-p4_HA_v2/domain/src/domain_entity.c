@@ -53,7 +53,7 @@ static entity_op_t entity_op_begin(domain_state_t *state, domain_entity_entry_t 
 static void entity_op_write_fact(const entity_op_t *op, uint8_t kind, sys_error_t error)
 {
     domain_fact_write(op->state, op->meta, op->entry->desc.type, op->key, op->key_size, kind,
-                      op->op, error, 0);
+                      op->op, error, NULL);
 }
 
 static void entity_op_state(const entity_op_t *op, uint8_t kind)

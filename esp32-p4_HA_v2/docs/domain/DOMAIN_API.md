@@ -201,7 +201,7 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 | Journal | прямой доступ отсутствует: Journal читает только Dispatcher, публичного `domain_journal_read()` для сервисов нет | `JOURNAL.md` |
 | Subscriptions | `domain_subscribe` / `domain_unsubscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |
-| Transient payload | `domain_payload_put / get` по opaque ref | `TRANSIENT_PAYLOAD.md` |
+| Transient payload | `domain_payload_put / get` по opaque ref; размер тела — в факте `payload_size` | `TRANSIENT_PAYLOAD.md` |
 
 Команда и событие — разные вещи: команда идёт напрямую исполнителю и лишь журналируется
 как `COMMAND_SENT`; событие идет подписчикам через Dispatcher (`COMMANDS.md:10-14`).
