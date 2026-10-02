@@ -5,6 +5,8 @@
 
 Как сервис вызывает Domain — не здесь: `../domain/DOMAIN_API.md`. Формы записей и
 ключей — `../RECORD_MODEL.md`. Словарь ZCL — `ha_model/include/ha_model/ha_zigbee.h`.
+Интерпретация устройств (endpoint / cluster / role) и проекция возможностей —
+`ZIGBEE_CAPABILITIES.md`.
 
 ## 1. Роль
 

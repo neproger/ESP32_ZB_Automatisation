@@ -229,6 +229,7 @@ docs/
 │   └── COMMANDS.md
 ├── services/
 │   ├── ZIGBEE.md
+│   ├── ZIGBEE_CAPABILITIES.md
 │   ├── ZIGBEE_IMPL_JOURNAL.md
 │   ├── AUTOMATION.md
 │   └── WEB.md
