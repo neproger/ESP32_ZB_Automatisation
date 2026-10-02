@@ -1,27 +1,10 @@
 #include <string.h>
 
-#include "mstore/mstore_bench.h"
 #include "mstore_platform.h"
 #include "storage/mstore_bytes.h"
 #include "storage/mstore_flash_device.h"
 #include "storage/mstore_region.h"
 #include "storage/mstore_storage.h"
-
-#ifdef MSTORE_BENCH_COUNTERS
-static mstore_bench_counters_t s_bench;
-#endif
-
-#ifdef MSTORE_BENCH_COUNTERS
-void mstore_bench_counters_reset(void) {
-    memset(&s_bench, 0, sizeof(s_bench));
-}
-
-void mstore_bench_counters_read(mstore_bench_counters_t *out) {
-    if (out != NULL) {
-        *out = s_bench;
-    }
-}
-#endif
 
 #define MSTORE_FLASH_HEADER_MAGIC 0x4D535442u   /* MSTB */
 #define MSTORE_FLASH_RECORD_MAGIC 0x5452u /* "RT", record prefix */
@@ -98,18 +81,10 @@ static bool dev_read(const mstore_flash_storage_t *st, size_t offset, void *dst,
 }
 
 static bool dev_program(const mstore_flash_storage_t *st, size_t offset, const void *src, size_t len) {
-#ifdef MSTORE_BENCH_COUNTERS
-    s_bench.program_calls++;
-    s_bench.program_bytes += len;
-#endif
     return st->device->ops->program(st->device->ctx, offset, src, len);
 }
 
 static bool dev_erase(const mstore_flash_storage_t *st, size_t offset, size_t len) {
-#ifdef MSTORE_BENCH_COUNTERS
-    s_bench.erase_calls++;
-    s_bench.erase_bytes += len;
-#endif
     return st->device->ops->erase(st->device->ctx, offset, len);
 }
 
@@ -334,9 +309,6 @@ static sys_error_t flash_scan(mstore_flash_storage_t *st, bool *out_torn) {
 }
 
 static sys_error_t flash_compact(mstore_flash_storage_t *st, bool clear) {
-#ifdef MSTORE_BENCH_COUNTERS
-    s_bench.compactions++;
-#endif
     size_t inactive = 1 - st->active_bank;
     if (!dev_erase(st, bank_offset(st, inactive), st->bank_size)) {
         return mstore_fail(SYS_CODE_IO);
@@ -443,9 +415,6 @@ static sys_error_t flash_append(mstore_flash_storage_t *st, uint32_t slot, uint8
         return mstore_fail(SYS_CODE_NO_SPACE);
     }
     build_record(st, kind, slot, meta, key, payload, len);
-#ifdef MSTORE_BENCH_COUNTERS
-    s_bench.records_appended++;
-#endif
     sys_error_t err = program_record(st, st->active_bank, st->write_offset, st->record_buf, len);
     if (sys_failed(err)) {
         st->needs_checkpoint = true; /* возможен torn append: следующий append сделает compact */
