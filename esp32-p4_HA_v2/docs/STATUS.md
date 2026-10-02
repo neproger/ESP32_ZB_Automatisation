@@ -42,6 +42,8 @@ C6 по SDIO            → esp32c6, host fw 3.0.9; RCP запрошен, но C
 
 Отправка команд (`zigbee_radio_send`) и приём репортов идут настоящим кодом; пока
 C6 не перепрошит, `zigbee.radio` логирует «RCP on the co-processor not started».
+Провал подъёма радио возвращается в bootstrap: `app_main` останавливается, и
+`bootstrap done` не печатается — без Zigbee система не поднимается.
 
 ## 4. Что дальше
 

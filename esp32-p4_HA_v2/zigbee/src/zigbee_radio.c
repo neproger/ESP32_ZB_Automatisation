@@ -19,6 +19,7 @@
 #include "esp_hosted.h"
 #include "esp_hosted_openthread.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
 #include "zigbee/zigbee_diag.h"
@@ -32,12 +33,21 @@ static const char *TAG = "zigbee.radio";
 
 #define RADIO_TASK_STACK 8192
 #define RADIO_TASK_PRIORITY 5
+#define RADIO_START_TIMEOUT_MS 15000
 #define COORDINATOR_ENDPOINT 1
 #define PRIMARY_CHANNEL_MASK (1l << 15)
 #define ZIGBEE_STORAGE_PARTITION "zb_storage"
 
 /* Стек готов принимать команды. Пишет задача радио при старте, читает задача сервиса. */
 static volatile bool s_ready;
+
+/*
+ * Исход старта асинхронной задачи радио; bootstrap ждёт его на семафоре. Память
+ * семафора статическая: задача отдаёт его ровно раз, удалять не нужно.
+ */
+static StaticSemaphore_t s_radio_init_done_storage;
+static SemaphoreHandle_t s_radio_init_done;
+static sys_error_t s_radio_init_error;
 
 /*
  * Значение репорта копируется по фактической ширине типа: в записи оно лежит в u32,
@@ -138,7 +148,19 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
     return false;
 }
 
-static void create_coordinator_device(void)
+/* Сбой подъёма радио — ошибка слоя Zigbee; задача сообщает её bootstrap'у.
+ * code — сырой код SDK для диагностики; 0, когда исходного кода нет. */
+static sys_error_t radio_fail(const char *what, uint32_t code)
+{
+    if (code != 0u) {
+        ESP_LOGE(TAG, "%s: code=0x%x", what, (unsigned)code);
+    } else {
+        ESP_LOGE(TAG, "%s", what);
+    }
+    return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+}
+
+static sys_error_t create_coordinator_device(void)
 {
     ezb_af_device_desc_t device = ezb_af_create_device_desc();
     ezb_af_ep_config_t ep_config = {0};
@@ -147,9 +169,16 @@ static void create_coordinator_device(void)
     ep_config.app_device_id = 0x0005u;
 
     ezb_af_ep_desc_t endpoint = ezb_af_create_gateway_endpoint(&ep_config);
-    ESP_ERROR_CHECK(ezb_af_device_add_endpoint_desc(device, endpoint));
-    ESP_ERROR_CHECK(ezb_af_device_desc_register(device));
+    const ezb_err_t add = ezb_af_device_add_endpoint_desc(device, endpoint);
+    if (add != EZB_ERR_NONE) {
+        return radio_fail("add coordinator endpoint failed", (uint32_t)add);
+    }
+    const ezb_err_t registered = ezb_af_device_desc_register(device);
+    if (registered != EZB_ERR_NONE) {
+        return radio_fail("register coordinator device failed", (uint32_t)registered);
+    }
     ezb_zcl_core_action_handler_register(core_action_handler);
+    return SYS_OK;
 }
 
 static void radio_uart_config(esp_zigbee_config_t *config,
@@ -169,6 +198,56 @@ static void radio_uart_config(esp_zigbee_config_t *config,
     dst->uart_config.source_clk = src->source_clk;
     dst->rx_pin = src->rx_pin;
     dst->tx_pin = src->tx_pin;
+}
+
+/*
+ * Настройка и старт стека Zigbee. Возвращает ошибку, а не завершает задачу:
+ * решение «система без Zigbee не поднимается» принимает bootstrap (app_main).
+ */
+static sys_error_t init_zigbee_stack(void)
+{
+    esp_hosted_openthread_radio_config_t radio = {0};
+    const int radio_ok = esp_hosted_openthread_get_radio_config(&radio);
+    if (radio_ok != 0 || radio.type != HOSTED_OPENTHREAD_TRANSPORT_UART) {
+        return radio_fail("expected UART spinel transport to RCP", (uint32_t)radio_ok);
+    }
+
+    esp_zigbee_config_t config = {
+        .device_config =
+            {
+                .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR,
+                .install_code_policy = false,
+                .zczr_config = { .max_children = 10 },
+            },
+        .platform_config = { .storage_partition_name = ZIGBEE_STORAGE_PARTITION },
+    };
+    radio_uart_config(&config, &radio);
+
+    const esp_err_t inited = esp_zigbee_init(&config);
+    if (inited != ESP_OK) {
+        return radio_fail("esp_zigbee_init failed", (uint32_t)inited);
+    }
+
+    ezb_aps_secur_enable_distributed_security(false);
+    const ezb_err_t channel = ezb_bdb_set_primary_channel_set(PRIMARY_CHANNEL_MASK);
+    if (channel != EZB_ERR_NONE) {
+        return radio_fail("set primary channel set failed", (uint32_t)channel);
+    }
+    const ezb_err_t handler = ezb_app_signal_add_handler(app_signal_handler);
+    if (handler != EZB_ERR_NONE) {
+        return radio_fail("add app signal handler failed", (uint32_t)handler);
+    }
+
+    const sys_error_t device = create_coordinator_device();
+    if (sys_failed(device)) {
+        return device;
+    }
+
+    const esp_err_t started = esp_zigbee_start(false);
+    if (started != ESP_OK) {
+        return radio_fail("esp_zigbee_start failed", (uint32_t)started);
+    }
+    return SYS_OK;
 }
 
 static sys_error_t radio_error(ezb_err_t result)
@@ -234,22 +313,16 @@ sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
     }
 }
 
-static void zigbee_stack_task(void *arg)
+/* Подъём RCP на C6: ESP-Hosted по SDIO, затем spinel-транспорт. */
+static sys_error_t bring_up_coproc_radio(void)
 {
-    (void)arg;
-
-    nvs_flash_init();
-    nvs_flash_init_partition(ZIGBEE_STORAGE_PARTITION);
-
-    if (esp_hosted_init() != ESP_OK) {
-        ESP_LOGE(TAG, "esp_hosted_init failed");
-        vTaskDelete(NULL);
-        return;
+    const esp_err_t hosted = esp_hosted_init();
+    if (hosted != ESP_OK) {
+        return radio_fail("esp_hosted_init failed", (uint32_t)hosted);
     }
-    if (esp_hosted_connect_to_slave() != ESP_OK) {
-        ESP_LOGE(TAG, "slave over SDIO not connected");
-        vTaskDelete(NULL);
-        return;
+    const esp_err_t connected = esp_hosted_connect_to_slave();
+    if (connected != ESP_OK) {
+        return radio_fail("slave over SDIO not connected", (uint32_t)connected);
     }
     /* Пример esp_hosted делает то же в esp_hosted_openthread_app_init(); заголовок того
      * вспомогательного файла в компонент не входит, поэтому шаги расписаны здесь. */
@@ -259,43 +332,72 @@ static void zigbee_stack_task(void *arg)
         esp_hosted_openthread_rcp_start() != ESP_OK ||
         esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_ENABLED) != ESP_OK ||
         esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_READY) != ESP_OK) {
-        ESP_LOGE(TAG, "RCP on the co-processor not started");
+        return radio_fail("RCP on the co-processor not started", 0);
+    }
+    return SYS_OK;
+}
+
+/*
+ * NVS: при исчерпании страниц или смене версии IDF раздел стирается и поднимается
+ * заново; иначе первый доступ к NVS отдаст ошибку позже и размыто.
+ */
+static sys_error_t init_nvs(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        const esp_err_t erased = nvs_flash_erase();
+        if (erased != ESP_OK) {
+            return radio_fail("nvs erase failed", (uint32_t)erased);
+        }
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        return radio_fail("nvs init failed", (uint32_t)err);
+    }
+
+    err = nvs_flash_init_partition(ZIGBEE_STORAGE_PARTITION);
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        const esp_err_t erased = nvs_flash_erase_partition(ZIGBEE_STORAGE_PARTITION);
+        if (erased != ESP_OK) {
+            return radio_fail("nvs zb_storage erase failed", (uint32_t)erased);
+        }
+        err = nvs_flash_init_partition(ZIGBEE_STORAGE_PARTITION);
+    }
+    if (err != ESP_OK) {
+        return radio_fail("nvs zb_storage init failed", (uint32_t)err);
+    }
+    return SYS_OK;
+}
+
+/*
+ * Задача радио: поднимает RCP и стек, сообщает исход bootstrap'у и, при успехе,
+ * уходит в mainloop. Провал не завершает систему через abort: app_main решает,
+ * продолжать ли без Zigbee (без него система бессмысленна — services/ZIGBEE.md §5).
+ */
+static void zigbee_stack_task(void *arg)
+{
+    (void)arg;
+
+    sys_error_t err = init_nvs();
+    if (sys_ok(err)) {
+        err = bring_up_coproc_radio();
+    }
+    if (sys_ok(err)) {
+        err = init_zigbee_stack();
+    }
+
+    s_radio_init_error = err;
+    if (sys_ok(err)) {
+        s_ready = true;
+    }
+    xSemaphoreGive(s_radio_init_done);
+
+    if (sys_failed(err)) {
         vTaskDelete(NULL);
         return;
     }
 
-    esp_hosted_openthread_radio_config_t radio = {0};
-    if (esp_hosted_openthread_get_radio_config(&radio) != 0 ||
-        radio.type != HOSTED_OPENTHREAD_TRANSPORT_UART) {
-        ESP_LOGE(TAG, "expected UART spinel transport to RCP");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    esp_zigbee_config_t config = {
-        .device_config =
-            {
-                .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR,
-                .install_code_policy = false,
-                .zczr_config = { .max_children = 10 },
-            },
-        .platform_config = { .storage_partition_name = ZIGBEE_STORAGE_PARTITION },
-    };
-    radio_uart_config(&config, &radio);
-
-    ESP_ERROR_CHECK(esp_zigbee_init(&config));
-
-    ezb_aps_secur_enable_distributed_security(false);
-    ESP_ERROR_CHECK(ezb_bdb_set_primary_channel_set(PRIMARY_CHANNEL_MASK));
-    ESP_ERROR_CHECK(ezb_app_signal_add_handler(app_signal_handler));
-
-    create_coordinator_device();
-
-    ESP_ERROR_CHECK(esp_zigbee_start(false));
-
-    s_ready = true;
     esp_zigbee_launch_mainloop();
-
     vTaskDelete(NULL);
 }
 
@@ -305,9 +407,24 @@ sys_error_t zigbee_radio_start(domain_t *domain)
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
     }
 
+    s_radio_init_done = xSemaphoreCreateBinaryStatic(&s_radio_init_done_storage);
+    if (s_radio_init_done == NULL) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+    }
+
     if (xTaskCreate(zigbee_stack_task, "zigbee_radio", RADIO_TASK_STACK, NULL, RADIO_TASK_PRIORITY,
                     NULL) != pdPASS) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
     }
-    return SYS_OK;
+
+    /*
+     * Без Zigbee система не поднимается: исход старта должен дойти до bootstrap'а, а не
+     * потеряться в отсоединённой задаче. Таймаут страхует от зависшего подъёма: задачу
+     * мы не отменяем, поэтому она может отработать позже, но решение уже принято
+     * (services/ZIGBEE.md §5).
+     */
+    if (xSemaphoreTake(s_radio_init_done, pdMS_TO_TICKS(RADIO_START_TIMEOUT_MS)) != pdTRUE) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    }
+    return s_radio_init_error;
 }
