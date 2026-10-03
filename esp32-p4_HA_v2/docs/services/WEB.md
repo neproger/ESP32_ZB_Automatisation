@@ -41,7 +41,15 @@ client connected
 ENTITY_UPSERTED → domain_get → Web DTO → STATE_DELTA → Browser
 ```
 
-## 4. Открытые вопросы
+## 4. Транспорт: Wi-Fi через сопроцессор C3
+
+У P4 нет своего Wi-Fi, а встроенный C6 занят 802.15.4 (Zigbee/RCP). Wi-Fi поднимается
+на **отдельном ESP32-C3** через `ESP-Hosted` (транспорт UART, `web` — станция, креды в
+`web/Kconfig.projbuild`). Пины, reset‑линия и скорость — `../hardware/JC4880P443C_I_W.md`
+§4.5. `web_start` поднимает Wi‑Fi и HTTP+WS в своей задаче; при неудаче линка
+веб‑сервер не стартует (bootstrap при этом продолжает работать на Zigbee).
+
+## 5. Открытые вопросы
 
 - консистентность snapshot при параллельных writers (eventual consistency
   «дельты догонят» vs version-stamped snapshot).

@@ -12,8 +12,9 @@
 | `domain` | Entity Store, Journal, Transient Payload, Dispatcher, Commands | host-тесты 9/9, IDF-сборка и запуск на P4 |
 | `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
-| `zigbee_radio` | ESP-Hosted по SDIO → RCP на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
+| `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `automation` | подписка на EVENT, правила (entity `automation`), `domain_post` команды | host-тест 1/1, сквозной цикл на P4 |
+| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART), HTTP + бинарный WS (каркас) | Wi-Fi `got ip`, веб-сервер стартует на P4 |
 | `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
@@ -24,8 +25,9 @@
 команда от UI         → COMMAND_SENT с адресатом (entity=1, key=uid)
 устройство            → пишется во flash один раз, переживает перезагрузку
 канал диагностики     → zigbee.diag, отдельно от журнала фактов
-радиоканал            → SDIO 4-bit CLK=18 CMD=19 D0..D3=14..17 RESET=54 поднят
-C6 по SDIO            → esp32c6, fw 3.0.9; подняты Wi-Fi и OpenThread (RCP)
+радиоканал            → spinel UART GPIO29/30 460800 → RCP ot_rcp на C6 поднят
+C6 (ot_rcp)           → 802.15.4 (Zigbee); Wi-Fi вынесен на внешний C3
+Wi-Fi (внешний C3)    → ESP-Hosted UART2 GPIO32/28, reset GPIO34, 115200 → got ip + веб-сервер
 комиссионирование     → сеть сформирована, steering выполнен, открыта на 180 с
 интервью              → Active_EP(3) → Simple_Desc(ep 242/2/1) → Basic "ESP32C6-DISPLAY"
                       → ENTITY_UPSERTED device=1 и три endpoint=3

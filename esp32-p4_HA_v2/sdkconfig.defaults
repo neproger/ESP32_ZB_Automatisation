@@ -14,39 +14,36 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
 
 #
-# Zigbee: стек на P4, радио — RCP на встроенном C6.
+# Zigbee: стек на P4, радио — RCP на встроенном C6 (прошивка ot_rcp, spinel по UART).
+# Перемычки на JP1: GPIO29 (TX) -> C6_U0RXD (pin 20), GPIO30 (RX) -> C6_U0TXD (pin 22).
 #
 CONFIG_ZB_ENABLED=y
 
 #
-# ESP-Hosted: SDIO несёт управление RCP, spinel (данные радио) — отдельный UART.
-# UART между P4 и C6 на этой плате не распаян: перемычки на JP1
-#   GPIO29 (TX) -> C6_U0RXD (pin 20), GPIO30 (RX) -> C6_U0TXD (pin 22).
+# ESP-Hosted: Wi-Fi вынесен на отдельный сопроцессор ESP32-C3 (UART). C6 несёт только
+# 802.15.4 (ot_rcp), esp_hosted для Zigbee не нужен. Пресет платы (SDIO) отключён:
+# с ним диапазон UART-пинов жёстко = 14.
 #
 CONFIG_ESP_HOSTED=y
 CONFIG_ESP_HOSTED_HOST_FEAT_RPC=y
 CONFIG_ESP_HOSTED_HOST_FEAT_RPC_EXT_V2=y
 CONFIG_ESP_HOSTED_HOST_FEAT_SYSTEM=y
-CONFIG_ESP_HOSTED_HOST_FEAT_OPENTHREAD=y
-CONFIG_ESP_HOSTED_HOST_FEAT_OPENTHREAD_AUTO_INIT=y
-CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
-
-# C6 несёт и Wi-Fi, и 802.15.4 RCP (CP собран с CP_FEAT_WIFI=y + FEAT_OPENTHREAD=y).
-# Хостовый Wi-Fi-слой (esp_wifi_remote) работает поверх ESP-Hosted по SDIO.
 CONFIG_ESP_HOSTED_HOST_FEAT_WIFI=y
 
 # Web service: WebSocket на esp_http_server (docs/services/WEB.md).
 CONFIG_HTTPD_WS_SUPPORT=y
 
-# Платы с такой распиновкой SDIO (CMD19 / CLK18 / D0-D3 = 14-17, reset GPIO54).
-CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
-CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+# Сопроцессор Wi-Fi — ESP32-C3 (не встроенный C6): задаёт ожидаемый chip id и
+# набор RPC. Без этого хост ждёт C6 (0x0d) и падает на "chip mismatch".
+CONFIG_SLAVE_IDF_TARGET_ESP32C3=y
 
-CONFIG_ESP_HOSTED_OT_HOST_TRANSPORT_UART=y
-CONFIG_ESP_HOSTED_OT_HOST_UART_PORT=1
-CONFIG_ESP_HOSTED_OT_HOST_UART_TX_PIN_TO_RCP=29
-CONFIG_ESP_HOSTED_OT_HOST_UART_RX_PIN_TO_RCP=30
-CONFIG_ESP_HOSTED_OT_HOST_UART_BAUDRATE=460800
-
-# Совместимость набора возможностей 802.15.4 с RCP (как в примере esp_hosted).
-CONFIG_OPENTHREAD_RX_ON_WHEN_IDLE=n
+# C3 по UART2: P4 GPIO32 (TX) -> C3 GPIO4 (RX); P4 GPIO28 (RX) <- C3 GPIO5 (TX).
+# Reset: P4 GPIO34 -> C3 EN (кнопка RST) — хост сбрасывает CP перед ожиданием
+# handshake, иначе CP отдаёт caps раньше, чем хост начал слушать (гонка загрузки).
+# 115200: на 921600 handshake не проходит, на 460800 Wi-Fi нестабилен (проверено).
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_UART=y
+CONFIG_ESP_HOSTED_HOST_UART_PORT=2
+CONFIG_ESP_HOSTED_HOST_UART_TX_GPIO=32
+CONFIG_ESP_HOSTED_HOST_UART_RX_GPIO=28
+CONFIG_ESP_HOSTED_HOST_UART_BAUD=115200
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=34
