@@ -41,3 +41,29 @@ Entity Store  = данные для решения
 vendor event), публикуются как `EVENT` и обрабатываются через `value` / `payload_ref`
 (`../domain/TRANSIENT_PAYLOAD.md`). Это не заставляет все state-события ходить через
 payload ring.
+
+## 4. Форма правила
+
+Правило — entity `automation`; ключ — числовой id. Форма — в
+`ha_model/include/ha_model/ha_automation.h`:
+
+```text
+trigger   событие (EVENT) от устройства: device_uid (0 — любое), command_id (0 — любая)
+action    Zigbee-команда: device_uid (0 — устройство-источник), endpoint, cluster, command, args
+```
+
+Правило минимально: триггер по событию и действие-команда. `action_device_uid == 0`
+означает «то же устройство, что вызвало событие».
+
+## 5. Реализация
+
+Компонент `automation` (только IDF) + `automation_rule.c` (чистая логика, host-тест
+`test_rule`). Сервис подписан на факты `EVENT` от `ZIGBEE` (`kind_mask`, `source_mask`),
+в задаче перебирает правила (`domain_entity_iter`) и при совпадении постит команду
+(`domain_post(HA_CMD_ZIGBEE_CLUSTER, ...)`); мутирующий API Domain в try_push не
+вызывается (`../domain/DOMAIN_API.md` §9).
+
+**Временное правило bring-up.** `main/app_main.c` при старте засевает правило id=1
+«нажатие кнопки → toggle реле (EP2) того же устройства» — чтобы сквозной путь был
+проверяем до появления UI/Web. Идемпотентно (создаётся, если записи нет); убрать, когда
+правила начнёт создавать UI.

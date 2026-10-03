@@ -1,12 +1,11 @@
 idf_component_register(
     SRCS
-        "app_main.c"
-        "journal_console.c"
+        "src/automation.c"
+        "src/automation_rule.c"
     INCLUDE_DIRS
-        "."
+        "include"
     REQUIRES
         domain
         ha_model
-        zigbee
-        automation
+        sys
 )

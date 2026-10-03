@@ -13,6 +13,7 @@
 | `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | ESP-Hosted по SDIO → RCP на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
+| `automation` | подписка на EVENT, правила (entity `automation`), `domain_post` команды | host-тест 1/1, сквозной цикл на P4 |
 | `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
@@ -31,6 +32,7 @@ C6 по SDIO            → esp32c6, fw 3.0.9; подняты Wi-Fi и OpenThrea
 подписка              → bind server-кластеров + Configure Reporting
                       → ENTITY_UPSERTED state=2 (Level, OnOff) от живого устройства
 события               → кнопка ESP32C6-DISPLAY: EVENT (OnOff Toggle) с payload
+automation            → кнопка → EVENT → правило → COMMAND_SENT → репорт состояния=2
 ```
 
 Платы хватает на сборку и наблюдение: `idf.py build flash monitor` из корня проекта.
@@ -50,9 +52,9 @@ C6 по SDIO            → esp32c6, fw 3.0.9; подняты Wi-Fi и OpenThrea
 ## 4. Что дальше
 
 ```text
-1. Команды на живое устройство      — UI/Automation -> domain_post -> радио -> репорт
-2. Automation service               — подписчик фактов (в т.ч. EVENT), правила
-3. Удаление устройства и явная операция permit-join — когда появится потребитель
+1. Правила Automation из UI/Web     — вместо bring-up seed; CRUD правил
+2. Удаление устройства и явная операция permit-join — когда появится потребитель
+3. device_meta (last_seen/rssi/lqi) — операционные данные для потребителей
 4. Web service (BFF)                — проекция записей в DTO, приём команд
 ```
 

@@ -1,10 +1,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "automation/automation.h"
 #include "domain/domain.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "ha_model/ha_automation.h"
 #include "ha_model/ha_entities.h"
 #include "journal_console.h"
 #include "zigbee/zigbee.h"
@@ -16,7 +18,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 3
+#define APP_ENTITY_TYPES 4
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -24,6 +26,7 @@
 #define APP_DEVICE_CAPACITY 32
 #define APP_STATE_CAPACITY 256
 #define APP_ENDPOINT_CAPACITY 128
+#define APP_AUTOMATION_CAPACITY 32
 
 #define DISPATCHER_TASK_STACK 4096
 #define DISPATCHER_TASK_PRIORITY 6
@@ -68,6 +71,46 @@ static const domain_entity_desc_t endpoint_desc = {
     .backing = DOMAIN_BACKING_RAM,
     .persist_key = NULL,
 };
+
+/* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
+static const domain_entity_desc_t automation_desc = {
+    .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
+    .key_size = sizeof(ha_automation_key_t),
+    .payload_size = sizeof(ha_automation_record_t),
+    .capacity = APP_AUTOMATION_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "automation",
+};
+
+/*
+ * Bring-up: правило «нажатие кнопки устройства → toggle его реле (EP2)». Нужно, чтобы
+ * проверить сквозной путь команды, пока правила не создаются из UI/Web. Идемпотентно.
+ */
+static void seed_demo_automation(domain_t *domain)
+{
+    const ha_automation_key_t key = {.id = 1};
+    ha_automation_record_t existing = {0};
+    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key, &existing))) {
+        return;
+    }
+
+    ha_automation_record_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger_command_id = HA_ZB_CMD_ON_OFF_TOGGLE; /* кнопка */
+    rule.action_endpoint = 2;                          /* реле/лампа устройства */
+    rule.action_cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    rule.action_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
+                                              &rule, &meta, &changed);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "demo automation not seeded: layer=%u code=%u", (unsigned)err.layer,
+                 (unsigned)err.code);
+    }
+}
 
 static bool start_step(sys_error_t err, const char *what)
 {
@@ -114,6 +157,9 @@ void app_main(void)
     if (!start_step(domain_register_entity(&s_domain, &endpoint_desc), "register endpoint")) {
         return;
     }
+    if (!start_step(domain_register_entity(&s_domain, &automation_desc), "register automation")) {
+        return;
+    }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {
         return;
     }
@@ -130,6 +176,10 @@ void app_main(void)
     if (!start_step(zigbee_radio_start(&s_domain), "zigbee radio")) {
         return;
     }
+    if (!start_step(automation_start(&s_domain), "automation start")) {
+        return;
+    }
+    seed_demo_automation(&s_domain);
 
     ESP_LOGI(TAG, "bootstrap done");
 }

@@ -8,7 +8,8 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/ha_model"
     "${CMAKE_CURRENT_LIST_DIR}/mstore"
     "${CMAKE_CURRENT_LIST_DIR}/sys"
-    "${CMAKE_CURRENT_LIST_DIR}/zigbee")
+    "${CMAKE_CURRENT_LIST_DIR}/zigbee"
+    "${CMAKE_CURRENT_LIST_DIR}/automation")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 

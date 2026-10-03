@@ -32,6 +32,7 @@ typedef enum {
     HA_ENTITY_DEVICE = 1,
     HA_ENTITY_STATE = 2,
     HA_ENTITY_ENDPOINT = 3,
+    HA_ENTITY_AUTOMATION = 4,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32
