@@ -21,8 +21,6 @@
 #include "ezbee/zcl/cluster/on_off.h"
 #include "ezbee/zcl/zcl_core.h"
 #include "ezbee/zcl/zcl_general_cmd.h"
-#include "esp_hosted.h"
-#include "esp_hosted_openthread.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -30,8 +28,9 @@
 #include "zigbee/zigbee_diag.h"
 
 /*
- * Порядок подъёма такой же, как в примере esp_hosted zigbee/thermostat:
- * ESP-Hosted по SDIO -> RCP на C6 -> UART со spinel -> стек Zigbee на P4.
+ * Радио: стек Zigbee на P4, 802.15.4-радио — RCP на C6 (прошивка ot_rcp,
+ * standalone spinel). Связь P4<->C6 — только UART; esp_hosted для Zigbee не нужен
+ * (он занят Wi-Fi на отдельном сопроцессоре).
  */
 
 static const char *TAG = "zigbee.radio";
@@ -43,6 +42,13 @@ static const char *TAG = "zigbee.radio";
 #define PRIMARY_CHANNEL_MASK (1l << 15)
 #define PERMIT_JOIN_SECONDS 180
 #define ZIGBEE_STORAGE_PARTITION "zb_storage"
+
+/* Spinel-UART к ot_rcp на C6: пины P4 GPIO29(TX)/30(RX) через JP1. */
+#define RCP_UART_PORT UART_NUM_1
+#define RCP_UART_TX_PIN 29
+#define RCP_UART_RX_PIN 30
+#define RCP_UART_BAUD 460800
+#define RCP_START_DELAY_MS 1000
 
 /* Стек готов принимать команды. Пишет задача радио при старте, читает задача сервиса. */
 static volatile bool s_ready;
@@ -680,23 +686,25 @@ static sys_error_t create_coordinator_device(void)
     return SYS_OK;
 }
 
-static void radio_uart_config(esp_zigbee_config_t *config,
-                              const esp_hosted_openthread_radio_config_t *radio)
+/*
+ * Spinel-UART к C6 с прошивкой ot_rcp (standalone RCP, без esp_hosted). Пины P4
+ * GPIO29(TX)/GPIO30(RX) через JP1 — те же, что раньше для spinel.
+ */
+static void radio_uart_config(esp_zigbee_config_t *config)
 {
     config->platform_config.radio_config.radio_mode = ESP_ZIGBEE_RADIO_MODE_UART_RCP;
 
-    const esp_hosted_openthread_uart_config_t *src = &radio->radio_uart_config;
     esp_zigbee_uart_config_t *dst = &config->platform_config.radio_config.radio_uart_config;
-    dst->port = src->port;
-    dst->uart_config.baud_rate = src->baud_rate;
-    dst->uart_config.data_bits = src->data_bits;
-    dst->uart_config.parity = src->parity;
-    dst->uart_config.stop_bits = src->stop_bits;
-    dst->uart_config.flow_ctrl = src->flow_ctrl;
-    dst->uart_config.rx_flow_ctrl_thresh = src->rx_flow_ctrl_thresh;
-    dst->uart_config.source_clk = src->source_clk;
-    dst->rx_pin = src->rx_pin;
-    dst->tx_pin = src->tx_pin;
+    dst->port = RCP_UART_PORT;
+    dst->uart_config.baud_rate = RCP_UART_BAUD;
+    dst->uart_config.data_bits = UART_DATA_8_BITS;
+    dst->uart_config.parity = UART_PARITY_DISABLE;
+    dst->uart_config.stop_bits = UART_STOP_BITS_1;
+    dst->uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    dst->uart_config.rx_flow_ctrl_thresh = 0;
+    dst->uart_config.source_clk = UART_SCLK_DEFAULT;
+    dst->rx_pin = (gpio_num_t)RCP_UART_RX_PIN;
+    dst->tx_pin = (gpio_num_t)RCP_UART_TX_PIN;
 }
 
 /*
@@ -705,12 +713,6 @@ static void radio_uart_config(esp_zigbee_config_t *config,
  */
 static sys_error_t init_zigbee_stack(void)
 {
-    esp_hosted_openthread_radio_config_t radio = {0};
-    const int radio_ok = esp_hosted_openthread_get_radio_config(&radio);
-    if (radio_ok != 0 || radio.type != HOSTED_OPENTHREAD_TRANSPORT_UART) {
-        return radio_fail("expected UART spinel transport to RCP", (uint32_t)radio_ok);
-    }
-
     esp_zigbee_config_t config = {
         .device_config =
             {
@@ -720,7 +722,7 @@ static sys_error_t init_zigbee_stack(void)
             },
         .platform_config = { .storage_partition_name = ZIGBEE_STORAGE_PARTITION },
     };
-    radio_uart_config(&config, &radio);
+    radio_uart_config(&config);
 
     const esp_err_t inited = esp_zigbee_init(&config);
     if (inited != ESP_OK) {
@@ -812,27 +814,13 @@ sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
     }
 }
 
-/* Подъём RCP на C6: ESP-Hosted по SDIO, затем spinel-транспорт. */
+/*
+ * Прошивка ot_rcp на C6 стартует RCP самостоятельно; P4 только соединяется по UART.
+ * Ждём загрузку C6 (иначе первые spinel-кадры уйдут в никуда).
+ */
 static sys_error_t bring_up_coproc_radio(void)
 {
-    const esp_err_t hosted = esp_hosted_init();
-    if (hosted != ESP_OK) {
-        return radio_fail("esp_hosted_init failed", (uint32_t)hosted);
-    }
-    const esp_err_t connected = esp_hosted_connect_to_slave();
-    if (connected != ESP_OK) {
-        return radio_fail("slave over SDIO not connected", (uint32_t)connected);
-    }
-    /* Пример esp_hosted делает то же в esp_hosted_openthread_app_init(); заголовок того
-     * вспомогательного файла в компонент не входит, поэтому шаги расписаны здесь. */
-    if (esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_CONFIGURED) != ESP_OK ||
-        esp_hosted_openthread_rcp_init() != ESP_OK ||
-        esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_INITED) != ESP_OK ||
-        esp_hosted_openthread_rcp_start() != ESP_OK ||
-        esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_ENABLED) != ESP_OK ||
-        esp_hosted_openthread_rcp_query(HOSTED_OPENTHREAD_QUERY_READY) != ESP_OK) {
-        return radio_fail("RCP on the co-processor not started", 0);
-    }
+    vTaskDelay(pdMS_TO_TICKS(RCP_START_DELAY_MS));
     return SYS_OK;
 }
 

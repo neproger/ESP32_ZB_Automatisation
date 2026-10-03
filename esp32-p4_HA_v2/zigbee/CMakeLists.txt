@@ -15,6 +15,5 @@ idf_component_register(
         ha_model
         sys
         nvs_flash
-        esp_hosted
         esp-zigbee-lib
 )

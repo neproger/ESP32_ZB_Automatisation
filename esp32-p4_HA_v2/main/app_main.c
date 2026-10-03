@@ -182,10 +182,9 @@ void app_main(void)
     }
     seed_demo_automation(&s_domain);
 
-    /* Web поднимается в своей задаче: без Wi-Fi система остаётся рабочей. */
-    if (!start_step(web_start(&s_domain), "web start")) {
-        return;
-    }
-
+    /*
+     * Web/Wi-Fi пока не поднимаем: esp_hosted переводится с C6 на отдельный
+     * сопроцессор C3 (см. план P4+C6+C3), а C6 теперь несёт только ot_rcp.
+     */
     ESP_LOGI(TAG, "bootstrap done");
 }
