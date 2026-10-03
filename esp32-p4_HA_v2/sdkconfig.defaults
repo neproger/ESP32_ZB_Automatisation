@@ -35,6 +35,9 @@ CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
 # Хостовый Wi-Fi-слой (esp_wifi_remote) работает поверх ESP-Hosted по SDIO.
 CONFIG_ESP_HOSTED_HOST_FEAT_WIFI=y
 
+# Web service: WebSocket на esp_http_server (docs/services/WEB.md).
+CONFIG_HTTPD_WS_SUPPORT=y
+
 # Платы с такой распиновкой SDIO (CMD19 / CLK18 / D0-D3 = 14-17, reset GPIO54).
 CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
 CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y

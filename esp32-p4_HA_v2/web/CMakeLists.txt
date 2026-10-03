@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "src/web.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        domain
+        sys
+    PRIV_REQUIRES
+        esp_hosted
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_http_server
+        nvs_flash
+)

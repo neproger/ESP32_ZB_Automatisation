@@ -9,4 +9,5 @@ idf_component_register(
         ha_model
         zigbee
         automation
+        web
 )

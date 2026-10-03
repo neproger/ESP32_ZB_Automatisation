@@ -9,6 +9,7 @@
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_entities.h"
 #include "journal_console.h"
+#include "web/web.h"
 #include "zigbee/zigbee.h"
 #include "zigbee/zigbee_radio.h"
 
@@ -180,6 +181,11 @@ void app_main(void)
         return;
     }
     seed_demo_automation(&s_domain);
+
+    /* Web поднимается в своей задаче: без Wi-Fi система остаётся рабочей. */
+    if (!start_step(web_start(&s_domain), "web start")) {
+        return;
+    }
 
     ESP_LOGI(TAG, "bootstrap done");
 }

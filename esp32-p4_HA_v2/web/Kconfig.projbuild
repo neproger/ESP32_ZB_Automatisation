@@ -1,0 +1,18 @@
+menu "Web service"
+
+    config WEB_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        help
+            Точка доступа для station-подключения. Значение задаётся в sdkconfig
+            (не в git); в будущем — через UI дисплея.
+
+    config WEB_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+
+    config WEB_MDNS_HOSTNAME
+        string "mDNS hostname"
+        default "esp32p4"
+
+endmenu
