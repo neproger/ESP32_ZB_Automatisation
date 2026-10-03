@@ -25,6 +25,7 @@
 #define ZIGBEE_COMMAND_QUEUE_LENGTH 8
 #define ZIGBEE_INTERVIEW_QUEUE_LENGTH 4
 #define ZIGBEE_EVENT_QUEUE_LENGTH 8
+#define ZIGBEE_LEAVE_QUEUE_LENGTH 8
 #define ZIGBEE_TASK_STACK 4096
 #define ZIGBEE_TASK_PRIORITY 5
 
@@ -35,6 +36,7 @@ static QueueHandle_t s_reports;
 static QueueHandle_t s_commands;
 static QueueHandle_t s_interviews;
 static QueueHandle_t s_events;
+static QueueHandle_t s_leaves;
 static QueueSetHandle_t s_inbox;
 
 static sys_error_t zigbee_fail(sys_code_t code)
@@ -163,6 +165,21 @@ static void zigbee_task(void *arg)
             if (xQueueReceive(s_events, &event, 0) == pdTRUE) {
                 zigbee_event_publish(&event);
             }
+            continue;
+        }
+
+        if (ready == s_leaves) {
+            ha_device_uid_t uid = 0;
+            if (xQueueReceive(s_leaves, &uid, 0) == pdTRUE) {
+                const sys_error_t err = zigbee_device_remove(s_domain, uid);
+                if (sys_failed(err)) {
+                    ESP_LOGW(TAG, "device not removed: uid=%llx err=%u",
+                             (unsigned long long)uid, (unsigned)err.code);
+                    zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
+                } else {
+                    ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
+                }
+            }
         }
     }
 }
@@ -178,16 +195,19 @@ sys_error_t zigbee_start(domain_t *domain)
     s_commands = xQueueCreate(ZIGBEE_COMMAND_QUEUE_LENGTH, sizeof(ha_zb_command_t));
     s_interviews = xQueueCreate(ZIGBEE_INTERVIEW_QUEUE_LENGTH, sizeof(zigbee_interview_result_t));
     s_events = xQueueCreate(ZIGBEE_EVENT_QUEUE_LENGTH, sizeof(zigbee_event_t));
+    s_leaves = xQueueCreate(ZIGBEE_LEAVE_QUEUE_LENGTH, sizeof(ha_device_uid_t));
     s_inbox = xQueueCreateSet(ZIGBEE_REPORT_QUEUE_LENGTH + ZIGBEE_COMMAND_QUEUE_LENGTH +
-                              ZIGBEE_INTERVIEW_QUEUE_LENGTH + ZIGBEE_EVENT_QUEUE_LENGTH);
+                              ZIGBEE_INTERVIEW_QUEUE_LENGTH + ZIGBEE_EVENT_QUEUE_LENGTH +
+                              ZIGBEE_LEAVE_QUEUE_LENGTH);
     if (s_reports == NULL || s_commands == NULL || s_interviews == NULL || s_events == NULL ||
-        s_inbox == NULL) {
+        s_leaves == NULL || s_inbox == NULL) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
     if (xQueueAddToSet(s_reports, s_inbox) != pdPASS ||
         xQueueAddToSet(s_commands, s_inbox) != pdPASS ||
         xQueueAddToSet(s_interviews, s_inbox) != pdPASS ||
-        xQueueAddToSet(s_events, s_inbox) != pdPASS) {
+        xQueueAddToSet(s_events, s_inbox) != pdPASS ||
+        xQueueAddToSet(s_leaves, s_inbox) != pdPASS) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
 
@@ -239,6 +259,17 @@ sys_error_t zigbee_submit_event(const zigbee_event_t *event)
         return zigbee_fail(SYS_CODE_INVALID_STATE);
     }
     if (xQueueSend(s_events, event, 0) != pdTRUE) {
+        return zigbee_fail(SYS_CODE_BUSY);
+    }
+    return SYS_OK;
+}
+
+sys_error_t zigbee_submit_leave(ha_device_uid_t device_uid)
+{
+    if (s_leaves == NULL) {
+        return zigbee_fail(SYS_CODE_INVALID_STATE);
+    }
+    if (xQueueSend(s_leaves, &device_uid, 0) != pdTRUE) {
         return zigbee_fail(SYS_CODE_BUSY);
     }
     return SYS_OK;

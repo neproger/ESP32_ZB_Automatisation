@@ -58,3 +58,9 @@ sys_error_t zigbee_submit_interview(const zigbee_interview_result_t *result);
  * (docs/services/ZIGBEE.md §6). BUSY — очередь событий заполнена.
  */
 sys_error_t zigbee_submit_event(const zigbee_event_t *event);
+
+/*
+ * Устройство ушло из сети. Fire-and-forget: снятие записей в Domain идёт в задаче
+ * сервиса (docs/services/ZIGBEE.md §6). BUSY — очередь заполнена.
+ */
+sys_error_t zigbee_submit_leave(ha_device_uid_t device_uid);

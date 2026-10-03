@@ -25,6 +25,12 @@ sys_error_t zigbee_device_set_model(domain_t *domain, ha_device_uid_t uid, const
 /* Создать запись устройства, если её ещё нет (для топологии при интервью). */
 sys_error_t zigbee_device_ensure(domain_t *domain, ha_device_uid_t uid);
 
+/*
+ * Устройство ушло из сети: снять его записи — состояние, topology endpoint'ов и
+ * само устройство. Идемпотентно: чего нет, то не мешает (docs/services/ZIGBEE.md §8).
+ */
+sys_error_t zigbee_device_remove(domain_t *domain, ha_device_uid_t uid);
+
 void zigbee_state_key_build(const zigbee_report_t *report, ha_zb_state_key_t *out_key);
 
 /* Компактное значение факта: журнал не хранит запись целиком (JOURNAL.md §3). */

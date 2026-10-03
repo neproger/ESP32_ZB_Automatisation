@@ -8,6 +8,8 @@
 #include "mstore_platform.h"
 #include "nor_sim.h"
 #include "nor_sim_device.h"
+#include "zigbee/zigbee.h"
+#include "zigbee/zigbee_state.h"
 
 /*
  * Интервью: роли кластеров из Simple Descriptor и запись устройства с топологией
@@ -28,6 +30,25 @@ static int g_failures = 0;
 #define SIM_ERASE_SIZE 4096u
 
 static const ha_device_uid_t UID = 0x00124B000A1B2C3Dull;
+
+typedef struct {
+    size_t seen;
+} count_ctx_t;
+
+static bool count_cb(const void *key, const void *record, void *ctx)
+{
+    (void)key;
+    (void)record;
+    ((count_ctx_t *)ctx)->seen++;
+    return true;
+}
+
+static size_t record_count(domain_t *domain, domain_entity_t type)
+{
+    count_ctx_t ctx = {0};
+    CHECK(sys_ok(domain_entity_iter(domain, type, count_cb, &ctx)));
+    return ctx.seen;
+}
 
 static void flash_on(mstore_nor_sim_t **out_sim, nor_sim_device_t *device)
 {
@@ -146,10 +167,57 @@ static void test_interview_writes_device_and_topology(void)
     flash_off(sim);
 }
 
+/* Устройство ушло: снимаются device, topology и state; повтор не ошибка. */
+static void test_leave_removes_entities(void)
+{
+    mstore_nor_sim_t *sim = NULL;
+    nor_sim_device_t device;
+    flash_on(&sim, &device);
+
+    domain_t domain = {0};
+    CHECK(sys_ok(domain_init(&domain, 3, 16, 8, 64)));
+    register_types(&domain);
+
+    zigbee_interview_result_t result = {0};
+    result.uid = UID;
+    result.endpoint_count = 1;
+    result.endpoints[0].endpoint = 1;
+    result.endpoints[0].cluster_count = 1;
+    result.endpoints[0].clusters[0].cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    result.endpoints[0].clusters[0].role = HA_ZB_ROLE_SERVER;
+    CHECK(sys_ok(zigbee_interview_apply(&domain, &result)));
+
+    const zigbee_report_t report = {
+        .device_uid = UID,
+        .cluster_id = HA_ZB_CLUSTER_ON_OFF,
+        .attr_id = HA_ZB_ATTR_ON_OFF_ON_OFF,
+        .endpoint = 1,
+        .zcl_type = HA_ZB_TYPE_BOOL,
+        .raw = 1,
+    };
+    bool changed = false;
+    CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
+
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 1);
+
+    CHECK(sys_ok(zigbee_device_remove(&domain, UID)));
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 0);
+
+    CHECK(sys_ok(zigbee_device_remove(&domain, UID))); /* повтор — не ошибка */
+
+    CHECK(sys_ok(domain_deinit(&domain)));
+    flash_off(sim);
+}
+
 int main(void)
 {
     test_cluster_roles();
     test_interview_writes_device_and_topology();
+    test_leave_removes_entities();
 
     if (g_failures != 0) {
         printf("test_interview: %d failure(s)\n", g_failures);

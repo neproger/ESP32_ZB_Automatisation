@@ -114,6 +114,80 @@ sys_error_t zigbee_device_ensure(domain_t *domain, ha_device_uid_t uid)
                              &changed);
 }
 
+/* Поиск первой записи типа с нужным uid: ключ копируется, iter прерывается. */
+typedef struct {
+    ha_device_uid_t uid;
+    uint8_t *key_out;
+    size_t key_size;
+    bool found;
+} first_key_ctx_t;
+
+static bool find_first_key(const void *key, const void *record, void *ctx)
+{
+    (void)record;
+    first_key_ctx_t *find = (first_key_ctx_t *)ctx;
+    if (memcmp(key, &find->uid, sizeof(find->uid)) != 0) {
+        return true;
+    }
+    memcpy(find->key_out, key, find->key_size);
+    find->found = true;
+    return false;
+}
+
+/* Удаление записей типа по одному: мутировать Domain внутри iter нельзя. */
+static sys_error_t remove_device_entities(domain_t *domain, domain_entity_t type, size_t key_size,
+                                          ha_device_uid_t uid)
+{
+    uint8_t key[sizeof(ha_zb_state_key_t)];
+    if (key_size > sizeof(key)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    for (;;) {
+        first_key_ctx_t find = {.uid = uid, .key_out = key, .key_size = key_size, .found = false};
+        const sys_error_t iter = domain_entity_iter(domain, type, find_first_key, &find);
+        if (sys_failed(iter)) {
+            return iter;
+        }
+        if (!find.found) {
+            return SYS_OK;
+        }
+
+        domain_fact_meta_t meta = {0};
+        meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+        const sys_error_t removed = domain_entity_remove(domain, type, key, &meta);
+        if (sys_failed(removed)) {
+            return removed;
+        }
+    }
+}
+
+sys_error_t zigbee_device_remove(domain_t *domain, ha_device_uid_t uid)
+{
+    if (domain == NULL) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    sys_error_t err = remove_device_entities(domain, (domain_entity_t)HA_ENTITY_STATE,
+                                             sizeof(ha_zb_state_key_t), uid);
+    if (sys_failed(err)) {
+        return err;
+    }
+    err = remove_device_entities(domain, (domain_entity_t)HA_ENTITY_ENDPOINT,
+                                 sizeof(ha_endpoint_key_t), uid);
+    if (sys_failed(err)) {
+        return err;
+    }
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    err = domain_entity_remove(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &meta);
+    if (sys_failed(err) && !sys_is(err, SYS_CODE_NOT_FOUND)) {
+        return err;
+    }
+    return SYS_OK;
+}
+
 sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, bool *out_changed)
 {
     if (domain == NULL || report == NULL || out_changed == NULL) {

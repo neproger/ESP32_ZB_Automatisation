@@ -187,6 +187,16 @@ static interview_device_t *interview_by_short(uint16_t short_addr)
     return NULL;
 }
 
+/* Устройство ушло: незавершённое интервью больше не нужно. */
+static void interview_drop(ha_device_uid_t uid)
+{
+    for (size_t i = 0; i < INTERVIEW_DEVICES_MAX; i++) {
+        if (s_interview[i].used && s_interview[i].uid == uid) {
+            s_interview[i].used = false;
+        }
+    }
+}
+
 /* Интервью собрано: отдать его задаче сервиса для записи в Domain (ZIGBEE.md §6). */
 static void interview_finish(interview_device_t *device)
 {
@@ -535,6 +545,21 @@ static void report_network_formed(void)
     start_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
 }
 
+/* Устройство ушло: снять незавершённое интервью и попросить сервис убрать записи. */
+static bool device_left(ha_device_uid_t uid, uint16_t short_addr)
+{
+    ESP_LOGI(TAG, "device left: short=0x%04x uid=%llx", (unsigned)short_addr,
+             (unsigned long long)uid);
+    interview_drop(uid);
+    const sys_error_t err = zigbee_submit_leave(uid);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "leave not queued: uid=%llx err=%u", (unsigned long long)uid,
+                 (unsigned)err.code);
+        zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
+    }
+    return true;
+}
+
 static bool app_signal_handler(const ezb_app_signal_t *signal)
 {
     const ezb_app_signal_type_t type = ezb_app_signal_get_type(signal);
@@ -590,8 +615,7 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
     case EZB_ZDO_SIGNAL_DEVICE_UPDATE: {
         const ezb_zdo_signal_device_update_params_t *update = ezb_app_signal_get_params(signal);
         if (update->status == EZB_ZDO_UPDDEV_DEVICE_LEFT) {
-            ESP_LOGI(TAG, "device left: short=0x%04x", (unsigned)update->short_addr);
-            return true;
+            return device_left((ha_device_uid_t)update->device_addr.u64, update->short_addr);
         }
         ESP_LOGI(TAG, "device rejoined: short=0x%04x uid=%llx status=0x%02x",
                  (unsigned)update->short_addr, (unsigned long long)update->device_addr.u64,
@@ -603,8 +627,7 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
     case EZB_ZDO_SIGNAL_LEAVE_INDICATION: {
         const ezb_zdo_signal_leave_indication_params_t *leave =
             ezb_app_signal_get_params(signal);
-        ESP_LOGI(TAG, "device left: short=0x%04x", (unsigned)leave->short_addr);
-        return true;
+        return device_left((ha_device_uid_t)leave->device_addr.u64, leave->short_addr);
     }
 
     case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: {
