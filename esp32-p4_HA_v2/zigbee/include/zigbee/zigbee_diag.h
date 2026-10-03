@@ -17,6 +17,7 @@ typedef enum {
     ZIGBEE_DIAG_COMMAND,      /* команда отклонена до отправки */
     ZIGBEE_DIAG_SEND,         /* команда не ушла в радио */
     ZIGBEE_DIAG_TOPOLOGY,     /* топология не записана */
+    ZIGBEE_DIAG_EVENT,        /* событие не опубликовано */
     ZIGBEE_DIAG_KIND_COUNT
 } zigbee_diag_kind_t;
 

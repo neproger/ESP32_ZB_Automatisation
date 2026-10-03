@@ -24,6 +24,7 @@
 #define ZIGBEE_REPORT_QUEUE_LENGTH 32
 #define ZIGBEE_COMMAND_QUEUE_LENGTH 8
 #define ZIGBEE_INTERVIEW_QUEUE_LENGTH 4
+#define ZIGBEE_EVENT_QUEUE_LENGTH 8
 #define ZIGBEE_TASK_STACK 4096
 #define ZIGBEE_TASK_PRIORITY 5
 
@@ -33,6 +34,7 @@ static domain_t *s_domain;
 static QueueHandle_t s_reports;
 static QueueHandle_t s_commands;
 static QueueHandle_t s_interviews;
+static QueueHandle_t s_events;
 static QueueSetHandle_t s_inbox;
 
 static sys_error_t zigbee_fail(sys_code_t code)
@@ -76,6 +78,33 @@ static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_
         return busy;
     }
     return SYS_OK;
+}
+
+/* EVENT с payload: событие несёт данные (cluster/command/bytes), а не значение атрибута. */
+static void zigbee_event_publish(const zigbee_event_t *event)
+{
+    const domain_fact_target_t target = {
+        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .key = &event->device_uid,
+    };
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
+    meta.value.v.u32 = event->command_id;
+
+    domain_payload_ref_t ref = 0;
+    const sys_error_t err =
+        domain_payload_put(s_domain, &target, &meta, event, sizeof(*event), &ref);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "event not published: uid=%llx cluster=%04x err=%u",
+                 (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
+                 (unsigned)err.code);
+        zigbee_diag_record(ZIGBEE_DIAG_EVENT, err);
+        return;
+    }
+    ESP_LOGI(TAG, "event: uid=%llx cluster=%04x cmd=%02x ep=%u",
+             (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
+             (unsigned)event->command_id, (unsigned)event->endpoint);
 }
 
 static void zigbee_task(void *arg)
@@ -126,6 +155,14 @@ static void zigbee_task(void *arg)
                              (unsigned long long)result.uid, (unsigned)result.endpoint_count);
                 }
             }
+            continue;
+        }
+
+        if (ready == s_events) {
+            zigbee_event_t event = {0};
+            if (xQueueReceive(s_events, &event, 0) == pdTRUE) {
+                zigbee_event_publish(&event);
+            }
         }
     }
 }
@@ -140,14 +177,17 @@ sys_error_t zigbee_start(domain_t *domain)
     s_reports = xQueueCreate(ZIGBEE_REPORT_QUEUE_LENGTH, sizeof(zigbee_report_t));
     s_commands = xQueueCreate(ZIGBEE_COMMAND_QUEUE_LENGTH, sizeof(ha_zb_command_t));
     s_interviews = xQueueCreate(ZIGBEE_INTERVIEW_QUEUE_LENGTH, sizeof(zigbee_interview_result_t));
+    s_events = xQueueCreate(ZIGBEE_EVENT_QUEUE_LENGTH, sizeof(zigbee_event_t));
     s_inbox = xQueueCreateSet(ZIGBEE_REPORT_QUEUE_LENGTH + ZIGBEE_COMMAND_QUEUE_LENGTH +
-                              ZIGBEE_INTERVIEW_QUEUE_LENGTH);
-    if (s_reports == NULL || s_commands == NULL || s_interviews == NULL || s_inbox == NULL) {
+                              ZIGBEE_INTERVIEW_QUEUE_LENGTH + ZIGBEE_EVENT_QUEUE_LENGTH);
+    if (s_reports == NULL || s_commands == NULL || s_interviews == NULL || s_events == NULL ||
+        s_inbox == NULL) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
     if (xQueueAddToSet(s_reports, s_inbox) != pdPASS ||
         xQueueAddToSet(s_commands, s_inbox) != pdPASS ||
-        xQueueAddToSet(s_interviews, s_inbox) != pdPASS) {
+        xQueueAddToSet(s_interviews, s_inbox) != pdPASS ||
+        xQueueAddToSet(s_events, s_inbox) != pdPASS) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
 
@@ -185,6 +225,20 @@ sys_error_t zigbee_submit_interview(const zigbee_interview_result_t *result)
         return zigbee_fail(SYS_CODE_INVALID_STATE);
     }
     if (xQueueSend(s_interviews, result, 0) != pdTRUE) {
+        return zigbee_fail(SYS_CODE_BUSY);
+    }
+    return SYS_OK;
+}
+
+sys_error_t zigbee_submit_event(const zigbee_event_t *event)
+{
+    if (event == NULL) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    if (s_events == NULL) {
+        return zigbee_fail(SYS_CODE_INVALID_STATE);
+    }
+    if (xQueueSend(s_events, event, 0) != pdTRUE) {
         return zigbee_fail(SYS_CODE_BUSY);
     }
     return SYS_OK;

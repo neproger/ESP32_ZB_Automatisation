@@ -22,6 +22,21 @@ typedef struct {
     uint32_t raw;     /* значение в кодировке ZCL (битовая копия для float) */
 } zigbee_report_t;
 
+/*
+ * Событие от устройства: команда/нажатие, из которого состояние не следует
+ * (docs/services/ZIGBEE.md §4). Публикуется как EVENT с payload.
+ */
+#define ZIGBEE_EVENT_PAYLOAD_MAX 16
+
+typedef struct {
+    ha_device_uid_t device_uid;
+    uint16_t cluster_id;
+    uint8_t command_id;
+    uint8_t endpoint;
+    uint8_t payload_length;
+    uint8_t payload[ZIGBEE_EVENT_PAYLOAD_MAX];
+} zigbee_event_t;
+
 /* Поднимает задачу сервиса. Вызывается из bootstrap после domain_init(). */
 sys_error_t zigbee_start(domain_t *domain);
 
@@ -37,3 +52,9 @@ sys_error_t zigbee_submit_report(const zigbee_report_t *report);
  * BUSY — очередь интервью заполнена.
  */
 sys_error_t zigbee_submit_interview(const zigbee_interview_result_t *result);
+
+/*
+ * Принять событие от устройства. Fire-and-forget: EVENT в Domain пишет задача сервиса
+ * (docs/services/ZIGBEE.md §6). BUSY — очередь событий заполнена.
+ */
+sys_error_t zigbee_submit_event(const zigbee_event_t *event);

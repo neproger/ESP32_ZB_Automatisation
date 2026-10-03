@@ -22,6 +22,7 @@ static const char *kind_name(zigbee_diag_kind_t kind)
     case ZIGBEE_DIAG_COMMAND: return "command rejected";
     case ZIGBEE_DIAG_SEND: return "command not sent";
     case ZIGBEE_DIAG_TOPOLOGY: return "topology";
+    case ZIGBEE_DIAG_EVENT: return "event";
     default: return "unknown";
     }
 }

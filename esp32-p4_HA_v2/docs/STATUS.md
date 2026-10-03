@@ -11,7 +11,7 @@
 | `sys` | единая модель ошибки `sys_error_t` (`ERRORS.md`) | тестами всех слоёв |
 | `domain` | Entity Store, Journal, Transient Payload, Dispatcher, Commands | host-тесты 9/9, IDF-сборка и запуск на P4 |
 | `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
-| `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
+| `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | ESP-Hosted по SDIO → RCP на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
@@ -30,6 +30,7 @@ C6 по SDIO            → esp32c6, fw 3.0.9; подняты Wi-Fi и OpenThrea
                       → ENTITY_UPSERTED device=1 и три endpoint=3
 подписка              → bind server-кластеров + Configure Reporting
                       → ENTITY_UPSERTED state=2 (Level, OnOff) от живого устройства
+события               → кнопка ESP32C6-DISPLAY: EVENT (OnOff Toggle) с payload
 ```
 
 Платы хватает на сборку и наблюдение: `idf.py build flash monitor` из корня проекта.
@@ -50,8 +51,8 @@ C6 по SDIO            → esp32c6, fw 3.0.9; подняты Wi-Fi и OpenThrea
 
 ```text
 1. Команды на живое устройство      — UI/Automation -> domain_post -> радио -> репорт
-2. Удаление устройства и явная операция permit-join — когда появится потребитель
-3. Automation service               — подписчик фактов, правила по состоянию
+2. Automation service               — подписчик фактов (в т.ч. EVENT), правила
+3. Удаление устройства и явная операция permit-join — когда появится потребитель
 4. Web service (BFF)                — проекция записей в DTO, приём команд
 ```
 

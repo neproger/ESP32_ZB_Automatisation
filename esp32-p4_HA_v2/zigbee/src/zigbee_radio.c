@@ -106,21 +106,31 @@ static bool report_value(const ezb_zcl_report_attr_variable_t *var, zigbee_repor
     return true;
 }
 
+/* EUI-64 источника кадра: расширенный адрес как есть, короткий — через таблицу стека. */
+static bool device_uid_from(const ezb_address_t *addr, ha_device_uid_t *out)
+{
+    if (addr->addr_mode == EZB_ADDR_MODE_EXT) {
+        *out = (ha_device_uid_t)addr->u.extended_addr.u64;
+        return true;
+    }
+    ezb_extaddr_t uid = {0};
+    if (addr->addr_mode == EZB_ADDR_MODE_SHORT &&
+        ezb_address_extended_by_short(addr->u.short_addr, &uid) == EZB_ERR_NONE) {
+        *out = (ha_device_uid_t)uid.u64;
+        return true;
+    }
+    return false; /* адрес ещё не разрешён в EUI-64 */
+}
+
 static bool report_from(const ezb_zcl_cmd_hdr_t *header, uint16_t cluster_id,
                         const ezb_zcl_report_attr_variable_t *var, zigbee_report_t *out)
 {
     if (header == NULL || var == NULL) {
         return false;
     }
-
-    ezb_extaddr_t uid = {0};
-    if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
-        uid = header->src_addr.u.extended_addr;
-    } else if (ezb_address_extended_by_short(header->src_addr.u.short_addr, &uid) != EZB_ERR_NONE) {
-        return false; /* короткий адрес ещё не разрешён в EUI-64 */
+    if (!device_uid_from(&header->src_addr, &out->device_uid)) {
+        return false;
     }
-
-    out->device_uid = (ha_device_uid_t)uid.u64;
     out->endpoint = header->src_ep;
     out->cluster_id = cluster_id;
     out->attr_id = var->attr_id;
@@ -443,6 +453,48 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
     }
 }
 
+/*
+ * События от устройств: входящие cluster-specific команды (кнопка/пульт). У обычных
+ * OnOff On/Off/Toggle в SDK нет отдельного колбэка, поэтому берём сырой ZCL-кадр,
+ * отбрасываем foundation-команды и ответы и публикуем EVENT.
+ */
+static bool raw_frame_handler(const ezb_zcl_raw_frame_t *raw)
+{
+    const ezb_zcl_cmd_hdr_t *header = raw != NULL ? raw->header : NULL;
+    if (header == NULL || header->profile_id != HA_ZB_PROFILE_HA) {
+        return false;
+    }
+    if (EZB_ZCL_CMD_FC_GET_FRAME_TYPE(header->fc) != EZB_ZCL_FRAME_TYPE_CLUSTER_SPECIFIC ||
+        EZB_ZCL_CMD_FC_IS_TO_CLI_DIRECTION(header->fc)) {
+        return false; /* не foundation-команда и не ответ: клиент шлёт команду серверу */
+    }
+
+    zigbee_event_t event = {0};
+    if (!device_uid_from(&header->src_addr, &event.device_uid)) {
+        return false;
+    }
+    event.cluster_id = header->cluster_id;
+    event.command_id = header->cmd_id;
+    event.endpoint = header->src_ep;
+
+    const uint16_t length = (raw->payload_length > ZIGBEE_EVENT_PAYLOAD_MAX)
+                                ? (uint16_t)ZIGBEE_EVENT_PAYLOAD_MAX
+                                : raw->payload_length;
+    event.payload_length = (uint8_t)length;
+    if (length > 0 && raw->payload != NULL) {
+        memcpy(event.payload, raw->payload, length);
+    }
+
+    const sys_error_t err = zigbee_submit_event(&event);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "event not queued: uid=%llx cluster=%04x err=%u",
+                 (unsigned long long)event.device_uid, (unsigned)event.cluster_id,
+                 (unsigned)err.code);
+        zigbee_diag_record(ZIGBEE_DIAG_EVENT, err);
+    }
+    return false; /* кадр не наш: пусть стек обработает его сам */
+}
+
 /* Запуск подпроцедуры BDB из колбэка стека. Отказ печатается, но не гасит сервис:
  * следующий сигнал или перезагрузка даст новую попытку. */
 static void start_commissioning(ezb_bdb_comm_mode_mask_t mode)
@@ -601,6 +653,7 @@ static sys_error_t create_coordinator_device(void)
         return radio_fail("register coordinator device failed", (uint32_t)registered);
     }
     ezb_zcl_core_action_handler_register(core_action_handler);
+    ezb_zcl_raw_command_handler_register(raw_frame_handler);
     return SYS_OK;
 }
 

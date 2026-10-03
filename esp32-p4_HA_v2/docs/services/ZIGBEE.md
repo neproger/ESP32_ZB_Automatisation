@@ -179,8 +179,9 @@ Level Control MoveToLevel               args_len = 1, args[0] = уровень 0
 
 Реализовано в слое, но вне контракта этого документа: комиссионирование координатора
 (создание сети, её открытие на конечное время, steering), интервью устройства
-(ZDO-дискавери `Active_EP`/`Simple_Desc` + чтение Basic) и подписка на состояние
-(binding server-кластеров устройства на координатор + Configure Reporting). Всё это
+(ZDO-дискавери `Active_EP`/`Simple_Desc` + чтение Basic), подписка на состояние
+(binding server-кластеров устройства на координатор + Configure Reporting) и приём
+событий (входящие cluster-specific команды через сырой ZCL-кадр → `EVENT`). Всё это
 идёт в задаче радио, результат кладётся в очередь сервиса — как и репорт.
 
 ```text
@@ -225,6 +226,7 @@ Level Control MoveToLevel               args_len = 1, args[0] = уровень 0
 9. комиссионирование: formation/open(180с)/steering                  выполнено
 10. интервью: Active_EP -> Simple_Desc -> Basic, upsert в Domain     выполнено
 11. подписка: bind + Configure Reporting -> репорты состояния        выполнено
+12. события: сырой ZCL-кадр команды -> EVENT с payload               выполнено
 ```
 
 Заглушек нет: источник кадров (`zigbee_stub_feed.c`) удалён. Приём репортов, интервью
