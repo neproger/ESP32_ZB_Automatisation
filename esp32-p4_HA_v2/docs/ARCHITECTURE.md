@@ -235,6 +235,8 @@ docs/
 │   └── WEB.md
 ├── clients/
 │   └── DISPLAY.md
+├── hardware/
+│   └── JC4880P443C_I_W.md   — плата: характеристики и процедуры
 └── storage/
     ├── MSTORE.md
     ├── MSTORE_FLASH_FORMAT.md
