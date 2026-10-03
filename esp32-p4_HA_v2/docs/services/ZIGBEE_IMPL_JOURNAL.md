@@ -9,21 +9,21 @@
 |---|---|
 | Компонент | `zigbee` (IDF-компонент + host-тесты чистой логики) |
 | Контракт | `services/ZIGBEE.md` |
-| Реализовано | задача сервиса, репорт → состояние, топология endpoint'ов, executor и отправка команд, радиоканал ESP-Hosted + RCP, счётчики диагностики |
-| Заглушки | источник кадров (`zigbee_stub_feed.c`) |
-| Тесты | host: `test_state`, `test_command`, `test_topology` (чистая логика без FreeRTOS) |
-| Проверено на P4 | поток фактов; радиоканал: SDIO и C6 видны, RCP ждёт прошивки C6 |
+| Реализовано | задача сервиса, репорт → состояние, топология endpoint'ов, интервью устройства (ZDO-дискавери + Basic), executor и отправка команд, комиссионирование (formation/open/steering), радиоканал ESP-Hosted + RCP, счётчики диагностики |
+| Заглушки | нет |
+| Тесты | host: `test_state`, `test_command`, `test_topology`, `test_interview` (чистая логика без FreeRTOS) |
+| Проверено на P4 | живое устройство (ESP32C6-DISPLAY): сеть, интервью, device + endpoint'ы в Domain |
 
 Сервис разделён по признаку «что можно проверить на хосте»:
 
 ```text
-zigbee_state.c      репорт → ключ, запись, компактное значение   host + IDF
-zigbee_command.c    проверка команды до отправки                 host + IDF
-zigbee_topology.c   запись endpoint'а                            host + IDF
-zigbee.c            задача, очереди, executor                    только IDF
-zigbee_radio.c      ESP-Hosted + RCP, репорт и отправка ZCL      только IDF
-zigbee_diag.c       счётчики и печать ошибок                     только IDF
-zigbee_stub_feed.c  подставной источник кадров                   только IDF
+zigbee_state.c      репорт → ключ, запись; модель устройства       host + IDF
+zigbee_command.c    проверка команды до отправки                    host + IDF
+zigbee_topology.c   запись endpoint'а                               host + IDF
+zigbee_interview.c  роли кластеров и запись интервью в Domain       host + IDF
+zigbee.c            задача, очереди, executor                       только IDF
+zigbee_radio.c      ESP-Hosted + RCP, репорт, команды и интервью    только IDF
+zigbee_diag.c       счётчики и печать ошибок                        только IDF
 ```
 
 ## 2. Хронология
@@ -41,6 +41,8 @@ zigbee_stub_feed.c  подставной источник кадров          
 10. счётчики диагностики                zigbee_diag, отдельно от Journal
 11. радиоканал                          zigbee_radio: ESP-Hosted -> RCP -> стек, репорты
 12. отправка команд                     zigbee_radio_send: On/Off, Level MoveToLevel
+13. комиссионирование                   formation/open(180с)/steering, лог permit-join
+14. интервью устройства                 Active_EP -> Simple_Desc -> Basic, upsert в Domain
 ```
 
 ## 3. Принятые решения
@@ -59,6 +61,9 @@ zigbee_stub_feed.c  подставной источник кадров          
 | 2026-10-01 | Радио — UART-RCP через ESP-Hosted, а не нативный 802.15.4 | у P4 нет радио; C6 отдаёт его как RCP, host-стек Zigbee тот же |
 | 2026-10-01 | Команда адресуется EUI-64, short address разрешает стек | identity устройства не зависит от текущего сетевого адреса |
 | 2026-10-01 | Отправка из задачи сервиса, а не радио | радио-задача занята mainloop'ом; ezb_* cmd_req сериализуются стеком |
+| 2026-10-03 | Устройство без интервью — только RAM сервиса, в Domain — по завершении интервью | топология и модель приходят заново на каждом rejoin; частичное устройство в Domain не появляется |
+| 2026-10-03 | Интервью завершается по счётчику ответов; Basic читается с endpoint'а, где он есть | у устройства есть служебные endpoint'ы без Basic — чтение «с первого» ответа не даёт и подвешивает интервью |
+| 2026-10-03 | Запись интервью в Domain — в задаче сервиса, а не в колбэке радио | Domain пишет один потребитель (задача сервиса); радио только собирает и кладёт в очередь |
 
 ## 4. От чего отказались
 
@@ -71,29 +76,9 @@ zigbee_stub_feed.c  подставной источник кадров          
 
 ## 5. Прошивка C6 (RCP)
 
-Ключевое: у встроенного C6 **нет своего USB**. Оба Type-C платы принадлежат P4
-(`High-speed = P4`, `Full-speed = P4/USB1P1`). C6 выведен только на гребёнку **JP1**:
-`C6_U0RXD`, `C6_U0TXD`, `GND`, `C6_IO9` (BOOT), `C6_CHIP_PU` (reset). Прошивается
-внешним **3.3 В USB-TTL** прямо в JP1.
+Характеристики платы, распиновка JP1 и полная процедура прошивки C6 (включая сборку
+CP-прошивки с RCP) — в справочнике `../hardware/JC4880P443C_I_W.md` §6.
 
-Заводская прошивка C6 — ESP-Hosted slave 2.x без RCP (хост видит `coprocessor=2.3.2`),
-поэтому `RCP on the co-processor not started`. Нужен **ESP-Hosted CP с RCP**, а не
-Wi-Fi-адаптер: исходник `managed_components/espressif__esp_hosted/examples/zigbee/thermostat/cp`,
-`espressif/esp_hosted` привязан к **3.0.9** (как на хосте). Сборка — вне
-`managed_components` (во временной папке), иначе ломается component manager проекта.
-
-```text
-1) припарковать P4 (иначе его ESP-Hosted дёргает reset C6 по GPIO54 и срывает запись):
-   esptool --chip esp32p4 -p COM4 --before default_reset --after no_reset flash_id
-2) прошить C6 (COMx — порт USB-TTL; прошивка собрана, eh_cp_zigbee_rcp.bin ~877 КБ):
-   esptool --chip esp32c6 -p COMx -b 460800 --before default_reset --after hard_reset write_flash ^
-     --flash-mode dio --flash-size 4MB --flash-freq 80m ^
-     0x0 bootloader.bin 0x8000 partition-table.bin 0xd000 ota_data_initial.bin 0x10000 eh_cp_zigbee_rcp.bin
-3) вернуть P4: esptool --chip esp32p4 -p COM4 --after hard_reset flash_id
-```
-
-Если у USB-TTL не разведены DTR/RTS — вход в boot вручную: `C6_IO9` на GND и импульс
-`C6_CHIP_PU` на GND. UART спинel на CP по умолчанию `UART1 RX20/TX21 460800` — совпадает
-с хостом (`TX29/RX30 460800`, `sdkconfig.defaults`).
-
-Статус: прошивка собрана, блокер — внешний 3.3 В USB-TTL в JP1.
+Статус: прошито и проверено. CP-прошивка включает Wi-Fi и RCP (OpenThread), спинel
+RCP вынесен на `GPIO17/16` (иначе UART занимает `D0/D1` SDIO и стек падает). C6 шьётся
+внешним 3.3 В USB-TTL в JP1. Детали — `../hardware/JC4880P443C_I_W.md` §6.

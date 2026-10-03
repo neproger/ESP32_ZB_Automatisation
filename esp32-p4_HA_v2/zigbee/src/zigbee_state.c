@@ -6,7 +6,8 @@
 
 /*
  * Репорт → состояние. Ничего не знает о радио, очередях и задачах: этим занимается
- * zigbee.c. Здесь только форма записи и правило появления устройства.
+ * zigbee.c. Здесь только форма записи и правило появления устройства: устройство
+ * появляется по завершении интервью (zigbee_interview_apply), не по репорту.
  */
 
 static sys_error_t zigbee_fail(sys_code_t code)
@@ -63,7 +64,38 @@ domain_value_t zigbee_value_compact(const zigbee_report_t *report)
     return value;
 }
 
-/* Устройство появляется в хранилище вместе с первым репортом: Zigbee его уже назвал. */
+sys_error_t zigbee_device_set_model(domain_t *domain, ha_device_uid_t uid, const char *model,
+                                    bool *out_changed)
+{
+    if (domain == NULL || model == NULL || out_changed == NULL) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    *out_changed = false;
+
+    /* Имя задаёт пользователь: читаем существующую запись, чтобы её не затереть. */
+    ha_device_record_t record = {0};
+    const sys_error_t found =
+        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record);
+    if (sys_failed(found) && !sys_is(found, SYS_CODE_NOT_FOUND)) {
+        return found;
+    }
+
+    size_t length = strlen(model);
+    if (length >= sizeof(record.model)) {
+        length = sizeof(record.model) - 1; /* обрезаем: поле фиксированной длины */
+    }
+    memcpy(record.model, model, length);
+    record.model[length] = '\0';
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+
+    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record, &meta,
+                             out_changed);
+}
+
+/* Создать запись устройства, если её ещё нет: сюда приходит топология интервью. */
 sys_error_t zigbee_device_ensure(domain_t *domain, ha_device_uid_t uid)
 {
     ha_device_record_t existing = {0};
@@ -90,9 +122,12 @@ sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, 
 
     *out_changed = false;
 
-    const sys_error_t device = zigbee_device_ensure(domain, report->device_uid);
-    if (sys_failed(device)) {
-        return device;
+    /* Устройства без интервью в Domain нет: репорт от него — не факт (§9.4). */
+    ha_device_record_t device = {0};
+    const sys_error_t known =
+        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &report->device_uid, &device);
+    if (sys_failed(known)) {
+        return known;
     }
 
     ha_zb_state_key_t key = {0};

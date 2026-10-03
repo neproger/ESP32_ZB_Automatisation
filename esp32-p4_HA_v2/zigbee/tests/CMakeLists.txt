@@ -8,7 +8,11 @@ enable_testing()
 
 # Тестируется только чистая часть сервиса: репорт → запись Domain и проверка команды
 # перед отправкой. Задача, очереди и радио в тесты не входят — это IDF-компонент.
-set(ZIGBEE_CORE ../src/zigbee_state.c ../src/zigbee_command.c ../src/zigbee_topology.c)
+set(ZIGBEE_CORE
+    ../src/zigbee_state.c
+    ../src/zigbee_command.c
+    ../src/zigbee_topology.c
+    ../src/zigbee_interview.c)
 
 set(DOMAIN_CORE
     ../../domain/src/domain_registry.c
@@ -64,3 +68,4 @@ endfunction()
 zigbee_add_test(test_state)
 zigbee_add_test(test_command)
 zigbee_add_test(test_topology)
+zigbee_add_test(test_interview)

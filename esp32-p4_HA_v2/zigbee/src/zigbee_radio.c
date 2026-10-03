@@ -11,7 +11,11 @@
 #include "ezbee/af.h"
 #include "ezbee/app_signals.h"
 #include "ezbee/bdb.h"
+#include "ezbee/nwk.h"
+#include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "zigbee/zigbee.h"
+#include "zigbee/zigbee_interview.h"
+#include "ezbee/zcl/cluster/basic_desc.h"
 #include "ezbee/zcl/cluster/level.h"
 #include "ezbee/zcl/cluster/on_off.h"
 #include "ezbee/zcl/zcl_core.h"
@@ -36,6 +40,7 @@ static const char *TAG = "zigbee.radio";
 #define RADIO_START_TIMEOUT_MS 15000
 #define COORDINATOR_ENDPOINT 1
 #define PRIMARY_CHANNEL_MASK (1l << 15)
+#define PERMIT_JOIN_SECONDS 180
 #define ZIGBEE_STORAGE_PARTITION "zb_storage"
 
 /* Стек готов принимать команды. Пишет задача радио при старте, читает задача сервиса. */
@@ -121,9 +126,287 @@ static bool report_from(const ezb_zcl_cmd_hdr_t *header, uint16_t cluster_id,
     return report_value(var, out);
 }
 
+/*
+ * Интервью устройства. Пока оно не завершено, запись живёт только здесь, в RAM: в
+ * Domain устройство попадает по итогу интервью (docs/services/ZIGBEE.md §9.4).
+ */
+#define INTERVIEW_DEVICES_MAX 4
+
+typedef struct {
+    bool used;
+    bool basic_requested; /* Basic читается один раз, с endpoint'а, где он есть */
+    ha_device_uid_t uid;
+    uint16_t short_addr;
+    uint8_t outstanding; /* сколько ответов ещё ждём */
+    uint8_t endpoint_count;
+    char model[HA_DEVICE_MODEL_MAX];
+    zigbee_interview_endpoint_t endpoints[ZIGBEE_INTERVIEW_ENDPOINTS_MAX];
+} interview_device_t;
+
+static interview_device_t s_interview[INTERVIEW_DEVICES_MAX];
+
+static interview_device_t *interview_slot(ha_device_uid_t uid, uint16_t short_addr)
+{
+    interview_device_t *free_slot = NULL;
+    for (size_t i = 0; i < INTERVIEW_DEVICES_MAX; i++) {
+        interview_device_t *candidate = &s_interview[i];
+        if (candidate->used && candidate->uid == uid) {
+            return candidate; /* повторный announce: интервью перезапускается */
+        }
+        if (!candidate->used && free_slot == NULL) {
+            free_slot = candidate;
+        }
+    }
+    if (free_slot != NULL) {
+        memset(free_slot, 0, sizeof(*free_slot));
+        free_slot->used = true;
+        free_slot->uid = uid;
+        free_slot->short_addr = short_addr;
+    }
+    return free_slot;
+}
+
+static interview_device_t *interview_by_short(uint16_t short_addr)
+{
+    for (size_t i = 0; i < INTERVIEW_DEVICES_MAX; i++) {
+        if (s_interview[i].used && s_interview[i].short_addr == short_addr) {
+            return &s_interview[i];
+        }
+    }
+    return NULL;
+}
+
+/* Интервью собрано: отдать его задаче сервиса для записи в Domain (ZIGBEE.md §6). */
+static void interview_finish(interview_device_t *device)
+{
+    zigbee_interview_result_t result = {0};
+    result.uid = device->uid;
+    memcpy(result.model, device->model, sizeof(result.model));
+    result.endpoint_count = device->endpoint_count;
+    memcpy(result.endpoints, device->endpoints, sizeof(device->endpoints));
+
+    const sys_error_t queued = zigbee_submit_interview(&result);
+    if (sys_failed(queued)) {
+        ESP_LOGW(TAG, "interview not queued: uid=%llx err=%u", (unsigned long long)device->uid,
+                 (unsigned)queued.code);
+        zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, queued);
+    } else {
+        ESP_LOGI(TAG, "interview done: uid=%llx endpoints=%u model=\"%s\"",
+                 (unsigned long long)device->uid, (unsigned)device->endpoint_count,
+                 device->model);
+    }
+
+    device->used = false;
+}
+
+static void interview_response(interview_device_t *device)
+{
+    if (device->outstanding > 0) {
+        device->outstanding--;
+    }
+    if (device->outstanding == 0) {
+        interview_finish(device);
+    }
+}
+
+static bool endpoint_has_basic_server(const zigbee_interview_endpoint_t *endpoint)
+{
+    for (uint8_t i = 0; i < endpoint->cluster_count; i++) {
+        if (endpoint->clusters[i].cluster_id == HA_ZB_CLUSTER_BASIC &&
+            endpoint->clusters[i].role == HA_ZB_ROLE_SERVER) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Прочитать Basic: модель — единственное, что интервью добавляет к топологии. */
+static bool interview_read_basic(interview_device_t *device, uint8_t endpoint)
+{
+    uint16_t attributes[] = {EZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
+                             EZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID};
+    const ezb_zcl_read_attr_cmd_t request = {
+        .cmd_ctrl =
+            {
+                .dst_addr.addr_mode = EZB_ADDR_MODE_SHORT,
+                .dst_addr.u.short_addr = device->short_addr,
+                .dst_ep = endpoint,
+                .src_ep = COORDINATOR_ENDPOINT,
+                .cluster_id = EZB_ZCL_CLUSTER_ID_BASIC,
+            },
+        .payload.attr_number = (uint8_t)(sizeof(attributes) / sizeof(attributes[0])),
+        .payload.attr_field = attributes,
+    };
+    const ezb_err_t err = ezb_zcl_read_attr_cmd_req(&request);
+    ESP_LOGI(TAG, "basic read: uid=%llx ep=%u code=0x%x", (unsigned long long)device->uid,
+             (unsigned)endpoint, (unsigned)err);
+    return err == EZB_ERR_NONE;
+}
+
+static void interview_on_simple_desc(const ezb_zdo_simple_desc_req_result_t *result,
+                                     void *user_ctx)
+{
+    interview_device_t *device = (interview_device_t *)user_ctx;
+    if (device == NULL) {
+        return;
+    }
+
+    const ezb_zdp_simple_desc_rsp_field_t *rsp = result->rsp;
+    if (result->error == EZB_ERR_NONE && rsp != NULL && rsp->status == EZB_ZDP_STATUS_SUCCESS &&
+        device->endpoint_count < ZIGBEE_INTERVIEW_ENDPOINTS_MAX) {
+        const ezb_af_simple_desc_t *desc = &rsp->desc;
+        const uint16_t *input = desc->app_cluster_list;
+        const uint16_t *output = input + desc->app_input_cluster_count;
+
+        zigbee_interview_endpoint_t *endpoint = &device->endpoints[device->endpoint_count];
+        uint8_t count = 0;
+        const sys_error_t mapped =
+            zigbee_clusters_from_lists(input, desc->app_input_cluster_count, output,
+                                       desc->app_output_cluster_count, endpoint->clusters,
+                                       HA_ENDPOINT_CLUSTERS_MAX, &count);
+        if (sys_ok(mapped)) {
+            endpoint->endpoint = desc->ep_id;
+            endpoint->profile_id = desc->app_profile_id;
+            endpoint->device_id = desc->app_device_id;
+            endpoint->cluster_count = count;
+            device->endpoint_count++;
+            ESP_LOGI(TAG, "simple desc: uid=%llx ep=%u clusters=%u",
+                     (unsigned long long)device->uid, (unsigned)desc->ep_id, (unsigned)count);
+            /* Модель берём с endpoint'а, где Basic действительно есть: иначе ответа нет. */
+            if (!device->basic_requested && endpoint_has_basic_server(endpoint) &&
+                interview_read_basic(device, desc->ep_id)) {
+                device->outstanding++;
+                device->basic_requested = true;
+            }
+        } else {
+            ESP_LOGW(TAG, "endpoint %u not stored: uid=%llx code=%u", (unsigned)desc->ep_id,
+                     (unsigned long long)device->uid, (unsigned)mapped.code);
+            zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, mapped);
+        }
+    }
+
+    interview_response(device);
+}
+
+static void interview_on_active_ep(const ezb_zdo_active_ep_req_result_t *result, void *user_ctx)
+{
+    interview_device_t *device = (interview_device_t *)user_ctx;
+    if (device == NULL) {
+        return;
+    }
+
+    const ezb_zdp_active_ep_rsp_field_t *rsp = result->rsp;
+    if (result->error != EZB_ERR_NONE || rsp == NULL || rsp->status != EZB_ZDP_STATUS_SUCCESS ||
+        rsp->active_ep_count == 0 || rsp->active_ep_list == NULL) {
+        ESP_LOGW(TAG, "active endpoints failed: uid=%llx", (unsigned long long)device->uid);
+        device->used = false;
+        return;
+    }
+
+    const uint8_t wanted = (rsp->active_ep_count > ZIGBEE_INTERVIEW_ENDPOINTS_MAX)
+                               ? (uint8_t)ZIGBEE_INTERVIEW_ENDPOINTS_MAX
+                               : rsp->active_ep_count;
+    ESP_LOGI(TAG, "active endpoints: uid=%llx count=%u", (unsigned long long)device->uid,
+             (unsigned)rsp->active_ep_count);
+    uint8_t requested = 0;
+    for (uint8_t i = 0; i < wanted; i++) {
+        const ezb_zdo_simple_desc_req_t request = {
+            .dst_nwk_addr = device->short_addr,
+            .field = {.nwk_addr_of_interest = device->short_addr,
+                      .endpoint = rsp->active_ep_list[i]},
+            .cb = interview_on_simple_desc,
+            .user_ctx = device,
+        };
+        if (ezb_zdo_simple_desc_req(&request) == EZB_ERR_NONE) {
+            requested++;
+        } else {
+            ESP_LOGW(TAG, "simple desc not requested: uid=%llx ep=%u",
+                     (unsigned long long)device->uid, (unsigned)rsp->active_ep_list[i]);
+        }
+    }
+
+    if (requested == 0) {
+        device->used = false;
+        return;
+    }
+    device->outstanding = requested;
+}
+
+static void interview_on_read_attr(const ezb_zcl_cmd_read_attr_rsp_message_t *message)
+{
+    if (message == NULL || message->in.header == NULL ||
+        message->info.cluster_id != EZB_ZCL_CLUSTER_ID_BASIC ||
+        message->in.header->src_addr.addr_mode != EZB_ADDR_MODE_SHORT) {
+        return;
+    }
+
+    interview_device_t *device = interview_by_short(message->in.header->src_addr.u.short_addr);
+    if (device == NULL) {
+        ESP_LOGI(TAG, "basic read rsp for unknown short=0x%04x",
+                 (unsigned)message->in.header->src_addr.u.short_addr);
+        return;
+    }
+    ESP_LOGI(TAG, "basic read rsp: uid=%llx status=0x%02x", (unsigned long long)device->uid,
+             (unsigned)message->info.status);
+
+    for (const ezb_zcl_read_attr_rsp_variable_t *var = message->in.variables; var != NULL;
+         var = var->next) {
+        if (var->status != EZB_ZCL_STATUS_SUCCESS ||
+            var->attr_id != EZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID || var->attr_value == NULL) {
+            continue;
+        }
+        const uint8_t length = *(const uint8_t *)var->attr_value;
+        const char *text = (const char *)var->attr_value + 1;
+        const size_t room = sizeof(device->model) - 1;
+        const size_t copied = (length < room) ? length : room;
+        memcpy(device->model, text, copied);
+        device->model[copied] = '\0';
+    }
+
+    interview_response(device);
+}
+
+/* Устройство появилось в сети (announce или rejoin): запускаем интервью. */
+static void interview_begin(ha_device_uid_t uid, uint16_t short_addr)
+{
+    interview_device_t *device = interview_slot(uid, short_addr);
+    if (device == NULL) {
+        ESP_LOGW(TAG, "interview table full: uid=%llx", (unsigned long long)uid);
+        return;
+    }
+    if (device->outstanding > 0) {
+        return; /* интервью уже идёт: повторный announce/rejoin его не перезапускает */
+    }
+
+    device->endpoint_count = 0;
+    device->model[0] = '\0';
+    device->basic_requested = false;
+    device->outstanding = 1;
+
+    const ezb_zdo_active_ep_req_t request = {
+        .dst_nwk_addr = short_addr,
+        .field = {.nwk_addr_of_interest = short_addr},
+        .cb = interview_on_active_ep,
+        .user_ctx = device,
+    };
+    if (ezb_zdo_active_ep_req(&request) != EZB_ERR_NONE) {
+        ESP_LOGW(TAG, "active endpoints not requested: uid=%llx", (unsigned long long)uid);
+        device->used = false;
+    }
+}
+
 static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
 {
-    if (callback_id != EZB_ZCL_CORE_REPORT_ATTR_CB_ID || message == NULL) {
+    if (message == NULL) {
+        return;
+    }
+
+    if (callback_id == EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID) {
+        interview_on_read_attr((const ezb_zcl_cmd_read_attr_rsp_message_t *)message);
+        return;
+    }
+
+    if (callback_id != EZB_ZCL_CORE_REPORT_ATTR_CB_ID) {
         return;
     }
 
@@ -142,10 +425,129 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
     }
 }
 
+/* Запуск подпроцедуры BDB из колбэка стека. Отказ печатается, но не гасит сервис:
+ * следующий сигнал или перезагрузка даст новую попытку. */
+static void start_commissioning(ezb_bdb_comm_mode_mask_t mode)
+{
+    const ezb_err_t err = ezb_bdb_start_top_level_commissioning(mode);
+    if (err != EZB_ERR_NONE) {
+        ESP_LOGW(TAG, "commissioning mode 0x%02x not started: code=0x%x", (unsigned)mode,
+                 (unsigned)err);
+    }
+}
+
+/*
+ * Устройство стартовало на BDB. Factory-new (сети ещё нет) координатор её создаёт;
+ * уже связанный — открывает на PERMIT_JOIN_SECONDS, чтобы устройства могли подключиться.
+ */
+static void commission_on_startup(void)
+{
+    if (ezb_bdb_is_factory_new()) {
+        start_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
+        return;
+    }
+
+    const ezb_err_t open = ezb_bdb_open_network(PERMIT_JOIN_SECONDS);
+    if (open != EZB_ERR_NONE) {
+        ESP_LOGW(TAG, "network not opened: code=0x%x", (unsigned)open);
+    }
+}
+
+/* Сеть создана: печатаем её координаты и переходим к steering, который её открывает. */
+static void report_network_formed(void)
+{
+    ezb_extpanid_t extended_pan_id = {0};
+    ezb_nwk_get_extended_panid(&extended_pan_id);
+    ESP_LOGI(TAG, "network formed: pan=0x%04x ext=0x%08lx%08lx channel=%u short=0x%04x",
+             (unsigned)ezb_nwk_get_panid(), (unsigned long)(extended_pan_id.u64 >> 32),
+             (unsigned long)(extended_pan_id.u64 & 0xFFFFFFFFu),
+             (unsigned)ezb_nwk_get_current_channel(), (unsigned)ezb_nwk_get_short_address());
+    start_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
+}
+
 static bool app_signal_handler(const ezb_app_signal_t *signal)
 {
-    ESP_LOGI(TAG, "signal 0x%04x", (unsigned)ezb_app_signal_get_type(signal));
-    return false;
+    const ezb_app_signal_type_t type = ezb_app_signal_get_type(signal);
+
+    switch (type) {
+    case EZB_ZDO_SIGNAL_SKIP_STARTUP:
+        /* Стек поднят и ждёт BDB: без этого шага сеть не создаётся вовсе. */
+        start_commissioning(EZB_BDB_MODE_INITIALIZATION);
+        return true;
+
+    case EZB_BDB_SIGNAL_DEVICE_FIRST_START:
+    case EZB_BDB_SIGNAL_DEVICE_REBOOT: {
+        const ezb_bdb_comm_status_t status =
+            *(const ezb_bdb_comm_status_t *)ezb_app_signal_get_params(signal);
+        if (status != EZB_BDB_STATUS_SUCCESS) {
+            ESP_LOGW(TAG, "device startup status=0x%02x", (unsigned)status);
+            return true;
+        }
+        commission_on_startup();
+        return true;
+    }
+
+    case EZB_BDB_SIGNAL_FORMATION: {
+        const ezb_bdb_comm_status_t status =
+            *(const ezb_bdb_comm_status_t *)ezb_app_signal_get_params(signal);
+        if (status != EZB_BDB_STATUS_SUCCESS) {
+            ESP_LOGW(TAG, "network formation status=0x%02x", (unsigned)status);
+            return true;
+        }
+        report_network_formed();
+        return true;
+    }
+
+    case EZB_BDB_SIGNAL_STEERING: {
+        const ezb_bdb_comm_status_t status =
+            *(const ezb_bdb_comm_status_t *)ezb_app_signal_get_params(signal);
+        if (status == EZB_BDB_STATUS_SUCCESS) {
+            ESP_LOGI(TAG, "network steering done");
+        } else {
+            ESP_LOGW(TAG, "network steering status=0x%02x", (unsigned)status);
+        }
+        return true;
+    }
+
+    case EZB_ZDO_SIGNAL_DEVICE_ANNCE: {
+        const ezb_zdo_signal_device_annce_params_t *annce = ezb_app_signal_get_params(signal);
+        ESP_LOGI(TAG, "device joined: short=0x%04x uid=%llx", (unsigned)annce->short_addr,
+                 (unsigned long long)annce->device_addr.u64);
+        interview_begin((ha_device_uid_t)annce->device_addr.u64, annce->short_addr);
+        return true;
+    }
+
+    case EZB_ZDO_SIGNAL_DEVICE_UPDATE: {
+        const ezb_zdo_signal_device_update_params_t *update = ezb_app_signal_get_params(signal);
+        if (update->status == EZB_ZDO_UPDDEV_DEVICE_LEFT) {
+            ESP_LOGI(TAG, "device left: short=0x%04x", (unsigned)update->short_addr);
+            return true;
+        }
+        ESP_LOGI(TAG, "device rejoined: short=0x%04x uid=%llx status=0x%02x",
+                 (unsigned)update->short_addr, (unsigned long long)update->device_addr.u64,
+                 (unsigned)update->status);
+        interview_begin((ha_device_uid_t)update->device_addr.u64, update->short_addr);
+        return true;
+    }
+
+    case EZB_ZDO_SIGNAL_LEAVE_INDICATION: {
+        const ezb_zdo_signal_leave_indication_params_t *leave =
+            ezb_app_signal_get_params(signal);
+        ESP_LOGI(TAG, "device left: short=0x%04x", (unsigned)leave->short_addr);
+        return true;
+    }
+
+    case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: {
+        const uint8_t duration = *(const uint8_t *)ezb_app_signal_get_params(signal);
+        ESP_LOGI(TAG, "network %s for %u s", duration != 0u ? "open" : "closed",
+                 (unsigned)duration);
+        return true;
+    }
+
+    default:
+        ESP_LOGI(TAG, "signal %s (0x%04x)", ezb_app_signal_to_string(type), (unsigned)type);
+        return false;
+    }
 }
 
 /* Сбой подъёма радио — ошибка слоя Zigbee; задача сообщает её bootstrap'у.

@@ -3,6 +3,7 @@
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h"
 #include "sys/sys_error.h"
+#include "zigbee/zigbee_interview.h"
 
 /*
  * Zigbee service (docs/services/ZIGBEE.md).
@@ -31,9 +32,8 @@ sys_error_t zigbee_start(domain_t *domain);
 sys_error_t zigbee_submit_report(const zigbee_report_t *report);
 
 /*
- * Пока нет радио, UI и Automation, их подставляет эта задача-заглушка: она поставляет
- * те же репорты, какие пришли бы от устройств, и постит команды от лица UI. Удалить при
- * появлении транспорта и потребителей; контракты submit_report()/domain_post() от неё
- * не зависят.
+ * Принять результат интервью. Fire-and-forget: интервью идёт в задаче радио, а запись
+ * устройства и топологии в Domain — в задаче сервиса (docs/services/ZIGBEE.md §6).
+ * BUSY — очередь интервью заполнена.
  */
-sys_error_t zigbee_stub_feed_start(domain_t *domain);
+sys_error_t zigbee_submit_interview(const zigbee_interview_result_t *result);

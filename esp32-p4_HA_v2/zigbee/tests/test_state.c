@@ -157,7 +157,8 @@ static void test_key_matches_report(void)
     CHECK(key.endpoint == 1);
 }
 
-static void test_first_report_creates_device_and_state(void)
+/* Репорт от устройства без интервью — не факт: устройства в Domain ещё нет (§9.4). */
+static void test_report_without_interview_is_dropped(void)
 {
     mstore_nor_sim_t *sim = NULL;
     nor_sim_device_t device;
@@ -170,12 +171,39 @@ static void test_first_report_creates_device_and_state(void)
     const zigbee_report_t report = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
                                              HA_ZB_TYPE_BOOL, 1);
     bool changed = false;
+    CHECK(sys_is(zigbee_state_apply(&domain, &report, &changed), SYS_CODE_NOT_FOUND));
+    CHECK(!changed);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 0);
+
+    CHECK(sys_ok(domain_deinit(&domain)));
+    flash_off(sim);
+}
+
+static void test_interviewed_device_gets_state(void)
+{
+    mstore_nor_sim_t *sim = NULL;
+    nor_sim_device_t device;
+    flash_on(&sim, &device);
+
+    domain_t domain = {0};
+    CHECK(sys_ok(domain_init(&domain, 2, 16, 8, 64)));
+    register_types(&domain);
+
+    /* Интервью завершилось: устройство с моделью попало в Domain. */
+    bool changed = false;
+    CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0001", &changed)));
+    CHECK(changed);
+
+    const zigbee_report_t report = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
+                                             HA_ZB_TYPE_BOOL, 1);
     CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
     CHECK(changed);
 
     ha_device_record_t device_record = {0};
     CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
                                    &device_record)));
+    CHECK(strcmp(device_record.model, "TS0001") == 0);
 
     ha_zb_state_key_t key = {0};
     zigbee_state_key_build(&report, &key);
@@ -190,6 +218,14 @@ static void test_first_report_creates_device_and_state(void)
     CHECK(!changed);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 1);
+
+    /* Повторное интервью обновляет модель, не множа запись. */
+    CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0002", &changed)));
+    CHECK(changed);
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+                                   &device_record)));
+    CHECK(strcmp(device_record.model, "TS0002") == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
 
     CHECK(sys_ok(domain_deinit(&domain)));
     flash_off(sim);
@@ -206,6 +242,7 @@ static void test_attributes_are_independent(void)
     register_types(&domain);
 
     bool changed = false;
+    CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0001", &changed)));
 
     const zigbee_report_t on = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
                                          HA_ZB_TYPE_BOOL, 1);
@@ -246,9 +283,11 @@ static void test_device_persists_but_state_does_not(void)
     CHECK(sys_ok(domain_init(&domain, 2, 16, 8, 64)));
     register_types(&domain);
 
+    bool changed = false;
+    CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0001", &changed)));
+
     const zigbee_report_t report = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
                                              HA_ZB_TYPE_BOOL, 1);
-    bool changed = false;
     CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
     CHECK(sys_ok(domain_deinit(&domain)));
 
@@ -291,7 +330,8 @@ int main(void)
 {
     test_value_mapping();
     test_key_matches_report();
-    test_first_report_creates_device_and_state();
+    test_report_without_interview_is_dropped();
+    test_interviewed_device_gets_state();
     test_attributes_are_independent();
     test_device_persists_but_state_does_not();
     test_geometry_fits_partition();
