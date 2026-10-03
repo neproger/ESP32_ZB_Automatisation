@@ -17,7 +17,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
-    ESP_LOGI(TAG, "ESP32-C6 Zigbee End Device starting");
+    ESP_LOGI(TAG, "ESP32-C6 Zigbee Router starting");
 
     if (rgb_led_init() != ESP_OK) {
         ESP_LOGW(TAG, "RGB LED init failed");
