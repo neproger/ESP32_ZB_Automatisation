@@ -49,7 +49,16 @@ ENTITY_UPSERTED → domain_get → Web DTO → STATE_DELTA → Browser
 §4.5. `web_start` поднимает Wi‑Fi и HTTP+WS в своей задаче; при неудаче линка
 веб‑сервер не стартует (bootstrap при этом продолжает работать на Zigbee).
 
-## 5. Открытые вопросы
+## 5. Протокол и клиент
+
+Провод — `WEB_PROTOCOL.md` (вариант A: сырые записи Domain, без DTO/строк; маленький
+endian; 8‑байтный заголовок). Клиент — `web-ui/` (Vite, vanilla): схема записей
+(`schema.js`), кадры (`proto.js`), WS + минимальный UI (`main.js`). Сборка — `npm run
+build` (`dist/`); в дев — `npm run dev` и `VITE_WS_URL=ws://<ip>/ws`.
+
+## 6. Открытые вопросы
 
 - консистентность snapshot при параллельных writers (eventual consistency
-  «дельты догонят» vs version-stamped snapshot).
+  «дельты догонят» vs version-stamped snapshot);
+- snapshot шлётся под Domain-lock (`WEB_PROTOCOL.md` §7);
+- события (`EVENT`) и встраивание `dist/` в прошивку — следующие шаги.

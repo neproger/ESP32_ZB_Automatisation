@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+body {
+  margin: 0;
+  background: #14161a;
+  color: #e6e6e6;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #2a2f38;
+}
+h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+h2 {
+  font-size: 0.95rem;
+  color: #9aa4b2;
+  margin: 1.25rem 1.25rem 0.5rem;
+}
+.link {
+  font-size: 0.8rem;
+  color: #d9534f;
+}
+.link.ok {
+  color: #4caf50;
+}
+main {
+  padding-bottom: 2rem;
+}
+.device {
+  margin: 0 1.25rem 0.75rem;
+  border: 1px solid #2a2f38;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.device .title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.device .uid {
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+.attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.attr {
+  background: #1d2229;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+.attr b {
+  color: #8ab4f8;
+  font-weight: 600;
+}
+button {
+  background: #2d333c;
+  color: #e6e6e6;
+  border: 1px solid #3a4150;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+button:hover {
+  background: #39414d;
+}
+input[type='text'] {
+  background: #1d2229;
+  color: #e6e6e6;
+  border: 1px solid #3a4150;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+}

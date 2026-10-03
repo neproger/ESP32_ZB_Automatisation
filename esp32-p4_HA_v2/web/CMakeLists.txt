@@ -1,11 +1,13 @@
 idf_component_register(
     SRCS
         "src/web.c"
+        "src/web_proto.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         domain
         sys
+        ha_model
     PRIV_REQUIRES
         esp_hosted
         esp_wifi
