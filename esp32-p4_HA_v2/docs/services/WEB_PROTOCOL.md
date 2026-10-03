@@ -66,7 +66,11 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 ## 6. Сценарии
 
 ```text
-WS connect (GET):
+WS connect (GET): сервер только принимает соединение. Слать snapshot прямо в GET нельзя:
+  ответ 101 завершается после возврата хендлера, и кадр уйдёт раньше. Snapshot инициирует
+  клиент командой SNAPSHOT сразу после open.
+
+client → SNAPSHOT:
   web task → этому fd: SYNC_BEGIN{count}, ENTITY per record (по типам), SYNC_END{count}
 
 Domain subscription (ENTITY_UPSERTED | ENTITY_REMOVED, любые source/entity):

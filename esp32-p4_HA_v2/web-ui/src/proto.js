@@ -63,6 +63,10 @@ export function zbCommand({ uid, ep, cluster, command, args = [] }) {
   return encodeCommand(CMD.ZB_COMMAND, out)
 }
 
+export function snapshot() {
+  return encodeCommand(CMD.SNAPSHOT)
+}
+
 // DEVICE_RENAME args = u64 uid | char name[32].
 export function renameDevice(uid, name) {
   const out = new Uint8Array(8 + 32)

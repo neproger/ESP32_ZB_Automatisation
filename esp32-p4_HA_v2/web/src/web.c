@@ -425,8 +425,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
     const int fd = httpd_req_to_sockfd(req);
 
     if (req->method == HTTP_GET) {
+        /* Snapshot запрашивает клиент командой SNAPSHOT: слать из GET нельзя —
+         * ответ 101 завершается после возврата хендлера, и кадр уйдёт раньше. */
         ESP_LOGI(TAG, "WS client connected (fd=%d)", fd);
-        web_request_snapshot(fd);
         return ESP_OK;
     }
 
@@ -459,7 +460,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
 static sys_error_t server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = WEB_MAX_CLIENTS;
+    /* Верхняя граница задана LWIP: 3 сокета держит сам HTTP-сервер (дефолт 7). */
+    config.max_open_sockets = 7;
     config.lru_purge_enable = true;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {

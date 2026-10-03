@@ -1,4 +1,4 @@
-import { MSG, decodeFrame, zbCommand, renameDevice } from './proto.js'
+import { MSG, decodeFrame, zbCommand, renameDevice, snapshot } from './proto.js'
 import {
   ENTITY,
   SCHEMA,
@@ -21,6 +21,8 @@ let socket = null
 let syncing = false
 
 function wsUrl() {
+  const q = new URLSearchParams(location.search).get('ws')
+  if (q) return q
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}/ws`
@@ -35,7 +37,10 @@ function setLink(ok) {
 function connect() {
   socket = new WebSocket(wsUrl())
   socket.binaryType = 'arraybuffer'
-  socket.onopen = () => setLink(true)
+  socket.onopen = () => {
+    setLink(true)
+    send(snapshot())
+  }
   socket.onclose = () => {
     setLink(false)
     setTimeout(connect, 1500)
