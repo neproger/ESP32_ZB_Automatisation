@@ -14,6 +14,7 @@
 #include "ezbee/nwk.h"
 #include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "zigbee/zigbee.h"
+#include "zigbee/zigbee_binding.h"
 #include "zigbee/zigbee_interview.h"
 #include "ezbee/zcl/cluster/basic_desc.h"
 #include "ezbee/zcl/cluster/level.h"
@@ -195,6 +196,10 @@ static void interview_finish(interview_device_t *device)
                  (unsigned long long)device->uid, (unsigned)device->endpoint_count,
                  device->model);
     }
+
+    /* Без binding и reporting устройство не шлёт состояние координатору. */
+    zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
+                         device->endpoint_count);
 
     device->used = false;
 }
@@ -406,6 +411,19 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
         return;
     }
 
+    if (callback_id == EZB_ZCL_CORE_CONFIG_REPORT_RSP_CB_ID) {
+        const ezb_zcl_cmd_config_report_rsp_message_t *rsp = message;
+        for (const ezb_zcl_config_report_rsp_variable_t *var = rsp->in.variables; var != NULL;
+             var = var->next) {
+            if (var->status != EZB_ZCL_STATUS_SUCCESS) {
+                ESP_LOGW(TAG, "reporting config rsp: cluster=%04x attr=%04x status=0x%02x",
+                         (unsigned)rsp->info.cluster_id, (unsigned)var->attr_id,
+                         (unsigned)var->status);
+            }
+        }
+        return;
+    }
+
     if (callback_id != EZB_ZCL_CORE_REPORT_ATTR_CB_ID) {
         return;
     }
@@ -571,6 +589,9 @@ static sys_error_t create_coordinator_device(void)
     ep_config.app_device_id = 0x0005u;
 
     ezb_af_ep_desc_t endpoint = ezb_af_create_gateway_endpoint(&ep_config);
+    /* Принять репорты и отправить команды координатор может только через client-кластер. */
+    zigbee_binding_add_client_clusters(endpoint);
+
     const ezb_err_t add = ezb_af_device_add_endpoint_desc(device, endpoint);
     if (add != EZB_ERR_NONE) {
         return radio_fail("add coordinator endpoint failed", (uint32_t)add);

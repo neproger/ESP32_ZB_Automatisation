@@ -5,6 +5,7 @@ idf_component_register(
         "src/zigbee_command.c"
         "src/zigbee_topology.c"
         "src/zigbee_interview.c"
+        "src/zigbee_binding.c"
         "src/zigbee_diag.c"
         "src/zigbee_radio.c"
     INCLUDE_DIRS
