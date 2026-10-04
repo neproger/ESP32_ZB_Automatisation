@@ -334,3 +334,5 @@ button.ghost.danger:hover { color: #ef5350; }
 .days { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
 .day { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.8rem; color: #9aa4b2; cursor: pointer; }
 .day input { margin: 0; }
+
+.time-pick { display: inline-flex; align-items: center; gap: 0.25rem; }

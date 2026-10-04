@@ -134,9 +134,19 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         <select value={triggerKind} onChange={(e) => setTriggerKind(Number(e.target.value))}>
           {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
-        {triggerKind === 1 ? (
+        {Number(triggerKind) === 1 ? (
           <>
-            <input type="time" value={timeStr} onChange={(e) => setTimeStr(e.target.value)} />
+            <span className="time-pick">
+              <select value={Math.floor(hhmmToMinutes(timeStr) / 60)}
+                onChange={(e) => setTimeStr(`${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(timeStr) % 60).padStart(2, '0')}`)}>
+                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
+              </select>
+              <span>:</span>
+              <select value={hhmmToMinutes(timeStr) % 60}
+                onChange={(e) => setTimeStr(`${String(Math.floor(hhmmToMinutes(timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}`)}>
+                {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+              </select>
+            </span>
             <span className="days">
               {WEEKDAY_LABELS.map((d, i) => (
                 <label key={d} className="day">

@@ -43,8 +43,8 @@ static int32_t s_tz_offset_min;
 static void put_device(void)
 {
     ha_device_record_t rec = {0};
-    strlcpy(rec.name, "Система", sizeof(rec.name));
-    strlcpy(rec.model, "ESP32-P4", sizeof(rec.model));
+    strlcpy(rec.name, "Время", sizeof(rec.name));
+    strlcpy(rec.model, "Система", sizeof(rec.model));
     const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;

@@ -50,7 +50,7 @@ const CLUSTER_NAMES = {
   0x0500: 'IAS Zone',
   0x0702: 'Metering',
   0x0b04: 'Электроизмерения',
-  0xfc00: 'Система',
+  0xfc00: 'Время',
 }
 
 export function clusterName(id) {
