@@ -1,5 +1,5 @@
 // Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
-import { encodeAutomationRecord } from './schema.js'
+import { encodeAutomationRecord, SCHEMA, ENTITY } from './schema.js'
 
 export const MSG = {
   SYNC_BEGIN: 0x01,
@@ -75,9 +75,9 @@ export function permitJoin(seconds = 180) {
   return encodeCommand(CMD.PERMIT_JOIN, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
 }
 
-// AUTOMATION_PUT args = u64 id | ha_automation_record_t (48 байт).
+// AUTOMATION_PUT args = u64 id | ha_automation_record_t (SCHEMA.recSize).
 export function automationPut(id, rule) {
-  const args = new Uint8Array(8 + 48)
+  const args = new Uint8Array(8 + SCHEMA[ENTITY.AUTOMATION].recSize)
   new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
   args.set(encodeAutomationRecord(rule), 8)
   return encodeCommand(CMD.AUTOMATION_PUT, args)

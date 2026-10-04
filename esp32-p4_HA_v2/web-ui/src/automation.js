@@ -2,6 +2,7 @@
 // (ZCL-аргументы; прошивка копирует их в команду — automation_rule_command).
 
 import { rgbHexToXy, xyToRgbHex } from './color.js'
+import { clusterName, attrName } from './zcl.js'
 
 const u16 = (v) => {
   const n = Math.max(0, Math.min(0xffff, Math.round(v))) & 0xffff
@@ -17,6 +18,24 @@ export const ACTION_CLUSTERS = [
 
 // Триггер: 0 = любая команда (прошивка трактует 0 как «любая»).
 export const TRIGGER_CMDS = [[0, 'Любая'], [2, 'Toggle'], [1, 'Вкл']]
+
+// Оператор условия: те же шесть, что и в правилах v1 (ha_condition_op_t).
+export const CONDITION_OPS = [
+  [1, '='],
+  [2, '≠'],
+  [3, '>'],
+  [4, '<'],
+  [5, '≥'],
+  [6, '≤'],
+]
+
+export function describeCondition(c, nameOf) {
+  const dev = c.deviceUid && BigInt(c.deviceUid) !== 0n ? nameOf(c.deviceUid) : 'триггер'
+  const op = (CONDITION_OPS.find(([v]) => v === c.op) || [, '?'])[1]
+  const isBool = c.cluster === 0x0006 && c.attr === 0x0000
+  const val = isBool ? (c.value ? 'Вкл' : 'Выкл') : c.value
+  return `${dev}: ${clusterName(c.cluster)}·${attrName(c.cluster, c.attr)} ${op} ${val}`
+}
 
 export function buildActionArgs(cluster, cmd, p) {
   if (cluster === 0x0006) return []

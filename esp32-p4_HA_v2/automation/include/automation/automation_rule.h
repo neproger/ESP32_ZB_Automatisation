@@ -4,6 +4,7 @@
 
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_commands.h"
+#include "ha_model/ha_entities.h"
 #include "sys/sys_error.h"
 
 /*
@@ -21,3 +22,11 @@ bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t
  */
 sys_error_t automation_rule_command(const ha_automation_record_t *rule,
                                     ha_device_uid_t trigger_uid, ha_zb_command_t *out);
+
+/*
+ * Проверить одно условие по состоянию атрибута: декодировать ZCL-значение по
+ * `zcl_type` и применить оператор. false — условие не выполнено (в том числе тип
+ * вне словаря скаляров): правило не срабатывает.
+ */
+bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
+                                  const ha_zb_state_record_t *state);

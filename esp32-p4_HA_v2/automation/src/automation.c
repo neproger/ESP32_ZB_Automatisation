@@ -55,12 +55,47 @@ static bool automation_find(const void *key, const void *record, void *ctx)
     return false;
 }
 
+/*
+ * Условия правила — AND: все должны быть выполнены. Нет состояния по ключу или тип
+ * значения невычислим — условие не выполнено (как в правилах v1).
+ */
+static bool automation_conditions_pass(ha_device_uid_t trigger_uid,
+                                       const ha_automation_record_t *rule)
+{
+    const uint8_t count = (rule->conditions_count > HA_AUTOMATION_CONDITIONS_MAX)
+                              ? HA_AUTOMATION_CONDITIONS_MAX
+                              : rule->conditions_count;
+    for (uint8_t i = 0; i < count; i++) {
+        const ha_automation_condition_t *condition = &rule->conditions[i];
+
+        ha_zb_state_key_t key = {0};
+        key.device_uid = (condition->device_uid != 0) ? condition->device_uid : trigger_uid;
+        key.cluster_id = condition->cluster_id;
+        key.attr_id = condition->attr_id;
+        key.endpoint = condition->endpoint;
+
+        ha_zb_state_record_t state = {0};
+        if (sys_failed(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, &key, &state))) {
+            return false;
+        }
+        if (!automation_rule_condition_ok(condition, &state)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void automation_trigger(ha_device_uid_t device_uid, uint16_t command_id)
 {
     automation_match_t match = {.device_uid = device_uid, .command_id = command_id};
     if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
                                       automation_find, &match)) ||
         !match.found) {
+        return;
+    }
+
+    if (!automation_conditions_pass(device_uid, &match.rule)) {
+        ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)match.rule_id);
         return;
     }
 

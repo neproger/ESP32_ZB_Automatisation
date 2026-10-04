@@ -3,7 +3,7 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
-import { describeActionArgs, TRIGGER_CMDS, ACTION_CLUSTERS } from '../automation.js'
+import { describeActionArgs, describeCondition, TRIGGER_CMDS, ACTION_CLUSTERS } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
 
 function triggerCmdName(id) {
@@ -65,6 +65,14 @@ export default function Automations() {
                 : ''}
             </span>
           </div>
+          {record.conditions?.length > 0 && (
+            <div className="conds">
+              <span className="muted">если</span>
+              {record.conditions.map((c, i) => (
+                <span className="chip" key={i}>{describeCondition(c, nameOf)}</span>
+              ))}
+            </div>
+          )}
         </div>
       ))}
 

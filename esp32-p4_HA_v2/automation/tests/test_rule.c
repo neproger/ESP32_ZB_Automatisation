@@ -1,6 +1,7 @@
 #include "automation/automation_rule.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_zigbee.h"
@@ -76,10 +77,51 @@ static void test_command(void)
     CHECK(sys_is(automation_rule_command(&level, UID, &command), SYS_CODE_INVALID_ARG));
 }
 
+static void test_condition(void)
+{
+    const ha_zb_state_record_t on = {.raw = 1, .zcl_type = HA_ZB_TYPE_BOOL};
+    ha_automation_condition_t cond = {.op = HA_CONDITION_OP_EQ, .value = 1};
+    CHECK(automation_rule_condition_ok(&cond, &on));
+    cond.value = 0;
+    CHECK(!automation_rule_condition_ok(&cond, &on));
+    cond.op = HA_CONDITION_OP_NE;
+    CHECK(automation_rule_condition_ok(&cond, &on));
+
+    const ha_zb_state_record_t level = {.raw = 200, .zcl_type = HA_ZB_TYPE_UINT8};
+    cond = (ha_automation_condition_t){.op = HA_CONDITION_OP_GE, .value = 100};
+    CHECK(automation_rule_condition_ok(&cond, &level));
+    cond.value = 250;
+    CHECK(!automation_rule_condition_ok(&cond, &level));
+
+    /* -5 °C: int16 приходит расширенным по знаку в raw */
+    const ha_zb_state_record_t temp = {.raw = (uint32_t)(int32_t)-5, .zcl_type = HA_ZB_TYPE_INT16};
+    cond = (ha_automation_condition_t){.op = HA_CONDITION_OP_LT, .value = 0};
+    CHECK(automation_rule_condition_ok(&cond, &temp));
+    cond.value = -10;
+    CHECK(!automation_rule_condition_ok(&cond, &temp));
+
+    float f = 21.5f;
+    uint32_t bits = 0;
+    memcpy(&bits, &f, sizeof(bits));
+    const ha_zb_state_record_t fl = {.raw = bits, .zcl_type = HA_ZB_TYPE_SINGLE_FLOAT};
+    cond = (ha_automation_condition_t){.op = HA_CONDITION_OP_EQ, .value = 21.5f};
+    CHECK(automation_rule_condition_ok(&cond, &fl));
+
+    const ha_zb_state_record_t str = {.raw = 0, .zcl_type = HA_ZB_TYPE_CHAR_STRING};
+    cond = (ha_automation_condition_t){.op = HA_CONDITION_OP_EQ, .value = 0};
+    CHECK(!automation_rule_condition_ok(&cond, &str));
+    CHECK(!automation_rule_condition_ok(&cond, NULL));
+    CHECK(!automation_rule_condition_ok(NULL, &on));
+
+    cond = (ha_automation_condition_t){.op = 0, .value = 1};
+    CHECK(!automation_rule_condition_ok(&cond, &on));
+}
+
 int main(void)
 {
     test_matches();
     test_command();
+    test_condition();
 
     if (g_failures != 0) {
         printf("test_rule: %d failure(s)\n", g_failures);

@@ -58,7 +58,12 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 | 1 | device | `u64 uid` | `{ char name[32]; char model[32]; }` |
 | 2 | state | `{ u64 uid; u16 cluster; u16 attr; u8 ep; u8 rsv[3]; }` (16) | `{ u32 raw; u8 zcl_type; u8 rsv[3]; }` (8) |
 | 3 | endpoint | `{ u64 uid; u8 ep; u8 rsv[7]; }` (16) | `{ u16 profile; u16 device_id; u8 count; u8 rsv[3]; cluster[16]{u16 id; u8 role; u8 rsv;} }` |
-| 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 rsv[6]; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; }` |
+| 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 rsv[5]; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
+
+`condition[4]` — условия правила (AND), первые `conditions_count` значимы:
+`{ u64 device_uid; u16 cluster; u16 attr; u8 ep; u8 op; u8 rsv[2]; f32 value; }` (24).
+`device_uid == 0` — устройство-источник триггера, `ep == 0` — любой endpoint;
+`op` — `ha_condition_op_t` (1 `=`, 2 `≠`, 3 `>`, 4 `<`, 5 `≥`, 6 `≤`).
 
 Заголовки/структуры — источник истины `ha_model`. Браузерная копия схемы —
 `web-ui/src/schema.js`.

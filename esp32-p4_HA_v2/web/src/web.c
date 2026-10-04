@@ -46,7 +46,7 @@ _Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
 
 /* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
 _Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
-_Static_assert(sizeof(ha_automation_record_t) == 48, "automation record layout: update web-ui");
+_Static_assert(sizeof(ha_automation_record_t) == 144, "automation record layout: update web-ui");
 
 /* Схема записи: браузер знает те же размеры (web-ui/src/schema.js). */
 typedef struct {
@@ -256,6 +256,11 @@ static uint16_t web_do_automation_put(const uint8_t *args, size_t len)
     ha_automation_record_t record;
     memcpy(&key, args, sizeof(key));
     memcpy(&record, args + sizeof(key), sizeof(record));
+
+    if (record.conditions_count > HA_AUTOMATION_CONDITIONS_MAX ||
+        record.action_args_len > HA_AUTOMATION_ARGS_MAX) {
+        return SYS_CODE_INVALID_ARG;
+    }
 
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;

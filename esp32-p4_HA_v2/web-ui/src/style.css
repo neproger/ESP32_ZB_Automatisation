@@ -320,3 +320,9 @@ button.ghost.danger:hover { color: #ef5350; }
 .node.action { background: #1c2530; }
 .arrow { color: #6b7280; }
 .card.off { opacity: 0.55; }
+
+.af-section { border-top: 1px solid #2a2f38; margin-top: 0.6rem; padding-top: 0.6rem; }
+.af-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+.af-cond { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.af-cond select, .af-cond input.ep { max-width: 220px; }
+.conds { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }

@@ -1,13 +1,25 @@
 import { useState } from 'react'
 import { store } from '../store.js'
 import { automationPut, zbCommand } from '../proto.js'
-import { uidHex } from '../zcl.js'
-import { ACTION_CLUSTERS, TRIGGER_CMDS, buildActionArgs, decodeActionArgs } from '../automation.js'
+import { uidHex, clusterName, attrName } from '../zcl.js'
+import { ACTION_CLUSTERS, TRIGGER_CMDS, CONDITION_OPS, buildActionArgs, decodeActionArgs } from '../automation.js'
+
+const MAX_CONDITIONS = 4
+const isBoolAttr = (c) => c.cluster === 0x0006 && c.attr === 0x0000
 
 function nextId(automations) {
   let max = 0n
   for (const { key } of automations.values()) if (key.id > max) max = key.id
   return max + 1n
+}
+
+// Атрибуты, по которым у устройства уже есть состояние (ключи Entity Store).
+function statesFor(uid) {
+  const out = []
+  if (uid === 0n) return out
+  for (const st of store.states.values()) if (st.key.uid === uid) out.push(st.key)
+  out.sort((a, b) => a.cluster - b.cluster || a.attr - b.attr || a.ep - b.ep)
+  return out
 }
 
 export default function AutomationForm({ id, devices, automations, onClose }) {
@@ -25,6 +37,7 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const [transitionMs, setTransitionMs] = useState(params.transitionMs ?? 0)
   const [kelvin, setKelvin] = useState(params.kelvin ?? 3000)
   const [colorHex, setColorHex] = useState(params.colorHex ?? '#ffcc88')
+  const [conditions, setConditions] = useState(existing ? existing.conditions.map((c) => ({ ...c })) : [])
 
   const clusterDef = ACTION_CLUSTERS.find((c) => c.id === actionCluster) || ACTION_CLUSTERS[0]
   const params0 = { level, transitionMs, kelvin, colorHex }
@@ -45,6 +58,12 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     setActionCmd(c.cmds[0][0])
   }
 
+  const updateCondition = (i, patch) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  const addCondition = () => {
+    if (conditions.length >= MAX_CONDITIONS) return
+    setConditions((cs) => [...cs, { deviceUid: 0n, cluster: 0x0006, attr: 0, ep: 0, op: 1, value: 1 }])
+  }
+
   const submit = (e) => {
     e.preventDefault()
     const targetId = id != null ? BigInt(id) : nextId(automations)
@@ -58,6 +77,14 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         actionCluster,
         actionCmd,
         actionArgs: args,
+        conditions: conditions.map((c) => ({
+          deviceUid: BigInt(c.deviceUid || 0),
+          cluster: c.cluster,
+          attr: c.attr,
+          ep: c.ep,
+          op: c.op,
+          value: Number(c.value) || 0,
+        })),
       }),
     )
     onClose()
@@ -67,6 +94,11 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     const uid = BigInt(actionUid) !== 0n ? BigInt(actionUid) : BigInt(triggerUid)
     if (uid === 0n) return
     store.send(zbCommand({ uid, ep: Number(actionEp), cluster: actionCluster, command: actionCmd, args }))
+  }
+
+  const condDeviceFor = (c) => {
+    if (c.deviceUid && c.deviceUid !== 0n) return c.deviceUid
+    return triggerUid !== '0' ? BigInt(triggerUid) : 0n
   }
 
   return (
@@ -98,6 +130,48 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         <label className="af-line">Цвет: <input type="color" value={colorHex} onChange={(e) => setColorHex(e.target.value)} />
         </label>
       )}
+
+      <div className="af-section">
+        <div className="af-section-head">
+          <span>Условия (все должны выполняться)</span>
+          <button type="button" onClick={addCondition} disabled={conditions.length >= MAX_CONDITIONS}>+ Условие</button>
+        </div>
+        {conditions.length === 0 && <div className="muted">нет — срабатывает всегда</div>}
+        {conditions.map((c, i) => {
+          const opts = statesFor(condDeviceFor(c))
+          const attrValue = c.cluster || c.attr ? `${c.ep}:${c.cluster}:${c.attr}` : ''
+          return (
+            <div className="af-cond" key={i}>
+              <select value={c.deviceUid.toString()} onChange={(e) => updateCondition(i, { deviceUid: BigInt(e.target.value), cluster: 0, attr: 0, ep: 0 })}>
+                {devOptions('то же, что триггер')}
+              </select>
+              <select value={attrValue} onChange={(e) => {
+                const [ep, cluster, attr] = e.target.value.split(':').map(Number)
+                updateCondition(i, { ep, cluster, attr, value: 1 })
+              }}>
+                <option value="">(атрибут)</option>
+                {opts.map((k) => (
+                  <option key={`${k.ep}:${k.cluster}:${k.attr}`} value={`${k.ep}:${k.cluster}:${k.attr}`}>
+                    {clusterName(k.cluster)} · {attrName(k.cluster, k.attr)} (EP{k.ep})
+                  </option>
+                ))}
+              </select>
+              <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
+                {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              {isBoolAttr(c) ? (
+                <select value={c.value ? 1 : 0} onChange={(e) => updateCondition(i, { value: Number(e.target.value) })}>
+                  <option value={1}>Вкл</option>
+                  <option value={0}>Выкл</option>
+                </select>
+              ) : (
+                <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
+              )}
+              <button type="button" className="ghost danger" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>✕</button>
+            </div>
+          )
+        })}
+      </div>
 
       <div className="af-line">
         <button type="submit">Сохранить</button>

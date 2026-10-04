@@ -48,18 +48,29 @@ payload ring.
 `ha_model/include/ha_model/ha_automation.h`:
 
 ```text
-trigger   событие (EVENT) от устройства: device_uid (0 — любое), command_id (0 — любая)
-action    Zigbee-команда: device_uid (0 — устройство-источник), endpoint, cluster, command, args
+trigger     событие (EVENT) от устройства: device_uid (0 — любое), command_id (0 — любая)
+conditions  список условий (AND): device_uid (0 — устройство-источник), endpoint (0 — любой),
+            cluster, attr, op, value
+action      Zigbee-команда: device_uid (0 — устройство-источник), endpoint, cluster, command, args
 ```
 
-Правило минимально: триггер по событию и действие-команда. `action_device_uid == 0`
-означает «то же устройство, что вызвало событие».
+`device_uid == 0` (в действии и в условии) означает «то же устройство, что вызвало событие».
+
+**Условия** (`ha_automation_condition_t`) — это сравнение **текущего состояния**
+атрибута, а не другого события: тот же числовой ключ, что в Entity Store
+(`cluster`, `attr`, `endpoint`), плюс оператор (`ha_condition_op_t`) и числовой
+порог. Все условия соединяются по И. Значение состояния декодируется по `zcl_type`
+(скаляры: bool/uint/int/enum/single float); знаковые приходят расширенными по знаку
+(`zigbee_radio.c:report_value`). Если состояния по ключу нет или тип не в словаре
+скаляров — условие не выполнено, правило не срабатывает. Это те же шесть операторов,
+что и в правилах v1.
 
 ## 5. Реализация
 
 Компонент `automation` (только IDF) + `automation_rule.c` (чистая логика, host-тест
 `test_rule`). Сервис подписан на факты `EVENT` от `ZIGBEE` (`kind_mask`, `source_mask`),
-в задаче перебирает правила (`domain_entity_iter`) и при совпадении постит команду
+в задаче перебирает правила (`domain_entity_iter`), при совпадении триггера оценивает
+условия по состоянию (`domain_entity_get(HA_ENTITY_STATE, ...)`) и постит команду
 (`domain_post(HA_CMD_ZIGBEE_CLUSTER, ...)`); мутирующий API Domain в try_push не
 вызывается (`../domain/DOMAIN_API.md` §9).
 

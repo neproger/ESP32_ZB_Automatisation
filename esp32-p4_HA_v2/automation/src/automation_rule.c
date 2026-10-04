@@ -1,10 +1,88 @@
 #include "automation/automation_rule.h"
 
+#include <math.h>
 #include <string.h>
+
+#include "ha_model/ha_zigbee.h"
 
 static sys_error_t automation_fail(sys_code_t code)
 {
     return sys_error_make(SYS_LAYER_AUTOMATION, code);
+}
+
+#define CONDITION_EPS 1e-6
+
+/*
+ * ZCL-значение состояния → число. `raw` хранится по фактической ширине типа
+ * (zigbee_radio.c:report_value): знаковые расширены по знаку, single float — биты.
+ * Тип вне словаря скаляров не вычислить — условие считается невыполненным.
+ */
+static bool condition_value(const ha_zb_state_record_t *state, double *out)
+{
+    const uint32_t raw = state->raw;
+    switch (state->zcl_type) {
+    case HA_ZB_TYPE_BOOL:
+    case HA_ZB_TYPE_BITMAP8:
+    case HA_ZB_TYPE_UINT8:
+    case HA_ZB_TYPE_ENUM8:
+        *out = (double)(raw & 0xffu);
+        return true;
+    case HA_ZB_TYPE_INT8:
+        *out = (double)(int8_t)(raw & 0xffu);
+        return true;
+    case HA_ZB_TYPE_UINT16:
+    case HA_ZB_TYPE_ENUM16:
+        *out = (double)(raw & 0xffffu);
+        return true;
+    case HA_ZB_TYPE_INT16:
+        *out = (double)(int16_t)(raw & 0xffffu);
+        return true;
+    case HA_ZB_TYPE_UINT32:
+        *out = (double)raw;
+        return true;
+    case HA_ZB_TYPE_INT32:
+        *out = (double)(int32_t)raw;
+        return true;
+    case HA_ZB_TYPE_SINGLE_FLOAT: {
+        float f = 0.0f;
+        memcpy(&f, &raw, sizeof(f));
+        *out = (double)f;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
+                                  const ha_zb_state_record_t *state)
+{
+    if (condition == NULL || state == NULL) {
+        return false;
+    }
+
+    double actual = 0.0;
+    if (!condition_value(state, &actual)) {
+        return false;
+    }
+    const double expected = (double)condition->value;
+
+    switch ((ha_condition_op_t)condition->op) {
+    case HA_CONDITION_OP_EQ:
+        return fabs(actual - expected) <= CONDITION_EPS;
+    case HA_CONDITION_OP_NE:
+        return fabs(actual - expected) > CONDITION_EPS;
+    case HA_CONDITION_OP_GT:
+        return actual > expected;
+    case HA_CONDITION_OP_LT:
+        return actual < expected;
+    case HA_CONDITION_OP_GE:
+        return actual >= expected;
+    case HA_CONDITION_OP_LE:
+        return actual <= expected;
+    default:
+        return false;
+    }
 }
 
 bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t device_uid,
