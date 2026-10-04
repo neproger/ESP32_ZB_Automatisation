@@ -330,3 +330,7 @@ button.ghost.danger:hover { color: #ef5350; }
 .sysstatus { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: auto; margin-right: 0.75rem; font-size: 0.85rem; }
 .sysstatus .clock { font-variant-numeric: tabular-nums; color: #e6e6e6; font-weight: 600; }
 .sysstatus b { color: #cbd5e1; }
+
+.days { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+.day { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.8rem; color: #9aa4b2; cursor: pointer; }
+.day input { margin: 0; }

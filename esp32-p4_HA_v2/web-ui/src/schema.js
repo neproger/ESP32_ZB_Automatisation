@@ -87,6 +87,9 @@ export function decodeRecord(type, dv) {
       }
       return {
         enabled: dv.getUint8(0),
+        triggerKind: dv.getUint8(3),
+        triggerMinutesOfDay: dv.getUint16(4, true),
+        triggerWeekdayMask: dv.getUint8(6),
         triggerUid: dv.getBigUint64(8, true),
         triggerCmd: dv.getUint16(16, true),
         actionUid: dv.getBigUint64(24, true),
@@ -127,9 +130,13 @@ export function encodeAutomationRecord(r) {
   const dv = new DataView(out.buffer)
   const args = r.actionArgs || []
   const conds = (r.conditions || []).slice(0, 4)
+  const kind = r.triggerKind || 0
   dv.setUint8(0, r.enabled ? 1 : 0)
   dv.setUint8(1, Math.min(args.length, 8))
   dv.setUint8(2, conds.length)
+  dv.setUint8(3, kind)
+  dv.setUint16(4, kind === 1 ? (r.triggerMinutesOfDay || 0) : 0, true)
+  dv.setUint8(6, kind === 1 ? (r.triggerWeekdayMask ?? 0x7f) : 0)
   dv.setBigUint64(8, BigInt(r.triggerUid || 0), true)
   dv.setUint16(16, r.triggerCmd || 0, true)
   dv.setBigUint64(24, BigInt(r.actionUid || 0), true)

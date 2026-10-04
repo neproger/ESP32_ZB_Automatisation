@@ -124,11 +124,38 @@ static void test_condition(void)
     CHECK(!automation_rule_condition_ok(&cond, &wmask));
 }
 
+static void test_time(void)
+{
+    ha_automation_record_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger_kind = HA_TRIGGER_TIME;
+    rule.trigger_minutes_of_day = 7 * 60; /* 07:00 */
+    rule.trigger_weekday_mask = 0x1F;     /* Пн-Пт */
+
+    CHECK(automation_rule_time_matches(&rule, 7 * 60, 1u << 0));   /* Пн 07:00 */
+    CHECK(!automation_rule_time_matches(&rule, 7 * 60, 1u << 5));  /* Сб вне маски */
+    CHECK(!automation_rule_time_matches(&rule, 8 * 60, 1u << 0));  /* не та минута */
+
+    rule.enabled = 0;
+    CHECK(!automation_rule_time_matches(&rule, 7 * 60, 1u << 0));
+
+    /* Виды триггера не пересекаются. */
+    ha_automation_record_t ev = {0};
+    ev.enabled = 1;
+    ev.trigger_kind = HA_TRIGGER_DEVICE_EVENT;
+    CHECK(!automation_rule_time_matches(&ev, 0, 1));
+
+    rule.enabled = 1;
+    rule.trigger_kind = HA_TRIGGER_TIME;
+    CHECK(!automation_rule_matches(&rule, 0x1234u, 2));
+}
+
 int main(void)
 {
     test_matches();
     test_command();
     test_condition();
+    test_time();
 
     if (g_failures != 0) {
         printf("test_rule: %d failure(s)\n", g_failures);

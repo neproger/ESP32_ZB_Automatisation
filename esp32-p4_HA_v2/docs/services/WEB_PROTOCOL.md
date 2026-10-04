@@ -58,7 +58,10 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 | 1 | device | `u64 uid` | `{ char name[32]; char model[32]; }` |
 | 2 | state | `{ u64 uid; u16 cluster; u16 attr; u8 ep; u8 rsv[3]; }` (16) | `{ u32 raw; u8 zcl_type; u8 rsv[3]; }` (8) |
 | 3 | endpoint | `{ u64 uid; u8 ep; u8 rsv[7]; }` (16) | `{ u16 profile; u16 device_id; u8 count; u8 rsv[3]; cluster[16]{u16 id; u8 role; u8 rsv;} }` |
-| 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 rsv[5]; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
+| 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 trigger_kind; u16 trigger_minutes_of_day; u8 trigger_weekday_mask; u8 rsv; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
+
+`trigger_kind`: 0 — событие устройства (`trigger_uid`/`trigger_cmd`), 1 — время
+(`trigger_minutes_of_day` + `trigger_weekday_mask`).
 
 | 6 | location | `u64 uid` | `{ f32 lat; f32 lon; i16 tz_offset_min; u8 rsv[2]; char name[48]; }` (60) |
 

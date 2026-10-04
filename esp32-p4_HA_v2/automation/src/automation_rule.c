@@ -90,7 +90,8 @@ bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
 bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t device_uid,
                              uint16_t command_id)
 {
-    if (rule == NULL || rule->enabled == 0) {
+    if (rule == NULL || rule->enabled == 0 ||
+        rule->trigger_kind != (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
         return false;
     }
     if (rule->trigger_device_uid != 0 && rule->trigger_device_uid != device_uid) {
@@ -100,6 +101,18 @@ bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t
         return false;
     }
     return true;
+}
+
+bool automation_rule_time_matches(const ha_automation_record_t *rule, uint16_t minutes_of_day,
+                                  uint8_t weekday_mask)
+{
+    if (rule == NULL || rule->enabled == 0 || rule->trigger_kind != (uint8_t)HA_TRIGGER_TIME) {
+        return false;
+    }
+    if (rule->trigger_minutes_of_day != minutes_of_day) {
+        return false;
+    }
+    return (rule->trigger_weekday_mask & weekday_mask) != 0;
 }
 
 sys_error_t automation_rule_command(const ha_automation_record_t *rule,

@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { store } from '../store.js'
 import { automationPut, zbCommand } from '../proto.js'
 import { uidHex, clusterName, attrName } from '../zcl.js'
-import { ACTION_CLUSTERS, TRIGGER_CMDS, CONDITION_OPS, buildActionArgs, decodeActionArgs } from '../automation.js'
+import {
+  ACTION_CLUSTERS, TRIGGER_CMDS, TRIGGER_KINDS, WEEKDAY_LABELS, CONDITION_OPS,
+  buildActionArgs, decodeActionArgs, minutesToHHMM, hhmmToMinutes,
+} from '../automation.js'
 import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
 const MAX_CONDITIONS = 4
@@ -27,8 +30,11 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const params = existing ? decodeActionArgs(existing.actionCluster, existing.actionCmd, existing.actionArgs) : {}
 
   const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
+  const [triggerKind, setTriggerKind] = useState(existing ? existing.triggerKind : 0)
   const [triggerUid, setTriggerUid] = useState(existing ? existing.triggerUid.toString() : '0')
   const [triggerCmd, setTriggerCmd] = useState(existing ? String(existing.triggerCmd) : '2')
+  const [timeStr, setTimeStr] = useState(minutesToHHMM(existing ? existing.triggerMinutesOfDay : 420))
+  const [weekdayMask, setWeekdayMask] = useState(existing ? existing.triggerWeekdayMask : 0x7f)
   const [actionUid, setActionUid] = useState(existing ? existing.actionUid.toString() : '0')
   const [actionEp, setActionEp] = useState(existing ? existing.actionEp : 1)
   const [actionCluster, setActionCluster] = useState(existing ? existing.actionCluster : 0x0006)
@@ -76,8 +82,11 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     store.send(
       automationPut(targetId, {
         enabled,
+        triggerKind,
         triggerUid: BigInt(triggerUid),
         triggerCmd: Number(triggerCmd),
+        triggerMinutesOfDay: triggerKind === 1 ? hhmmToMinutes(timeStr) : 0,
+        triggerWeekdayMask: triggerKind === 1 ? weekdayMask : 0,
         actionUid: BigInt(actionUid),
         actionEp: Number(actionEp),
         actionCluster,
@@ -121,13 +130,34 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     <form className="auto-form" onSubmit={submit}>
       <label className="af-line"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Включено</label>
 
-      <label className="af-line">Триггер: <select value={triggerUid} onChange={(e) => {
-        const u = e.target.value
-        setTriggerUid(u)
-        setTriggerCmd(u !== '0' && BigInt(u) === SYSTEM_DEVICE_UID ? '1' : '2')
-      }}>{devOptions('любое устройство')}</select>
-        <select value={triggerCmd} onChange={(e) => setTriggerCmd(e.target.value)}>{triggerOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-      </label>
+      <div className="af-line">Триггер:
+        <select value={triggerKind} onChange={(e) => setTriggerKind(Number(e.target.value))}>
+          {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        {triggerKind === 1 ? (
+          <>
+            <input type="time" value={timeStr} onChange={(e) => setTimeStr(e.target.value)} />
+            <span className="days">
+              {WEEKDAY_LABELS.map((d, i) => (
+                <label key={d} className="day">
+                  <input type="checkbox" checked={(weekdayMask >> i) & 1}
+                    onChange={(e) => setWeekdayMask((m) => (e.target.checked ? (m | (1 << i)) : (m & ~(1 << i))))} />
+                  {d}
+                </label>
+              ))}
+            </span>
+          </>
+        ) : (
+          <>
+            <select value={triggerUid} onChange={(e) => {
+              const u = e.target.value
+              setTriggerUid(u)
+              setTriggerCmd(u !== '0' && BigInt(u) === SYSTEM_DEVICE_UID ? '1' : '2')
+            }}>{devOptions('любое устройство')}</select>
+            <select value={triggerCmd} onChange={(e) => setTriggerCmd(e.target.value)}>{triggerOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          </>
+        )}
+      </div>
 
       <label className="af-line">Действие: <select value={actionUid} onChange={(e) => setActionUid(e.target.value)}>{devOptions('то же, что триггер')}</select>
         EP <input className="ep" type="number" min="0" max="255" value={actionEp} onChange={(e) => setActionEp(e.target.value)} />

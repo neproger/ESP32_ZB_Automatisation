@@ -31,6 +31,16 @@ typedef struct {
     uint64_t id;
 } ha_automation_key_t;
 
+/*
+ * Вид триггера. DEVICE_EVENT — событие от устройства (Zigbee-команда или системное
+ * событие); TIME — «будильник»: конкретное время суток + набор дней недели, без
+ * условий сравнения. Расширяемо: сюда добавятся STATE (порог атрибута) и SUN.
+ */
+typedef enum {
+    HA_TRIGGER_DEVICE_EVENT = 0,
+    HA_TRIGGER_TIME = 1,
+} ha_automation_trigger_kind_t;
+
 /* Оператор условия: те же шесть, что в правилах v1 (docs/services/AUTOMATION.md). */
 typedef enum {
     HA_CONDITION_OP_EQ = 1,
@@ -62,9 +72,14 @@ typedef struct {
     uint8_t enabled;
     uint8_t action_args_len;
     uint8_t conditions_count;
-    uint8_t reserved[5];
+    uint8_t trigger_kind;             /* ha_automation_trigger_kind_t */
 
-    /* Триггер: событие (EVENT) от устройства. 0 — «любое». */
+    /* TIME: время срабатывания (минуты от начала суток) и дни недели (бит 0=Пн..6=Вс). */
+    uint16_t trigger_minutes_of_day;
+    uint8_t trigger_weekday_mask;
+    uint8_t reserved;
+
+    /* DEVICE_EVENT: событие (EVENT) от устройства. 0 — «любое». */
     ha_device_uid_t trigger_device_uid;
     uint16_t trigger_command_id;
 
@@ -82,12 +97,14 @@ typedef struct {
 #ifdef __cplusplus
 static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
+static_assert(offsetof(ha_automation_record_t, trigger_device_uid) == 8, "automation: layout trigger");
 static_assert(offsetof(ha_automation_record_t, conditions) == 48, "automation: layout conditions");
 static_assert(sizeof(ha_automation_record_t) == 144, "ha_automation_record_t: неожиданный размер");
 static_assert(sizeof(ha_automation_record_t) <= 1024, "automation: больше региона");
 #else
 _Static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 _Static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
+_Static_assert(offsetof(ha_automation_record_t, trigger_device_uid) == 8, "automation: layout trigger");
 _Static_assert(offsetof(ha_automation_record_t, conditions) == 48, "automation: layout conditions");
 _Static_assert(sizeof(ha_automation_record_t) == 144, "ha_automation_record_t: неожиданный размер");
 _Static_assert(sizeof(ha_automation_record_t) <= 1024, "automation: больше региона");

@@ -11,6 +11,7 @@
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_system.h"
 
 /*
  * Задача сервиса — единственный, кто читает Domain и постит команды от лица Automation.
@@ -50,15 +51,52 @@ typedef struct {
 typedef struct {
     ha_device_uid_t device_uid;
     uint16_t command_id;
+    bool has_time;        /* «минутный тик»: текущее локальное время прочитано */
+    uint16_t minutes_of_day;
+    uint8_t weekday_mask;
     automation_match_t matches[AUTOMATION_FIRE_MAX];
     size_t count;
 } automation_scan_t;
+
+/* Текущее локальное время системного девайса (минуты суток + маска дня недели). */
+static bool read_system_time(uint16_t *minutes_of_day, uint8_t *weekday_mask)
+{
+    const ha_zb_state_key_t minutes_key = {.device_uid = HA_SYSTEM_DEVICE_UID,
+                                           .cluster_id = HA_CLUSTER_SYSTEM,
+                                           .attr_id = HA_SYS_ATTR_MINUTES_OF_DAY,
+                                           .endpoint = HA_SYSTEM_ENDPOINT};
+    ha_zb_state_record_t minutes_rec = {0};
+    if (sys_failed(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, &minutes_key,
+                                     &minutes_rec))) {
+        return false;
+    }
+
+    const ha_zb_state_key_t mask_key = {.device_uid = HA_SYSTEM_DEVICE_UID,
+                                        .cluster_id = HA_CLUSTER_SYSTEM,
+                                        .attr_id = HA_SYS_ATTR_WEEKDAY_MASK,
+                                        .endpoint = HA_SYSTEM_ENDPOINT};
+    ha_zb_state_record_t mask_rec = {0};
+    if (sys_failed(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, &mask_key,
+                                     &mask_rec))) {
+        return false;
+    }
+
+    *minutes_of_day = (uint16_t)minutes_rec.raw;
+    *weekday_mask = (uint8_t)mask_rec.raw;
+    return true;
+}
 
 static bool automation_collect(const void *key, const void *record, void *ctx)
 {
     automation_scan_t *scan = (automation_scan_t *)ctx;
     const ha_automation_record_t *rule = (const ha_automation_record_t *)record;
-    if (!automation_rule_matches(rule, scan->device_uid, scan->command_id)) {
+
+    if (rule->trigger_kind == (uint8_t)HA_TRIGGER_TIME) {
+        if (!scan->has_time ||
+            !automation_rule_time_matches(rule, scan->minutes_of_day, scan->weekday_mask)) {
+            return true;
+        }
+    } else if (!automation_rule_matches(rule, scan->device_uid, scan->command_id)) {
         return true;
     }
     if (scan->count >= AUTOMATION_FIRE_MAX) {
@@ -137,6 +175,11 @@ static void automation_fire(const automation_match_t *match, ha_device_uid_t tri
 static void automation_trigger(ha_device_uid_t device_uid, uint16_t command_id)
 {
     automation_scan_t scan = {.device_uid = device_uid, .command_id = command_id};
+    /* «Будильники» проверяются на минутном тике системного девайса. */
+    if (device_uid == HA_SYSTEM_DEVICE_UID &&
+        command_id == (uint16_t)HA_SYS_EVENT_MINUTE_TICK) {
+        scan.has_time = read_system_time(&scan.minutes_of_day, &scan.weekday_mask);
+    }
     if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
                                       automation_collect, &scan))) {
         return;

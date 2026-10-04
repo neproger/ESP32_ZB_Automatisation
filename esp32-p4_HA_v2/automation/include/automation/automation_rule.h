@@ -12,9 +12,16 @@
  * сборка команды. Без FreeRTOS, Domain и логирования — проверяется на хосте.
  */
 
-/* Сопоставить правило событию (device, command). Выключенное правило не подходит. */
+/* Сопоставить правило-событие (device, command). Выключенное/TIME-правило не подходит. */
 bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t device_uid,
                              uint16_t command_id);
+
+/*
+ * Сопоставить правило-«будильник» текущему локальному времени: та же минута суток и
+ * хотя бы один общий день недели. minutes_of_day/weekday_mask берутся у системного девайса.
+ */
+bool automation_rule_time_matches(const ha_automation_record_t *rule, uint16_t minutes_of_day,
+                                  uint8_t weekday_mask);
 
 /*
  * Собрать Zigbee-команду действия. trigger_uid подставляется, когда у правила

@@ -19,6 +19,28 @@ export const ACTION_CLUSTERS = [
 // Триггер: 0 = любая команда (прошивка трактует 0 как «любая»).
 export const TRIGGER_CMDS = [[0, 'Любая'], [2, 'Toggle'], [1, 'Вкл']]
 
+// Виды триггера (ha_automation_trigger_kind_t).
+export const TRIGGER_KINDS = [
+  [0, 'Событие устройства'],
+  [1, 'Время'],
+]
+
+export const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+
+export function minutesToHHMM(minutes) {
+  const m = ((Number(minutes) || 0) + 1440) % 1440
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+export function hhmmToMinutes(text) {
+  const [h, m] = String(text || '').split(':').map(Number)
+  return ((h || 0) * 60 + (m || 0)) % 1440
+}
+
+export function maskToDays(mask) {
+  return WEEKDAY_LABELS.filter((_, i) => ((Number(mask) || 0) >> i) & 1).join(', ')
+}
+
 // Оператор условия: те же шесть, что и в правилах v1 (ha_condition_op_t).
 export const CONDITION_OPS = [
   [1, '='],

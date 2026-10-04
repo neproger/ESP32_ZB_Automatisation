@@ -48,11 +48,18 @@ payload ring.
 `ha_model/include/ha_model/ha_automation.h`:
 
 ```text
-trigger     событие (EVENT) от устройства: device_uid (0 — любое), command_id (0 — любая)
+trigger     вид триггера + параметры:
+              DEVICE_EVENT — событие от устройства: device_uid (0 — любое), command_id (0 — любая)
+              TIME         — «будильник»: minutes_of_day (0..1439) + weekday_mask (бит 0=Пн..6=Вс)
 conditions  список условий (AND): device_uid (0 — устройство-источник), endpoint (0 — любой),
             cluster, attr, op, value
 action      Zigbee-команда: device_uid (0 — устройство-источник), endpoint, cluster, command, args
 ```
+
+**Виды триггера** (`ha_automation_trigger_kind_t`) в одном байте записи; расширяемо.
+`TIME` проверяется на минутном тике системного девайса (`SYSTEM.md` §4): Automation
+читает `minutes_of_day`/`weekday_mask` из состояний системного девайса и сверяет с
+правилом (`automation_rule_time_matches`). Дальше условия — как обычно (AND).
 
 `device_uid == 0` (в действии и в условии) означает «то же устройство, что вызвало событие».
 
