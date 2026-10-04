@@ -3,6 +3,7 @@ import { store } from '../store.js'
 import { automationPut, zbCommand } from '../proto.js'
 import { uidHex, clusterName, attrName } from '../zcl.js'
 import { ACTION_CLUSTERS, TRIGGER_CMDS, CONDITION_OPS, buildActionArgs, decodeActionArgs } from '../automation.js'
+import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
 const MAX_CONDITIONS = 4
 
@@ -41,6 +42,12 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const clusterDef = ACTION_CLUSTERS.find((c) => c.id === actionCluster) || ACTION_CLUSTERS[0]
   const params0 = { level, transitionMs, kelvin, colorHex }
   const args = buildActionArgs(actionCluster, actionCmd, params0)
+
+  // Для системного девайса триггер — его события (тики времени), иначе — ZCL-команды.
+  const isSystemTrigger = triggerUid !== '0' && BigInt(triggerUid) === SYSTEM_DEVICE_UID
+  const triggerOptions = isSystemTrigger
+    ? Object.keys(SYSTEM_EVENTS).map(Number).sort((a, b) => a - b).map((id) => [id, SYSTEM_EVENTS[id]])
+    : TRIGGER_CMDS
 
   const devOptions = (anyLabel) => [
     <option key="0" value="0">{anyLabel}</option>,
@@ -114,8 +121,12 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     <form className="auto-form" onSubmit={submit}>
       <label className="af-line"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Включено</label>
 
-      <label className="af-line">Триггер: <select value={triggerUid} onChange={(e) => setTriggerUid(e.target.value)}>{devOptions('любое устройство')}</select>
-        <select value={triggerCmd} onChange={(e) => setTriggerCmd(e.target.value)}>{TRIGGER_CMDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+      <label className="af-line">Триггер: <select value={triggerUid} onChange={(e) => {
+        const u = e.target.value
+        setTriggerUid(u)
+        setTriggerCmd(u !== '0' && BigInt(u) === SYSTEM_DEVICE_UID ? '1' : '2')
+      }}>{devOptions('любое устройство')}</select>
+        <select value={triggerCmd} onChange={(e) => setTriggerCmd(e.target.value)}>{triggerOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
       </label>
 
       <label className="af-line">Действие: <select value={actionUid} onChange={(e) => setActionUid(e.target.value)}>{devOptions('то же, что триггер')}</select>

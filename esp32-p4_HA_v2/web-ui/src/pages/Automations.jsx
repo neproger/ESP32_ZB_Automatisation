@@ -5,10 +5,15 @@ import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
 import { describeActionArgs, describeCondition, TRIGGER_CMDS, ACTION_CLUSTERS } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
+import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
 function triggerCmdName(id) {
   const e = TRIGGER_CMDS.find(([v]) => v === id)
   return e ? e[1] : '0x' + id.toString(16)
+}
+function triggerName(uid, cmd) {
+  if (uid === SYSTEM_DEVICE_UID) return SYSTEM_EVENTS[cmd] || '0x' + cmd.toString(16)
+  return triggerCmdName(cmd)
 }
 function actionCmdName(cluster, cmd) {
   const c = ACTION_CLUSTERS.find((x) => x.id === cluster)
@@ -55,7 +60,7 @@ export default function Automations() {
           </div>
           <div className="flow">
             <span className="node trigger">
-              {nameOf(record.triggerUid)} · {triggerCmdName(record.triggerCmd)}
+              {nameOf(record.triggerUid)} · {triggerName(record.triggerUid, record.triggerCmd)}
             </span>
             <span className="arrow">→</span>
             <span className="node action">
