@@ -209,6 +209,9 @@ static uint16_t web_do_zb_command(const uint8_t *args, size_t len)
     }
     ha_zb_command_t command;
     memcpy(&command, args, sizeof(command));
+    if (command.args_len > HA_ZB_COMMAND_ARGS_MAX) {
+        return SYS_CODE_INVALID_ARG;
+    }
 
     const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,

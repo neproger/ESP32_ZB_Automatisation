@@ -1,5 +1,6 @@
 #include "automation/automation.h"
 
+#include <stddef.h>
 #include <string.h>
 
 #include "automation/automation_rule.h"
@@ -34,25 +35,40 @@ static bool automation_accept(const domain_event_t *event, void *ctx)
     return xQueueSend(s_inbox, event, 0) == pdTRUE;
 }
 
+/*
+ * Одному событию (device, command) может соответствовать несколько правил. Собираем
+ * все совпадения в обходе, а условия и постинг выполняем после: постить команду прямо
+ * в колбэке обхода нельзя (там держится lock Domain).
+ */
+#define AUTOMATION_FIRE_MAX 8
+
 typedef struct {
-    ha_device_uid_t device_uid;
-    uint16_t command_id;
-    bool found;
     uint64_t rule_id;
     ha_automation_record_t rule;
 } automation_match_t;
 
-static bool automation_find(const void *key, const void *record, void *ctx)
+typedef struct {
+    ha_device_uid_t device_uid;
+    uint16_t command_id;
+    automation_match_t matches[AUTOMATION_FIRE_MAX];
+    size_t count;
+} automation_scan_t;
+
+static bool automation_collect(const void *key, const void *record, void *ctx)
 {
-    automation_match_t *match = (automation_match_t *)ctx;
+    automation_scan_t *scan = (automation_scan_t *)ctx;
     const ha_automation_record_t *rule = (const ha_automation_record_t *)record;
-    if (!automation_rule_matches(rule, match->device_uid, match->command_id)) {
-        return true; /* первое совпадение достаточно: правило уже скопировано */
+    if (!automation_rule_matches(rule, scan->device_uid, scan->command_id)) {
+        return true;
     }
-    match->rule_id = ((const ha_automation_key_t *)key)->id;
-    match->rule = *rule;
-    match->found = true;
-    return false;
+    if (scan->count >= AUTOMATION_FIRE_MAX) {
+        ESP_LOGW(TAG, "more than %d matching rules; extra dropped", AUTOMATION_FIRE_MAX);
+        return true;
+    }
+    scan->matches[scan->count].rule_id = ((const ha_automation_key_t *)key)->id;
+    scan->matches[scan->count].rule = *rule;
+    scan->count++;
+    return true;
 }
 
 /*
@@ -85,22 +101,15 @@ static bool automation_conditions_pass(ha_device_uid_t trigger_uid,
     return true;
 }
 
-static void automation_trigger(ha_device_uid_t device_uid, uint16_t command_id)
+static void automation_fire(const automation_match_t *match, ha_device_uid_t trigger_uid)
 {
-    automation_match_t match = {.device_uid = device_uid, .command_id = command_id};
-    if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
-                                      automation_find, &match)) ||
-        !match.found) {
-        return;
-    }
-
-    if (!automation_conditions_pass(device_uid, &match.rule)) {
-        ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)match.rule_id);
+    if (!automation_conditions_pass(trigger_uid, &match->rule)) {
+        ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)match->rule_id);
         return;
     }
 
     ha_zb_command_t command = {0};
-    if (sys_failed(automation_rule_command(&match.rule, device_uid, &command))) {
+    if (sys_failed(automation_rule_command(&match->rule, trigger_uid, &command))) {
         return;
     }
 
@@ -121,8 +130,20 @@ static void automation_trigger(ha_device_uid_t device_uid, uint16_t command_id)
         return;
     }
     ESP_LOGI(TAG, "rule %llu fired: uid=%llx cluster=%04x cmd=%02x",
-             (unsigned long long)match.rule_id, (unsigned long long)command.device_uid,
+             (unsigned long long)match->rule_id, (unsigned long long)command.device_uid,
              (unsigned)command.cluster_id, (unsigned)command.command_id);
+}
+
+static void automation_trigger(ha_device_uid_t device_uid, uint16_t command_id)
+{
+    automation_scan_t scan = {.device_uid = device_uid, .command_id = command_id};
+    if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
+                                      automation_collect, &scan))) {
+        return;
+    }
+    for (size_t i = 0; i < scan.count; i++) {
+        automation_fire(&scan.matches[i], device_uid);
+    }
 }
 
 static void automation_task(void *arg)

@@ -5,7 +5,6 @@ import { uidHex, clusterName, attrName } from '../zcl.js'
 import { ACTION_CLUSTERS, TRIGGER_CMDS, CONDITION_OPS, buildActionArgs, decodeActionArgs } from '../automation.js'
 
 const MAX_CONDITIONS = 4
-const isBoolAttr = (c) => c.cluster === 0x0006 && c.attr === 0x0000
 
 function nextId(automations) {
   let max = 0n
@@ -100,6 +99,16 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     if (c.deviceUid && c.deviceUid !== 0n) return c.deviceUid
     return triggerUid !== '0' ? BigInt(triggerUid) : 0n
   }
+  // Тип берём из живого состояния: bool (0x10) показываем как Вкл/Выкл.
+  const zclTypeFor = (c) => {
+    const uid = condDeviceFor(c)
+    if (uid === 0n) return undefined
+    return store.states.get(`st:${uid}:${c.ep}:${c.cluster}:${c.attr}`)?.record.zclType
+  }
+  const isBoolCond = (c) => {
+    const t = zclTypeFor(c)
+    return t != null ? t === 0x10 : c.cluster === 0x0006 && c.attr === 0x0000
+  }
 
   return (
     <form className="auto-form" onSubmit={submit}>
@@ -159,7 +168,7 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
               <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
                 {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-              {isBoolAttr(c) ? (
+              {isBoolCond(c) ? (
                 <select value={c.value ? 1 : 0} onChange={(e) => updateCondition(i, { value: Number(e.target.value) })}>
                   <option value={1}>Вкл</option>
                   <option value={0}>Выкл</option>
