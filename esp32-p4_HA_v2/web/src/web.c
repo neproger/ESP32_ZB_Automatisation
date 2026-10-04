@@ -422,6 +422,8 @@ static esp_err_t send_embedded(httpd_req_t *req, const char *content_type, const
                                const uint8_t *end)
 {
     httpd_resp_set_type(req, content_type);
+    /* Имена файлов фиксированные: запрещаем кэш, иначе браузер держит старую сборку. */
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, (const char *)begin, (ssize_t)(end - begin));
 }
 
