@@ -38,6 +38,9 @@ typedef enum {
     /* Список устройств на удаление: ключ — uid. Устройство всё равно нужно удалить из
      * сети, поэтому держим пометку, пока не пройдёт leave (docs/services/ZIGBEE.md). */
     HA_ENTITY_DEVICE_REMOVE = 5,
+    /* Локация системного устройства (город/координаты): строка в state (число+тип) не
+     * влезает, поэтому это отдельный тип сущности с текстовым полем. Ключ — uid. */
+    HA_ENTITY_LOCATION = 6,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32
@@ -110,6 +113,17 @@ typedef struct {
     uint8_t reserved[7];
 } ha_device_remove_record_t;
 
+/* Локация (ключ — uid системного устройства): текст города + координаты + tz-offset. */
+#define HA_LOCATION_NAME_MAX 48
+
+typedef struct {
+    float latitude;
+    float longitude;
+    int16_t tz_offset_min;
+    uint8_t reserved[2];
+    char name[HA_LOCATION_NAME_MAX];
+} ha_location_record_t;
+
 #ifdef __cplusplus
 static_assert(sizeof(ha_zb_state_key_t) == 16, "ha_zb_state_key_t: неожиданный размер");
 static_assert(offsetof(ha_zb_state_key_t, cluster_id) == 8, "ha_zb_state_key_t: layout");
@@ -122,6 +136,8 @@ static_assert(sizeof(ha_endpoint_key_t) == 16, "ha_endpoint_key_t: неожид�
 static_assert(offsetof(ha_endpoint_key_t, endpoint) == 8, "ha_endpoint_key_t: layout");
 static_assert(sizeof(ha_endpoint_record_t) == 72, "ha_endpoint_record_t: неожиданный размер");
 static_assert(sizeof(ha_device_remove_record_t) == 8, "ha_device_remove_record_t: неожиданный размер");
+static_assert(sizeof(ha_location_record_t) == 60, "ha_location_record_t: неожиданный размер");
+static_assert(offsetof(ha_location_record_t, name) == 12, "ha_location_record_t: layout");
 #else
 _Static_assert(sizeof(ha_zb_state_key_t) == 16, "ha_zb_state_key_t: неожиданный размер");
 _Static_assert(offsetof(ha_zb_state_key_t, cluster_id) == 8, "ha_zb_state_key_t: layout");
@@ -134,6 +150,8 @@ _Static_assert(sizeof(ha_endpoint_key_t) == 16, "ha_endpoint_key_t: неожид
 _Static_assert(offsetof(ha_endpoint_key_t, endpoint) == 8, "ha_endpoint_key_t: layout");
 _Static_assert(sizeof(ha_endpoint_record_t) == 72, "ha_endpoint_record_t: неожиданный размер");
 _Static_assert(sizeof(ha_device_remove_record_t) == 8, "ha_device_remove_record_t: неожиданный размер");
+_Static_assert(sizeof(ha_location_record_t) == 60, "ha_location_record_t: неожиданный размер");
+_Static_assert(offsetof(ha_location_record_t, name) == 12, "ha_location_record_t: layout");
 #endif
 
 #ifdef __cplusplus

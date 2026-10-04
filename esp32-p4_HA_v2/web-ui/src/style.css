@@ -326,3 +326,7 @@ button.ghost.danger:hover { color: #ef5350; }
 .af-cond { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
 .af-cond select, .af-cond input.ep { max-width: 220px; }
 .conds { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+.sysstatus { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: auto; margin-right: 0.75rem; font-size: 0.85rem; }
+.sysstatus .clock { font-variant-numeric: tabular-nums; color: #e6e6e6; font-weight: 600; }
+.sysstatus b { color: #cbd5e1; }

@@ -60,6 +60,8 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 | 3 | endpoint | `{ u64 uid; u8 ep; u8 rsv[7]; }` (16) | `{ u16 profile; u16 device_id; u8 count; u8 rsv[3]; cluster[16]{u16 id; u8 role; u8 rsv;} }` |
 | 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 rsv[5]; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
 
+| 6 | location | `u64 uid` | `{ f32 lat; f32 lon; i16 tz_offset_min; u8 rsv[2]; char name[48]; }` (60) |
+
 `condition[4]` — условия правила (AND), первые `conditions_count` значимы:
 `{ u64 device_uid; u16 cluster; u16 attr; u8 ep; u8 op; u8 rsv[2]; f32 value; }` (24).
 `device_uid == 0` — устройство-источник триггера, `ep == 0` — любой endpoint;

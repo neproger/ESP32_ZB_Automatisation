@@ -39,6 +39,8 @@ typedef enum {
     HA_CONDITION_OP_LT = 4,
     HA_CONDITION_OP_GE = 5,
     HA_CONDITION_OP_LE = 6,
+    /* Битовая маска: (value & actual) != 0. Для наборов, где EQ/NE мало (дни недели). */
+    HA_CONDITION_OP_HAS_BITS = 7,
 } ha_condition_op_t;
 
 /*

@@ -80,6 +80,8 @@ bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
         return actual >= expected;
     case HA_CONDITION_OP_LE:
         return actual <= expected;
+    case HA_CONDITION_OP_HAS_BITS:
+        return ((uint32_t)actual & (uint32_t)expected) != 0u;
     default:
         return false;
     }

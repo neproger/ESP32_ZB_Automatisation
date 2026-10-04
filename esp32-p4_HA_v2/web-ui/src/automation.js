@@ -27,6 +27,7 @@ export const CONDITION_OPS = [
   [4, '<'],
   [5, '≥'],
   [6, '≤'],
+  [7, 'содержит биты'],
 ]
 
 export function describeCondition(c, nameOf) {

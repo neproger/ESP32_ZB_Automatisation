@@ -115,6 +115,13 @@ static void test_condition(void)
 
     cond = (ha_automation_condition_t){.op = 0, .value = 1};
     CHECK(!automation_rule_condition_ok(&cond, &on));
+
+    /* HAS_BITS: маска Пн-Пт (0x1F) содержит Ср (бит 2), но не Сб (бит 5). */
+    const ha_zb_state_record_t wmask = {.raw = 0x1Fu, .zcl_type = HA_ZB_TYPE_BITMAP8};
+    cond = (ha_automation_condition_t){.op = HA_CONDITION_OP_HAS_BITS, .value = 0x04};
+    CHECK(automation_rule_condition_ok(&cond, &wmask));
+    cond.value = 0x20;
+    CHECK(!automation_rule_condition_ok(&cond, &wmask));
 }
 
 int main(void)

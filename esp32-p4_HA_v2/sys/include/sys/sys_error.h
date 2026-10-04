@@ -25,6 +25,7 @@ typedef enum {
     SYS_LAYER_ZIGBEE,
     SYS_LAYER_AUTOMATION,
     SYS_LAYER_WEB,
+    SYS_LAYER_SYSTEM,
 } sys_layer_t;
 
 /*

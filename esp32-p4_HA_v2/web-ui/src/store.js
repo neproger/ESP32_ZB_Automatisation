@@ -10,6 +10,7 @@ const maps = {
   [ENTITY.ENDPOINT]: new Map(),
   [ENTITY.AUTOMATION]: new Map(),
   [ENTITY.DEVICE_REMOVE]: new Map(),
+  [ENTITY.LOCATION]: new Map(),
 }
 
 const EVENT_LOG_MAX = 200
@@ -119,6 +120,9 @@ export const store = {
   },
   get removals() {
     return maps[ENTITY.DEVICE_REMOVE]
+  },
+  get locations() {
+    return maps[ENTITY.LOCATION]
   },
   get events() {
     return events

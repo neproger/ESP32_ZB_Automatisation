@@ -36,7 +36,7 @@ const CLUSTER_NAMES = {
   0x0006: 'On/Off',
   0x0007: 'On/Off Switch',
   0x0008: 'Level Control',
-  0x000a: 'Analog Input',
+  0x000a: 'Time',
   0x0019: 'OTA',
   0x0102: 'Шторы',
   0x0201: 'Термостат',
@@ -50,6 +50,7 @@ const CLUSTER_NAMES = {
   0x0500: 'IAS Zone',
   0x0702: 'Metering',
   0x0b04: 'Электроизмерения',
+  0xfc00: 'Система',
 }
 
 export function clusterName(id) {
@@ -84,7 +85,37 @@ export function describeAttr(cluster, attr) {
   if (cluster === 0x0400 && attr === 0x0000) return { name: 'MeasuredValue' }
   if (cluster === 0x0001 && attr === 0x0021) return { name: 'Battery', unit: '%', scale: 0.5 }
   if (cluster === 0x0001 && attr === 0x0020) return { name: 'BatteryVoltage', unit: 'V', scale: 0.1 }
+  if (cluster === 0x000a && attr === 0x0000) return { name: 'Время (UTC)' }
+  if (cluster === 0xfc00) return SYSTEM_ATTR[attr] || null
   return null
+}
+
+// Атрибуты системного девайса (см. ha_model/ha_system.h).
+const SYSTEM_ATTR = {
+  0x0000: { name: 'Час' },
+  0x0001: { name: 'Минута' },
+  0x0002: { name: 'День недели' },
+  0x0003: { name: 'Дни недели (маска)' },
+  0x0004: { name: 'Минуты от начала суток' },
+  0x0005: { name: 'Смещение пояса', unit: 'мин' },
+}
+
+const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+
+function formatSystemValue(attr, raw) {
+  const u = raw >>> 0
+  if (attr === 0x0000) return `${u & 0xff}`
+  if (attr === 0x0001) return String(u & 0xff).padStart(2, '0')
+  if (attr === 0x0002) return WEEKDAYS[u & 7] || '?'
+  if (attr === 0x0003) return WEEKDAYS.filter((_, i) => (u >> i) & 1).join(', ') || '—'
+  if (attr === 0x0004) return `${String(Math.floor(u / 60)).padStart(2, '0')}:${String(u % 60).padStart(2, '0')}`
+  if (attr === 0x0005) {
+    const v = (u << 16) >> 16
+    const sign = v < 0 ? '-' : '+'
+    const a = Math.abs(v)
+    return `UTC${sign}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`
+  }
+  return String(u)
 }
 
 function signExtend(u, zclType) {
@@ -96,6 +127,8 @@ function signExtend(u, zclType) {
 
 export function formatAttrValue(cluster, attr, zclType, raw) {
   const u = raw >>> 0
+  if (cluster === 0xfc00) return formatSystemValue(attr, raw)
+  if (cluster === 0x000a && attr === 0x0000) return new Date(u * 1000).toLocaleString()
   const info = describeAttr(cluster, attr)
   if (info?.scale) {
     const v = (info.signed ? signExtend(u, zclType) : u) * info.scale

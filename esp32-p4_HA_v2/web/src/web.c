@@ -44,6 +44,7 @@ _Static_assert(WEB_ENTITY_ENDPOINT == (uint32_t)HA_ENTITY_ENDPOINT, "entity id: 
 _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
 _Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
                "entity id: device-remove");
+_Static_assert(WEB_ENTITY_LOCATION == (uint32_t)HA_ENTITY_LOCATION, "entity id: location");
 
 /* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
 _Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
@@ -62,6 +63,7 @@ static const web_schema_t SCHEMA[] = {
     {WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t)},
     {WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t)},
     {WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)},
+    {WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t)},
 };
 #define WEB_SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
 

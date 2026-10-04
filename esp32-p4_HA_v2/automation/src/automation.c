@@ -182,7 +182,9 @@ sys_error_t automation_start(domain_t *domain)
 
     domain_subscription_desc_t desc = {0};
     desc.kind_mask = 1u << (uint32_t)DOMAIN_FACT_EVENT;
-    desc.source_mask = 1u << (uint32_t)DOMAIN_SOURCE_ZIGBEE;
+    /* Триггеры бывают и от синтетического системного устройства (время/погода). */
+    desc.source_mask = (1u << (uint32_t)DOMAIN_SOURCE_ZIGBEE) |
+                       (1u << (uint32_t)DOMAIN_SOURCE_SYSTEM);
     desc.entity = (domain_entity_t)HA_ENTITY_DEVICE;
     desc.try_push = automation_accept;
     desc.wake = NULL; /* задача спит на очереди, отдельный сигнал не нужен */

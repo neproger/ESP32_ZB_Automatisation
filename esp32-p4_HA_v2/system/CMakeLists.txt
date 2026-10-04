@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "src/system.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        domain
+        ha_model
+        sys
+    PRIV_REQUIRES
+        esp_netif
+        esp_event
+        esp_http_client
+)

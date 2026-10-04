@@ -1,7 +1,7 @@
 // Схема записей v2 (docs/services/WEB_PROTOCOL.md §5) — зеркало ha_model.
 // Только провод: дискриминаторы, layout key/record, декод и кодирование.
 
-export const ENTITY = { DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5 }
+export const ENTITY = { DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5, LOCATION: 6 }
 
 export const SCHEMA = {
   [ENTITY.DEVICE]: { keySize: 8, recSize: 64 },
@@ -9,6 +9,7 @@ export const SCHEMA = {
   [ENTITY.ENDPOINT]: { keySize: 16, recSize: 72 },
   [ENTITY.AUTOMATION]: { keySize: 8, recSize: 144 },
   [ENTITY.DEVICE_REMOVE]: { keySize: 8, recSize: 8 },
+  [ENTITY.LOCATION]: { keySize: 8, recSize: 60 },
 }
 
 const text = new TextDecoder()
@@ -36,6 +37,8 @@ export function decodeKey(type, dv) {
       return { id: dv.getBigUint64(0, true) }
     case ENTITY.DEVICE_REMOVE:
       return { uid: dv.getBigUint64(0, true) }
+    case ENTITY.LOCATION:
+      return { uid: dv.getBigUint64(0, true) }
     default:
       return {}
   }
@@ -58,6 +61,13 @@ export function decodeRecord(type, dv) {
     }
     case ENTITY.DEVICE_REMOVE:
       return { requested: dv.getUint8(0) }
+    case ENTITY.LOCATION:
+      return {
+        latitude: dv.getFloat32(0, true),
+        longitude: dv.getFloat32(4, true),
+        tzOffsetMin: dv.getInt16(8, true),
+        name: cstr(dv, 12, 48),
+      }
     case ENTITY.AUTOMATION: {
       const argsLen = dv.getUint8(1)
       const actionArgs = []
@@ -104,6 +114,8 @@ export function entityId(type, key) {
       return `auto:${key.id}`
     case ENTITY.DEVICE_REMOVE:
       return `rm:${key.uid}`
+    case ENTITY.LOCATION:
+      return `loc:${key.uid}`
     default:
       return ''
   }

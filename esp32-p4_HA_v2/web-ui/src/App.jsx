@@ -4,6 +4,7 @@ import Devices from './pages/Devices.jsx'
 import DeviceDetail from './pages/DeviceDetail.jsx'
 import Automations from './pages/Automations.jsx'
 import Events from './pages/Events.jsx'
+import SystemStatus from './components/SystemStatus.jsx'
 
 // Ручной роутинг поверх hash: сервер отдаёт один документ, навигация — на клиенте.
 function useHash() {
@@ -38,6 +39,7 @@ export default function App() {
             Автоматизации
           </a>
         </nav>
+        <SystemStatus />
         <span className={'link' + (online ? ' ok' : '')}>{online ? 'подключено' : 'нет связи'}</span>
       </header>
       <main>
