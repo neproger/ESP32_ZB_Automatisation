@@ -877,86 +877,11 @@ static sys_error_t radio_error(ezb_err_t result)
     return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
 }
 
-/* Адресат команды задаётся EUI-64: short address разрешается стеком под капотом. */
-static ezb_zcl_cluster_cmd_ctrl_t command_control(const ha_zb_command_t *command)
-{
-    const ezb_extaddr_t eui = {.u64 = command->device_uid};
-    const ezb_zcl_cluster_cmd_ctrl_t control = {
-        .dst_addr = EZB_ADDRESS_EXTENDED(eui),
-        .dst_ep = command->dst_endpoint,
-        .src_ep = COORDINATOR_ENDPOINT,
-        .dis_default_rsp = false,
-    };
-    return control;
-}
-
-static sys_error_t send_on_off(const ha_zb_command_t *command)
-{
-    const ezb_zcl_on_off_cmd_t request = {.cmd_ctrl = command_control(command)};
-
-    switch (command->command_id) {
-    case HA_ZB_CMD_ON_OFF_OFF: return radio_error(ezb_zcl_on_off_off_cmd_req(&request));
-    case HA_ZB_CMD_ON_OFF_ON: return radio_error(ezb_zcl_on_off_on_cmd_req(&request));
-    case HA_ZB_CMD_ON_OFF_TOGGLE: return radio_error(ezb_zcl_on_off_toggle_cmd_req(&request));
-    default: return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
-    }
-}
-
-/* Аргументы: [level] или [level, transition_lo, transition_hi]; без перехода — 0xFFFF. */
-static sys_error_t send_level_move_to_level(const ha_zb_command_t *command)
-{
-    if (command->command_id != HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL || command->args_len < 1) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
-    }
-
-    const uint16_t transition =
-        (command->args_len >= 3) ? (uint16_t)(command->args[1] | (command->args[2] << 8)) : 0xFFFF;
-    const ezb_zcl_level_move_to_level_cmd_t request = {
-        .cmd_ctrl = command_control(command),
-        .payload = {.level = command->args[0], .transition_time = transition},
-    };
-    return radio_error(ezb_zcl_level_move_to_level_cmd_req(&request));
-}
-
-/* Color: [x_lo,x_hi,y_lo,y_hi,t_lo,t_hi]. */
-static sys_error_t send_color_move_to_color(const ha_zb_command_t *command)
-{
-    if (command->args_len < 4) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
-    }
-    const uint16_t transition =
-        (command->args_len >= 6) ? (uint16_t)(command->args[4] | (command->args[5] << 8)) : 0;
-    const ezb_zcl_color_control_move_to_color_cmd_t request = {
-        .cmd_ctrl = command_control(command),
-        .payload = {.color_x = (uint16_t)(command->args[0] | (command->args[1] << 8)),
-                    .color_y = (uint16_t)(command->args[2] | (command->args[3] << 8)),
-                    .transition_time = transition},
-    };
-    return radio_error(ezb_zcl_color_control_move_to_color_cmd_req(&request));
-}
-
-/* Color temperature: [mireds_lo,mireds_hi,t_lo,t_hi]. */
-static sys_error_t send_color_move_to_color_temperature(const ha_zb_command_t *command)
-{
-    if (command->args_len < 2) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
-    }
-    const uint16_t transition =
-        (command->args_len >= 4) ? (uint16_t)(command->args[2] | (command->args[3] << 8)) : 0;
-    const ezb_zcl_color_control_move_to_color_temperature_cmd_t request = {
-        .cmd_ctrl = command_control(command),
-        .payload = {.color_temperature_mireds =
-                        (uint16_t)(command->args[0] | (command->args[1] << 8)),
-                    .transition_time = transition},
-    };
-    return radio_error(ezb_zcl_color_control_move_to_color_temperature_cmd_req(&request));
-}
-
 /*
- * Общая отправка ZCL cluster-specific команды любого кластера: собираем ZCL-кадр
- * (frame control, seq, cmd id, args) и шлём через APS. Так поддержаны все известные
- * команды ZCL, а не только перечисленные. Аргументы приходят уже в кодировке ZCL
- * (ha_commands.h), поэтому кадр формируется как есть.
+ * Отправка любой ZCL cluster-specific команды: собираем ZCL-кадр (frame control, seq,
+ * cmd id, args) и шлём через APS. Список команд и кодирование аргументов задаёт словарь
+ * (ha_zigbee.h на бэке, web-ui/src/commands.js на фронте) — специальных путей под
+ * конкретный кластер нет. Аргументы приходят уже в кодировке ZCL.
  */
 static uint8_t s_zcl_seq;
 
@@ -994,19 +919,7 @@ sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
     }
 
-    switch (command->cluster_id) {
-    case HA_ZB_CLUSTER_ON_OFF: return send_on_off(command);
-    case HA_ZB_CLUSTER_LEVEL_CONTROL: return send_level_move_to_level(command);
-    case HA_ZB_CLUSTER_COLOR_CONTROL:
-        if (command->command_id == 0x00) {
-            return send_color_move_to_color(command);
-        }
-        if (command->command_id == 0x01) {
-            return send_color_move_to_color_temperature(command);
-        }
-        return send_raw_zcl(command);
-    default: return send_raw_zcl(command);
-    }
+    return send_raw_zcl(command);
 }
 
 /*

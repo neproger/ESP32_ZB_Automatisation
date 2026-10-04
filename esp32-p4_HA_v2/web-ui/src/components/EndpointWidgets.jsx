@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { store } from '../store.js'
 import { zbCommand } from '../proto.js'
-import { deriveEndpointMeta, hasAccept, hasReport } from '../capabilities.js'
+import { deriveEndpointMeta, hasReport } from '../capabilities.js'
 import { formatAttrValue } from '../zcl.js'
 import { rgbHexToXy, xyToRgbHex } from '../color.js'
+import { CLUSTERS, u8, u16, OPTIONS } from '../commands.js'
 
 function find(states, cluster, attr) {
   return states.find((s) => s.key.cluster === cluster && s.key.attr === attr) || null
@@ -13,35 +14,101 @@ function raw(states, cluster, attr) {
   return st ? st.record.raw >>> 0 : null
 }
 
-function u16bytes(v) {
-  const n = Math.max(0, Math.min(0xffff, Math.round(v))) & 0xffff
-  return [n & 0xff, n >> 8]
+/* Контрол одной команды из словаря: виджет и кодирование args — по описанию команды. */
+function CommandControl({ uid, ep, clusterId, cmd, states }) {
+  const send = (command, args = []) => store.send(zbCommand({ uid, ep, cluster: clusterId, command, args }))
+
+  if (cmd.widget === 'onoff') {
+    const onoff = (raw(states, 0x0006, 0x0000) ?? 0) !== 0
+    return (
+      <div className="wrow">
+        <label className="wlabel">
+          <input type="checkbox" checked={onoff} onChange={(e) => send(e.target.checked ? cmd.on : cmd.off)} />
+          Вкл
+        </label>
+        <button onClick={() => send(cmd.toggle)}>Toggle</button>
+      </div>
+    )
+  }
+
+  return <ParamControl uid={uid} ep={ep} clusterId={clusterId} cmd={cmd} states={states} send={send} />
+}
+
+/* Контролы с параметрами: level / color_temp / color_xy / number. */
+function ParamControl({ cmd, states, send }) {
+  if (cmd.widget === 'level') {
+    const current = Math.max(0, Math.min(254, raw(states, 0x0008, 0x0000) ?? 0))
+    return <LevelControl current={current} cmd={cmd} send={send} />
+  }
+  if (cmd.widget === 'color_temp') {
+    const mired = raw(states, 0x0300, 0x0007) ?? 0
+    const current = mired > 0 ? Math.max(2000, Math.min(6500, Math.round(1_000_000 / mired))) : 3000
+    return <TempControl current={current} cmd={cmd} send={send} />
+  }
+  if (cmd.widget === 'color_xy') {
+    const x = raw(states, 0x0300, 0x0003)
+    const y = raw(states, 0x0300, 0x0004)
+    const current = x != null && y != null ? xyToRgbHex(x, y) : '#ffffff'
+    return <ColorControl current={current} cmd={cmd} send={send} />
+  }
+  if (cmd.widget === 'number') {
+    return <NumberControl cmd={cmd} send={send} />
+  }
+  return null
+}
+
+function LevelControl({ current, cmd, send }) {
+  const [value, setValue] = useState(current)
+  useEffect(() => setValue(current), [current])
+  return (
+    <div className="wcol">
+      <div className="muted">Уровень: {value}</div>
+      <input type="range" min="0" max="254" value={value}
+        onChange={(e) => { const v = Number(e.target.value); setValue(v); send(cmd.id, [...u8(v), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+    </div>
+  )
+}
+
+function TempControl({ current, cmd, send }) {
+  const [kelvin, setKelvin] = useState(current)
+  useEffect(() => setKelvin(current), [current])
+  return (
+    <div className="wcol">
+      <div className="muted">Темп. цвета: {kelvin} K</div>
+      <input type="range" min="2000" max="6500" step="100" value={kelvin}
+        onChange={(e) => { const k = Number(e.target.value); setKelvin(k); send(cmd.id, [...u16(1_000_000 / k), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+    </div>
+  )
+}
+
+function ColorControl({ current, cmd, send }) {
+  const [color, setColor] = useState(current)
+  useEffect(() => setColor(current), [current])
+  return (
+    <div className="wcol">
+      <div className="muted">Цвет</div>
+      <input type="color" value={color}
+        onChange={(e) => { setColor(e.target.value); const { x, y } = rgbHexToXy(e.target.value); send(cmd.id, [...u16(x), ...u16(y), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+    </div>
+  )
+}
+
+function NumberControl({ cmd, send }) {
+  const p = cmd.params[0]
+  const [value, setValue] = useState(p.default ?? 0)
+  const encode = p.type === 'u8' ? u8 : u16
+  return (
+    <div className="wrow">
+      <span className="muted">{cmd.name}: {p.label}</span>
+      <input className="ep" type="number" min={p.min} max={p.max} value={value} onChange={(e) => setValue(Number(e.target.value))} />
+      <button onClick={() => send(cmd.id, encode(value))}>Отправить</button>
+    </div>
+  )
 }
 
 export default function EndpointWidgets({ uid, ep, record, states }) {
-  const meta = useMemo(() => deriveEndpointMeta(record), [record])
-
-  const onoff = (() => {
-    const r = raw(states, 0x0006, 0x0000)
-    return r != null ? r !== 0 : false
-  })()
-  const level0 = Math.max(0, Math.min(254, raw(states, 0x0008, 0x0000) ?? 0))
-  const colorX = raw(states, 0x0300, 0x0003)
-  const colorY = raw(states, 0x0300, 0x0004)
-  const color0 = colorX != null && colorY != null ? xyToRgbHex(colorX, colorY) : '#ffffff'
-  const mired0 = raw(states, 0x0300, 0x0007) ?? 0
-  const tempK0 = mired0 > 0 ? Math.max(2000, Math.min(6500, Math.round(1_000_000 / mired0))) : 3000
-
-  const [level, setLevel] = useState(level0)
-  const [color, setColor] = useState(color0)
-  const [tempK, setTempK] = useState(tempK0)
-  useEffect(() => setLevel(level0), [level0, uid, ep])
-  useEffect(() => setColor(color0), [color0, uid, ep])
-  useEffect(() => setTempK(tempK0), [tempK0, uid, ep])
-
-  const send = (cluster, command, args = []) =>
-    store.send(zbCommand({ uid, ep, cluster, command, args }))
-
+  const meta = deriveEndpointMeta(record)
+  const serverClusters = (record.clusters || []).filter((c) => c.role === 1).map((c) => c.id)
   const sensor = (cluster, attr) => {
     const st = find(states, cluster, attr)
     return st ? formatAttrValue(cluster, attr, st.record.zclType, st.record.raw) : null
@@ -49,66 +116,13 @@ export default function EndpointWidgets({ uid, ep, record, states }) {
 
   return (
     <div className="widgets">
-      {hasAccept(meta, 'onoff.') && (
-        <div className="wrow">
-          <label className="wlabel">
-            <input type="checkbox" checked={onoff} onChange={(e) => send(0x0006, e.target.checked ? 1 : 0)} />
-            On
-          </label>
-          <button onClick={() => send(0x0006, 2)}>Toggle</button>
-        </div>
-      )}
-
-      {hasAccept(meta, 'level.') && (
-        <div className="wcol">
-          <div className="muted">Уровень: {level}</div>
-          <input
-            type="range"
-            min="0"
-            max="254"
-            value={level}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              setLevel(v)
-              send(0x0008, 0x00, [v, 0, 0])
-            }}
-          />
-        </div>
-      )}
-
-      {hasAccept(meta, 'color.move_to_color_xy') && (
-        <div className="wcol">
-          <div className="muted">Цвет</div>
-          <input
-            type="color"
-            value={color}
-            onChange={(e) => {
-              setColor(e.target.value)
-              const { x, y } = rgbHexToXy(e.target.value)
-              send(0x0300, 0x00, [...u16bytes(x), ...u16bytes(y), 0, 0])
-            }}
-          />
-        </div>
-      )}
-
-      {hasAccept(meta, 'color.move_to_color_temperature') && (
-        <div className="wcol">
-          <div className="muted">Темп. цвета: {tempK} K</div>
-          <input
-            type="range"
-            min="2000"
-            max="6500"
-            step="100"
-            value={tempK}
-            onChange={(e) => {
-              const k = Number(e.target.value)
-              setTempK(k)
-              send(0x0300, 0x01, [...u16bytes(1_000_000 / k), 0, 0])
-            }}
-          />
-        </div>
-      )}
-
+      {serverClusters.map((clusterId) => {
+        const def = CLUSTERS[clusterId]
+        if (!def) return null
+        return def.commands.map((cmd) => (
+          <CommandControl key={`${clusterId}:${cmd.id ?? cmd.widget}`} uid={uid} ep={ep} clusterId={clusterId} cmd={cmd} states={states} />
+        ))
+      })}
       <div className="wrow">
         {hasReport(meta, 'temperature_c') && <span className="sensor">Темп: <b>{sensor(0x0402, 0x0000) ?? '—'}</b></span>}
         {hasReport(meta, 'humidity_pct') && <span className="sensor">Влажн: <b>{sensor(0x0405, 0x0000) ?? '—'}</b></span>}
