@@ -9,6 +9,7 @@ const maps = {
   [ENTITY.STATE]: new Map(),
   [ENTITY.ENDPOINT]: new Map(),
   [ENTITY.AUTOMATION]: new Map(),
+  [ENTITY.DEVICE_REMOVE]: new Map(),
 }
 
 let version = 0
@@ -99,6 +100,12 @@ export const store = {
   },
   get automations() {
     return maps[ENTITY.AUTOMATION]
+  },
+  get removals() {
+    return maps[ENTITY.DEVICE_REMOVE]
+  },
+  isMarkedForRemoval(uid) {
+    return maps[ENTITY.DEVICE_REMOVE].has(`rm:${uid}`)
   },
   send(frame) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(frame.bytes)

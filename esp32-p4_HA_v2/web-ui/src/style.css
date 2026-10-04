@@ -235,3 +235,7 @@ table.ep td .attr {
 .sensor b {
   color: #e6e6e6;
 }
+.tag.warn {
+  color: #e0a35a;
+  border-color: #5a4a2a;
+}

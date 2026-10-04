@@ -22,6 +22,7 @@
 #define WEB_ENTITY_STATE 2u
 #define WEB_ENTITY_ENDPOINT 3u
 #define WEB_ENTITY_AUTOMATION 4u
+#define WEB_ENTITY_DEVICE_REMOVE 5u
 
 typedef enum {
     WEB_MSG_SYNC_BEGIN = 0x01,
@@ -38,6 +39,8 @@ typedef enum {
     WEB_CMD_DEVICE_RENAME = 3,
     WEB_CMD_AUTOMATION_PUT = 4,
     WEB_CMD_AUTOMATION_REMOVE = 5,
+    WEB_CMD_DEVICE_REMOVE = 6,
+    WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

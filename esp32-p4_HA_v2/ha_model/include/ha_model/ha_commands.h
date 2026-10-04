@@ -30,6 +30,9 @@ extern "C" {
  */
 #define HA_CMD_ZIGBEE_CLUSTER 1u
 
+/* Пометить устройство на удаление (args = ha_device_uid_t): leave при появлении. */
+#define HA_CMD_DEVICE_REMOVE 2u
+
 /* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
 #define HA_ZB_COMMAND_ARGS_MAX 16u
 

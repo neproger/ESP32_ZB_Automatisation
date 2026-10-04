@@ -13,6 +13,7 @@
 #include "ezbee/bdb.h"
 #include "ezbee/nwk.h"
 #include "ezbee/zdo/zdo_dev_srv_disc.h"
+#include "ezbee/zdo/zdo_nwk_mgmt.h"
 #include "zigbee/zigbee.h"
 #include "zigbee/zigbee_binding.h"
 #include "zigbee/zigbee_interview.h"
@@ -566,6 +567,96 @@ static bool device_left(ha_device_uid_t uid, uint16_t short_addr)
     return true;
 }
 
+/*
+ * Удаление. Устройство нельзя убрать из сети напрямую: держим пометку (список в
+ * Domain, HA_ENTITY_DEVICE_REMOVE) и шлём ZDO Mgmt_Leave, когда оно в сети. Успешный
+ * leave кладёт факт leave в сервис — он и удаляет устройство/endpoint'ы, и снимает
+ * пометку. Повторный announce/rediscovery помеченного устройства тоже уходит в leave
+ * (интервью не запускаем).
+ */
+#define LEAVE_CTX_MAX 4
+
+typedef struct {
+    bool used;
+    ha_device_uid_t uid;
+} leave_ctx_t;
+
+static leave_ctx_t s_leave_ctx[LEAVE_CTX_MAX];
+static domain_t *s_radio_domain;
+
+static leave_ctx_t *leave_ctx_acquire(ha_device_uid_t uid)
+{
+    leave_ctx_t *free_ctx = NULL;
+    for (size_t i = 0; i < LEAVE_CTX_MAX; i++) {
+        if (s_leave_ctx[i].used && s_leave_ctx[i].uid == uid) {
+            return &s_leave_ctx[i];
+        }
+        if (!s_leave_ctx[i].used && free_ctx == NULL) {
+            free_ctx = &s_leave_ctx[i];
+        }
+    }
+    if (free_ctx != NULL) {
+        free_ctx->used = true;
+        free_ctx->uid = uid;
+    }
+    return free_ctx;
+}
+
+static void leave_req_done(const ezb_zdo_nwk_mgmt_leave_req_result_t *result, void *user_ctx)
+{
+    leave_ctx_t *ctx = (leave_ctx_t *)user_ctx;
+    const bool ok = result != NULL && result->error == EZB_ERR_NONE && result->rsp != NULL &&
+                    result->rsp->status == EZB_ZDP_STATUS_SUCCESS;
+    ESP_LOGI(TAG, "leave result: uid=%llx ok=%d", (unsigned long long)(ctx != NULL ? ctx->uid : 0),
+             (int)ok);
+    if (ok && ctx != NULL) {
+        (void)zigbee_submit_leave(ctx->uid);
+    }
+    if (ctx != NULL) {
+        ctx->used = false;
+    }
+}
+
+sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid)
+{
+    if (!s_ready) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
+    }
+    const ezb_extaddr_t ext = {.u64 = uid};
+    ezb_shortaddr_t short_addr = 0;
+    if (ezb_address_short_by_extended(&ext, &short_addr) != EZB_ERR_NONE) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NOT_FOUND);
+    }
+    leave_ctx_t *ctx = leave_ctx_acquire(uid);
+    if (ctx == NULL) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+    }
+    const ezb_zdo_nwk_mgmt_leave_req_t request = {
+        .dst_nwk_addr = short_addr,
+        .field = {.device_addr = ext, .remove_children = false, .rejoin = false},
+        .cb = leave_req_done,
+        .user_ctx = ctx,
+    };
+    const ezb_err_t err = ezb_zdo_nwk_mgmt_leave_req(&request);
+    if (err != EZB_ERR_NONE) {
+        ctx->used = false;
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    }
+    ESP_LOGI(TAG, "leave requested: uid=%llx short=0x%04x", (unsigned long long)uid,
+             (unsigned)short_addr);
+    return SYS_OK;
+}
+
+static bool device_marked_for_removal(ha_device_uid_t uid)
+{
+    if (s_radio_domain == NULL) {
+        return false;
+    }
+    ha_device_remove_record_t record = {0};
+    return sys_ok(domain_entity_get(s_radio_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid,
+                                    &record));
+}
+
 static bool app_signal_handler(const ezb_app_signal_t *signal)
 {
     const ezb_app_signal_type_t type = ezb_app_signal_get_type(signal);
@@ -612,21 +703,32 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
 
     case EZB_ZDO_SIGNAL_DEVICE_ANNCE: {
         const ezb_zdo_signal_device_annce_params_t *annce = ezb_app_signal_get_params(signal);
+        const ha_device_uid_t uid = (ha_device_uid_t)annce->device_addr.u64;
+        if (device_marked_for_removal(uid)) {
+            ESP_LOGI(TAG, "device marked for removal: uid=%llx", (unsigned long long)uid);
+            (void)zigbee_radio_request_leave(uid);
+            return true;
+        }
         ESP_LOGI(TAG, "device joined: short=0x%04x uid=%llx", (unsigned)annce->short_addr,
-                 (unsigned long long)annce->device_addr.u64);
-        interview_begin((ha_device_uid_t)annce->device_addr.u64, annce->short_addr);
+                 (unsigned long long)uid);
+        interview_begin(uid, annce->short_addr);
         return true;
     }
 
     case EZB_ZDO_SIGNAL_DEVICE_UPDATE: {
         const ezb_zdo_signal_device_update_params_t *update = ezb_app_signal_get_params(signal);
+        const ha_device_uid_t uid = (ha_device_uid_t)update->device_addr.u64;
         if (update->status == EZB_ZDO_UPDDEV_DEVICE_LEFT) {
-            return device_left((ha_device_uid_t)update->device_addr.u64, update->short_addr);
+            return device_left(uid, update->short_addr);
+        }
+        if (device_marked_for_removal(uid)) {
+            ESP_LOGI(TAG, "device marked for removal (rejoin): uid=%llx", (unsigned long long)uid);
+            (void)zigbee_radio_request_leave(uid);
+            return true;
         }
         ESP_LOGI(TAG, "device rejoined: short=0x%04x uid=%llx status=0x%02x",
-                 (unsigned)update->short_addr, (unsigned long long)update->device_addr.u64,
-                 (unsigned)update->status);
-        interview_begin((ha_device_uid_t)update->device_addr.u64, update->short_addr);
+                 (unsigned)update->short_addr, (unsigned long long)uid, (unsigned)update->status);
+        interview_begin(uid, update->short_addr);
         return true;
     }
 
@@ -893,6 +995,7 @@ sys_error_t zigbee_radio_start(domain_t *domain)
     if (domain == NULL) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
     }
+    s_radio_domain = domain;
 
     s_radio_init_done = xSemaphoreCreateBinaryStatic(&s_radio_init_done_storage);
     if (s_radio_init_done == NULL) {

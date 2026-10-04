@@ -16,6 +16,8 @@ export const CMD = {
   DEVICE_RENAME: 3,
   AUTOMATION_PUT: 4,
   AUTOMATION_REMOVE: 5,
+  DEVICE_REMOVE: 6,
+  DEVICE_REMOVE_CANCEL: 7,
 }
 
 export const HDR = 8
@@ -81,6 +83,19 @@ export function automationRemove(id) {
   const args = new Uint8Array(8)
   new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
   return encodeCommand(CMD.AUTOMATION_REMOVE, args)
+}
+
+// DEVICE_REMOVE args = u64 uid (пометка на удаление; leave при появлении).
+export function removeDevice(uid) {
+  const args = new Uint8Array(8)
+  new DataView(args.buffer).setBigUint64(0, BigInt(uid), true)
+  return encodeCommand(CMD.DEVICE_REMOVE, args)
+}
+
+export function cancelRemoveDevice(uid) {
+  const args = new Uint8Array(8)
+  new DataView(args.buffer).setBigUint64(0, BigInt(uid), true)
+  return encodeCommand(CMD.DEVICE_REMOVE_CANCEL, args)
 }
 
 // DEVICE_RENAME args = u64 uid | char name[32].

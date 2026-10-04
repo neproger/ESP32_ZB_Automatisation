@@ -19,3 +19,10 @@ sys_error_t zigbee_radio_start(domain_t *domain);
  * INVALID_ARG — кластер/команда/аргументы вне формы, IO — радио отказало.
  */
 sys_error_t zigbee_radio_send(const ha_zb_command_t *command);
+
+/*
+ * Отправить устройству ZDO Mgmt_Leave (удаление из сети). NOT_FOUND — устройства нет
+ * в сети прямо сейчас (leave уйдёт при следующем announce); INVALID_STATE — стек не
+ * стартовал; IO — радио отказало.
+ */
+sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid);

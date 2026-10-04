@@ -1,13 +1,14 @@
 // Схема записей v2 (docs/services/WEB_PROTOCOL.md §5) — зеркало ha_model.
 // Только провод: дискриминаторы, layout key/record, декод и кодирование.
 
-export const ENTITY = { DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4 }
+export const ENTITY = { DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5 }
 
 export const SCHEMA = {
   [ENTITY.DEVICE]: { keySize: 8, recSize: 64 },
   [ENTITY.STATE]: { keySize: 16, recSize: 8 },
   [ENTITY.ENDPOINT]: { keySize: 16, recSize: 72 },
   [ENTITY.AUTOMATION]: { keySize: 8, recSize: 48 },
+  [ENTITY.DEVICE_REMOVE]: { keySize: 8, recSize: 8 },
 }
 
 const text = new TextDecoder()
@@ -33,6 +34,8 @@ export function decodeKey(type, dv) {
       return { uid: dv.getBigUint64(0, true), ep: dv.getUint8(8) }
     case ENTITY.AUTOMATION:
       return { id: dv.getBigUint64(0, true) }
+    case ENTITY.DEVICE_REMOVE:
+      return { uid: dv.getBigUint64(0, true) }
     default:
       return {}
   }
@@ -53,6 +56,8 @@ export function decodeRecord(type, dv) {
       }
       return { profile: dv.getUint16(0, true), deviceId: dv.getUint16(2, true), clusters }
     }
+    case ENTITY.DEVICE_REMOVE:
+      return { requested: dv.getUint8(0) }
     case ENTITY.AUTOMATION: {
       const argsLen = dv.getUint8(1)
       const actionArgs = []
@@ -83,6 +88,8 @@ export function entityId(type, key) {
       return `ep:${key.uid}:${key.ep}`
     case ENTITY.AUTOMATION:
       return `auto:${key.id}`
+    case ENTITY.DEVICE_REMOVE:
+      return `rm:${key.uid}`
     default:
       return ''
   }

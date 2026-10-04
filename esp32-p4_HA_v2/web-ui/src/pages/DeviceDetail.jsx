@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { renameDevice } from '../proto.js'
+import { renameDevice, removeDevice, cancelRemoveDevice } from '../proto.js'
 import { uidHex, clusterName, describeProfile, describeDeviceId, hex16 } from '../zcl.js'
 import EndpointWidgets from '../components/EndpointWidgets.jsx'
 import StateAttr from '../components/StateAttr.jsx'
@@ -43,6 +43,14 @@ export default function DeviceDetail({ uid }) {
           />
           {dev.record.model && <span className="tag">{dev.record.model}</span>}
           <span className="uid">{uidHex(target)}</span>
+          {s.isMarkedForRemoval(target) ? (
+            <>
+              <span className="tag warn">на удаление</span>
+              <button onClick={() => store.send(cancelRemoveDevice(target))}>Отменить</button>
+            </>
+          ) : (
+            <button onClick={() => store.send(removeDevice(target))}>Удалить</button>
+          )}
         </div>
 
         <h3>Endpoints</h3>

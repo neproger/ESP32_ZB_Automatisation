@@ -26,6 +26,7 @@
 #define ZIGBEE_INTERVIEW_QUEUE_LENGTH 4
 #define ZIGBEE_EVENT_QUEUE_LENGTH 8
 #define ZIGBEE_LEAVE_QUEUE_LENGTH 8
+#define ZIGBEE_REMOVE_QUEUE_LENGTH 8
 #define ZIGBEE_TASK_STACK 4096
 #define ZIGBEE_TASK_PRIORITY 5
 
@@ -37,6 +38,7 @@ static QueueHandle_t s_commands;
 static QueueHandle_t s_interviews;
 static QueueHandle_t s_events;
 static QueueHandle_t s_leaves;
+static QueueHandle_t s_remove_requests;
 static QueueSetHandle_t s_inbox;
 
 static sys_error_t zigbee_fail(sys_code_t code)
@@ -78,6 +80,36 @@ static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_
         const sys_error_t busy = zigbee_fail(SYS_CODE_BUSY);
         zigbee_diag_record(ZIGBEE_DIAG_COMMAND, busy);
         return busy;
+    }
+    return SYS_OK;
+}
+
+/*
+ * Удаление устройства: помечаем его в Domain (persistent список) и просим leave прямо
+ * сейчас. Если устройства нет в сети, пометка остаётся — leave уйдёт при announce.
+ */
+static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args, size_t args_size,
+                                         void *ctx)
+{
+    (void)type;
+    (void)ctx;
+    if (args == NULL || args_size != sizeof(ha_device_uid_t)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    const ha_device_uid_t uid = *(const ha_device_uid_t *)args;
+    const ha_device_remove_record_t record = {.requested = 1};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    const sys_error_t put = domain_entity_put(
+        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &record, &meta, &changed);
+    if (sys_failed(put)) {
+        return put;
+    }
+
+    if (s_remove_requests == NULL || xQueueSend(s_remove_requests, &uid, 0) != pdTRUE) {
+        return zigbee_fail(SYS_CODE_BUSY);
     }
     return SYS_OK;
 }
@@ -178,6 +210,23 @@ static void zigbee_task(void *arg)
                     zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
                 } else {
                     ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
+                    /* Устройство ушло — снимаем и пометку на удаление. */
+                    domain_fact_meta_t meta = {0};
+                    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+                    (void)domain_entity_remove(
+                        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &meta);
+                }
+            }
+            continue;
+        }
+
+        if (ready == s_remove_requests) {
+            ha_device_uid_t uid = 0;
+            if (xQueueReceive(s_remove_requests, &uid, 0) == pdTRUE) {
+                const sys_error_t err = zigbee_radio_request_leave(uid);
+                if (sys_failed(err)) {
+                    ESP_LOGI(TAG, "leave not sent: uid=%llx err=%u (ждём announce)",
+                             (unsigned long long)uid, (unsigned)err.code);
                 }
             }
         }
@@ -196,18 +245,20 @@ sys_error_t zigbee_start(domain_t *domain)
     s_interviews = xQueueCreate(ZIGBEE_INTERVIEW_QUEUE_LENGTH, sizeof(zigbee_interview_result_t));
     s_events = xQueueCreate(ZIGBEE_EVENT_QUEUE_LENGTH, sizeof(zigbee_event_t));
     s_leaves = xQueueCreate(ZIGBEE_LEAVE_QUEUE_LENGTH, sizeof(ha_device_uid_t));
+    s_remove_requests = xQueueCreate(ZIGBEE_REMOVE_QUEUE_LENGTH, sizeof(ha_device_uid_t));
     s_inbox = xQueueCreateSet(ZIGBEE_REPORT_QUEUE_LENGTH + ZIGBEE_COMMAND_QUEUE_LENGTH +
                               ZIGBEE_INTERVIEW_QUEUE_LENGTH + ZIGBEE_EVENT_QUEUE_LENGTH +
-                              ZIGBEE_LEAVE_QUEUE_LENGTH);
+                              ZIGBEE_LEAVE_QUEUE_LENGTH + ZIGBEE_REMOVE_QUEUE_LENGTH);
     if (s_reports == NULL || s_commands == NULL || s_interviews == NULL || s_events == NULL ||
-        s_leaves == NULL || s_inbox == NULL) {
+        s_leaves == NULL || s_remove_requests == NULL || s_inbox == NULL) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
     if (xQueueAddToSet(s_reports, s_inbox) != pdPASS ||
         xQueueAddToSet(s_commands, s_inbox) != pdPASS ||
         xQueueAddToSet(s_interviews, s_inbox) != pdPASS ||
         xQueueAddToSet(s_events, s_inbox) != pdPASS ||
-        xQueueAddToSet(s_leaves, s_inbox) != pdPASS) {
+        xQueueAddToSet(s_leaves, s_inbox) != pdPASS ||
+        xQueueAddToSet(s_remove_requests, s_inbox) != pdPASS) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
 
@@ -217,7 +268,12 @@ sys_error_t zigbee_start(domain_t *domain)
     }
 
     /* Регистрация исполнителя — часть инициализации, а не runtime-механизм. */
-    return domain_register_command(domain, HA_CMD_ZIGBEE_CLUSTER, zigbee_execute, NULL);
+    const sys_error_t cluster =
+        domain_register_command(domain, HA_CMD_ZIGBEE_CLUSTER, zigbee_execute, NULL);
+    if (sys_failed(cluster)) {
+        return cluster;
+    }
+    return domain_register_command(domain, HA_CMD_DEVICE_REMOVE, zigbee_remove_execute, NULL);
 }
 
 sys_error_t zigbee_submit_report(const zigbee_report_t *report)

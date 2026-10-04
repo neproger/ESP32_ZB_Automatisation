@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { store } from '../store.js'
-import { renameDevice } from '../proto.js'
+import { renameDevice, removeDevice, cancelRemoveDevice } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
 import EndpointWidgets from './EndpointWidgets.jsx'
 import StateAttr from './StateAttr.jsx'
@@ -9,6 +9,7 @@ export default function DeviceCard({ dev }) {
   const { key, record } = dev
   const [name, setName] = useState(record.name)
   useEffect(() => setName(record.name), [record.name])
+  const removing = store.isMarkedForRemoval(key.uid)
 
   const endpoints = [...store.endpoints.values()]
     .filter((e) => e.key.uid === key.uid)
@@ -28,6 +29,14 @@ export default function DeviceCard({ dev }) {
         />
         {record.model && <span className="tag">{record.model}</span>}
         <a className="uid" href={`#/device/${key.uid}`}>{uidHex(key.uid)}</a>
+        {removing ? (
+          <>
+            <span className="tag warn">на удаление</span>
+            <button onClick={() => store.send(cancelRemoveDevice(key.uid))}>Отменить</button>
+          </>
+        ) : (
+          <button onClick={() => store.send(removeDevice(key.uid))}>Удалить</button>
+        )}
       </div>
 
       {endpoints.length > 0 &&

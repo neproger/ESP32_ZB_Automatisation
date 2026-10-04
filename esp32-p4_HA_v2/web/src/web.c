@@ -41,6 +41,8 @@ _Static_assert(WEB_ENTITY_DEVICE == (uint32_t)HA_ENTITY_DEVICE, "entity id: devi
 _Static_assert(WEB_ENTITY_STATE == (uint32_t)HA_ENTITY_STATE, "entity id: state");
 _Static_assert(WEB_ENTITY_ENDPOINT == (uint32_t)HA_ENTITY_ENDPOINT, "entity id: endpoint");
 _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
+_Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
+               "entity id: device-remove");
 
 /* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
 _Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
@@ -58,6 +60,7 @@ static const web_schema_t SCHEMA[] = {
     {WEB_ENTITY_STATE, sizeof(ha_zb_state_key_t), sizeof(ha_zb_state_record_t)},
     {WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t)},
     {WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t)},
+    {WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)},
 };
 #define WEB_SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
 
@@ -268,6 +271,40 @@ static uint16_t web_do_automation_put(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_device_uid_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_device_uid_t uid;
+    memcpy(&uid, args, sizeof(uid));
+
+    const domain_fact_target_t target = {
+        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .key = &uid,
+    };
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err =
+        domain_post(s_domain, HA_CMD_DEVICE_REMOVE, &uid, sizeof(uid), &target, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+static uint16_t web_do_device_remove_cancel(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_device_uid_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_device_uid_t uid;
+    memcpy(&uid, args, sizeof(uid));
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err = domain_entity_remove(
+        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 static uint16_t web_do_automation_remove(const uint8_t *args, size_t len)
 {
     if (len != sizeof(ha_automation_key_t)) {
@@ -309,6 +346,12 @@ static void web_handle_command(int fd, uint16_t seq, uint8_t cmd, const uint8_t 
         break;
     case WEB_CMD_AUTOMATION_REMOVE:
         status = web_do_automation_remove(args, len);
+        break;
+    case WEB_CMD_DEVICE_REMOVE:
+        status = web_do_device_remove(args, len);
+        break;
+    case WEB_CMD_DEVICE_REMOVE_CANCEL:
+        status = web_do_device_remove_cancel(args, len);
         break;
     default:
         break;
