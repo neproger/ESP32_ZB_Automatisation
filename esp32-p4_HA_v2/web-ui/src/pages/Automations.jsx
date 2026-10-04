@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, automationRemove } from '../proto.js'
-import { uidHex, clusterName } from '../schema.js'
+import { uidHex, clusterName } from '../zcl.js'
 import AutomationForm from '../components/AutomationForm.jsx'
 
 export default function Automations() {

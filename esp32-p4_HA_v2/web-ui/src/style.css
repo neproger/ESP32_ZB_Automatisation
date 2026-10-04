@@ -191,3 +191,47 @@ table.ep td {
 table.ep td .attr {
   margin: 0 0.25rem 0.25rem 0;
 }
+
+.endpoint {
+  margin-top: 0.6rem;
+  border-top: 1px solid #232830;
+  padding-top: 0.5rem;
+}
+.ep-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-size: 0.8rem;
+  color: #9aa4b2;
+}
+.widgets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.45rem;
+  align-items: center;
+}
+.wrow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.wcol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 170px;
+}
+.wlabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.sensor {
+  font-size: 0.8rem;
+  color: #9aa4b2;
+}
+.sensor b {
+  color: #e6e6e6;
+}

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { renameDevice } from '../proto.js'
-import { uidHex, clusterName } from '../schema.js'
+import { uidHex, clusterName, describeProfile, describeDeviceId, hex16 } from '../zcl.js'
+import EndpointWidgets from '../components/EndpointWidgets.jsx'
 import StateAttr from '../components/StateAttr.jsx'
 
 export default function DeviceDetail({ uid }) {
@@ -23,7 +24,9 @@ export default function DeviceDetail({ uid }) {
   }
 
   const states = [...s.states.values()].filter((st) => st.key.uid === target)
-  const endpoints = [...s.endpoints.values()].filter((e) => e.key.uid === target)
+  const endpoints = [...s.endpoints.values()]
+    .filter((e) => e.key.uid === target)
+    .sort((a, b) => a.key.ep - b.key.ep)
 
   return (
     <section>
@@ -42,40 +45,38 @@ export default function DeviceDetail({ uid }) {
           <span className="uid">{uidHex(target)}</span>
         </div>
 
-        <h3>Атрибуты</h3>
+        <h3>Endpoints</h3>
+        {endpoints.length === 0 ? (
+          <p className="muted">топология ещё не собрана</p>
+        ) : (
+          endpoints.map((e) => (
+            <div className="endpoint" key={e.key.ep}>
+              <div className="ep-head">
+                EP{e.key.ep}
+                <span className="uid">
+                  profile {describeProfile(e.record.profile) || hex16(e.record.profile)} · id{' '}
+                  {describeDeviceId(e.record.deviceId) || hex16(e.record.deviceId)}
+                </span>
+              </div>
+              <div className="attrs">
+                {e.record.clusters.map((c) => (
+                  <span className="attr small" key={c.id}>
+                    {clusterName(c.id)}{c.role === 1 ? '' : ' (client)'}
+                  </span>
+                ))}
+              </div>
+              <EndpointWidgets uid={target} ep={e.key.ep} record={e.record} states={states.filter((st) => st.key.ep === e.key.ep)} />
+            </div>
+          ))
+        )}
+
+        <h3>Атрибуты (сырые)</h3>
         <div className="attrs">
           {states.length === 0 && <span className="muted">атрибутов пока нет</span>}
           {states.map((st) => (
             <StateAttr key={`${st.key.cluster}:${st.key.attr}:${st.key.ep}`} uid={target} st={st} />
           ))}
         </div>
-
-        <h3>Endpoints</h3>
-        {endpoints.length === 0 ? (
-          <p className="muted">топология ещё не собрана</p>
-        ) : (
-          <table className="ep">
-            <thead>
-              <tr><th>EP</th><th>profile</th><th>device id</th><th>кластеры</th></tr>
-            </thead>
-            <tbody>
-              {endpoints.map((e) => (
-                <tr key={e.key.ep}>
-                  <td>{e.key.ep}</td>
-                  <td>0x{e.record.profile.toString(16)}</td>
-                  <td>0x{e.record.deviceId.toString(16)}</td>
-                  <td>
-                    {e.record.clusters.map((c) => (
-                      <span className="attr small" key={c.id}>
-                        {clusterName(c.id)}{c.role === 1 ? ' (server)' : ' (client)'}
-                      </span>
-                    ))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
     </section>
   )

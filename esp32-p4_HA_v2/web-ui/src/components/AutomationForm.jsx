@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { store } from '../store.js'
 import { automationPut } from '../proto.js'
-import { uidHex, CLUSTER_ONOFF } from '../schema.js'
+import { uidHex, CLUSTER_ONOFF } from '../zcl.js'
 
 const TRIGGER_CMDS = [
   ['Toggle', 2],
