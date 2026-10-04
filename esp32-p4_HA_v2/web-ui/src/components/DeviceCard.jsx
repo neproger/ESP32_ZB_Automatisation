@@ -3,6 +3,7 @@ import { store } from '../store.js'
 import { renameDevice } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
 import EndpointWidgets from './EndpointWidgets.jsx'
+import StateAttr from './StateAttr.jsx'
 
 export default function DeviceCard({ dev }) {
   const { key, record } = dev
@@ -29,24 +30,36 @@ export default function DeviceCard({ dev }) {
         <a className="uid" href={`#/device/${key.uid}`}>{uidHex(key.uid)}</a>
       </div>
 
-      {endpoints.length === 0 && <div className="attrs"><span className="muted">топология ещё не собрана</span></div>}
-
-      {endpoints.map((e) => (
-        <div className="endpoint" key={e.key.ep}>
-          <div className="ep-head">
-            EP{e.key.ep}
-            <span className="uid">
-              {e.record.clusters.map((c) => clusterName(c.id) + (c.role === 1 ? '' : ' (client)')).join(', ') || '—'}
-            </span>
+      {endpoints.length > 0 &&
+        endpoints.map((e) => (
+          <div className="endpoint" key={e.key.ep}>
+            <div className="ep-head">
+              EP{e.key.ep}
+              <span className="uid">
+                {e.record.clusters.map((c) => clusterName(c.id) + (c.role === 1 ? '' : ' (client)')).join(', ') || '—'}
+              </span>
+            </div>
+            <EndpointWidgets
+              uid={key.uid}
+              ep={e.key.ep}
+              record={e.record}
+              states={states.filter((s) => s.key.ep === e.key.ep)}
+            />
           </div>
-          <EndpointWidgets
-            uid={key.uid}
-            ep={e.key.ep}
-            record={e.record}
-            states={states.filter((s) => s.key.ep === e.key.ep)}
-          />
+        ))}
+
+      {/* Пока топология (endpoint) не собрана — показываем известные атрибуты. */}
+      {endpoints.length === 0 && states.length > 0 && (
+        <div className="attrs">
+          {states.map((st) => (
+            <StateAttr key={`${st.key.ep}:${st.key.cluster}:${st.key.attr}`} uid={key.uid} st={st} />
+          ))}
         </div>
-      ))}
+      )}
+
+      {endpoints.length === 0 && states.length === 0 && (
+        <div className="attrs"><span className="muted">данных пока нет — устройство не прислало отчёт</span></div>
+      )}
     </div>
   )
 }
