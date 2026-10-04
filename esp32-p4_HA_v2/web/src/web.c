@@ -469,36 +469,40 @@ static sys_error_t wifi_connect(void)
 /* --- HTTP / WebSocket --------------------------------------------------- */
 
 #ifdef WEB_UI_EMBEDDED
-/* Собранный web-ui встроен в прошивку (web/ui, символы EMBED_FILES). */
+/* Собранный web-ui встроен в прошивку (web/ui). index.html — как есть, скрипты/стили — gzip. */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
-extern const uint8_t app_js_start[] asm("_binary_app_js_start");
-extern const uint8_t app_js_end[] asm("_binary_app_js_end");
-extern const uint8_t app_css_start[] asm("_binary_app_css_start");
-extern const uint8_t app_css_end[] asm("_binary_app_css_end");
+extern const uint8_t app_js_gz_start[] asm("_binary_app_js_gz_start");
+extern const uint8_t app_js_gz_end[] asm("_binary_app_js_gz_end");
+extern const uint8_t app_css_gz_start[] asm("_binary_app_css_gz_start");
+extern const uint8_t app_css_gz_end[] asm("_binary_app_css_gz_end");
 
 static esp_err_t send_embedded(httpd_req_t *req, const char *content_type, const uint8_t *begin,
-                               const uint8_t *end)
+                               const uint8_t *end, bool gzip)
 {
     httpd_resp_set_type(req, content_type);
     /* Имена файлов фиксированные: запрещаем кэш, иначе браузер держит старую сборку. */
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (gzip) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    }
     return httpd_resp_send(req, (const char *)begin, (ssize_t)(end - begin));
 }
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    return send_embedded(req, "text/html; charset=utf-8", index_html_start, index_html_end);
+    return send_embedded(req, "text/html; charset=utf-8", index_html_start, index_html_end, false);
 }
 
 static esp_err_t app_js_handler(httpd_req_t *req)
 {
-    return send_embedded(req, "application/javascript; charset=utf-8", app_js_start, app_js_end);
+    return send_embedded(req, "application/javascript; charset=utf-8", app_js_gz_start,
+                         app_js_gz_end, true);
 }
 
 static esp_err_t app_css_handler(httpd_req_t *req)
 {
-    return send_embedded(req, "text/css; charset=utf-8", app_css_start, app_css_end);
+    return send_embedded(req, "text/css; charset=utf-8", app_css_gz_start, app_css_gz_end, true);
 }
 #else
 static const char *ROOT_PAGE =

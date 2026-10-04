@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/gzip.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "preact": "^10.24.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

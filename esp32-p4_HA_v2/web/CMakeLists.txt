@@ -1,6 +1,7 @@
-# Собранный web-ui (vite → web/ui). Если его нет — прошивка отдаёт заглушку.
+# Собранный web-ui (vite + gzip → web/ui). index.html — как есть, скрипты/стили — *.gz
+# (отдаются с Content-Encoding: gzip). Если файлов нет — прошивка отдаёт заглушку.
 set(WEB_UI_FILES "")
-foreach(f "index.html" "app.js" "app.css")
+foreach(f "index.html" "app.js.gz" "app.css.gz")
     if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ui/${f}")
         list(APPEND WEB_UI_FILES "ui/${f}")
     endif()
