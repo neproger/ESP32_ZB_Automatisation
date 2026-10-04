@@ -89,18 +89,18 @@ export function entityId(type, key) {
 }
 
 const ATTR_NAMES = {
-  '6:0': 'On/Off',
-  '8:0': 'Уровень',
-  '1024:0': 'Освещённость',
-  '1026:0': 'Температура',
-  '1029:0': 'Влажность',
-  '1030:0': 'Давление',
-  '1024:0x0010': 'Освещённость',
-  '1026:0x0010': 'Температура',
+  '0:4': 'производитель',
+  '0:5': 'модель',
+  '6:0': 'состояние',
+  '8:0': 'уровень',
+  '1024:0': 'значение',
+  '1026:0': 'значение',
+  '1029:0': 'значение',
+  '1030:0': 'значение',
 }
 
 export function attrName(cluster, attr) {
-  return ATTR_NAMES[`${cluster}:${attr}`] || `cluster ${cluster}/${attr}`
+  return ATTR_NAMES[`${cluster}:${attr}`] || 'attr 0x' + attr.toString(16)
 }
 
 // Значение атрибута: ZCL-тип + сырые байты. Масштаб — сторона читателя (ha_zigbee.h).
@@ -130,6 +130,39 @@ export const CLUSTER_ONOFF = 6
 export const CLUSTER_LEVEL = 8
 export const CMD_ONOFF = { OFF: 0, ON: 1, TOGGLE: 2 }
 export const CMD_LEVEL_MOVE_TO = 0
+
+const CLUSTER_NAMES = {
+  0x0000: 'Basic',
+  0x0001: 'Питание',
+  0x0003: 'Identify',
+  0x0004: 'Группы',
+  0x0005: 'Сцены',
+  0x0006: 'On/Off',
+  0x0007: 'On/Off Switch',
+  0x0008: 'Уровень',
+  0x000a: 'Analog Input',
+  0x0019: 'OTA',
+  0x0102: 'Шторы',
+  0x0201: 'Термостат',
+  0x0202: 'Вентилятор',
+  0x0300: 'Цвет',
+  0x0400: 'Освещённость',
+  0x0402: 'Температура',
+  0x0403: 'Давление',
+  0x0405: 'Влажность',
+  0x0406: 'Присутствие',
+  0x0500: 'IAS Zone',
+  0x0702: 'Metering',
+  0x0b04: 'Электроизмерения',
+}
+
+export function clusterName(id) {
+  return CLUSTER_NAMES[id] || 'cluster 0x' + id.toString(16)
+}
+
+export function uidHex(uid) {
+  return '0x' + uid.toString(16).padStart(16, '0')
+}
 
 // Кодирование записи правила (48 байт, layout C с выравниванием; см. WEB_PROTOCOL §5).
 export function encodeAutomationRecord(r) {
