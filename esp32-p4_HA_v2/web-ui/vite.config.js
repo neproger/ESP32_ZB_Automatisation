@@ -1,14 +1,21 @@
 import { defineConfig } from 'vite'
 
-// Дев: клиент на ПК, WS — на устройство. `VITE_WS_URL` переопределяет адрес,
-// иначе берём хост из window.location (когда SPA отдаётся самим устройством).
+// Сборка кладётся прямо в компонент прошивки (web/ui), откуда её встраивает
+// EMBED_FILES. Имена файлов фиксированы (без хэша), чтобы CMake знал символы.
 export default defineConfig({
   server: {
     host: true,
     port: 5173,
   },
   build: {
-    outDir: 'dist',
+    outDir: '../web/ui',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'app.js',
+        assetFileNames: 'app.[ext]',
+        chunkFileNames: 'chunk-[name].js',
+      },
+    },
   },
 })

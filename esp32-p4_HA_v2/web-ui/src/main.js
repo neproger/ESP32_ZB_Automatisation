@@ -1,3 +1,4 @@
+import './style.css'
 import { MSG, decodeFrame, zbCommand, renameDevice, snapshot } from './proto.js'
 import {
   ENTITY,

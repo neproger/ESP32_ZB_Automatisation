@@ -53,8 +53,12 @@ ENTITY_UPSERTED → domain_get → Web DTO → STATE_DELTA → Browser
 
 Провод — `WEB_PROTOCOL.md` (вариант A: сырые записи Domain, без DTO/строк; маленький
 endian; 8‑байтный заголовок). Клиент — `web-ui/` (Vite, vanilla): схема записей
-(`schema.js`), кадры (`proto.js`), WS + минимальный UI (`main.js`). Сборка — `npm run
-build` (`dist/`); в дев — `npm run dev` и `VITE_WS_URL=ws://<ip>/ws`.
+(`schema.js`), кадры (`proto.js`), WS + UI (`main.js`).
+
+`npm run build` кладёт сборку в `web/ui/`, откуда прошивка встраивает её (`EMBED_FILES`)
+и отдаёт по `/` — отдельный сервер не нужен, устройство отдаёт приложение само. Порядок:
+`npm run build` (в `web-ui`) → `idf.py build`. Без собранного `web/ui/` прошивка отдаёт
+заглушку. В дев — `npm run dev`, `VITE_WS_URL=ws://<ip>/ws` (или `?ws=`).
 
 ## 6. Открытые вопросы
 

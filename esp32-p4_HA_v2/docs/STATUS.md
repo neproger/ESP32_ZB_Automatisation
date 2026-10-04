@@ -14,7 +14,7 @@
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `automation` | подписка на EVENT, правила (entity `automation`), `domain_post` команды | host-тест 1/1, сквозной цикл на P4 |
-| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование) | сборка/флаш, старт сервера; клиент `web-ui` собирается |
+| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и `CMD_RESULT` проверены |
 | `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)

@@ -409,16 +409,47 @@ static sys_error_t wifi_connect(void)
 
 /* --- HTTP / WebSocket --------------------------------------------------- */
 
-/* Заглушка: сюда кладётся собранный web-ui (SPA). */
+#ifdef WEB_UI_EMBEDDED
+/* Собранный web-ui встроен в прошивку (web/ui, символы EMBED_FILES). */
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[] asm("_binary_index_html_end");
+extern const uint8_t app_js_start[] asm("_binary_app_js_start");
+extern const uint8_t app_js_end[] asm("_binary_app_js_end");
+extern const uint8_t app_css_start[] asm("_binary_app_css_start");
+extern const uint8_t app_css_end[] asm("_binary_app_css_end");
+
+static esp_err_t send_embedded(httpd_req_t *req, const char *content_type, const uint8_t *begin,
+                               const uint8_t *end)
+{
+    httpd_resp_set_type(req, content_type);
+    return httpd_resp_send(req, (const char *)begin, (ssize_t)(end - begin));
+}
+
+static esp_err_t root_handler(httpd_req_t *req)
+{
+    return send_embedded(req, "text/html; charset=utf-8", index_html_start, index_html_end);
+}
+
+static esp_err_t app_js_handler(httpd_req_t *req)
+{
+    return send_embedded(req, "application/javascript; charset=utf-8", app_js_start, app_js_end);
+}
+
+static esp_err_t app_css_handler(httpd_req_t *req)
+{
+    return send_embedded(req, "text/css; charset=utf-8", app_css_start, app_css_end);
+}
+#else
 static const char *ROOT_PAGE =
     "<!doctype html><meta charset=utf-8><title>ESP32-P4 HA</title>"
-    "<h1>ESP32-P4 Home Automation</h1><p>Web service is up.</p>";
+    "<h1>ESP32-P4 Home Automation</h1><p>Web service is up (no embedded UI).</p>";
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, ROOT_PAGE, HTTPD_RESP_USE_STRLEN);
 }
+#endif
 
 static esp_err_t ws_handler(httpd_req_t *req)
 {
@@ -480,6 +511,20 @@ static sys_error_t server_start(void)
         .is_websocket = true,
     };
     httpd_register_uri_handler(s_server, &root);
+#ifdef WEB_UI_EMBEDDED
+    const httpd_uri_t app_js = {
+        .uri = "/app.js",
+        .method = HTTP_GET,
+        .handler = app_js_handler,
+    };
+    const httpd_uri_t app_css = {
+        .uri = "/app.css",
+        .method = HTTP_GET,
+        .handler = app_css_handler,
+    };
+    httpd_register_uri_handler(s_server, &app_js);
+    httpd_register_uri_handler(s_server, &app_css);
+#endif
     httpd_register_uri_handler(s_server, &ws);
     return SYS_OK;
 }
