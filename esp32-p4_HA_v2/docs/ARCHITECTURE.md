@@ -28,10 +28,10 @@ Command — намерение что-то сделать
            ha_model — общий словарь форм данных
            линкуют сервисы и bootstrap, но не Domain
              ╱              │              ╲
-        Zigbee          Automation        Web / Display
+        Zigbee       Automation     Web / Display / System
 
                   Services / Clients
-       Zigbee | Automation | Web | Display
+       Zigbee | Automation | Web | Display | System
                        │
                       ▼
         ┌───────────────── Domain API ─────────────────┐
@@ -191,6 +191,9 @@ payload, процедуры создания/удаления устройств
 - **Automation service** — подписчик фактов; при срабатывании правила постит команду.
   Работает по текущему состоянию (event = триггер, state = данные); события при этом
   не схлопываются.
+- **System service** — точное время (SNTP) и, далее, погода. Держит синтетическое
+  системное устройство «Время» и сущность `location` в Domain, публикует события-тики.
+  Детали — `services/SYSTEM.md`.
 - **Web service (BFF)** — адаптер для браузера: projection canonical records → DTO,
   snapshot при подключении, deltas, приём команд/CRUD. Все фронтенд-особенности
   (batching, throttling, формат) живут здесь и не лезут в Domain.
@@ -232,6 +235,7 @@ docs/
 │   ├── ZIGBEE_CAPABILITIES.md
 │   ├── ZIGBEE_IMPL_JOURNAL.md
 │   ├── AUTOMATION.md
+│   ├── SYSTEM.md
 │   └── WEB.md
 ├── clients/
 │   └── DISPLAY.md

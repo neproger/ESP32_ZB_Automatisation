@@ -13,8 +13,9 @@
 | `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
-| `automation` | подписка на EVENT, правила (entity `automation`), `domain_post` команды | host-тест 1/1, сквозной цикл на P4 |
-| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и `CMD_RESULT` проверены |
+| `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
+| `system` | сервис времени: SNTP + GeoIP (пояс/город, `ip-api`); синтетический девайс «Время» и сущность `location`; состояния времени и события-тики (`MINUTE/HALF_HOUR/HOUR/DAY`) | запуск на P4: `sntp sync: ESP_OK`, tz/город, snapshot с девайсом/состояниями/location |
+| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
 | `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
@@ -35,6 +36,9 @@ Wi-Fi (внешний C3)    → ESP-Hosted UART2 GPIO32/28, reset GPIO34, 11520
                       → ENTITY_UPSERTED state=2 (Level, OnOff) от живого устройства
 события               → кнопка ESP32C6-DISPLAY: EVENT (OnOff Toggle) с payload
 automation            → кнопка → EVENT → правило → COMMAND_SENT → репорт состояния=2
+системный сервис      → SNTP sync; GeoIP пояс/город; девайс «Время» + `location` в Domain
+системный тик         → ENTITY_UPSERTED состояний времени + EVENT (MINUTE_TICK) каждую минуту
+TIME-триггер          → правило «будильник» сохраняется (kind=1, minutes_of_day, weekday_mask)
 ```
 
 Платы хватает на сборку и наблюдение: `idf.py build flash monitor` из корня проекта.
@@ -59,11 +63,15 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 ## 4. Что дальше
 
 ```text
-1. Правила Automation из UI/Web     — вместо bring-up seed; CRUD правил
-2. device_meta (last_seen/rssi/lqi) — операционные данные для потребителей
-3. Явные операции устройством       — удаление пользователем, permit-join
-4. Web service (BFF)                — проекция записей в DTO, приём команд
+1. Погода (system phase 2)          — Open-Meteo; состояния погоды + событие WEATHER_CHANGED
+2. Триггер STATE (порог атрибута)   — «свет по движению», «закрыть по холоду» без кнопки
+3. device_meta (last_seen/rssi/lqi)
+4. Отдельный девайс «Система»       — служебные вещи (uptime, версия) при старте
 ```
+
+Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`
+и условия. Порог `STATE` потребует расширения записи правила (смена `persist_key` на
+версионный, чтобы не терять данные устройств при миграции mstore).
 
 Порядок прежний: Zigbee — единственный источник состояния, Automation и Web
 потребляют то, что он produces.
