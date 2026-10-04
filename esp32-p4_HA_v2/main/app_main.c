@@ -60,17 +60,17 @@ static const domain_entity_desc_t state_desc = {
 };
 
 /*
- * Топология: состав кластеров endpoint'а. RAM — интервью повторяется на каждом старте,
- * а персистентность здесь означала бы запись во flash ради данных, которые и так
- * приходят заново.
+ * Топология: состав кластеров endpoint'а. FLASH: у устройства endpoint'ы не меняются,
+ * поэтому интервью сохраняется один раз и переживает перезагрузку (интервью обновляет
+ * запись при повторном join). Состояние атрибутов при этом остаётся RAM.
  */
 static const domain_entity_desc_t endpoint_desc = {
     .type = (domain_entity_t)HA_ENTITY_ENDPOINT,
     .key_size = sizeof(ha_endpoint_key_t),
     .payload_size = sizeof(ha_endpoint_record_t),
     .capacity = APP_ENDPOINT_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM,
-    .persist_key = NULL,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "endpoint",
 };
 
 /* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */

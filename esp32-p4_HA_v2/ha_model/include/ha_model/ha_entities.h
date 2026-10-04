@@ -11,8 +11,10 @@
  *   - runtime state — одна сущность на один атрибут (docs/services/ZIGBEE.md §9).
  *
  * Чего здесь нет: operational metadata (last_seen, rssi, lqi) — она меняется на
- * каждом сообщении и потому в canonical state не входит (RECORD_MODEL.md:123-138);
- * топология (endpoint, cluster list) — отдельный шаг вместе с интервью.
+ * каждом сообщении и потому в canonical state не входит (RECORD_MODEL.md:123-138).
+ * Топология (endpoint, cluster list) — отдельный шаг вместе с интервью; у устройства
+ * она не меняется, поэтому endpoint хранится во flash (bootstrap: FLASH + persist_key),
+ * а state атрибутов — только RAM (репорты приносят его заново).
  */
 
 #include <stddef.h>
