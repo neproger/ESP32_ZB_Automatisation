@@ -9,8 +9,8 @@ export default function DeviceCard({ dev }) {
   const { key, record } = dev
   const [name, setName] = useState(record.name)
   useEffect(() => setName(record.name), [record.name])
-  const removing = store.isMarkedForRemoval(key.uid)
 
+  const removing = store.isMarkedForRemoval(key.uid)
   const endpoints = [...store.endpoints.values()]
     .filter((e) => e.key.uid === key.uid)
     .sort((a, b) => a.key.ep - b.key.ep)
@@ -18,7 +18,7 @@ export default function DeviceCard({ dev }) {
 
   return (
     <div className="card">
-      <div className="title">
+      <div className="card-head">
         <input
           className="name"
           value={name}
@@ -27,37 +27,38 @@ export default function DeviceCard({ dev }) {
           onBlur={() => store.send(renameDevice(key.uid, name))}
           onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
         />
-        {record.model && <span className="tag">{record.model}</span>}
+        {record.model && <span className="chip">{record.model}</span>}
         <a className="uid" href={`#/device/${key.uid}`}>{uidHex(key.uid)}</a>
+        <span className="spacer" />
         {removing ? (
           <>
-            <span className="tag warn">на удаление</span>
-            <button onClick={() => store.send(cancelRemoveDevice(key.uid))}>Отменить</button>
+            <span className="chip warn">на удаление</span>
+            <button className="ghost" onClick={() => store.send(cancelRemoveDevice(key.uid))}>Отменить</button>
           </>
         ) : (
-          <button onClick={() => store.send(removeDevice(key.uid))}>Удалить</button>
+          <button className="ghost danger" onClick={() => store.send(removeDevice(key.uid))}>Удалить</button>
         )}
       </div>
 
-      {endpoints.length > 0 &&
-        endpoints.map((e) => (
-          <div className="endpoint" key={e.key.ep}>
-            <div className="ep-head">
-              EP{e.key.ep}
-              <span className="uid">
-                {e.record.clusters.map((c) => clusterName(c.id) + (c.role === 1 ? '' : ' (client)')).join(', ') || '—'}
-              </span>
-            </div>
-            <EndpointWidgets
-              uid={key.uid}
-              ep={e.key.ep}
-              record={e.record}
-              states={states.filter((s) => s.key.ep === e.key.ep)}
-            />
+      {endpoints.map((e) => (
+        <div className="endpoint" key={e.key.ep}>
+          <div className="ep-head">
+            <span className="ep-badge">EP{e.key.ep}</span>
+            <span className="clusters">
+              {e.record.clusters.map((c) => (
+                <span className="chip sm" key={c.id}>{clusterName(c.id)}{c.role === 1 ? '' : ' ·client'}</span>
+              ))}
+            </span>
           </div>
-        ))}
+          <EndpointWidgets
+            uid={key.uid}
+            ep={e.key.ep}
+            record={e.record}
+            states={states.filter((s) => s.key.ep === e.key.ep)}
+          />
+        </div>
+      ))}
 
-      {/* Пока топология (endpoint) не собрана — показываем известные атрибуты. */}
       {endpoints.length === 0 && states.length > 0 && (
         <div className="attrs">
           {states.map((st) => (

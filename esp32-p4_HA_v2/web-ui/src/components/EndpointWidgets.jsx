@@ -60,9 +60,10 @@ function ParamControl({ cmd, states, send }) {
 function LevelControl({ current, cmd, send }) {
   const [value, setValue] = useState(current)
   useEffect(() => setValue(current), [current])
+  const pct = Math.round((value / 254) * 100)
   return (
     <div className="wcol">
-      <div className="muted">Уровень: {value}</div>
+      <div className="wlabel">Уровень <b>{pct}%</b></div>
       <input type="range" min="0" max="254" value={value}
         onChange={(e) => { const v = Number(e.target.value); setValue(v); send(cmd.id, [...u8(v), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
     </div>

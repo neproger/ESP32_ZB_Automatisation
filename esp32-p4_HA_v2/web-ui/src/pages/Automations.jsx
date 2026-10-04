@@ -3,8 +3,18 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
-import { describeActionArgs } from '../automation.js'
+import { describeActionArgs, TRIGGER_CMDS, ACTION_CLUSTERS } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
+
+function triggerCmdName(id) {
+  const e = TRIGGER_CMDS.find(([v]) => v === id)
+  return e ? e[1] : '0x' + id.toString(16)
+}
+function actionCmdName(cluster, cmd) {
+  const c = ACTION_CLUSTERS.find((x) => x.id === cluster)
+  const e = c && c.cmds.find(([v]) => v === cmd)
+  return e ? e[1] : '0x' + cmd.toString(16)
+}
 
 export default function Automations() {
   const s = useStore()
@@ -28,23 +38,28 @@ export default function Automations() {
       {list.length === 0 && <p className="muted pad">правил пока нет</p>}
 
       {list.map(({ key, record }) => (
-        <div className="card" key={'auto:' + key.id}>
-          <div className="title">
-            <input
-              type="checkbox"
-              checked={!!record.enabled}
-              onChange={(e) => store.send(automationPut(key.id, { ...record, enabled: e.target.checked }))}
-            />
-            <span>Правило #{key.id}</span>
-            <button onClick={() => setEditing(key.id)}>Изменить</button>
-            <button onClick={() => store.send(automationRemove(key.id))}>Удалить</button>
+        <div className={`card${record.enabled ? '' : ' off'}`} key={'auto:' + key.id}>
+          <div className="card-head">
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={!!record.enabled}
+                onChange={(e) => store.send(automationPut(key.id, { ...record, enabled: e.target.checked }))}
+              />
+              <span />
+            </label>
+            <span className="rule-id">Правило #{key.id}</span>
+            <span className="spacer" />
+            <button className="ghost" onClick={() => setEditing(key.id)}>Изменить</button>
+            <button className="ghost danger" onClick={() => store.send(automationRemove(key.id))}>Удалить</button>
           </div>
-          <div className="attrs">
-            <span className="attr">
-              триггер: <b>{nameOf(record.triggerUid)}</b> · команда 0x{record.triggerCmd.toString(16)}
+          <div className="flow">
+            <span className="node trigger">
+              {nameOf(record.triggerUid)} · {triggerCmdName(record.triggerCmd)}
             </span>
-            <span className="attr">
-              действие: <b>{nameOf(record.actionUid)}</b> · EP{record.actionEp} · {clusterName(record.actionCluster)} · команда 0x{record.actionCmd.toString(16)}
+            <span className="arrow">→</span>
+            <span className="node action">
+              {nameOf(record.actionUid)} · EP{record.actionEp} · {clusterName(record.actionCluster)} · {actionCmdName(record.actionCluster, record.actionCmd)}
               {describeActionArgs(record.actionCluster, record.actionCmd, record.actionArgs)
                 ? ' · ' + describeActionArgs(record.actionCluster, record.actionCmd, record.actionArgs)
                 : ''}

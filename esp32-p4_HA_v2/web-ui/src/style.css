@@ -267,3 +267,56 @@ ul.events .kind {
 ul.events .kind.remove {
   color: #d9534f;
 }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.spacer { flex: 1 1 auto; }
+.chip {
+  font-size: 0.72rem;
+  color: #9aa4b2;
+  border: 1px solid #333a45;
+  border-radius: 10px;
+  padding: 0.05rem 0.5rem;
+}
+.chip.sm { font-size: 0.68rem; padding: 0.02rem 0.4rem; }
+.chip.warn { color: #e0a35a; border-color: #5a4a2a; }
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: #9aa4b2;
+}
+button.ghost:hover { background: #1d2229; color: #e6e6e6; }
+button.ghost.danger:hover { color: #ef5350; }
+.ep-badge {
+  background: #2d333c;
+  color: #cbd5e1;
+  border-radius: 6px;
+  padding: 0.05rem 0.45rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.clusters { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.wlabel b { color: #e6e6e6; margin-left: 0.25rem; }
+.switch { display: inline-flex; align-items: center; cursor: pointer; }
+.switch input { display: none; }
+.switch span {
+  width: 34px; height: 18px; border-radius: 10px; background: #3a4150; position: relative;
+  transition: background 0.15s;
+}
+.switch span::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #9aa4b2; transition: transform 0.15s;
+}
+.switch input:checked + span { background: #2e7d32; }
+.switch input:checked + span::after { transform: translateX(16px); background: #e6e6e6; }
+.rule-id { font-weight: 600; }
+.flow { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.5rem; flex-wrap: wrap; }
+.node { border-radius: 8px; padding: 0.35rem 0.6rem; font-size: 0.85rem; border: 1px solid #2a2f38; }
+.node.trigger { background: #21262e; }
+.node.action { background: #1c2530; }
+.arrow { color: #6b7280; }
+.card.off { opacity: 0.55; }
