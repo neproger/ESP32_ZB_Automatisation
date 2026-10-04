@@ -33,6 +33,9 @@ extern "C" {
 /* Пометить устройство на удаление (args = ha_device_uid_t): leave при появлении. */
 #define HA_CMD_DEVICE_REMOVE 2u
 
+/* Открыть сеть для подключения новых устройств (args = uint8_t seconds, 0 — закрыть). */
+#define HA_CMD_PERMIT_JOIN 3u
+
 /* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
 #define HA_ZB_COMMAND_ARGS_MAX 16u
 

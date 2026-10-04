@@ -18,6 +18,7 @@ export const CMD = {
   AUTOMATION_REMOVE: 5,
   DEVICE_REMOVE: 6,
   DEVICE_REMOVE_CANCEL: 7,
+  PERMIT_JOIN: 8,
 }
 
 export const HDR = 8
@@ -68,6 +69,11 @@ export function zbCommand({ uid, ep, cluster, command, args = [] }) {
 
 export function snapshot() {
   return encodeCommand(CMD.SNAPSHOT)
+}
+
+// PERMIT_JOIN args = u8 seconds (0 — закрыть сеть).
+export function permitJoin(seconds = 180) {
+  return encodeCommand(CMD.PERMIT_JOIN, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
 }
 
 // AUTOMATION_PUT args = u64 id | ha_automation_record_t (48 байт).

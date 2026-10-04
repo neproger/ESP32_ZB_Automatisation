@@ -41,6 +41,7 @@ typedef enum {
     WEB_CMD_AUTOMATION_REMOVE = 5,
     WEB_CMD_DEVICE_REMOVE = 6,
     WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
+    WEB_CMD_PERMIT_JOIN = 8,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

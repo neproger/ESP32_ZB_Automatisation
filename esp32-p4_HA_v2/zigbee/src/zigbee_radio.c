@@ -530,14 +530,28 @@ static void start_commissioning(ezb_bdb_comm_mode_mask_t mode)
 static void commission_on_startup(void)
 {
     if (ezb_bdb_is_factory_new()) {
+        /* Первый запуск: сеть нужно создать, formation открывает её для steering. */
         start_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
         return;
     }
 
-    const ezb_err_t open = ezb_bdb_open_network(PERMIT_JOIN_SECONDS);
-    if (open != EZB_ERR_NONE) {
-        ESP_LOGW(TAG, "network not opened: code=0x%x", (unsigned)open);
+    /* Сеть уже создана: на старте её не открываем — подключение новых устройств только
+     * по команде из UI (zigbee_radio_open_network). */
+    ESP_LOGI(TAG, "network closed; use the UI button to permit joining");
+}
+
+sys_error_t zigbee_radio_open_network(uint8_t seconds)
+{
+    if (!s_ready) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
     }
+    const ezb_err_t err = ezb_bdb_open_network(seconds);
+    if (err != EZB_ERR_NONE) {
+        ESP_LOGW(TAG, "network not opened: code=0x%x", (unsigned)err);
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    }
+    ESP_LOGI(TAG, "network open requested for %u s", (unsigned)seconds);
+    return SYS_OK;
 }
 
 /* Сеть создана: печатаем её координаты и переходим к steering, который её открывает. */

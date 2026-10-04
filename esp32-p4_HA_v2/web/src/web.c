@@ -290,6 +290,19 @@ static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+static uint16_t web_do_permit_join(const uint8_t *args, size_t len)
+{
+    if (len != 1) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    const uint8_t seconds = args[0];
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err =
+        domain_post(s_domain, HA_CMD_PERMIT_JOIN, &seconds, sizeof(seconds), NULL, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 static uint16_t web_do_device_remove_cancel(const uint8_t *args, size_t len)
 {
     if (len != sizeof(ha_device_uid_t)) {
@@ -352,6 +365,9 @@ static void web_handle_command(int fd, uint16_t seq, uint8_t cmd, const uint8_t 
         break;
     case WEB_CMD_DEVICE_REMOVE_CANCEL:
         status = web_do_device_remove_cancel(args, len);
+        break;
+    case WEB_CMD_PERMIT_JOIN:
+        status = web_do_permit_join(args, len);
         break;
     default:
         break;

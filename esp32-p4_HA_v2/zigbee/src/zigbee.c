@@ -27,6 +27,7 @@
 #define ZIGBEE_EVENT_QUEUE_LENGTH 8
 #define ZIGBEE_LEAVE_QUEUE_LENGTH 8
 #define ZIGBEE_REMOVE_QUEUE_LENGTH 8
+#define ZIGBEE_PERMIT_QUEUE_LENGTH 4
 #define ZIGBEE_TASK_STACK 4096
 #define ZIGBEE_TASK_PRIORITY 5
 
@@ -39,6 +40,7 @@ static QueueHandle_t s_interviews;
 static QueueHandle_t s_events;
 static QueueHandle_t s_leaves;
 static QueueHandle_t s_remove_requests;
+static QueueHandle_t s_permit_requests;
 static QueueSetHandle_t s_inbox;
 
 static sys_error_t zigbee_fail(sys_code_t code)
@@ -109,6 +111,22 @@ static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args
     }
 
     if (s_remove_requests == NULL || xQueueSend(s_remove_requests, &uid, 0) != pdTRUE) {
+        return zigbee_fail(SYS_CODE_BUSY);
+    }
+    return SYS_OK;
+}
+
+/* Открыть сеть для подключения новых устройств (по кнопке в UI). */
+static sys_error_t zigbee_permit_execute(domain_command_t type, const void *args, size_t args_size,
+                                         void *ctx)
+{
+    (void)type;
+    (void)ctx;
+    if (args == NULL || args_size != sizeof(uint8_t)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    const uint8_t seconds = *(const uint8_t *)args;
+    if (s_permit_requests == NULL || xQueueSend(s_permit_requests, &seconds, 0) != pdTRUE) {
         return zigbee_fail(SYS_CODE_BUSY);
     }
     return SYS_OK;
@@ -229,6 +247,17 @@ static void zigbee_task(void *arg)
                              (unsigned long long)uid, (unsigned)err.code);
                 }
             }
+            continue;
+        }
+
+        if (ready == s_permit_requests) {
+            uint8_t seconds = 0;
+            if (xQueueReceive(s_permit_requests, &seconds, 0) == pdTRUE) {
+                const sys_error_t err = zigbee_radio_open_network(seconds);
+                if (sys_failed(err)) {
+                    ESP_LOGW(TAG, "network not opened: err=%u", (unsigned)err.code);
+                }
+            }
         }
     }
 }
@@ -246,11 +275,14 @@ sys_error_t zigbee_start(domain_t *domain)
     s_events = xQueueCreate(ZIGBEE_EVENT_QUEUE_LENGTH, sizeof(zigbee_event_t));
     s_leaves = xQueueCreate(ZIGBEE_LEAVE_QUEUE_LENGTH, sizeof(ha_device_uid_t));
     s_remove_requests = xQueueCreate(ZIGBEE_REMOVE_QUEUE_LENGTH, sizeof(ha_device_uid_t));
+    s_permit_requests = xQueueCreate(ZIGBEE_PERMIT_QUEUE_LENGTH, sizeof(uint8_t));
     s_inbox = xQueueCreateSet(ZIGBEE_REPORT_QUEUE_LENGTH + ZIGBEE_COMMAND_QUEUE_LENGTH +
                               ZIGBEE_INTERVIEW_QUEUE_LENGTH + ZIGBEE_EVENT_QUEUE_LENGTH +
-                              ZIGBEE_LEAVE_QUEUE_LENGTH + ZIGBEE_REMOVE_QUEUE_LENGTH);
+                              ZIGBEE_LEAVE_QUEUE_LENGTH + ZIGBEE_REMOVE_QUEUE_LENGTH +
+                              ZIGBEE_PERMIT_QUEUE_LENGTH);
     if (s_reports == NULL || s_commands == NULL || s_interviews == NULL || s_events == NULL ||
-        s_leaves == NULL || s_remove_requests == NULL || s_inbox == NULL) {
+        s_leaves == NULL || s_remove_requests == NULL || s_permit_requests == NULL ||
+        s_inbox == NULL) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
     if (xQueueAddToSet(s_reports, s_inbox) != pdPASS ||
@@ -258,7 +290,8 @@ sys_error_t zigbee_start(domain_t *domain)
         xQueueAddToSet(s_interviews, s_inbox) != pdPASS ||
         xQueueAddToSet(s_events, s_inbox) != pdPASS ||
         xQueueAddToSet(s_leaves, s_inbox) != pdPASS ||
-        xQueueAddToSet(s_remove_requests, s_inbox) != pdPASS) {
+        xQueueAddToSet(s_remove_requests, s_inbox) != pdPASS ||
+        xQueueAddToSet(s_permit_requests, s_inbox) != pdPASS) {
         return zigbee_fail(SYS_CODE_NO_MEM);
     }
 
@@ -273,7 +306,12 @@ sys_error_t zigbee_start(domain_t *domain)
     if (sys_failed(cluster)) {
         return cluster;
     }
-    return domain_register_command(domain, HA_CMD_DEVICE_REMOVE, zigbee_remove_execute, NULL);
+    const sys_error_t remove =
+        domain_register_command(domain, HA_CMD_DEVICE_REMOVE, zigbee_remove_execute, NULL);
+    if (sys_failed(remove)) {
+        return remove;
+    }
+    return domain_register_command(domain, HA_CMD_PERMIT_JOIN, zigbee_permit_execute, NULL);
 }
 
 sys_error_t zigbee_submit_report(const zigbee_report_t *report)

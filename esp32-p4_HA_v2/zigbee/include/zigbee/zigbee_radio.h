@@ -26,3 +26,9 @@ sys_error_t zigbee_radio_send(const ha_zb_command_t *command);
  * стартовал; IO — радио отказало.
  */
 sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid);
+
+/*
+ * Открыть сеть для подключения новых устройств на seconds секунд (0 — закрыть).
+ * Вызывается только по команде из UI; на старте сеть закрыта.
+ */
+sys_error_t zigbee_radio_open_network(uint8_t seconds);
