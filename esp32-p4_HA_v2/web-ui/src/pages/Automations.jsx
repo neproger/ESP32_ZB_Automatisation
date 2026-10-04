@@ -3,6 +3,7 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
+import { describeActionArgs } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
 
 export default function Automations() {
@@ -44,6 +45,9 @@ export default function Automations() {
             </span>
             <span className="attr">
               действие: <b>{nameOf(record.actionUid)}</b> · EP{record.actionEp} · {clusterName(record.actionCluster)} · команда 0x{record.actionCmd.toString(16)}
+              {describeActionArgs(record.actionCluster, record.actionCmd, record.actionArgs)
+                ? ' · ' + describeActionArgs(record.actionCluster, record.actionCmd, record.actionArgs)
+                : ''}
             </span>
           </div>
         </div>

@@ -1,0 +1,58 @@
+// Модель правила автоматизации: кластеры/команды и кодирование action_args
+// (ZCL-аргументы; прошивка копирует их в команду — automation_rule_command).
+
+import { rgbHexToXy, xyToRgbHex } from './color.js'
+
+const u16 = (v) => {
+  const n = Math.max(0, Math.min(0xffff, Math.round(v))) & 0xffff
+  return [n & 0xff, n >> 8]
+}
+const readU16 = (lo = 0, hi = 0) => (lo & 0xff) | ((hi & 0xff) << 8)
+
+export const ACTION_CLUSTERS = [
+  { id: 0x0006, name: 'On/Off', cmds: [[0, 'Выключить'], [1, 'Включить'], [2, 'Toggle']] },
+  { id: 0x0008, name: 'Level', cmds: [[0, 'Перейти к уровню']] },
+  { id: 0x0300, name: 'Color', cmds: [[1, 'Температура цвета'], [0, 'Цвет XY']] },
+]
+
+// Триггер: 0 = любая команда (прошивка трактует 0 как «любая»).
+export const TRIGGER_CMDS = [[0, 'Любая'], [2, 'Toggle'], [1, 'Вкл']]
+
+export function buildActionArgs(cluster, cmd, p) {
+  if (cluster === 0x0006) return []
+  if (cluster === 0x0008) return [Math.max(0, Math.min(254, Math.round(p.level || 0))), ...u16(p.transitionMs || 0)]
+  if (cluster === 0x0300 && cmd === 1) {
+    const k = Math.max(2000, Math.min(6500, p.kelvin || 3000))
+    return [...u16(1_000_000 / k), ...u16(p.transitionMs || 0)]
+  }
+  if (cluster === 0x0300 && cmd === 0) {
+    const { x, y } = rgbHexToXy(p.colorHex || '#ffffff')
+    return [...u16(x), ...u16(y), ...u16(p.transitionMs || 0)]
+  }
+  return []
+}
+
+export function decodeActionArgs(cluster, cmd, args = []) {
+  if (cluster === 0x0008) return { level: args[0] ?? 0, transitionMs: readU16(args[1], args[2]) }
+  if (cluster === 0x0300 && cmd === 1) {
+    const mired = readU16(args[0], args[1])
+    return { kelvin: mired > 0 ? Math.round(1_000_000 / mired) : 3000, transitionMs: readU16(args[2], args[3]) }
+  }
+  if (cluster === 0x0300 && cmd === 0) {
+    return {
+      colorHex: xyToRgbHex(readU16(args[0], args[1]), readU16(args[2], args[3])),
+      transitionMs: readU16(args[4], args[5]),
+    }
+  }
+  return {}
+}
+
+export function describeActionArgs(cluster, cmd, args = []) {
+  if (cluster === 0x0008) return `Level=${args[0] ?? 0}${readU16(args[1], args[2]) ? `, ${readU16(args[1], args[2])}ms` : ''}`
+  if (cluster === 0x0300 && cmd === 1) {
+    const m = readU16(args[0], args[1])
+    return m > 0 ? `~${Math.round(1_000_000 / m)}K` : ''
+  }
+  if (cluster === 0x0300 && cmd === 0) return `xy ${readU16(args[0], args[1])},${readU16(args[2], args[3])}`
+  return ''
+}
