@@ -145,7 +145,7 @@ esp_err_t display_init(void)
     }
 
     s_lvgl_ready = true;
-    display_set_backlight(80);
+    display_set_backlight(30);
     return ESP_OK;
 }
 

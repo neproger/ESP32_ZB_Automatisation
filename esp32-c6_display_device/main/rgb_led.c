@@ -1,6 +1,8 @@
 #include "rgb_led.h"
 #include "board.h"
 
+#include <math.h>
+
 #include "esp_log.h"
 #include "esp_check.h"
 #include "led_strip.h"
@@ -40,7 +42,8 @@ esp_err_t rgb_led_init(void)
         .strip_gpio_num = BOARD_RGB_LED_GPIO,
         .max_leds = 1,
         .led_model = LED_MODEL_WS2812,
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+        /* На этой плате каналы WS2812 идут R,G,B (проверено: GRB давал R<->G swap). */
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_RGB,
         .flags.invert_out = false,
     };
     led_strip_rmt_config_t rmt_cfg = {
@@ -126,4 +129,44 @@ void rgb_led_set_xy(uint16_t x16, uint16_t y16, uint8_t level)
 
     const float scale = (float)level / 254.0f;
     send_rgb(clamp_u8(r * scale * 255.0f), clamp_u8(g * scale * 255.0f), clamp_u8(b * scale * 255.0f));
+}
+
+void rgb_led_set_ct(uint16_t mireds, uint8_t level)
+{
+    if (!s_ready) {
+        return;
+    }
+    if (level == 0) {
+        rgb_led_off();
+        return;
+    }
+
+    /* Clamp to a sensible 2000K..10000K window. */
+    if (mireds < 100) {
+        mireds = 100;
+    }
+    if (mireds > 500) {
+        mireds = 500;
+    }
+
+    /* Mireds -> Kelvin, then the Tanner Helland approximation of a
+       black-body radiator to sRGB. */
+    const float kelvin = 1000000.0f / (float)mireds;
+    const float t = kelvin / 100.0f;
+
+    float r;
+    float g;
+    float b;
+    if (t <= 66.0f) {
+        r = 255.0f;
+        g = 99.4708025861f * logf(t) - 161.1195681661f;
+        b = (t <= 19.0f) ? 0.0f : (138.5177312231f * logf(t - 10.0f) - 305.0447927307f);
+    } else {
+        r = 329.698727446f * powf(t - 60.0f, -0.1332047592f);
+        g = 288.1221695283f * powf(t - 60.0f, -0.0755148492f);
+        b = 255.0f;
+    }
+
+    const float scale = (float)level / 254.0f;
+    send_rgb(clamp_u8(r * scale), clamp_u8(g * scale), clamp_u8(b * scale));
 }

@@ -16,6 +16,9 @@ void ui_set_net_info(uint16_t pan_id, uint8_t channel, uint16_t short_addr, cons
 /* Lamp state as reported by the light endpoint. */
 void ui_set_light(bool on, uint8_t level, uint8_t hue, uint8_t sat);
 
+/* On-chip die temperature in degrees Celsius. */
+void ui_set_temperature(float celsius);
+
 /* Number of local button presses. */
 void ui_set_button_count(uint32_t count);
 

@@ -15,3 +15,6 @@ void rgb_led_set_hs(uint8_t hue, uint8_t sat, uint8_t level);
 
 /* CIE xy mode. x/y: 0..65535 (ZCL units), level: 0..254. */
 void rgb_led_set_xy(uint16_t x, uint16_t y, uint8_t level);
+
+/* Color-temperature mode. mireds: ZCL units, level: 0..254. */
+void rgb_led_set_ct(uint16_t mireds, uint8_t level);

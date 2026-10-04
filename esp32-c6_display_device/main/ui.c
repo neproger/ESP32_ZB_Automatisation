@@ -12,6 +12,7 @@
 static bool s_ready;
 static lv_obj_t *s_status;
 static lv_obj_t *s_info;
+static lv_obj_t *s_temp;
 static lv_obj_t *s_light;
 static lv_obj_t *s_button;
 static lv_obj_t *s_log;
@@ -47,6 +48,9 @@ void ui_init(void)
 
     s_info = make_label(scr, &lv_font_montserrat_14, 0xFFFFFF);
     lv_label_set_text(s_info, "PAN: ----\nCH: --\nADDR: ----\nIEEE: --");
+
+    s_temp = make_label(scr, &lv_font_montserrat_14, 0xFF8A65);
+    lv_label_set_text(s_temp, "TEMP: --.- C");
 
     s_light = make_label(scr, &lv_font_montserrat_14, 0xFFFFFF);
     lv_label_set_text(s_light, "LIGHT: OFF\nLEVEL: 0\nHUE: 0 SAT: 0");
@@ -91,6 +95,17 @@ void ui_set_light(bool on, uint8_t level, uint8_t hue, uint8_t sat)
     char buf[80];
     snprintf(buf, sizeof(buf), "LIGHT: %s\nLEVEL: %u\nHUE: %u SAT: %u", on ? "ON" : "OFF", level, hue, sat);
     lv_label_set_text(s_light, buf);
+    display_unlock();
+}
+
+void ui_set_temperature(float celsius)
+{
+    if (!s_ready || !display_lock(1000)) {
+        return;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "TEMP: %.1f C", celsius);
+    lv_label_set_text(s_temp, buf);
     display_unlock();
 }
 
