@@ -3,6 +3,7 @@ import { useStore } from './useStore.js'
 import Devices from './pages/Devices.jsx'
 import DeviceDetail from './pages/DeviceDetail.jsx'
 import Automations from './pages/Automations.jsx'
+import Events from './pages/Events.jsx'
 
 // Ручной роутинг поверх hash: сервер отдаёт один документ, навигация — на клиенте.
 function useHash() {
@@ -30,6 +31,9 @@ export default function App() {
           <a href="#/devices" className={current === 'devices' || current === 'device' ? 'active' : ''}>
             Устройства
           </a>
+          <a href="#/events" className={current === 'events' ? 'active' : ''}>
+            События
+          </a>
           <a href="#/automations" className={current === 'automations' ? 'active' : ''}>
             Автоматизации
           </a>
@@ -39,6 +43,8 @@ export default function App() {
       <main>
         {current === 'automations' ? (
           <Automations />
+        ) : current === 'events' ? (
+          <Events />
         ) : current === 'device' ? (
           <DeviceDetail uid={arg} />
         ) : (

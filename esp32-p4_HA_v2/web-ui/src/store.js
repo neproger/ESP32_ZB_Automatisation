@@ -12,10 +12,21 @@ const maps = {
   [ENTITY.DEVICE_REMOVE]: new Map(),
 }
 
+const EVENT_LOG_MAX = 200
+const events = []
+let eventSeq = 0
+let syncing = false
 let version = 0
 let status = 'connecting'
 let socket = null
 const listeners = new Set()
+
+function logEvent(action, entityType, key, record) {
+  events.push({ seq: ++eventSeq, ts: Date.now(), action, entityType, key, record })
+  if (events.length > EVENT_LOG_MAX) {
+    events.splice(0, events.length - EVENT_LOG_MAX)
+  }
+}
 
 const emit = () => {
   version++
@@ -35,10 +46,12 @@ function onFrame(buf) {
   if (!frame) return
   const { payload } = frame
   if (frame.type === MSG.SYNC_BEGIN) {
+    syncing = true
     for (const k in maps) maps[k].clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
+    syncing = false
     emit()
     return
   }
@@ -52,9 +65,12 @@ function onFrame(buf) {
   const id = entityId(type, key)
   if (frame.type === MSG.ENTITY_REMOVE) {
     maps[type].delete(id)
+    if (!syncing) logEvent('remove', type, key, null)
   } else {
     const recDv = new DataView(payload.buffer, payload.byteOffset + 1 + schema.keySize, schema.recSize)
-    maps[type].set(id, { key, record: decodeRecord(type, recDv) })
+    const record = decodeRecord(type, recDv)
+    maps[type].set(id, { key, record })
+    if (!syncing) logEvent('upsert', type, key, record)
   }
   emit()
 }
@@ -103,6 +119,9 @@ export const store = {
   },
   get removals() {
     return maps[ENTITY.DEVICE_REMOVE]
+  },
+  get events() {
+    return events
   },
   isMarkedForRemoval(uid) {
     return maps[ENTITY.DEVICE_REMOVE].has(`rm:${uid}`)

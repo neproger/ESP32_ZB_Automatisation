@@ -239,3 +239,31 @@ table.ep td .attr {
   color: #e0a35a;
   border-color: #5a4a2a;
 }
+ul.events {
+  list-style: none;
+  margin: 0 1.25rem;
+  padding: 0;
+  font-size: 0.85rem;
+}
+ul.events li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #232830;
+}
+ul.events .time {
+  color: #6b7280;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  min-width: 5.5rem;
+}
+ul.events .kind {
+  font-weight: 700;
+  color: #4caf50;
+  width: 1rem;
+  text-align: center;
+}
+ul.events .kind.remove {
+  color: #d9534f;
+}
