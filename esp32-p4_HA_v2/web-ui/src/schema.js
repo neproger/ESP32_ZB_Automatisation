@@ -53,7 +53,10 @@ export function decodeRecord(type, dv) {
       }
       return { profile: dv.getUint16(0, true), deviceId: dv.getUint16(2, true), clusters }
     }
-    case ENTITY.AUTOMATION:
+    case ENTITY.AUTOMATION: {
+      const argsLen = dv.getUint8(1)
+      const actionArgs = []
+      for (let i = 0; i < argsLen && i < 8; i++) actionArgs.push(dv.getUint8(37 + i))
       return {
         enabled: dv.getUint8(0),
         triggerUid: dv.getBigUint64(8, true),
@@ -62,7 +65,9 @@ export function decodeRecord(type, dv) {
         actionEp: dv.getUint8(32),
         actionCluster: dv.getUint16(34, true),
         actionCmd: dv.getUint8(36),
+        actionArgs,
       }
+    }
     default:
       return {}
   }
@@ -125,3 +130,20 @@ export const CLUSTER_ONOFF = 6
 export const CLUSTER_LEVEL = 8
 export const CMD_ONOFF = { OFF: 0, ON: 1, TOGGLE: 2 }
 export const CMD_LEVEL_MOVE_TO = 0
+
+// Кодирование записи правила (48 байт, layout C с выравниванием; см. WEB_PROTOCOL §5).
+export function encodeAutomationRecord(r) {
+  const out = new Uint8Array(48)
+  const dv = new DataView(out.buffer)
+  const args = r.actionArgs || []
+  dv.setUint8(0, r.enabled ? 1 : 0)
+  dv.setUint8(1, Math.min(args.length, 8))
+  dv.setBigUint64(8, BigInt(r.triggerUid || 0), true)
+  dv.setUint16(16, r.triggerCmd || 0, true)
+  dv.setBigUint64(24, BigInt(r.actionUid || 0), true)
+  dv.setUint8(32, r.actionEp || 0)
+  dv.setUint16(34, r.actionCluster || 0, true)
+  dv.setUint8(36, r.actionCmd || 0)
+  out.set(args.slice(0, 8), 37)
+  return out
+}

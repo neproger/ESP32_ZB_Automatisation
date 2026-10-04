@@ -1,5 +1,5 @@
 import './style.css'
-import { MSG, decodeFrame, zbCommand, renameDevice, snapshot } from './proto.js'
+import { MSG, decodeFrame, zbCommand, renameDevice, snapshot, automationPut, automationRemove } from './proto.js'
 import {
   ENTITY,
   SCHEMA,
@@ -200,6 +200,131 @@ function renderState(uid, st) {
   return el
 }
 
+const TRIGGER_CMDS = [['Toggle', 2], ['Вкл', 1], ['Выкл', 0]]
+const ACTION_CLUSTERS = [['On/Off', 6], ['Level', 8]]
+const ACTION_CMDS = { 6: [['Toggle', 2], ['Вкл', 1], ['Выкл', 0]], 8: [['Move to level', 0]] }
+
+let editingId = null
+
+function deviceName(uid) {
+  if (uid === 0n) return '—'
+  for (const [, { key, record }] of devices) {
+    if (key.uid === uid) return record.name || record.model || uidHex(uid)
+  }
+  return uidHex(uid)
+}
+
+function el(tag, props = {}, text) {
+  const e = document.createElement(tag)
+  Object.assign(e, props)
+  if (text != null) e.textContent = text
+  return e
+}
+
+function fillDeviceSelect(sel, anyLabel) {
+  sel.innerHTML = ''
+  sel.append(el('option', { value: '0' }, anyLabel))
+  for (const [, { key, record }] of devices) {
+    sel.append(el('option', { value: key.uid.toString() },
+      (record.name || record.model || uidHex(key.uid)) + ' (' + uidHex(key.uid) + ')'))
+  }
+}
+
+function fillOptions(sel, pairs) {
+  sel.innerHTML = ''
+  for (const [label, value] of pairs) sel.append(el('option', { value: String(value) }, label))
+}
+
+function updateActionCmds() {
+  const cluster = Number(document.getElementById('af-action-cluster').value)
+  fillOptions(document.getElementById('af-action-cmd'), ACTION_CMDS[cluster] || ACTION_CMDS[6])
+}
+
+function openAutoForm(id) {
+  editingId = id
+  const form = document.getElementById('auto-form')
+  form.hidden = false
+
+  const g = (i) => document.getElementById(i)
+  const enabled = el('input', { type: 'checkbox', id: 'af-enabled', checked: true })
+  const trigDev = el('select', { id: 'af-trigger-dev' })
+  const trigCmd = el('select', { id: 'af-trigger-cmd' })
+  const actDev = el('select', { id: 'af-action-dev' })
+  const actEp = el('input', { type: 'number', id: 'af-action-ep', min: 0, max: 255, value: 1 })
+  const actCluster = el('select', { id: 'af-action-cluster' })
+  const actCmd = el('select', { id: 'af-action-cmd' })
+
+  fillDeviceSelect(trigDev, 'любое устройство')
+  fillDeviceSelect(actDev, 'то же, что триггер')
+  fillOptions(trigCmd, TRIGGER_CMDS)
+  fillOptions(actCluster, ACTION_CLUSTERS)
+  actCluster.addEventListener('change', updateActionCmds)
+  updateActionCmds()
+
+  const entry = id != null ? automations.get(`auto:${id}`) : null
+  if (entry) {
+    const r = entry.record
+    enabled.checked = !!r.enabled
+    trigDev.value = r.triggerUid.toString()
+    trigCmd.value = String(r.triggerCmd)
+    actDev.value = r.actionUid.toString()
+    actEp.value = r.actionEp
+    actCluster.value = String(r.actionCluster)
+    updateActionCmds()
+    actCmd.value = String(r.actionCmd)
+  }
+
+  const line = (labelText, field) => {
+    const d = el('label', { className: 'af-line' })
+    d.append(document.createTextNode(labelText + ' '), field)
+    return d
+  }
+  const save = el('button', { type: 'submit' }, 'Сохранить')
+  const cancel = el('button', { type: 'button' }, 'Отмена')
+  cancel.addEventListener('click', closeAutoForm)
+  const actions = el('div', { className: 'af-line' })
+  actions.append(save, cancel)
+
+  form.replaceChildren(
+    line('Вкл', enabled),
+    line('Триггер, устройство:', trigDev),
+    line('команда:', trigCmd),
+    line('Действие, устройство:', actDev),
+    line('endpoint:', actEp),
+    line('кластер:', actCluster),
+    line('команда:', actCmd),
+    actions,
+  )
+}
+
+function closeAutoForm() {
+  editingId = null
+  document.getElementById('auto-form').hidden = true
+}
+
+function nextAutomationId() {
+  let max = 0n
+  for (const [, { key }] of automations) if (key.id > max) max = key.id
+  return max + 1n
+}
+
+function submitAutoForm(event) {
+  event.preventDefault()
+  const g = (i) => document.getElementById(i)
+  const id = editingId != null ? BigInt(editingId) : nextAutomationId()
+  send(automationPut(id, {
+    enabled: g('af-enabled').checked,
+    triggerUid: BigInt(g('af-trigger-dev').value),
+    triggerCmd: Number(g('af-trigger-cmd').value),
+    actionUid: BigInt(g('af-action-dev').value),
+    actionEp: Number(g('af-action-ep').value),
+    actionCluster: Number(g('af-action-cluster').value),
+    actionCmd: Number(g('af-action-cmd').value),
+    actionArgs: [],
+  }))
+  closeAutoForm()
+}
+
 function renderAutomations() {
   const root = document.getElementById('automations')
   root.innerHTML = ''
@@ -208,15 +333,31 @@ function renderAutomations() {
     return
   }
   for (const [, { key, record }] of automations) {
-    const el = document.createElement('div')
-    el.className = 'device'
-    el.innerHTML =
-      `<div class="title"><span>Правило #${key.id}</span>` +
-      `<span class="uid">${record.enabled ? 'включено' : 'выключено'}</span></div>` +
-      `<div class="attrs"><div class="attr">триггер cmd=0x${record.triggerCmd.toString(16)} ` +
-      `→ cluster 0x${record.actionCluster.toString(16)} cmd=0x${record.actionCmd.toString(16)}</div></div>`
-    root.append(el)
+    const card = el('div', { className: 'device' })
+    const title = el('div', { className: 'title' })
+
+    const enabled = el('input', { type: 'checkbox', checked: !!record.enabled })
+    enabled.addEventListener('change', () =>
+      send(automationPut(key.id, { ...record, enabled: enabled.checked })))
+    const label = el('span', {}, 'Правило #' + key.id)
+    const edit = el('button', {}, 'Изменить')
+    edit.addEventListener('click', () => openAutoForm(key.id))
+    const del = el('button', {}, 'Удалить')
+    del.addEventListener('click', () => send(automationRemove(key.id)))
+    title.append(enabled, label, edit, del)
+
+    const desc = el('div', { className: 'attrs' })
+    desc.innerHTML =
+      `<div class="attr">триггер: ${deviceName(record.triggerUid)} cmd=0x${record.triggerCmd.toString(16)}</div>` +
+      `<div class="attr">→ ${deviceName(record.actionUid)} ep=${record.actionEp} ` +
+      `cluster=0x${record.actionCluster.toString(16)} cmd=0x${record.actionCmd.toString(16)}</div>`
+
+    card.append(title, desc)
+    root.append(card)
   }
 }
+
+document.getElementById('auto-add').addEventListener('click', () => openAutoForm(null))
+document.getElementById('auto-form').addEventListener('submit', submitAutoForm)
 
 connect()

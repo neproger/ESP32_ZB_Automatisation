@@ -1,4 +1,5 @@
 // Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
+import { encodeAutomationRecord } from './schema.js'
 
 export const MSG = {
   SYNC_BEGIN: 0x01,
@@ -65,6 +66,21 @@ export function zbCommand({ uid, ep, cluster, command, args = [] }) {
 
 export function snapshot() {
   return encodeCommand(CMD.SNAPSHOT)
+}
+
+// AUTOMATION_PUT args = u64 id | ha_automation_record_t (48 байт).
+export function automationPut(id, rule) {
+  const args = new Uint8Array(8 + 48)
+  new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
+  args.set(encodeAutomationRecord(rule), 8)
+  return encodeCommand(CMD.AUTOMATION_PUT, args)
+}
+
+// AUTOMATION_REMOVE args = u64 id.
+export function automationRemove(id) {
+  const args = new Uint8Array(8)
+  new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
+  return encodeCommand(CMD.AUTOMATION_REMOVE, args)
 }
 
 // DEVICE_RENAME args = u64 uid | char name[32].
