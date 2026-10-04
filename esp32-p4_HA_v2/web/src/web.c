@@ -35,7 +35,8 @@ static const char *TAG = "web";
 #define WEB_TASK_PRIORITY 4
 #define WEB_MAX_CLIENTS 8
 #define WEB_INBOX_LENGTH 32
-#define WEB_CMD_BUF 128
+/* Максимальный входящий кадр целиком (заголовок + payload), не только команда. */
+#define WEB_CMD_BUF WEB_PROTO_MAX_FRAME
 
 _Static_assert(WEB_ENTITY_DEVICE == (uint32_t)HA_ENTITY_DEVICE, "entity id: device");
 _Static_assert(WEB_ENTITY_STATE == (uint32_t)HA_ENTITY_STATE, "entity id: state");
