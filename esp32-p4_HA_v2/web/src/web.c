@@ -142,7 +142,7 @@ typedef struct {
 static bool snapshot_emit(const void *key, const void *record, void *ctx)
 {
     snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
-    uint8_t payload[1 + DOMAIN_EVENT_KEY_MAX + sizeof(ha_endpoint_record_t)];
+    uint8_t payload[WEB_PROTO_MAX_PAYLOAD];
     payload[0] = s->schema->type;
     memcpy(payload + 1, key, s->schema->key_size);
     memcpy(payload + 1 + s->schema->key_size, record, s->schema->rec_size);
@@ -182,12 +182,12 @@ static void web_send_fact(const domain_event_t *event)
         return;
     }
 
-    uint8_t payload[1 + DOMAIN_EVENT_KEY_MAX + sizeof(ha_endpoint_record_t)];
+    uint8_t payload[WEB_PROTO_MAX_PAYLOAD];
     payload[0] = schema->type;
     memcpy(payload + 1, event->key, schema->key_size);
 
     if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
-        uint8_t record[sizeof(ha_endpoint_record_t)];
+        uint8_t record[WEB_PROTO_MAX_PAYLOAD];
         if (sys_failed(domain_entity_get(s_domain, event->entity, event->key, record))) {
             return;
         }
