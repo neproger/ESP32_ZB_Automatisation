@@ -7,7 +7,6 @@ export const MSG = {
   ENTITY: 0x10,
   ENTITY_REMOVE: 0x11,
   COMMAND: 0x20,
-  CMD_RESULT: 0x21,
 }
 
 export const CMD = {

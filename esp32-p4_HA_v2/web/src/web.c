@@ -201,12 +201,6 @@ static void web_send_fact(const domain_event_t *event)
 
 /* --- команды ------------------------------------------------------------ */
 
-static void web_reply(int fd, uint16_t seq, uint16_t code)
-{
-    const uint8_t payload[2] = {(uint8_t)(code & 0xffu), (uint8_t)(code >> 8)};
-    web_send_frame(fd, WEB_MSG_CMD_RESULT, seq, payload, sizeof(payload));
-}
-
 static uint16_t web_do_zb_command(const uint8_t *args, size_t len)
 {
     if (len != sizeof(ha_zb_command_t)) {
@@ -339,11 +333,12 @@ static void web_request_snapshot(int fd)
     xQueueSend(s_inbox, &item, 0);
 }
 
-static void web_handle_command(int fd, uint16_t seq, uint8_t cmd, const uint8_t *args, size_t len)
+/* Команды fire-and-forget: ответа нет, UI реагирует только на реальное состояние. */
+static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t len)
 {
     if (cmd == (uint8_t)WEB_CMD_SNAPSHOT) {
         web_request_snapshot(fd);
-        return; /* ответа нет: клиент получит SYNC_BEGIN… */
+        return; /* клиент получит SYNC_BEGIN… */
     }
 
     uint16_t status = (uint16_t)SYS_CODE_INVALID_ARG;
@@ -372,7 +367,9 @@ static void web_handle_command(int fd, uint16_t seq, uint8_t cmd, const uint8_t 
     default:
         break;
     }
-    web_reply(fd, seq, status);
+    if (status != (uint16_t)SYS_CODE_OK) {
+        ESP_LOGW(TAG, "command %u rejected: code=%u", (unsigned)cmd, (unsigned)status);
+    }
 }
 
 /* --- Wi-Fi -------------------------------------------------------------- */
@@ -548,7 +545,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (frame.len >= WEB_PROTO_HDR_SIZE &&
         web_frame_decode(frame.payload, frame.len, &hdr, &payload, &payload_len) &&
         hdr.type == (uint8_t)WEB_MSG_COMMAND && payload_len >= 1) {
-        web_handle_command(fd, hdr.seq, payload[0], payload + 1, payload_len - 1);
+        web_handle_command(fd, payload[0], payload + 1, payload_len - 1);
     }
     return ESP_OK;
 }

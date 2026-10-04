@@ -30,7 +30,6 @@ typedef enum {
     WEB_MSG_ENTITY = 0x10,
     WEB_MSG_ENTITY_REMOVE = 0x11,
     WEB_MSG_COMMAND = 0x20,
-    WEB_MSG_CMD_RESULT = 0x21,
 } web_msg_t;
 
 typedef enum {
