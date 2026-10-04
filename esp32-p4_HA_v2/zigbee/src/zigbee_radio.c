@@ -10,6 +10,7 @@
 #include "esp_zigbee.h"
 #include "ezbee/af.h"
 #include "ezbee/app_signals.h"
+#include "ezbee/aps.h"
 #include "ezbee/bdb.h"
 #include "ezbee/nwk.h"
 #include "ezbee/zdo/zdo_dev_srv_disc.h"
@@ -951,6 +952,39 @@ static sys_error_t send_color_move_to_color_temperature(const ha_zb_command_t *c
     return radio_error(ezb_zcl_color_control_move_to_color_temperature_cmd_req(&request));
 }
 
+/*
+ * Общая отправка ZCL cluster-specific команды любого кластера: собираем ZCL-кадр
+ * (frame control, seq, cmd id, args) и шлём через APS. Так поддержаны все известные
+ * команды ZCL, а не только перечисленные. Аргументы приходят уже в кодировке ZCL
+ * (ha_commands.h), поэтому кадр формируется как есть.
+ */
+static uint8_t s_zcl_seq;
+
+static sys_error_t send_raw_zcl(const ha_zb_command_t *command)
+{
+    uint8_t frame[3 + HA_ZB_COMMAND_ARGS_MAX];
+    frame[0] = 0x01; /* cluster-specific, client→server, default response enabled */
+    frame[1] = s_zcl_seq++;
+    frame[2] = command->command_id;
+    if (command->args_len > 0) {
+        memcpy(&frame[3], command->args, command->args_len);
+    }
+
+    const ezb_extaddr_t eui = {.u64 = command->device_uid};
+    const ezb_apsde_data_req_t request = {
+        .dst_address = EZB_ADDRESS_EXTENDED(eui),
+        .src_endpoint = COORDINATOR_ENDPOINT,
+        .dst_endpoint = command->dst_endpoint,
+        .cluster_id = command->cluster_id,
+        .profile_id = HA_ZB_PROFILE_HA,
+        .radius = 0x1E,
+        .tx_options = EZB_APSDE_TX_OPT_SECURITY_ENABLED,
+        .asdu_length = (uint16_t)(3 + command->args_len),
+        .asdu = frame,
+    };
+    return radio_error(ezb_apsde_data_request(&request));
+}
+
 sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
 {
     if (command == NULL) {
@@ -970,8 +1004,8 @@ sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
         if (command->command_id == 0x01) {
             return send_color_move_to_color_temperature(command);
         }
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
-    default: return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
+        return send_raw_zcl(command);
+    default: return send_raw_zcl(command);
     }
 }
 
