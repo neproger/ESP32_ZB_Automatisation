@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "sdkconfig.h"
+
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -23,7 +25,8 @@
  */
 
 #define TAG "wifi"
-#define WIFI_TASK_STACK 4096
+/* Скан/автоподключение держат на стеке крупные массивы AP/known — 4 КБ мало. */
+#define WIFI_TASK_STACK 8192
 #define WIFI_TASK_PRIORITY 4
 #define WIFI_QUEUE_LEN 4
 
@@ -252,6 +255,36 @@ static void do_connect(const char *ssid, const char *password)
     esp_wifi_connect();
 }
 
+/*
+ * Bring-up: если известных точек нет, засеваем одну из Kconfig (sdkconfig, не git).
+ * Временная мера, пока provisioning (Display/Web) не готов: без неё плата без сети.
+ */
+typedef struct {
+    bool any;
+} known_any_t;
+
+static bool known_any_cb(const void *key, const void *record, void *ctx)
+{
+    (void)key;
+    (void)record;
+    ((known_any_t *)ctx)->any = true;
+    return false; /* достаточно наличия любой записи */
+}
+
+static void seed_known_from_config(void)
+{
+    if (CONFIG_WEB_WIFI_SSID[0] == '\0') {
+        return;
+    }
+    known_any_t any = {0};
+    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_KNOWN, known_any_cb, &any);
+    if (any.any) {
+        return;
+    }
+    ensure_known(CONFIG_WEB_WIFI_SSID, CONFIG_WEB_WIFI_PASSWORD);
+    ESP_LOGI(TAG, "seeded known Wi-Fi from Kconfig: \"%s\"", CONFIG_WEB_WIFI_SSID);
+}
+
 /* Автоподключение при старте: известная точка с самым сильным сигналом. */
 static void autoconnect(void)
 {
@@ -365,6 +398,7 @@ static void wifi_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    seed_known_from_config();
     autoconnect();
 
     for (;;) {
