@@ -96,11 +96,12 @@ output clusters = client  (0x02)
 Дополнительно `OnOffSwitchConfig` (`0x0007`, server) уточняет характер кнопки:
 `SwitchType` = `Toggle` / `Momentary` / `Multifunction` (§6).
 
-Словарь `(cluster_id, role) → capability` — **общий, в `ha_model`** рядом с
-`ha_zigbee.h` (числа + строка, без логики):
-`ha_model/include/ha_model/ha_capabilities.h` (`ha_capability_rule_t`,
-`HA_CAPABILITY_RULES`, имя наружу — `rule->name`). Capability по-прежнему **не
-хранится** в Domain — его строит потребитель из кластеров endpoint'а.
+Проекцию строит **потребитель из кластеров endpoint'а**, хранимых сырыми. Capability
+**не хранится** в Domain и не держится словарём в прошивке. На практике проекцию
+выполняет клиент — `web-ui/src/capabilities.js` (`deriveEndpointMeta`): сопоставляет
+`(cluster_id, role)` тегам `accepts/emits/reports`, по ним выбираются виджеты. Таблица
+§4 — спецификация этой проекции (серверный словарь `ha_capabilities.h` был мёртвым и
+удалён).
 
 ## 5. Примеры устройств (деревом)
 
@@ -276,7 +277,8 @@ ezbee/zcl/cluster/basic_desc.h                  Basic attr IDs
 
 ## 9. Открытые вопросы
 
-1. ~~**Словарь в `ha_model`.**~~ Выполнено: `ha_model/include/ha_model/ha_capabilities.h`.
+1. ~~**Словарь в `ha_model`.**~~ Отменено: серверный словарь был мёртвым и удалён;
+   проекция — на клиенте (`web-ui/src/capabilities.js`), таблица §4 — её спецификация.
 2. **Гранулярность до атрибута.** Endpoint хранит только кластер + роль; для
    некоторых возможностей нужно знать атрибуты (например, `ColorCapabilities`).
 3. **Кнопки.** Политика байндинга client-кластеров кнопки на координатор,
