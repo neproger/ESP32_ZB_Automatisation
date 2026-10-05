@@ -66,6 +66,16 @@ const DEVICE_IDS = {
   0x0405: 'Датчик влажности',
 }
 
+// Проекция (cluster, attr) → виджет Display (зеркало ui_widget_kind_for).
+export function widgetKind(cluster, attr) {
+  if (cluster === 0x0006 && attr === 0x0000) return 'Переключатель'
+  if (cluster === 0x0008 && attr === 0x0000) return 'Уровень'
+  if (cluster === 0x0300) return attr === 0x0007 ? 'Темп. цвета' : 'Цвет'
+  if (cluster === 0x0406 && attr === 0x0000) return 'Индикатор'
+  if (cluster === 0x0500 && attr === 0x0000) return 'Индикатор'
+  return 'Значение'
+}
+
 export function describeProfile(id) {
   return id === 0x0104 ? 'Home Automation' : null
 }

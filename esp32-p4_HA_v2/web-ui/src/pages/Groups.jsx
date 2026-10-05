@@ -1,22 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { groupPut, groupRemove, groupItemPut, groupItemRemove } from '../proto.js'
-import { uidHex, clusterName, attrName, formatAttrValue } from '../zcl.js'
+import { uidHex, clusterName, attrName, formatAttrValue, widgetKind } from '../zcl.js'
 
 // Экраны Display (docs/clients/DISPLAY.md): group — экран, group_item — виджет.
-// Виджет ссылается на состояние (device_uid, ep, cluster, attr).
+// Виджет ссылается на состояние (device_uid, ep, cluster, attr); Display сам выбирает
+// форму виджета по (cluster, attr) — показываем её как подсказку.
 function deviceName(devices, uid) {
   for (const { key, record } of devices.values()) {
     if (key.uid === uid) return record.name || record.model || uidHex(uid)
   }
   return uidHex(uid)
-}
-
-function statesOf(s) {
-  return [...s.states.values()].sort(
-    (a, b) => a.key.cluster - b.key.cluster || a.key.attr - b.key.attr || a.key.ep - b.key.ep,
-  )
 }
 
 function stateKeyStr(k) {
@@ -27,40 +22,84 @@ function parseStateKey(str) {
   return { uid: BigInt(uid), ep: Number(ep), cluster: Number(cluster), attr: Number(attr) }
 }
 
-function GroupCard({ group, items, devices, states }) {
+// Список состояний, сгруппированный по устройству (для <optgroup>).
+function stateGroups(s) {
+  const byDev = new Map()
+  for (const st of s.states.values()) {
+    const uid = st.key.uid.toString()
+    if (!byDev.has(uid)) byDev.set(uid, [])
+    byDev.get(uid).push(st)
+  }
+  const out = []
+  for (const [uid, list] of byDev) {
+    list.sort((a, b) => a.key.cluster - b.key.cluster || a.key.attr - b.key.attr || a.key.ep - b.key.ep)
+    out.push({ uid, name: deviceName(s.devices, BigInt(uid)), list })
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name))
+  return out
+}
+
+function GroupCard({ group, items, s }) {
+  const [title, setTitle] = useState(group.record.title)
+  useEffect(() => setTitle(group.record.title), [group.record.title])
   const [stateStr, setStateStr] = useState('')
-  const [title, setTitle] = useState('')
+  const [itemTitle, setItemTitle] = useState('')
+
+  const rename = () => store.send(groupPut(group.key.id, title.trim()))
 
   const addItem = () => {
     if (!stateStr) return
     const state = parseStateKey(stateStr)
     const order = items.length ? Math.max(...items.map((it) => it.record.order)) + 1 : 0
-    store.send(groupItemPut(group.key.id, state, { order, title: title.trim() }))
+    store.send(groupItemPut(group.key.id, state, { order, title: itemTitle.trim() }))
     setStateStr('')
-    setTitle('')
+    setItemTitle('')
+  }
+
+  // Поменять местами порядок с соседом (up/down).
+  const move = (index, delta) => {
+    const j = index + delta
+    if (j < 0 || j >= items.length) return
+    const a = items[index]
+    const b = items[j]
+    store.send(groupItemPut(group.key.id, a.key.state, { order: b.record.order, title: a.record.title }))
+    store.send(groupItemPut(group.key.id, b.key.state, { order: a.record.order, title: b.record.title }))
+  }
+
+  const renameItem = (it, newTitle) => {
+    store.send(groupItemPut(group.key.id, it.key.state, { order: it.record.order, title: newTitle.trim() }))
   }
 
   return (
     <div className="card">
       <div className="card-head">
-        <span className="rule-id">{group.record.title || 'Экран #' + group.key.id}</span>
+        <input className="name" value={title} placeholder="Название экрана"
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={rename}
+          onKeyDown={(e) => e.key === 'Enter' && e.target.blur()} />
         <span className="spacer" />
         <button className="ghost danger" onClick={() => store.send(groupRemove(group.key.id))}>Удалить экран</button>
       </div>
 
       {items.length === 0 && <div className="muted">виджетов нет</div>}
-      {items.map((it) => {
+      {items.map((it, i) => {
         const { state } = it.key
-        const st = store.states.get(`st:${state.uid}:${state.ep}:${state.cluster}:${state.attr}`)
+        const st = s.states.get(`st:${state.uid}:${state.ep}:${state.cluster}:${state.attr}`)
         const value = st ? formatAttrValue(state.cluster, state.attr, st.record.zclType, st.record.raw) : '—'
         return (
           <div className="flow" key={`gi:${stateKeyStr(state)}`}>
-            <span className="node trigger">{it.record.title || attrName(state.cluster, state.attr)}</span>
+            <span className="node action" title={widgetKind(state.cluster, state.attr)}>
+              {widgetKind(state.cluster, state.attr)}
+            </span>
+            <input className="name" defaultValue={it.record.title} placeholder={attrName(state.cluster, state.attr)}
+              onBlur={(e) => renameItem(it, e.target.value)} />
             <span className="muted">
-              {deviceName(devices, state.uid)} · {clusterName(state.cluster)} {attrName(state.cluster, state.attr)}
+              {deviceName(s.devices, state.uid)} · {clusterName(state.cluster)} {attrName(state.cluster, state.attr)}
             </span>
             <span className="spacer" />
-            <span className="node action">{value}</span>
+            <span className="sensor">{value}</span>
+            <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
+            <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1}>↓</button>
             <button className="ghost danger" onClick={() => store.send(groupItemRemove(group.key.id, state))}>✕</button>
           </div>
         )
@@ -69,14 +108,18 @@ function GroupCard({ group, items, devices, states }) {
       <div className="af-line">
         <select value={stateStr} onChange={(e) => setStateStr(e.target.value)}>
           <option value="">(состояние)</option>
-          {states.map((st) => (
-            <option key={stateKeyStr(st.key)} value={stateKeyStr(st.key)}>
-              {deviceName(devices, st.key.uid)} · {clusterName(st.key.cluster)} {attrName(st.key.cluster, st.key.attr)} (EP{st.key.ep})
-            </option>
+          {stateGroups(s).map((g) => (
+            <optgroup key={g.uid} label={g.name}>
+              {g.list.map((st) => (
+                <option key={stateKeyStr(st.key)} value={stateKeyStr(st.key)}>
+                  {clusterName(st.key.cluster)} {attrName(st.key.cluster, st.key.attr)} (EP{st.key.ep}) · {widgetKind(st.key.cluster, st.key.attr)}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
-        <input type="text" placeholder="подпись (необязательно)" value={title}
-          onChange={(e) => setTitle(e.target.value)} />
+        <input type="text" placeholder="подпись (необязательно)" value={itemTitle}
+          onChange={(e) => setItemTitle(e.target.value)} />
         <button onClick={addItem}>+ виджет</button>
       </div>
     </div>
@@ -87,8 +130,6 @@ export default function Groups() {
   const s = useStore()
   const [newTitle, setNewTitle] = useState('')
   const groups = [...s.groups.values()].sort((a, b) => (a.key.id < b.key.id ? -1 : 1))
-  const devices = [...s.devices.values()]
-  const states = statesOf(s)
 
   const nextId = () => {
     let max = 0n
@@ -115,8 +156,7 @@ export default function Groups() {
           items={[...s.groupItems.values()]
             .filter((it) => it.key.groupId === g.key.id)
             .sort((a, b) => a.record.order - b.record.order)}
-          devices={devices}
-          states={states}
+          s={s}
         />
       ))}
     </section>
