@@ -78,6 +78,7 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 4. Wi-Fi provisioning — сервис: скан/connect на C3, автоподключение по известным точкам
 5. device_meta (last_seen/rssi/lqi)
 6. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
+7. Выбираемые темы UI — пресеты палитры (`ui_palette.h`) + выбор через `settings`
 ```
 
 Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`
