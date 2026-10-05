@@ -4,6 +4,7 @@ import Devices from './pages/Devices.jsx'
 import DeviceDetail from './pages/DeviceDetail.jsx'
 import Automations from './pages/Automations.jsx'
 import Events from './pages/Events.jsx'
+import Groups from './pages/Groups.jsx'
 import SystemStatus from './components/SystemStatus.jsx'
 
 // Ручной роутинг поверх hash: сервер отдаёт один документ, навигация — на клиенте.
@@ -32,6 +33,9 @@ export default function App() {
           <a href="#/devices" className={current === 'devices' || current === 'device' ? 'active' : ''}>
             Устройства
           </a>
+          <a href="#/groups" className={current === 'groups' ? 'active' : ''}>
+            Экраны
+          </a>
           <a href="#/events" className={current === 'events' ? 'active' : ''}>
             События
           </a>
@@ -45,6 +49,8 @@ export default function App() {
       <main>
         {current === 'automations' ? (
           <Automations />
+        ) : current === 'groups' ? (
+          <Groups />
         ) : current === 'events' ? (
           <Events />
         ) : current === 'device' ? (

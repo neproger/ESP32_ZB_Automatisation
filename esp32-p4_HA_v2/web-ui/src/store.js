@@ -11,6 +11,11 @@ const maps = {
   [ENTITY.AUTOMATION]: new Map(),
   [ENTITY.DEVICE_REMOVE]: new Map(),
   [ENTITY.LOCATION]: new Map(),
+  [ENTITY.GROUP]: new Map(),
+  [ENTITY.GROUP_ITEM]: new Map(),
+  [ENTITY.WEATHER]: new Map(),
+  [ENTITY.WIFI_STATUS]: new Map(),
+  [ENTITY.SETTINGS]: new Map(),
 }
 
 const EVENT_LOG_MAX = 200
@@ -123,6 +128,21 @@ export const store = {
   },
   get locations() {
     return maps[ENTITY.LOCATION]
+  },
+  get groups() {
+    return maps[ENTITY.GROUP]
+  },
+  get groupItems() {
+    return maps[ENTITY.GROUP_ITEM]
+  },
+  get weather() {
+    return maps[ENTITY.WEATHER]
+  },
+  get wifiStatus() {
+    return maps[ENTITY.WIFI_STATUS]
+  },
+  get settings() {
+    return maps[ENTITY.SETTINGS]
   },
   get events() {
     return events

@@ -24,6 +24,13 @@
 #define WEB_ENTITY_AUTOMATION 4u
 #define WEB_ENTITY_DEVICE_REMOVE 5u
 #define WEB_ENTITY_LOCATION 6u
+#define WEB_ENTITY_GROUP 7u
+#define WEB_ENTITY_GROUP_ITEM 8u
+#define WEB_ENTITY_WEATHER 9u
+/* wifi_scan (10) и wifi_known (11) в браузер не отдаются: первая слишком велика
+ * (16 AP), вторая содержит пароли. Их читает Display напрямую из Domain. */
+#define WEB_ENTITY_WIFI_STATUS 12u
+#define WEB_ENTITY_SETTINGS 13u
 
 typedef enum {
     WEB_MSG_SYNC_BEGIN = 0x01,

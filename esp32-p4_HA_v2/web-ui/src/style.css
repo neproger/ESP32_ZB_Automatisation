@@ -336,3 +336,5 @@ button.ghost.danger:hover { color: #ef5350; }
 .day input { margin: 0; }
 
 .time-pick { display: inline-flex; align-items: center; gap: 0.25rem; }
+
+.sysstatus .weather { color: #90caf9; }

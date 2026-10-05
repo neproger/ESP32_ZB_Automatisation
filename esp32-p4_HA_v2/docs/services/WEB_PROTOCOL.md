@@ -64,6 +64,14 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 (`trigger_minutes_of_day` + `trigger_weekday_mask`).
 
 | 6 | location | `u64 uid` | `{ f32 lat; f32 lon; i16 tz_offset_min; u8 rsv[2]; char name[48]; }` (60) |
+| 7 | group | `u64 id` | `{ char title[32]; }` (32) |
+| 8 | group_item | `u64 group_id; state(16)` (24) | `{ u16 order; u8 rsv[2]; char title[32]; }` (36) |
+| 9 | weather | `u64 uid` | `{ u8 condition; u8 cloud_pct; i16 temp_c100; u16 humidity_p100; u16 pressure_hpa; u16 wind_kmh10; u16 wind_dir_deg; u8 rsv[4]; }` (16) |
+| 12 | wifi_status | `u64 uid` | `{ u8 state; u8 connected; i8 rssi; u8 rsv; char ssid[32]; }` (36) |
+| 13 | settings | `u8 id` | `{ u32 screensaver_timeout_ms; u8 brightness_pct; u8 rsv[3]; }` (8) |
+
+`wifi_scan (10)` и `wifi_known (11)` в браузер не отдаются: первая слишком велика
+(16 AP), вторая содержит пароли; их читает Display напрямую из Domain.
 
 `condition[4]` — условия правила (AND), первые `conditions_count` значимы:
 `{ u64 device_uid; u16 cluster; u16 attr; u8 ep; u8 op; u8 rsv[2]; f32 value; }` (24).

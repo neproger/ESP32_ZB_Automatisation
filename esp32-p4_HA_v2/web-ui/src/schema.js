@@ -1,7 +1,10 @@
 // Схема записей v2 (docs/services/WEB_PROTOCOL.md §5) — зеркало ha_model.
 // Только провод: дискриминаторы, layout key/record, декод и кодирование.
 
-export const ENTITY = { DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5, LOCATION: 6 }
+export const ENTITY = {
+  DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5, LOCATION: 6,
+  GROUP: 7, GROUP_ITEM: 8, WEATHER: 9, WIFI_STATUS: 12, SETTINGS: 13,
+}
 
 export const SCHEMA = {
   [ENTITY.DEVICE]: { keySize: 8, recSize: 64 },
@@ -10,6 +13,11 @@ export const SCHEMA = {
   [ENTITY.AUTOMATION]: { keySize: 8, recSize: 144 },
   [ENTITY.DEVICE_REMOVE]: { keySize: 8, recSize: 8 },
   [ENTITY.LOCATION]: { keySize: 8, recSize: 60 },
+  [ENTITY.GROUP]: { keySize: 8, recSize: 32 },
+  [ENTITY.GROUP_ITEM]: { keySize: 24, recSize: 36 },
+  [ENTITY.WEATHER]: { keySize: 8, recSize: 16 },
+  [ENTITY.WIFI_STATUS]: { keySize: 8, recSize: 36 },
+  [ENTITY.SETTINGS]: { keySize: 1, recSize: 8 },
 }
 
 const text = new TextDecoder()
@@ -38,7 +46,23 @@ export function decodeKey(type, dv) {
     case ENTITY.DEVICE_REMOVE:
       return { uid: dv.getBigUint64(0, true) }
     case ENTITY.LOCATION:
+    case ENTITY.WEATHER:
+    case ENTITY.WIFI_STATUS:
       return { uid: dv.getBigUint64(0, true) }
+    case ENTITY.GROUP:
+      return { id: dv.getBigUint64(0, true) }
+    case ENTITY.GROUP_ITEM:
+      return {
+        groupId: dv.getBigUint64(0, true),
+        state: {
+          uid: dv.getBigUint64(8, true),
+          cluster: dv.getUint16(16, true),
+          attr: dv.getUint16(18, true),
+          ep: dv.getUint8(20),
+        },
+      }
+    case ENTITY.SETTINGS:
+      return { id: dv.getUint8(0) }
     default:
       return {}
   }
@@ -67,6 +91,32 @@ export function decodeRecord(type, dv) {
         longitude: dv.getFloat32(4, true),
         tzOffsetMin: dv.getInt16(8, true),
         name: cstr(dv, 12, 48),
+      }
+    case ENTITY.GROUP:
+      return { title: cstr(dv, 0, 32) }
+    case ENTITY.GROUP_ITEM:
+      return { order: dv.getUint16(0, true), title: cstr(dv, 4, 32) }
+    case ENTITY.WEATHER:
+      return {
+        condition: dv.getUint8(0),
+        cloudPct: dv.getUint8(1),
+        temperatureC: dv.getInt16(2, true) / 100,
+        humidityPct: dv.getUint16(4, true) / 100,
+        pressureHpa: dv.getUint16(6, true),
+        windKmh: dv.getUint16(8, true) / 10,
+        windDirDeg: dv.getUint16(10, true),
+      }
+    case ENTITY.WIFI_STATUS:
+      return {
+        state: dv.getUint8(0),
+        connected: dv.getUint8(1),
+        rssi: dv.getInt8(2),
+        ssid: cstr(dv, 4, 32),
+      }
+    case ENTITY.SETTINGS:
+      return {
+        screensaverTimeoutMs: dv.getUint32(0, true),
+        brightnessPct: dv.getUint8(4),
       }
     case ENTITY.AUTOMATION: {
       const argsLen = dv.getUint8(1)
@@ -119,6 +169,16 @@ export function entityId(type, key) {
       return `rm:${key.uid}`
     case ENTITY.LOCATION:
       return `loc:${key.uid}`
+    case ENTITY.WEATHER:
+      return `weather:${key.uid}`
+    case ENTITY.WIFI_STATUS:
+      return `wifi:${key.uid}`
+    case ENTITY.GROUP:
+      return `grp:${key.id}`
+    case ENTITY.GROUP_ITEM:
+      return `gi:${key.groupId}:${key.state.uid}:${key.state.ep}:${key.state.cluster}:${key.state.attr}`
+    case ENTITY.SETTINGS:
+      return `set:${key.id}`
     default:
       return ''
   }

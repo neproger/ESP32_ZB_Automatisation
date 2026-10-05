@@ -10,6 +10,10 @@
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_groups.h"
+#include "ha_model/ha_settings.h"
+#include "ha_model/ha_weather.h"
+#include "ha_model/ha_wifi.h"
 #include "web/web_proto.h"
 
 /*
@@ -42,6 +46,11 @@ _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity 
 _Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
                "entity id: device-remove");
 _Static_assert(WEB_ENTITY_LOCATION == (uint32_t)HA_ENTITY_LOCATION, "entity id: location");
+_Static_assert(WEB_ENTITY_GROUP == (uint32_t)HA_ENTITY_GROUP, "entity id: group");
+_Static_assert(WEB_ENTITY_GROUP_ITEM == (uint32_t)HA_ENTITY_GROUP_ITEM, "entity id: group-item");
+_Static_assert(WEB_ENTITY_WEATHER == (uint32_t)HA_ENTITY_WEATHER, "entity id: weather");
+_Static_assert(WEB_ENTITY_WIFI_STATUS == (uint32_t)HA_ENTITY_WIFI_STATUS, "entity id: wifi-status");
+_Static_assert(WEB_ENTITY_SETTINGS == (uint32_t)HA_ENTITY_SETTINGS, "entity id: settings");
 
 /* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
 _Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
@@ -61,6 +70,11 @@ static const web_schema_t SCHEMA[] = {
     {WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t)},
     {WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)},
     {WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t)},
+    {WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t)},
+    {WEB_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t)},
+    {WEB_ENTITY_WEATHER, sizeof(ha_device_uid_t), sizeof(ha_weather_record_t)},
+    {WEB_ENTITY_WIFI_STATUS, sizeof(ha_device_uid_t), sizeof(ha_wifi_status_record_t)},
+    {WEB_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t)},
 };
 #define WEB_SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
 
