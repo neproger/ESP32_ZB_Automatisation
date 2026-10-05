@@ -98,6 +98,15 @@ v1 скриптом `icons/tools/downscale_icons.py`). Экраны резерв
 Внизу — навигационные точки-карусель (`ui_nav_dots.c`): по одной на группу, активная
 подсвечена; тоже на `lv_layer_top()`, поэтому не двигаются при переходах.
 
+В строке состояния — «бургер» (`ui_menu.c`) с выпадающим меню на `lv_layer_top()`:
+«Настройки» и «Wi-Fi». «Настройки» — отдельный экран (`ui_settings.c`): подсветка и
+таймаут скринсейвера, чтение/запись `HA_ENTITY_SETTINGS` (`../services/SETTINGS.md`).
+Wi-Fi открывает отдельный экран (`ui_wifi.c`): список
+сетей из `HA_ENTITY_WIFI_SCAN`, статус из `HA_ENTITY_WIFI_STATUS`, кнопка «Сканировать» и
+диалог пароля (`lv_keyboard` + `lv_textarea`). Скан — команда `HA_CMD_WIFI_SCAN`,
+подключение — `HA_CMD_WIFI_CONNECT` (args: ssid + пароль); результат приходит состоянием,
+как и всё остальное (форм — `ha_model/ha_wifi.h`).
+
 Превью без железа — LVGL Live Preview: тот же `ui/` + фейковый Domain с мок-данными
 (`preview/domain_fake.c`), панель 480×800.
 

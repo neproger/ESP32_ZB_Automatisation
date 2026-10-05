@@ -16,8 +16,8 @@
 | `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
 | `system` | сервис времени: SNTP + GeoIP (пояс/город, `ip-api`); синтетический девайс «Время» и сущность `location`; состояния времени и события-тики (`MINUTE/HALF_HOUR/HOUR/DAY`) | запуск на P4: `sntp sync: ESP_OK`, tz/город, snapshot с девайсом/состояниями/location |
 | `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
-| `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
-| `ha_p4` (приложение) | bootstrap: 9 типов сущностей (device/state/endpoint/automation/device_remove/location/group/group_item/weather), задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 (`display` в прошивку пока не линкуется) |
+| `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), бургер-меню, экран Wi-Fi (сети + диалог пароля), экран настроек (подсветка, скринсейвер), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
+| `ha_p4` (приложение) | bootstrap: 13 типов сущностей (device/state/endpoint/automation/device_remove/location/group/group_item/weather/wifi_scan/wifi_known/wifi_status/settings), задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 (`display` в прошивку пока не линкуется) |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
 
@@ -52,6 +52,8 @@ TIME-триггер          → правило «будильник» сохр�
 display                  порт под панель (esp_lcd + lvgl_port + GT911) не подключён;
                          UI живёт в host-превью, display_start из app_main не зовётся
 weather                  сущность HA_ENTITY_WEATHER заведена, сервис (Open-Meteo) не написан
+wifi provisioning        таблицы scan/known/status и команды заведены; сервис
+                         (скан/connect на C3, автоподключение по известным) не написан
 ```
 
 Уход устройства — по сигналу `LEAVE_INDICATION`/`DEVICE_UPDATE` (снятие device,
@@ -72,8 +74,9 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 2. Погода (system phase 2) — сервис Open-Meteo заполняет HA_ENTITY_WEATHER + событие
                             WEATHER_CHANGED (сущность и форма уже в Domain)
 3. Триггер STATE (порог атрибута) — «свет по движению», «закрыть по холоду» без кнопки
-4. device_meta (last_seen/rssi/lqi)
-5. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
+4. Wi-Fi provisioning — сервис: скан/connect на C3, автоподключение по известным точкам
+5. device_meta (last_seen/rssi/lqi)
+6. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
 ```
 
 Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`

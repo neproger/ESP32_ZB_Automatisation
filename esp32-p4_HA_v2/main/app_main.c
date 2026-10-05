@@ -9,7 +9,9 @@
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
+#include "ha_model/ha_wifi.h"
 #include "journal_console.h"
 #include "system/system.h"
 #include "web/web.h"
@@ -22,7 +24,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 9
+#define APP_ENTITY_TYPES 13
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -36,6 +38,10 @@
 #define APP_GROUP_CAPACITY 16
 #define APP_GROUP_ITEM_CAPACITY 128
 #define APP_WEATHER_CAPACITY 1
+#define APP_WIFI_SCAN_CAPACITY 1
+#define APP_WIFI_KNOWN_CAPACITY 8
+#define APP_WIFI_STATUS_CAPACITY 1
+#define APP_SETTINGS_CAPACITY 1
 
 #define DISPATCHER_TASK_STACK 4096
 #define DISPATCHER_TASK_PRIORITY 6
@@ -140,6 +146,47 @@ static const domain_entity_desc_t weather_desc = {
     .persist_key = NULL,
 };
 
+/*
+ * Wi-Fi provisioning (docs/services/WEB.md): скан и статус — RAM (сервис их
+ * обновляет/чистит), известные точки — FLASH (автоподключение при старте).
+ */
+static const domain_entity_desc_t wifi_scan_desc = {
+    .type = (domain_entity_t)HA_ENTITY_WIFI_SCAN,
+    .key_size = sizeof(ha_device_uid_t),
+    .payload_size = sizeof(ha_wifi_scan_record_t),
+    .capacity = APP_WIFI_SCAN_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
+static const domain_entity_desc_t wifi_known_desc = {
+    .type = (domain_entity_t)HA_ENTITY_WIFI_KNOWN,
+    .key_size = sizeof(ha_wifi_known_key_t),
+    .payload_size = sizeof(ha_wifi_known_record_t),
+    .capacity = APP_WIFI_KNOWN_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "wifi_known",
+};
+
+static const domain_entity_desc_t wifi_status_desc = {
+    .type = (domain_entity_t)HA_ENTITY_WIFI_STATUS,
+    .key_size = sizeof(ha_device_uid_t),
+    .payload_size = sizeof(ha_wifi_status_record_t),
+    .capacity = APP_WIFI_STATUS_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
+/* Настройки: одна запись, FLASH — должны переживать перезагрузку. */
+static const domain_entity_desc_t settings_desc = {
+    .type = (domain_entity_t)HA_ENTITY_SETTINGS,
+    .key_size = sizeof(ha_settings_key_t),
+    .payload_size = sizeof(ha_settings_record_t),
+    .capacity = APP_SETTINGS_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "settings",
+};
+
 /* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
 static const domain_entity_desc_t automation_desc = {
     .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
@@ -241,6 +288,18 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &weather_desc), "register weather")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &wifi_scan_desc), "register wifi-scan")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &wifi_known_desc), "register wifi-known")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &wifi_status_desc), "register wifi-status")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &settings_desc), "register settings")) {
         return;
     }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {

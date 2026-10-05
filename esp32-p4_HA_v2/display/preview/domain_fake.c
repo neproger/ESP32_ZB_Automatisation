@@ -10,8 +10,10 @@
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_settings.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
+#include "ha_model/ha_wifi.h"
 #include "ha_model/ha_zigbee.h"
 
 #define DEV_KITCHEN 0x00124B0000000001ull
@@ -55,6 +57,27 @@ typedef struct {
 static const fake_location_t s_locations[] = {
     {HA_SYSTEM_DEVICE_UID, {.latitude = 55.75f, .longitude = 37.62f, .tz_offset_min = 180,
                             .name = "Москва"}},
+};
+
+static const ha_wifi_scan_record_t s_wifi_scan = {
+    .count = 3,
+    .aps = {
+        {.ssid = "HomeNet", .rssi = -48, .auth = HA_WIFI_AUTH_WPA2},
+        {.ssid = "Neighbor_5G", .rssi = -72, .auth = HA_WIFI_AUTH_WPA2},
+        {.ssid = "CafeGuest", .rssi = -83, .auth = HA_WIFI_AUTH_OPEN},
+    },
+};
+
+static const ha_wifi_status_record_t s_wifi_status = {
+    .state = HA_WIFI_STATE_IDLE,
+    .connected = 0,
+    .ssid = "",
+};
+
+/* Настройки изменяемы: экран настроек пишет сюда через domain_entity_put. */
+static ha_settings_record_t s_settings = {
+    .screensaver_timeout_ms = 60000,
+    .brightness_pct = 80,
 };
 
 static const ha_weather_record_t s_weather = {
@@ -234,7 +257,48 @@ sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type, const void
         }
         return not_found();
     }
+    if (type == (domain_entity_t)HA_ENTITY_WIFI_SCAN) {
+        if (*(const ha_device_uid_t *)key == HA_WIFI_DEVICE_UID) {
+            *(ha_wifi_scan_record_t *)out_record = s_wifi_scan;
+            return SYS_OK;
+        }
+        return not_found();
+    }
+    if (type == (domain_entity_t)HA_ENTITY_WIFI_STATUS) {
+        if (*(const ha_device_uid_t *)key == HA_WIFI_DEVICE_UID) {
+            *(ha_wifi_status_record_t *)out_record = s_wifi_status;
+            return SYS_OK;
+        }
+        return not_found();
+    }
+    if (type == (domain_entity_t)HA_ENTITY_SETTINGS) {
+        if (((const ha_settings_key_t *)key)->id == HA_SETTINGS_ID) {
+            *(ha_settings_record_t *)out_record = s_settings;
+            return SYS_OK;
+        }
+        return not_found();
+    }
     return not_found();
+}
+
+sys_error_t domain_entity_put(domain_t *domain, domain_entity_t type, const void *key,
+                              const void *record, const domain_fact_meta_t *meta,
+                              bool *out_changed)
+{
+    (void)domain;
+    (void)key;
+    (void)meta;
+    if (out_changed != NULL) {
+        *out_changed = false;
+    }
+    if (type == (domain_entity_t)HA_ENTITY_SETTINGS && record != NULL) {
+        s_settings = *(const ha_settings_record_t *)record;
+        if (out_changed != NULL) {
+            *out_changed = true;
+        }
+        return SYS_OK;
+    }
+    return SYS_OK;
 }
 
 sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,
@@ -265,9 +329,12 @@ sys_error_t domain_entity_meta(domain_t *domain, domain_entity_t type, const voi
                                domain_entity_meta_t *out_meta)
 {
     (void)domain;
-    (void)type;
     (void)key;
-    (void)out_meta;
+    /* Скан статичен в превью — отдаём версию, чтобы список построился один раз. */
+    if (type == (domain_entity_t)HA_ENTITY_WIFI_SCAN && out_meta != NULL) {
+        out_meta->version.value = 1;
+        return SYS_OK;
+    }
     return not_found();
 }
 

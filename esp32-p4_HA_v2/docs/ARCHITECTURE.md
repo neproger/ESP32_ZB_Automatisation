@@ -239,6 +239,7 @@ docs/
 │   ├── ZIGBEE_IMPL_JOURNAL.md
 │   ├── AUTOMATION.md
 │   ├── SYSTEM.md
+│   ├── SETTINGS.md
 │   ├── WEB.md
 │   └── WEB_PROTOCOL.md
 ├── clients/

@@ -88,6 +88,28 @@ static void format_value(const ha_zb_state_key_t *state, const ha_zb_state_recor
 
 /* --- создание объектов --- */
 
+lv_obj_t *ui_slider_create_styled(lv_obj_t *parent, int min, int max)
+{
+    lv_obj_t *slider = lv_slider_create(parent);
+    lv_obj_set_height(slider, 10); /* толщина дорожки; маркер вырастает pad'ом */
+    lv_slider_set_range(slider, min, max);
+
+    lv_obj_set_style_bg_color(slider, lv_color_hex(UI_COL_CHIP), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_border_width(slider, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(UI_COL_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(slider, 0, LV_PART_INDICATOR);
+
+    lv_obj_set_style_bg_color(slider, lv_color_hex(UI_COL_TEXT), LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_border_width(slider, 0, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(slider, 6, LV_PART_KNOB);
+    return slider;
+}
+
 static lv_obj_t *make_slider_row(lv_obj_t *parent, int min, int max, lv_obj_t **out_slider,
                                  lv_obj_t **out_label)
 {
@@ -102,26 +124,8 @@ static lv_obj_t *make_slider_row(lv_obj_t *parent, int min, int max, lv_obj_t **
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    *out_slider = lv_slider_create(row);
+    *out_slider = ui_slider_create_styled(row, min, max);
     lv_obj_set_flex_grow(*out_slider, 1);
-    lv_obj_set_height(*out_slider, 10); /* толщина дорожки; маркер вырастает pad'ом */
-    lv_slider_set_range(*out_slider, min, max);
-
-    /* Дорожка и заполнение — скруглённые, без рамок. */
-    lv_obj_set_style_bg_color(*out_slider, lv_color_hex(UI_COL_CHIP), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(*out_slider, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(*out_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_border_width(*out_slider, 0, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(*out_slider, lv_color_hex(UI_COL_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(*out_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-    lv_obj_set_style_border_width(*out_slider, 0, LV_PART_INDICATOR);
-
-    /* Маркер — круг размером дорожка + 2*pad. */
-    lv_obj_set_style_bg_color(*out_slider, lv_color_hex(UI_COL_TEXT), LV_PART_KNOB);
-    lv_obj_set_style_bg_opa(*out_slider, LV_OPA_COVER, LV_PART_KNOB);
-    lv_obj_set_style_radius(*out_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
-    lv_obj_set_style_border_width(*out_slider, 0, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(*out_slider, 6, LV_PART_KNOB);
 
     *out_label = lv_label_create(row);
     lv_obj_set_style_text_font(*out_label, UI_FONT_BODY, 0);

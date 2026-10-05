@@ -6,9 +6,12 @@ file(GLOB WEATHER_ICON_SRCS "icons/wicon_*.c")
 idf_component_register(
     SRCS
         "src/display.c"
+        "src/ui_menu.c"
         "src/ui_nav_dots.c"
         "src/ui_page.c"
+        "src/ui_settings.c"
         "src/ui_status_bar.c"
+        "src/ui_wifi.c"
         "src/ui_widgets.c"
         "fonts/ui_font_20.c"
         "fonts/ui_font_32.c"

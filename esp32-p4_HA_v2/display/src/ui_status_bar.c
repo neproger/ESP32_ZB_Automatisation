@@ -7,6 +7,7 @@
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
 #include "ui_compat.h"
+#include "ui_menu.h"
 #include "ui_style.h"
 #include "weather_icons.h"
 
@@ -19,6 +20,12 @@ static char s_last_time[8];
 static char s_last_location[HA_LOCATION_NAME_MAX];
 static char s_last_weather[40];
 static const lv_image_dsc_t *s_last_icon;
+
+static void on_burger(lv_event_t *event)
+{
+    (void)event;
+    ui_menu_toggle();
+}
 
 void ui_status_bar_create(domain_t *domain)
 {
@@ -69,6 +76,25 @@ void ui_status_bar_create(domain_t *domain)
     lv_obj_set_style_text_font(s_weather_label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(s_weather_label, lv_color_hex(UI_COL_TEXT), 0);
     lv_label_set_text(s_weather_label, "");
+
+    /* Бургер — меню поверх экрана (ui_menu). */
+    lv_obj_t *burger = lv_button_create(bar);
+    lv_obj_set_size(burger, 44, 40);
+    lv_obj_set_style_bg_opa(burger, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(burger, 0, 0);
+    lv_obj_set_style_shadow_width(burger, 0, 0);
+    lv_obj_set_style_pad_all(burger, 0, 0);
+    lv_obj_add_event_cb(burger, on_burger, LV_EVENT_CLICKED, NULL);
+    for (int i = 0; i < 3; ++i) {
+        lv_obj_t *line = lv_obj_create(burger);
+        lv_obj_set_size(line, 26, 3);
+        lv_obj_set_style_radius(line, 2, 0);
+        lv_obj_set_style_bg_color(line, lv_color_hex(UI_COL_TEXT), 0);
+        lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(line, 0, 0);
+        ui_set_scrollable(line, false);
+        lv_obj_align(line, LV_ALIGN_CENTER, 0, (i - 1) * 8);
+    }
 }
 
 static bool read_u8(uint16_t attr_id, uint8_t *out)

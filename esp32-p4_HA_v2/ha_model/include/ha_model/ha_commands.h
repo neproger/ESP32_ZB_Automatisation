@@ -36,6 +36,12 @@ extern "C" {
 /* Открыть сеть для подключения новых устройств (args = uint8_t seconds, 0 — закрыть). */
 #define HA_CMD_PERMIT_JOIN 3u
 
+/* Wi-Fi: запустить скан (args нет); результат — сущность HA_ENTITY_WIFI_SCAN. */
+#define HA_CMD_WIFI_SCAN 4u
+
+/* Wi-Fi: подключиться к точке (args = ha_wifi_connect_args_t, ha_wifi.h). */
+#define HA_CMD_WIFI_CONNECT 5u
+
 /* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
 #define HA_ZB_COMMAND_ARGS_MAX 16u
 

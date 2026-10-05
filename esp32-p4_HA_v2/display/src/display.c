@@ -7,12 +7,17 @@
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_weather.h"
+#include "ha_model/ha_wifi.h"
 #include "ha_model/ha_zigbee.h"
 #include "ui_commands.h"
+#include "ui_menu.h"
 #include "ui_nav_dots.h"
 #include "ui_page.h"
+#include "ui_settings.h"
 #include "ui_status_bar.h"
 #include "ui_style.h"
+#include "ui_wifi.h"
 
 #define DISPLAY_POLL_PERIOD_MS 250
 #define DISPLAY_ANIM_MS 220
@@ -31,8 +36,15 @@ typedef struct {
     ha_group_item_record_t recs[UI_MAX_ITEMS];
 } item_list_t;
 
+typedef enum {
+    SCREEN_GROUPS = 0,
+    SCREEN_WIFI,
+    SCREEN_SETTINGS,
+} screen_mode_t;
+
 static domain_t *s_domain;
 static ui_page_t *s_page;
+static screen_mode_t s_screen_mode;
 static size_t s_group_index;
 static group_list_t s_groups;
 static item_list_t s_items;
@@ -187,7 +199,7 @@ static void load_page_now(void)
 
 static void navigate(int group_delta)
 {
-    if (s_domain == NULL) {
+    if (s_domain == NULL || s_screen_mode != SCREEN_GROUPS) {
         return;
     }
     collect_groups();
@@ -235,12 +247,80 @@ static void on_page_gesture(void *ctx, lv_dir_t dir)
     }
 }
 
+/* --- меню, экраны Wi-Fi и настроек --- */
+
+/* Возврат из вспомогательного экрана к экранам групп (общий back для них). */
+static void return_to_groups(void)
+{
+    s_screen_mode = SCREEN_GROUPS;
+    collect_groups();
+    s_page = NULL; /* текущий вспомогательный экран удалит lv_screen_load_anim(auto_del) */
+    ui_page_t *page = build_page(s_group_index);
+    if (page == NULL) {
+        return;
+    }
+    s_page = page;
+    lv_screen_load_anim(ui_page_root(page), LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, DISPLAY_ANIM_MS, 0, true);
+    ui_nav_dots_update(s_groups.count, s_group_index);
+}
+
+static void open_wifi(void)
+{
+    collect_groups();
+    s_page = NULL; /* текущий групповой экран удалит lv_screen_load_anim(auto_del) */
+    lv_obj_t *root = ui_wifi_create(s_domain, return_to_groups);
+    if (root == NULL) {
+        return;
+    }
+    s_screen_mode = SCREEN_WIFI;
+    lv_screen_load_anim(root, LV_SCREEN_LOAD_ANIM_MOVE_LEFT, DISPLAY_ANIM_MS, 0, true);
+    ui_nav_dots_update(1, 0); /* одна «страница» — точки скрыты */
+}
+
+static void open_settings(void)
+{
+    collect_groups();
+    s_page = NULL;
+    lv_obj_t *root = ui_settings_create(s_domain, return_to_groups);
+    if (root == NULL) {
+        return;
+    }
+    s_screen_mode = SCREEN_SETTINGS;
+    lv_screen_load_anim(root, LV_SCREEN_LOAD_ANIM_MOVE_LEFT, DISPLAY_ANIM_MS, 0, true);
+    ui_nav_dots_update(1, 0);
+}
+
+static void on_menu(ui_menu_item_t item)
+{
+    if (item == UI_MENU_WIFI) {
+        open_wifi();
+    } else if (item == UI_MENU_SETTINGS) {
+        open_settings();
+    }
+}
+
 /* --- публичный API --- */
 
 static void poll_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
     display_poll();
+}
+
+/*
+ * Дефолтный шрифт темы — наш кириллический. Иначе любой виджет без явного шрифта
+ * (кнопки, список дропдауна, клавиатура) берёт встроенный ASCII-шрифт LVGL и
+ * рисует кириллицу прямоугольниками.
+ */
+static void apply_theme_font(void)
+{
+    lv_display_t *display = lv_display_get_default();
+    if (display == NULL) {
+        return;
+    }
+    lv_theme_t *theme = lv_theme_default_init(display, lv_color_hex(UI_COL_ACCENT),
+                                              lv_color_hex(UI_COL_OK), true, UI_FONT_BODY);
+    lv_display_set_theme(display, theme);
 }
 
 void display_start(domain_t *domain)
@@ -250,8 +330,11 @@ void display_start(domain_t *domain)
     }
     s_domain = domain;
 
+    apply_theme_font();
     ui_status_bar_create(domain);
     ui_nav_dots_create();
+    ui_menu_create();
+    ui_menu_set_cb(on_menu);
     collect_groups();
     s_group_index = 0;
     load_page_now();
@@ -261,10 +344,21 @@ void display_start(domain_t *domain)
 
 void display_poll(void)
 {
-    if (s_domain == NULL || s_page == NULL) {
+    if (s_domain == NULL) {
         return;
     }
     ui_status_bar_apply();
+    if (s_screen_mode == SCREEN_WIFI) {
+        ui_wifi_apply();
+        return;
+    }
+    if (s_screen_mode == SCREEN_SETTINGS) {
+        ui_settings_apply();
+        return;
+    }
+    if (s_page == NULL) {
+        return;
+    }
     collect_groups();
     if (s_groups.count > 0 && s_group_index >= s_groups.count) {
         s_group_index = s_groups.count - 1;
@@ -384,4 +478,25 @@ bool display_send_color_temperature(const ha_zb_state_key_t *key, uint16_t mired
     };
     return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
                               NULL));
+}
+
+bool display_send_wifi_scan(void)
+{
+    if (s_domain == NULL) {
+        return false;
+    }
+    return sys_ok(domain_post(s_domain, HA_CMD_WIFI_SCAN, NULL, 0, NULL, NULL));
+}
+
+bool display_send_wifi_connect(const char *ssid, const char *password)
+{
+    if (s_domain == NULL || ssid == NULL) {
+        return false;
+    }
+    ha_wifi_connect_args_t args = {0};
+    snprintf(args.ssid, sizeof(args.ssid), "%s", ssid);
+    if (password != NULL) {
+        snprintf(args.password, sizeof(args.password), "%s", password);
+    }
+    return sys_ok(domain_post(s_domain, HA_CMD_WIFI_CONNECT, &args, sizeof(args), NULL, NULL));
 }

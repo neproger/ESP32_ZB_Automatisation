@@ -62,7 +62,22 @@ endian; 8‑байтный заголовок). Клиент — `web-ui/` (Vite
 `npm run build` (в `web-ui`) → `idf.py build`. Без собранного `web/ui/` прошивка отдаёт
 заглушку. В дев — `npm run dev`, `VITE_WS_URL=ws://<ip>/ws` (или `?ws=`).
 
-## 6. Открытые вопросы
+## 6. Wi-Fi provisioning
+
+Креды Wi-Fi — данные Domain, а не UI. Три таблицы (`ha_model/ha_wifi.h`):
+
+- `HA_ENTITY_WIFI_SCAN` — результат последнего скана (RAM); сервис чистит её после
+  подключения и завершения работы;
+- `HA_ENTITY_WIFI_KNOWN` — известные точки (ssid+password, FLASH): при старте сервис
+  сканирует, среди известных выбирает сеть с самым сильным сигналом и подключается;
+- `HA_ENTITY_WIFI_STATUS` — состояние подключения (RAM).
+
+Экран Display читает эти таблицы и постит команды `HA_CMD_WIFI_SCAN` /
+`HA_CMD_WIFI_CONNECT` (`ha_commands.h`); пароль, введённый на экране, сервис сохраняет в
+известные. Реализация сервиса (scan/connect на C3) — следующий шаг; сейчас заведены формы,
+команды и регистрация типов в bootstrap.
+
+## 7. Открытые вопросы
 
 - консистентность snapshot при параллельных writers (eventual consistency
   «дельты догонят» vs version-stamped snapshot);

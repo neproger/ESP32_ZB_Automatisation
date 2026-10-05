@@ -20,3 +20,16 @@ static inline void ui_set_scrollable(lv_obj_t *obj, bool enabled)
     }
 #endif
 }
+
+static inline void ui_set_hidden(lv_obj_t *obj, bool hidden)
+{
+#if (LVGL_VERSION_MAJOR == 9) && (LVGL_VERSION_MINOR >= 6)
+    lv_obj_set_hidden(obj, hidden);
+#else
+    if (hidden) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
+}

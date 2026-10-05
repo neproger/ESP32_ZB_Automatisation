@@ -47,6 +47,12 @@ typedef enum {
     HA_ENTITY_GROUP_ITEM = 8,
     /* Погода системного сервиса (docs/services/SYSTEM.md). Форма — ha_model/ha_weather.h. */
     HA_ENTITY_WEATHER = 9,
+    /* Wi-Fi provisioning (docs/services/WEB.md). Формы — ha_model/ha_wifi.h. */
+    HA_ENTITY_WIFI_SCAN = 10,
+    HA_ENTITY_WIFI_KNOWN = 11,
+    HA_ENTITY_WIFI_STATUS = 12,
+    /* Настройки приложения (docs/services/SETTINGS.md). Форма — ha_model/ha_settings.h. */
+    HA_ENTITY_SETTINGS = 13,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32
