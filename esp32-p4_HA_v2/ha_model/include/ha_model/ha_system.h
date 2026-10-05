@@ -46,6 +46,7 @@ typedef enum {
     HA_SYS_EVENT_HALF_HOUR_TICK = 2,  /* каждые 30 минут (:00 и :30) */
     HA_SYS_EVENT_HOUR_TICK = 3,       /* каждый час на :00 */
     HA_SYS_EVENT_DAY_TICK = 4,        /* 00:00 локального времени */
+    HA_SYS_EVENT_WEATHER_CHANGED = 5, /* сменилось условие погоды */
 } ha_system_event_t;
 
 #ifdef __cplusplus

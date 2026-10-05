@@ -4,9 +4,8 @@
 
 ## 1. Роль
 
-Сервис времени и погоды (пока — только время). Держит **синтетическое системное
-устройство** в Domain: точное время (SNTP), локальный пояс и город (GeoIP). Погода
-(Open-Meteo) — следующий шаг, форма та же.
+Сервис времени и погоды. Держит **синтетическое системное устройство** в Domain: точное
+время (SNTP), локальный пояс и город (GeoIP) и текущую погоду (Open-Meteo).
 
 Устройство не Zigbee: оно живёт в обычных сущностях Domain (`device` / `endpoint` /
 `state` / `location`), поэтому Automation и Web видят его как любое другое. Сеть сервис
@@ -20,10 +19,12 @@ system_start(domain) -> task:
   ждём сеть (IP на WIFI_STA_DEF)
   SNTP (pool.ntp.org) -> системные часы
   GeoIP (ip-api.com) -> пояс + город -> TZ (POSIX), сущность location
+  Open-Meteo -> HA_ENTITY_WEATHER (WMO code -> condition); смена условия -> WEATHER_CHANGED
   создаём device/endpoint системного девайса
   далее каждую минуту:
     обновляем состояния времени
     публикуем события-«тики»
+  раз в 15 минут обновляем погоду
   спим до начала следующей минуты
 ```
 
@@ -49,16 +50,16 @@ UID — `HA_SYSTEM_DEVICE_UID` (`ha_model/ha_system.h`), ASCII "SYST" в ста�
 Строка города в state не влезает (там число+тип), поэтому она — отдельная сущность
 `HA_ENTITY_LOCATION` (текст + координаты + tz-offset), ключ — uid.
 
-### 3.1. Погода (заготовка)
+### 3.1. Погода
 
 Погода — отдельная сущность `HA_ENTITY_WEATHER`, форма — `ha_model/ha_weather.h`, ключ —
 синтетический `HA_WEATHER_DEVICE_UID` (вне диапазона Zigbee). Одна запись на текущие
 условия: `condition` (enum; имена как в HA и в иконках v1), температура/влажность в 0.01,
 давление, скорость и направление ветра, облачность. RAM: данные приходят из сети,
-персистентность не нужна (как `location`). Тип и ёмкость регистрирует bootstrap, поэтому
-сущность существует в Domain ещё до появления сервиса; заполнять её будет сервис
-(Open-Meteo, перевод WMO `weather_code` → `condition`). Display и Automation читают её
-как обычную сущность. Временных меток в записи нет — они ломали бы свёртку
+персистентность не нужна (как `location`). Заполняет сервис: Open-Meteo `current`
+(`temperature_2m`, `relative_humidity_2m`, `weather_code`, `wind_speed_10m`,
+`wind_direction_10m`, `cloud_cover`, `surface_pressure`, `is_day`), перевод WMO
+`weather_code` → `condition`. Временных меток в записи нет — они ломали бы свёртку
 (`../RECORD_MODEL.md` §2.2).
 
 ## 4. События (для автоматизаций)
@@ -72,6 +73,7 @@ Automation подписан и на `SYSTEM`, поэтому правило ве
 | 2 | `HALF_HOUR_TICK` — каждые 30 минут (`:00`/`:30`) |
 | 3 | `HOUR_TICK` — каждый час |
 | 4 | `DAY_TICK` — 00:00 локального времени |
+| 5 | `WEATHER_CHANGED` — сменилось условие погоды |
 
 Так выражаются типовые расписания:
 
@@ -83,6 +85,8 @@ Automation подписан и на `SYSTEM`, поэтому правило ве
 ## 5. Реализация
 
 Компонент `system` (`system/src/system.c`). Зависит от `domain`/`ha_model`/`sys`; из
-IDF — `esp_netif` (SNTP + IP STA), `esp_http_client` (GeoIP). Внешнего JSON-парсера нет:
-для плоского ответа ip-api хватает `json_find`/`json_string`/`json_number`. IANA-имена
-поясов newlib не знает, поэтому TZ строится из смещения (знак в POSIX TZ обратный).
+IDF — `esp_netif` (SNTP + IP STA), `esp_http_client` (GeoIP + Open-Meteo). Внешнего
+JSON-парсера нет: `json_find`/`json_string`/`json_number` ищут поля по имени. У Open-Meteo
+ключи дублируются в `current_units` (строки), поэтому поля берутся из подстроки после
+`"current":`. IANA-имена поясов newlib не знает — TZ строится из смещения (знак в POSIX
+TZ обратный).

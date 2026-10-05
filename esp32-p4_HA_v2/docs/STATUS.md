@@ -14,7 +14,7 @@
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
-| `system` | сервис времени: SNTP + GeoIP (пояс/город, `ip-api`); синтетический девайс «Время» и сущность `location`; состояния времени и события-тики (`MINUTE/HALF_HOUR/HOUR/DAY`) | запуск на P4: `sntp sync: ESP_OK`, tz/город, snapshot с девайсом/состояниями/location |
+| `system` | сервис времени и погоды: SNTP + GeoIP (пояс/город, `ip-api`) + Open-Meteo (`current`, WMO→condition); синтетический девайс «Время», сущности `location` и `weather`; события-тики и `WEATHER_CHANGED` | запуск на P4: `sntp sync: ESP_OK`, tz/город, `weather: cond=2 t=10.5C`, snapshot с девайсом/состояниями/location/weather |
 | `wifi` | сервис Wi-Fi: владелец радио на внешнем C3 (ESP-Hosted); подъём стека, скан, подключение, автоподключение по известным; сущности `wifi_scan/known/status`, команды `HA_CMD_WIFI_SCAN/CONNECT` | host-тест 1/1 (`wifi_select`), IDF-сборка; на железе не проверено (нет P4) |
 | `web` | HTTP+WS (BFF) через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку; радио не владеет | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
 | `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), бургер-меню, экран Wi-Fi (сети + диалог пароля), экран настроек (подсветка, скринсейвер), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
@@ -51,9 +51,8 @@ TIME-триггер          → правило «будильник» сохр�
 ```text
 нет                      источник кадров (zigbee_stub_feed.c) удалён; репорты, интервью
                          и команды идут настоящим радиоканалом
-weather                  сущность HA_ENTITY_WEATHER заведена, сервис (Open-Meteo) не написан
-wifi provisioning        сервис `wifi` (скан/connect/автоподключение) написан и компилируется;
-                         на железе не проверено — нет P4
+wifi provisioning        сервис `wifi` (скан/connect/автоподключение) — provisioning только из
+                         UI Display; на железе наблюдалась нестабильность AUTH_EXPIRE (AP/C3)
 ```
 
 Уход устройства — по сигналу `LEAVE_INDICATION`/`DEVICE_UPDATE` (снятие device,
@@ -69,13 +68,11 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 ## 4. Что дальше
 
 ```text
-1. Погода (system phase 2) — сервис Open-Meteo заполняет HA_ENTITY_WEATHER + событие
-                            WEATHER_CHANGED (сущность и форма уже в Domain)
-2. Триггер STATE (порог атрибута) — «свет по движению», «закрыть по холоду» без кнопки
-3. Wi-Fi provisioning — сервис: скан/connect на C3, автоподключение по известным точкам
-4. device_meta (last_seen/rssi/lqi)
-5. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
-6. Выбираемые темы UI — пресеты палитры (`ui_palette.h`) + выбор через `settings`
+1. Триггер STATE (порог атрибута) — «свет по движению», «закрыть по холоду» без кнопки
+2. device_meta (last_seen/rssi/lqi)
+3. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
+4. Выбираемые темы UI — пресеты палитры (`ui_palette.h`) + выбор через `settings`
+5. Аудио ES8311 / microSD — остальные периферии платы
 ```
 
 Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`

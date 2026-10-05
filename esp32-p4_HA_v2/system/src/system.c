@@ -1,5 +1,6 @@
 #include "system/system.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -13,6 +14,7 @@
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_system.h"
+#include "ha_model/ha_weather.h"
 #include "ha_model/ha_zigbee.h"
 
 /*
@@ -35,8 +37,18 @@ static const char *TAG = "system";
 #define SYSTEM_GEOIP_BODY_MAX 1024
 #define SYSTEM_GEOIP_ATTEMPTS 5
 
+#define SYSTEM_WEATHER_URL "http://api.open-meteo.com/v1/forecast"
+#define SYSTEM_WEATHER_BODY_MAX 2048
+#define SYSTEM_WEATHER_PERIOD_MIN 15
+#define SYSTEM_WEATHER_ATTEMPTS 3
+
 static domain_t *s_domain;
 static int32_t s_tz_offset_min;
+
+static double s_lat;
+static double s_lon;
+static bool s_weather_valid;
+static uint8_t s_weather_condition;
 
 /* --- сущности Domain ---------------------------------------------------- */
 
@@ -322,6 +334,8 @@ static void resolve_location(void)
         if (fetch_location(city, sizeof(city), &lat, &lon, &offset_sec)) {
             apply_tz(offset_sec);
             s_tz_offset_min = offset_sec / 60;
+            s_lat = lat;
+            s_lon = lon;
             put_location(city[0] ? city : "Unknown", lat, lon, s_tz_offset_min);
             ESP_LOGI(TAG, "location: %s (%.4f, %.4f)", city[0] ? city : "?", lat, lon);
             return;
@@ -331,6 +345,142 @@ static void resolve_location(void)
 
     ESP_LOGW(TAG, "geoip unavailable; keeping UTC");
     put_location("Unknown", 0.0, 0.0, 0);
+}
+
+/* --- погода (Open-Meteo) ------------------------------------------------ */
+
+/* WMO weather_code → условие (ha_weather_condition_t). is_day — из поля is_day. */
+static uint8_t wmo_to_condition(int code, bool is_day)
+{
+    switch (code) {
+    case 0:
+    case 1:
+        return is_day ? (uint8_t)HA_WEATHER_CLEAR : (uint8_t)HA_WEATHER_CLEAR_NIGHT;
+    case 2:
+        return (uint8_t)HA_WEATHER_PARTLYCLOUDY;
+    case 3:
+        return (uint8_t)HA_WEATHER_OVERCAST;
+    case 45:
+    case 48:
+        return (uint8_t)HA_WEATHER_FOG;
+    case 51:
+    case 53:
+    case 55:
+    case 56:
+    case 57:
+    case 61:
+    case 63:
+    case 65:
+        return (uint8_t)HA_WEATHER_RAINY;
+    case 66:
+    case 67:
+        return (uint8_t)HA_WEATHER_SNOWY_RAINY;
+    case 71:
+    case 73:
+    case 75:
+    case 77:
+    case 85:
+    case 86:
+        return (uint8_t)HA_WEATHER_SNOWY;
+    case 80:
+    case 81:
+    case 82:
+        return (uint8_t)HA_WEATHER_POURING;
+    case 95:
+        return (uint8_t)HA_WEATHER_LIGHTNING;
+    case 96:
+    case 99:
+        return (uint8_t)HA_WEATHER_LIGHTNING_RAINY;
+    default:
+        return (uint8_t)HA_WEATHER_UNKNOWN;
+    }
+}
+
+static bool fetch_weather(ha_weather_record_t *out)
+{
+    static char body[SYSTEM_WEATHER_BODY_MAX];
+    char url[320];
+    const int n = snprintf(url, sizeof(url),
+                           "%s?latitude=%.4f&longitude=%.4f&current=temperature_2m,"
+                           "relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,"
+                           "cloud_cover,surface_pressure,is_day",
+                           SYSTEM_WEATHER_URL, s_lat, s_lon);
+    if (n <= 0 || n >= (int)sizeof(url)) {
+        return false;
+    }
+    if (http_get_text(url, body, sizeof(body)) != ESP_OK) {
+        ESP_LOGW(TAG, "weather http failed");
+        return false;
+    }
+
+    /* Ключи есть и в `current_units` (строки) — берём только внутри `current`. */
+    const char *current = strstr(body, "\"current\":");
+    if (current == NULL) {
+        ESP_LOGW(TAG, "weather json: нет объекта current");
+        return false;
+    }
+
+    double temp = 0.0;
+    double code = 0.0;
+    if (!json_number(current, "temperature_2m", &temp) ||
+        !json_number(current, "weather_code", &code)) {
+        ESP_LOGW(TAG, "weather json: нет temperature_2m/weather_code");
+        return false;
+    }
+
+    ha_weather_record_t rec = {0};
+    double v = 0.0;
+    const bool is_day = !(json_number(current, "is_day", &v) && v == 0.0);
+    rec.condition = wmo_to_condition((int)code, is_day);
+    rec.temperature_c100 = (int16_t)lround(temp * 100.0);
+    if (json_number(current, "relative_humidity_2m", &v)) {
+        rec.humidity_p100 = (uint16_t)lround(v * 100.0);
+    }
+    if (json_number(current, "surface_pressure", &v)) {
+        rec.pressure_hpa = (uint16_t)lround(v);
+    }
+    if (json_number(current, "wind_speed_10m", &v)) {
+        rec.wind_kmh10 = (uint16_t)lround(v * 10.0);
+    }
+    if (json_number(current, "wind_direction_10m", &v)) {
+        rec.wind_dir_deg = (uint16_t)lround(v);
+    }
+    if (json_number(current, "cloud_cover", &v)) {
+        rec.cloud_pct = (uint8_t)lround(v);
+    }
+    *out = rec;
+    return true;
+}
+
+static void put_weather(const ha_weather_record_t *rec)
+{
+    const ha_device_uid_t uid = HA_WEATHER_DEVICE_UID;
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    bool changed = false;
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_WEATHER, &uid, rec, &meta, &changed);
+}
+
+static void refresh_weather(void)
+{
+    ha_weather_record_t rec = {0};
+    for (int attempt = 1; attempt <= SYSTEM_WEATHER_ATTEMPTS; attempt++) {
+        if (fetch_weather(&rec)) {
+            put_weather(&rec);
+            const bool changed = s_weather_valid && rec.condition != s_weather_condition;
+            s_weather_valid = true;
+            s_weather_condition = rec.condition;
+            if (changed) {
+                publish_event((uint8_t)HA_SYS_EVENT_WEATHER_CHANGED);
+            }
+            ESP_LOGI(TAG, "weather: cond=%u t=%.1fC hum=%u%% wind=%.1fkm/h",
+                     (unsigned)rec.condition, (double)rec.temperature_c100 / 100.0,
+                     (unsigned)rec.humidity_p100 / 100, (double)rec.wind_kmh10 / 10.0);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    ESP_LOGW(TAG, "weather unavailable");
 }
 
 /* --- состояния / события ------------------------------------------------ */
@@ -381,7 +531,9 @@ static void system_task(void *arg)
     put_device();
     put_endpoint();
     resolve_location();
+    refresh_weather();
 
+    uint32_t minutes_since_weather = 0;
     for (;;) {
         const time_t now = time(NULL);
         struct tm tmv = {0};
@@ -390,9 +542,16 @@ static void system_task(void *arg)
         update_time_states(&tmv);
         emit_ticks(&tmv);
 
-        /* Спим до начала следующей минуты, чтобы «тики» били ровно по границе. */
-        const uint32_t delay_ms = (uint32_t)((60 - tmv.tm_sec) * 1000);
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        if (++minutes_since_weather >= SYSTEM_WEATHER_PERIOD_MIN) {
+            minutes_since_weather = 0;
+            refresh_weather();
+        }
+
+        /* Спим до начала следующей минуты; пересчитываем после погоды (HTTP мог занять время). */
+        const time_t after = time(NULL);
+        struct tm t2 = {0};
+        localtime_r(&after, &t2);
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)((60 - t2.tm_sec) * 1000)));
     }
 }
 
