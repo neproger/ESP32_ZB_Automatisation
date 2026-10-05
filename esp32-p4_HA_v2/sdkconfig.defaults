@@ -50,3 +50,7 @@ CONFIG_ESP_HOSTED_HOST_RESET_GPIO=34
 
 # PSRAM: кадровый буфер дисплея 480x800x2 = 768 КБ не влезает в internal.
 CONFIG_SPIRAM=y
+
+# UART к C3: software flow control — больше очереди, чтобы гасить всплески (Display/PSRAM).
+CONFIG_ESP_HOSTED_HOST_UART_TX_Q_SIZE=24
+CONFIG_ESP_HOSTED_HOST_UART_RX_Q_SIZE=24

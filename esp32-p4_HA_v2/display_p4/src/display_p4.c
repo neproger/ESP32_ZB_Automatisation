@@ -227,7 +227,10 @@ static esp_err_t touch_init(void)
 
 static lv_display_t *lvgl_start(void)
 {
-    const lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
+    /* Display (LVGL) — на ядро 1; транспорт esp_hosted/UART остаётся на ядре 0,
+     * чтобы тяжёлая отрисовка не голодала линк к C3. */
+    port.task_affinity = 1;
     if (lvgl_port_init(&port) != ESP_OK) {
         return NULL;
     }
