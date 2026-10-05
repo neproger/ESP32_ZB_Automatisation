@@ -256,7 +256,8 @@ static void do_connect(const char *ssid, const char *password)
     wifi_config_t config = {0};
     copy_str((char *)config.sta.ssid, sizeof(config.sta.ssid), ssid);
     copy_str((char *)config.sta.password, sizeof(config.sta.password), password);
-    config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    /* Как в старом рабочем web-сервисе: порог WPA2. */
+    config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     put_status(HA_WIFI_STATE_CONNECTING, 0, 0, ssid);
     if (esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK) {
