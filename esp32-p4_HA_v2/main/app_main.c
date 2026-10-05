@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "automation/automation.h"
+#include "display_p4/display_p4.h"
 #include "domain/domain.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -338,6 +339,9 @@ void app_main(void)
     if (!start_step(system_start(&s_domain), "system start")) {
         return;
     }
+
+    /* Порт Display: панель ST7701 (DSI) + тач GT911, запускает UI под LVGL. */
+    display_p4_start(&s_domain);
 
     ESP_LOGI(TAG, "bootstrap done");
 }

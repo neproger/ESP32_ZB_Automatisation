@@ -12,4 +12,5 @@ idf_component_register(
         web
         wifi
         system
+        display_p4
 )

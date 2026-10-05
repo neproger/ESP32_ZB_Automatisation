@@ -1,0 +1,7 @@
+## Порт Display под плату Guition JC4880P443C_I_W: ST7701 MIPI-DSI + GT911.
+## Отдельный компонент: `ui/` (display) остаётся host-buildable, порт знает про esp_lcd.
+dependencies:
+  idf: ">=5.4"
+  lvgl/lvgl: ">=9.2,<10"
+  espressif/esp_lvgl_port: "^2"
+  espressif/esp_lcd_touch_gt911: "^1"
