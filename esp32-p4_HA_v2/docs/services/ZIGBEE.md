@@ -223,7 +223,7 @@ security; явное удаление устройства пользовате�
 5. команды: executor + проверка адресата + очередь отправки         выполнено
 6. топология: endpoint и состав кластеров                           выполнено
 7. счётчики диагностики (zigbee_diag)                               выполнено
-8. радиоканал: ESP-Hosted + RCP, репорты и отправка ZCL             выполнено
+8. радиоканал: spinel-UART + standalone ot_rcp, репорты и ZCL       выполнено
 9. комиссионирование: formation/open(180с)/steering                  выполнено
 10. интервью: Active_EP -> Simple_Desc -> Basic, upsert в Domain     выполнено
 11. подписка: bind + Configure Reporting -> репорты состояния        выполнено

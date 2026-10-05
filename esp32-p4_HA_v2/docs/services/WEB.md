@@ -52,11 +52,13 @@ ENTITY_UPSERTED → domain_get → Web DTO → STATE_DELTA → Browser
 ## 5. Протокол и клиент
 
 Провод — `WEB_PROTOCOL.md` (вариант A: сырые записи Domain, без DTO/строк; маленький
-endian; 8‑байтный заголовок). Клиент — `web-ui/` (Vite, vanilla): схема записей
-(`schema.js`), кадры (`proto.js`), WS + UI (`main.js`).
+endian; 8‑байтный заголовок). Клиент — `web-ui/` (Vite + Preact/JSX): схема записей
+(`src/schema.js`), кадры (`src/proto.js`), словарь команд (`src/commands.js`), UI
+(`src/App.jsx`, `src/main.jsx`).
 
-`npm run build` кладёт сборку в `web/ui/`, откуда прошивка встраивает её (`EMBED_FILES`)
-и отдаёт по `/` — отдельный сервер не нужен, устройство отдаёт приложение само. Порядок:
+`npm run build` кладёт сборку в `web/ui/` (`index.html`, `app.js`, `app.css` и их `.gz`;
+второй шаг — `scripts/gzip.mjs`), откуда прошивка встраивает её (`EMBED_FILES`) и отдаёт
+по `/` — отдельный сервер не нужен, устройство отдаёт приложение само. Порядок:
 `npm run build` (в `web-ui`) → `idf.py build`. Без собранного `web/ui/` прошивка отдаёт
 заглушку. В дев — `npm run dev`, `VITE_WS_URL=ws://<ip>/ws` (или `?ws=`).
 

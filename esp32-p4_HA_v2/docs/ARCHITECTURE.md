@@ -236,7 +236,8 @@ docs/
 │   ├── ZIGBEE_IMPL_JOURNAL.md
 │   ├── AUTOMATION.md
 │   ├── SYSTEM.md
-│   └── WEB.md
+│   ├── WEB.md
+│   └── WEB_PROTOCOL.md
 ├── clients/
 │   └── DISPLAY.md
 ├── hardware/
@@ -245,7 +246,9 @@ docs/
     ├── MSTORE.md
     ├── MSTORE_FLASH_FORMAT.md
     ├── MSTORE_FLASH_REGIONS.md
-    └── MSTORE_IMPL_JOURNAL.md
+    ├── MSTORE_IMPL_JOURNAL.md
+    ├── MSTORE_BENCH.md
+    └── MICRO_DB_V1_REVIEW.md
 ```
 
 Правило разделения:

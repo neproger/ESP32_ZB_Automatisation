@@ -9,7 +9,7 @@
 |---|---|
 | Компонент | `zigbee` (IDF-компонент + host-тесты чистой логики) |
 | Контракт | `services/ZIGBEE.md` |
-| Реализовано | задача сервиса, репорт → состояние, топология endpoint'ов, интервью устройства (ZDO-дискавери + Basic), подписка на состояние (binding + Configure Reporting), события от устройств (сырой ZCL-кадр → EVENT), executor и отправка команд, комиссионирование (formation/open/steering), радиоканал ESP-Hosted + RCP, счётчики диагностики |
+| Реализовано | задача сервиса, репорт → состояние, топология endpoint'ов, интервью устройства (ZDO-дискавери + Basic), подписка на состояние (binding + Configure Reporting), события от устройств (сырой ZCL-кадр → EVENT), executor и отправка команд, комиссионирование (formation/open/steering), радиоканал spinel-UART + standalone ot_rcp на C6, счётчики диагностики |
 | Заглушки | нет |
 | Тесты | host: `test_state`, `test_command`, `test_topology`, `test_interview` (чистая логика без FreeRTOS) |
 | Проверено на P4 | живое устройство (ESP32C6-DISPLAY): сеть, интервью, device + endpoint'ы в Domain |
@@ -22,7 +22,7 @@ zigbee_command.c    проверка команды до отправки       
 zigbee_topology.c   запись endpoint'а                               host + IDF
 zigbee_interview.c  роли кластеров и запись интервью в Domain       host + IDF
 zigbee.c            задача, очереди, executor                       только IDF
-zigbee_radio.c      ESP-Hosted + RCP, репорт, команды и интервью    только IDF
+zigbee_radio.c      spinel-UART RCP (ot_rcp), репорт, команды       только IDF
 zigbee_binding.c    подписка: client-кластеры, bind, reporting      только IDF
 zigbee_diag.c       счётчики и печать ошибок                        только IDF
 ```
@@ -40,7 +40,7 @@ zigbee_diag.c       счётчики и печать ошибок               
 8. адресат факта                        domain_fact_target_t в Domain
 9. топология                            endpoint и состав кластеров
 10. счётчики диагностики                zigbee_diag, отдельно от Journal
-11. радиоканал                          zigbee_radio: ESP-Hosted -> RCP -> стек, репорты
+11. радиоканал                          zigbee_radio: spinel-UART -> RCP -> стек, репорты
 12. отправка команд                     zigbee_radio_send: On/Off, Level MoveToLevel
 13. комиссионирование                   formation/open(180с)/steering, лог permit-join
 14. интервью устройства                 Active_EP -> Simple_Desc -> Basic, upsert в Domain
@@ -64,6 +64,7 @@ zigbee_diag.c       счётчики и печать ошибок               
 | 2026-10-01 | Радио — UART-RCP через ESP-Hosted, а не нативный 802.15.4 | у P4 нет радио; C6 отдаёт его как RCP, host-стек Zigbee тот же |
 | 2026-10-01 | Команда адресуется EUI-64, short address разрешает стек | identity устройства не зависит от текущего сетевого адреса |
 | 2026-10-01 | Отправка из задачи сервиса, а не радио | радио-задача занята mainloop'ом; ezb_* cmd_req сериализуются стеком |
+| 2026-10-03 | C6 — standalone `ot_rcp` по spinel-UART, `esp_hosted` для Zigbee не нужен | стандартная прошивка RCP проще; `esp_hosted` освобождён под Wi-Fi на C3 |
 | 2026-10-03 | Устройство без интервью — только RAM сервиса, в Domain — по завершении интервью | топология и модель приходят заново на каждом rejoin; частичное устройство в Domain не появляется |
 | 2026-10-03 | Интервью завершается по счётчику ответов; Basic читается с endpoint'а, где он есть | у устройства есть служебные endpoint'ы без Basic — чтение «с первого» ответа не даёт и подвешивает интервью |
 | 2026-10-03 | Запись интервью в Domain — в задаче сервиса, а не в колбэке радио | Domain пишет один потребитель (задача сервиса); радио только собирает и кладёт в очередь |
@@ -83,8 +84,9 @@ zigbee_diag.c       счётчики и печать ошибок               
 ## 5. Прошивка C6 (RCP)
 
 Характеристики платы, распиновка JP1 и полная процедура прошивки C6 (включая сборку
-CP-прошивки с RCP) — в справочнике `../hardware/JC4880P443C_I_W.md` §6.
+RCP-прошивки `ot_rcp`) — в справочнике `../hardware/JC4880P443C_I_W.md` §6.
 
-Статус: прошито и проверено. CP-прошивка включает Wi-Fi и RCP (OpenThread), спинel
-RCP вынесен на `GPIO17/16` (иначе UART занимает `D0/D1` SDIO и стек падает). C6 шьётся
-внешним 3.3 В USB-TTL в JP1. Детали — `../hardware/JC4880P443C_I_W.md` §6.
+Статус: прошито и проверено. C6 несёт **standalone 802.15.4 RCP** (`ot_rcp`, без
+`esp_hosted`); spinel вынесен на `GPIO17/16`. Wi-Fi на C6 не используется — он вынесен
+на отдельный C3 (`../hardware/JC4880P443C_I_W.md` §4.5). C6 шьётся внешним 3.3 В
+USB-TTL в JP1. Детали — `../hardware/JC4880P443C_I_W.md` §6.

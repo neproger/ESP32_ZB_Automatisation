@@ -1,9 +1,9 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  ## Required IDF version
+  ## Required IDF version (проект собран и проверен на 6.1)
   idf:
-    version: '>=5.2'
-  # ESP-Hosted: шина до встроенного C6 (SDIO) и управление RCP.
+    version: '>=6.1'
+  # ESP-Hosted: Wi-Fi на внешнем ESP32-C3 (транспорт UART). Для Zigbee не нужен.
   espressif/esp_hosted: '*'
   # Стек Zigbee на хосте (P4); радио — RCP на C6.
   # Wi-Fi на P4 нет: esp_wifi_* маршрутизируется на C6 через ESP-Hosted
