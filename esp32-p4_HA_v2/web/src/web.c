@@ -2,13 +2,9 @@
 
 #include <string.h>
 
-#include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
-#include "esp_netif.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
@@ -19,11 +15,12 @@
 /*
  * Web service (docs/services/WEB.md, docs/services/WEB_PROTOCOL.md).
  *
- * Wi-Fi — station поверх ESP-Hosted (external C3). Поверх HTTP поднят бинарный WS;
- * на проводе — сырые записи Domain как есть (вариант A): никаких DTO/строк.
+ * Wi-Fi не его: радио на внешнем C3 держит сервис `wifi` (docs/services/WIFI.md);
+ * web — только HTTP+WS. На проводе — сырые записи Domain как есть (вариант A):
+ * никаких DTO/строк.
  *
  * Задача web:
- *   - поднимает Wi-Fi и HTTP+WS (два шага в одной задаче);
+ *   - поднимает HTTP+WS (сервер стартует и без IP, доступен после подключения);
  *   - на подключение клиента шлёт snapshot (SYNC_BEGIN → ENTITY… → SYNC_END);
  *   - подписана на Domain и рассылает дельты (ENTITY / ENTITY_REMOVE) всем клиентам;
  *   - выполняет команды из WS (Zigbee-команда, CRUD автоматизаций, переименование).
@@ -383,97 +380,6 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
     }
 }
 
-/* --- Wi-Fi -------------------------------------------------------------- */
-
-#define WIFI_CONNECTED_BIT BIT0
-
-static EventGroupHandle_t s_wifi_events;
-
-static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi disconnected, reconnecting");
-        esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
-        xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
-    }
-}
-
-/* Диагностика: что видит радио C3 при подъёме. */
-static void wifi_log_scan(void)
-{
-    ESP_LOGI(TAG, "set_ps(NONE) -> 0x%x", (unsigned)esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_LOGI(TAG, "set_country(RU) -> 0x%x", (unsigned)esp_wifi_set_country_code("RU", true));
-
-    wifi_scan_config_t scan = {0};
-    scan.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan.scan_time.active.min = 120;
-    scan.scan_time.active.max = 300;
-
-    for (int attempt = 1; attempt <= 3; attempt++) {
-        const esp_err_t err = esp_wifi_scan_start(&scan, true);
-        uint16_t count = 0;
-        const esp_err_t got = esp_wifi_scan_get_ap_num(&count);
-        ESP_LOGI(TAG, "scan #%d: start=0x%x get_num=0x%x found=%u", attempt, (unsigned)err,
-                 (unsigned)got, (unsigned)count);
-        if (count == 0) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-            continue;
-        }
-        wifi_ap_record_t records[16] = {0};
-        uint16_t shown = (count > 16) ? 16 : count;
-        if (esp_wifi_scan_get_ap_records(&shown, records) != ESP_OK) {
-            return;
-        }
-        for (uint16_t i = 0; i < shown; i++) {
-            ESP_LOGI(TAG, "  AP \"%s\" ch=%u rssi=%d", (const char *)records[i].ssid,
-                     (unsigned)records[i].primary, (int)records[i].rssi);
-        }
-        return;
-    }
-}
-
-static sys_error_t wifi_connect(void)
-{
-    s_wifi_events = xEventGroupCreate();
-    if (s_wifi_events == NULL) {
-        return sys_error_make(SYS_LAYER_WEB, SYS_CODE_NO_MEM);
-    }
-
-    /* netif/event loop могли быть подняты ESP-Hosted — повторная инициализация не нужна. */
-    (void)esp_netif_init();
-    (void)esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
-
-    const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
-    if (esp_wifi_init(&init) != ESP_OK) {
-        return sys_error_make(SYS_LAYER_WEB, SYS_CODE_IO);
-    }
-
-    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL, NULL);
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL, NULL);
-
-    wifi_config_t config = {0};
-    strlcpy((char *)config.sta.ssid, CONFIG_WEB_WIFI_SSID, sizeof(config.sta.ssid));
-    strlcpy((char *)config.sta.password, CONFIG_WEB_WIFI_PASSWORD, sizeof(config.sta.password));
-    config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK ||
-        esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK || esp_wifi_start() != ESP_OK) {
-        return sys_error_make(SYS_LAYER_WEB, SYS_CODE_IO);
-    }
-
-    wifi_log_scan();
-
-    ESP_LOGI(TAG, "connecting to Wi-Fi SSID \"%s\"", CONFIG_WEB_WIFI_SSID);
-    esp_wifi_connect();
-    xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
-    return SYS_OK;
-}
-
 /* --- HTTP / WebSocket --------------------------------------------------- */
 
 #ifdef WEB_UI_EMBEDDED
@@ -639,11 +545,6 @@ static void web_task(void *arg)
 {
     s_domain = (domain_t *)arg;
 
-    if (sys_failed(wifi_connect())) {
-        ESP_LOGE(TAG, "Wi-Fi not connected; web server not started");
-        vTaskDelete(NULL);
-        return;
-    }
     if (sys_failed(server_start())) {
         ESP_LOGE(TAG, "HTTP server not started");
         vTaskDelete(NULL);

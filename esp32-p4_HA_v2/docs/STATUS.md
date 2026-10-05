@@ -15,7 +15,8 @@
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
 | `system` | сервис времени: SNTP + GeoIP (пояс/город, `ip-api`); синтетический девайс «Время» и сущность `location`; состояния времени и события-тики (`MINUTE/HALF_HOUR/HOUR/DAY`) | запуск на P4: `sntp sync: ESP_OK`, tz/город, snapshot с девайсом/состояниями/location |
-| `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
+| `wifi` | сервис Wi-Fi: владелец радио на внешнем C3 (ESP-Hosted); подъём стека, скан, подключение, автоподключение по известным; сущности `wifi_scan/known/status`, команды `HA_CMD_WIFI_SCAN/CONNECT` | host-тест 1/1 (`wifi_select`), IDF-сборка; на железе не проверено (нет P4) |
+| `web` | HTTP+WS (BFF) через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку; радио не владеет | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
 | `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), бургер-меню, экран Wi-Fi (сети + диалог пароля), экран настроек (подсветка, скринсейвер), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
 | `ha_p4` (приложение) | bootstrap: 13 типов сущностей (device/state/endpoint/automation/device_remove/location/group/group_item/weather/wifi_scan/wifi_known/wifi_status/settings), задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 (`display` в прошивку пока не линкуется) |
 
@@ -52,8 +53,8 @@ TIME-триггер          → правило «будильник» сохр�
 display                  порт под панель (esp_lcd + lvgl_port + GT911) не подключён;
                          UI живёт в host-превью, display_start из app_main не зовётся
 weather                  сущность HA_ENTITY_WEATHER заведена, сервис (Open-Meteo) не написан
-wifi provisioning        таблицы scan/known/status и команды заведены; сервис
-                         (скан/connect на C3, автоподключение по известным) не написан
+wifi provisioning        сервис `wifi` (скан/connect/автоподключение) написан и компилируется;
+                         на железе не проверено — нет P4
 ```
 
 Уход устройства — по сигналу `LEAVE_INDICATION`/`DEVICE_UPDATE` (снятие device,
@@ -113,6 +114,7 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 domain host-тесты  — domain/tests/README.md
 mstore host-тесты  — те же шаги для mstore/tests
 zigbee host-тесты  — те же шаги для zigbee/tests
+wifi host-тесты    — те же шаги для wifi/tests (test_wifi_select)
 UI превью (без P4) — display/preview/README.md (LVGL Live Preview)
 ```
 

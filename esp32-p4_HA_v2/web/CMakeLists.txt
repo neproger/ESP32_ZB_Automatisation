@@ -18,10 +18,6 @@ idf_component_register(
         sys
         ha_model
     PRIV_REQUIRES
-        esp_hosted
-        esp_wifi
-        esp_netif
-        esp_event
         esp_http_server
         nvs_flash
     EMBED_FILES

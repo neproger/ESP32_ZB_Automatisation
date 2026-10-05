@@ -15,6 +15,7 @@
 #include "journal_console.h"
 #include "system/system.h"
 #include "web/web.h"
+#include "wifi/wifi.h"
 #include "zigbee/zigbee.h"
 #include "zigbee/zigbee_radio.h"
 
@@ -323,12 +324,17 @@ void app_main(void)
     }
     seed_demo_automation(&s_domain);
 
-    /* Web поднимается в своей задаче: Wi-Fi — через сопроцессор C3 (ESP-Hosted UART). */
+    /* Wi-Fi — свой сервис: владеет радио на C3, автоподключение по известным. */
+    if (!start_step(wifi_start(&s_domain), "wifi start")) {
+        return;
+    }
+
+    /* Web поднимается в своей задаче; сеть ждёт от сервиса wifi. */
     if (!start_step(web_start(&s_domain), "web start")) {
         return;
     }
 
-    /* Системное устройство (время/погода): стартует своим темпом и ждёт сеть от Web. */
+    /* Системное устройство (время/погода): стартует своим темпом и ждёт сеть. */
     if (!start_step(system_start(&s_domain), "system start")) {
         return;
     }

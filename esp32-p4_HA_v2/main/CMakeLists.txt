@@ -10,5 +10,6 @@ idf_component_register(
         zigbee
         automation
         web
+        wifi
         system
 )

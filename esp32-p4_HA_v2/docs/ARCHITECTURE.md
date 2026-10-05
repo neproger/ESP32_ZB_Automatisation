@@ -195,6 +195,8 @@ payload, процедуры создания/удаления устройств
 - **System service** — точное время (SNTP) и, далее, погода. Держит синтетическое
   системное устройство «Время» и сущность `location` в Domain, публикует события-тики.
   Детали — `services/SYSTEM.md`.
+- **Wi-Fi service** — единственный владелец радио на внешнем C3 (ESP-Hosted): подъём
+  стека, скан, подключение, provisioning. Детали — `services/WIFI.md`.
 - **Web service (BFF)** — адаптер для браузера: projection canonical records → DTO,
   snapshot при подключении, deltas, приём команд/CRUD. Все фронтенд-особенности
   (batching, throttling, формат) живут здесь и не лезут в Domain.
@@ -239,6 +241,7 @@ docs/
 │   ├── ZIGBEE_IMPL_JOURNAL.md
 │   ├── AUTOMATION.md
 │   ├── SYSTEM.md
+│   ├── WIFI.md
 │   ├── SETTINGS.md
 │   ├── WEB.md
 │   └── WEB_PROTOCOL.md

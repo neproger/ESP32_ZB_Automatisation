@@ -55,6 +55,7 @@ typedef enum {
     DOMAIN_SOURCE_UI = 2,
     DOMAIN_SOURCE_AUTOMATION = 3,
     DOMAIN_SOURCE_SYSTEM = 4,
+    DOMAIN_SOURCE_WIFI = 5,
 } domain_source_t;
 
 /*
