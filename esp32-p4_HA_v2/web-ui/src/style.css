@@ -338,3 +338,6 @@ button.ghost.danger:hover { color: #ef5350; }
 .time-pick { display: inline-flex; align-items: center; gap: 0.25rem; }
 
 .sysstatus .weather { color: #90caf9; }
+
+.item-list { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
+.item-list .flow { margin-top: 0; }
