@@ -1,0 +1,7 @@
+## Display client (LVGL). Один и тот же ui/ собирается в прошивке и в host-preview.
+dependencies:
+  idf:
+    version: '>=6.1'
+  ## LVGL 9. Версия одна на прошивку и превью (docs/clients/DISPLAY.md).
+  lvgl/lvgl:
+    version: '>=9.2,<10'

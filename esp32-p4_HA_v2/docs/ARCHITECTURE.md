@@ -174,9 +174,10 @@ Domain-фасад; ring-API наружу не выходит.
 
 ### 3.5. Domain API
 
-Сервисы видят только Domain API: entity CRUD, commands, payload, subscription/event
-delivery. Контракт фасада — `domain/DOMAIN_API.md`. Типы `mstore` (seq, slot, generation,
-ring) наружу не выходят; доменные identity — opaque-типы Domain.
+Сервисы видят только Domain API: entity CRUD + дешёвую ревизию (`meta`), commands,
+payload, subscription/event delivery. Контракт фасада — `domain/DOMAIN_API.md`.
+Типы `mstore` (seq, slot, generation, ring) наружу не выходят; доменные identity —
+opaque-типы Domain, включая `domain_entity_version_t`.
 
 **Domain не знает про:** pending UI, lifecycle команд, correlation, ownership/TTL
 payload, процедуры создания/удаления устройств, связи между сущностями, роли/permissions.
@@ -200,8 +201,10 @@ payload, процедуры создания/удаления устройств
 
 ## 5. Clients
 
-- **Display** — осознанное исключение: прямой polling Domain read API ради дешёвых
-  LVGL-обновлений. Остаётся клиентом Domain, к `mstore` не линкуется.
+- **Display** — осознанное исключение: прямой polling Domain read API (в т.ч.
+  `domain_entity_meta`) ради дешёвых LVGL-обновлений. Остаётся клиентом Domain, к
+  `mstore` не линкуется. Экраны — данные `group`/`group_item`, плюс `location`/`weather`
+  системного устройства (`clients/DISPLAY.md`); host-превью без железа — с фейковым Domain.
 - **Browser** — через Web service.
 
 ## 6. Сквозные правила

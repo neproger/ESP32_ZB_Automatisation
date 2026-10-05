@@ -1,0 +1,39 @@
+{
+  "mainFile": "preview_entry.c",
+  "includePaths": [
+    "../src",
+    "../icons",
+    "../include",
+    "../../ha_model/include",
+    "../../domain/include",
+    "../../sys/include"
+  ],
+  "dependencies": [
+    "../src/display.c",
+    "../src/ui_nav_dots.c",
+    "../src/ui_page.c",
+    "../src/ui_status_bar.c",
+    "../src/ui_widgets.c",
+    "../fonts/ui_font_20.c",
+    "../fonts/ui_font_32.c",
+    "../fonts/ui_font_48.c",
+    "../icons/weather_icons.c",
+    "../icons/wicon_sunny.c",
+    "../icons/wicon_clear_night.c",
+    "../icons/wicon_partlycloudy.c",
+    "../icons/wicon_cloudy.c",
+    "../icons/wicon_overcast.c",
+    "../icons/wicon_fog.c",
+    "../icons/wicon_rainy.c",
+    "../icons/wicon_pouring.c",
+    "../icons/wicon_snowy.c",
+    "../icons/wicon_snowy_rainy.c",
+    "../icons/wicon_hail.c",
+    "../icons/wicon_lightning.c",
+    "../icons/wicon_lightning_rainy.c",
+    "../icons/wicon_windy.c",
+    "../icons/wicon_windy_variant.c",
+    "../icons/wicon_exceptional.c",
+    "domain_fake.c"
+  ]
+}

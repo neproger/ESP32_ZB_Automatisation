@@ -223,10 +223,56 @@ static void test_two_types_are_independent(void)
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
+static void test_meta(void)
+{
+    domain_t domain = {0};
+    CHECK(sys_ok(domain_init(&domain, 2, 8, 8, 64)));
+    domain_entity_desc_t desc = desc_of(TYPE_A, 4);
+    CHECK(sys_ok(domain_register_entity(&domain, &desc)));
+
+    const test_key_t key = key_of(1);
+    test_record_t record = record_of(10);
+    bool changed = false;
+    domain_entity_meta_t meta = {0};
+
+    /* Записи нет — NOT_FOUND, а не «нулевая версия». */
+    CHECK(sys_is(domain_entity_meta(&domain, TYPE_A, &key, &meta), SYS_CODE_NOT_FOUND));
+
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
+    CHECK(changed);
+    domain_entity_meta_t first = {0};
+    CHECK(sys_ok(domain_entity_meta(&domain, TYPE_A, &key, &first)));
+
+    /* Повтор без изменения payload версию не двигает. */
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
+    CHECK(!changed);
+    domain_entity_meta_t same = {0};
+    CHECK(sys_ok(domain_entity_meta(&domain, TYPE_A, &key, &same)));
+    CHECK(same.version.value == first.version.value);
+
+    /* Реальное изменение версию двигает. */
+    record.value = 11;
+    CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, NULL, &changed)));
+    CHECK(changed);
+    domain_entity_meta_t next = {0};
+    CHECK(sys_ok(domain_entity_meta(&domain, TYPE_A, &key, &next)));
+    CHECK(next.version.value != first.version.value);
+
+    CHECK(sys_is(domain_entity_meta(&domain, TYPE_A, &key, NULL), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_meta(&domain, TYPE_A, NULL, &meta), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(domain_entity_meta(&domain, 99, &key, &meta), SYS_CODE_NOT_FOUND));
+
+    CHECK(sys_ok(domain_entity_remove(&domain, TYPE_A, &key, NULL)));
+    CHECK(sys_is(domain_entity_meta(&domain, TYPE_A, &key, &meta), SYS_CODE_NOT_FOUND));
+
+    CHECK(sys_ok(domain_deinit(&domain)));
+}
+
 int main(void)
 {
     test_put_changed();
     test_get_remove();
+    test_meta();
     test_no_space();
     test_iter();
     test_two_types_are_independent();

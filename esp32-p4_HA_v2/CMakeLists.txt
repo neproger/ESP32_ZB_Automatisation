@@ -11,7 +11,8 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/zigbee"
     "${CMAKE_CURRENT_LIST_DIR}/automation"
     "${CMAKE_CURRENT_LIST_DIR}/web"
-    "${CMAKE_CURRENT_LIST_DIR}/system")
+    "${CMAKE_CURRENT_LIST_DIR}/system"
+    "${CMAKE_CURRENT_LIST_DIR}/display")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 

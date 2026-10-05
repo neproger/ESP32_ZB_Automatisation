@@ -8,6 +8,8 @@
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_groups.h"
+#include "ha_model/ha_weather.h"
 #include "journal_console.h"
 #include "system/system.h"
 #include "web/web.h"
@@ -20,7 +22,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 6
+#define APP_ENTITY_TYPES 9
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -31,6 +33,9 @@
 #define APP_AUTOMATION_CAPACITY 32
 #define APP_DEVICE_REMOVE_CAPACITY 32
 #define APP_LOCATION_CAPACITY 4
+#define APP_GROUP_CAPACITY 16
+#define APP_GROUP_ITEM_CAPACITY 128
+#define APP_WEATHER_CAPACITY 1
 
 #define DISPATCHER_TASK_STACK 4096
 #define DISPATCHER_TASK_PRIORITY 6
@@ -95,6 +100,42 @@ static const domain_entity_desc_t location_desc = {
     .key_size = sizeof(ha_device_uid_t),
     .payload_size = sizeof(ha_location_record_t),
     .capacity = APP_LOCATION_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
+/*
+ * Экраны Display: group (экран) и group_item (виджет). Создаёт/меняет Web, читает
+ * Display как клиент Domain (docs/clients/DISPLAY.md). FLASH: раскладка экранов
+ * пользовательская, значит должна пережить перезагрузку.
+ */
+static const domain_entity_desc_t group_desc = {
+    .type = (domain_entity_t)HA_ENTITY_GROUP,
+    .key_size = sizeof(ha_group_key_t),
+    .payload_size = sizeof(ha_group_record_t),
+    .capacity = APP_GROUP_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "group",
+};
+
+static const domain_entity_desc_t group_item_desc = {
+    .type = (domain_entity_t)HA_ENTITY_GROUP_ITEM,
+    .key_size = sizeof(ha_group_item_key_t),
+    .payload_size = sizeof(ha_group_item_record_t),
+    .capacity = APP_GROUP_ITEM_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "group_item",
+};
+
+/*
+ * Погода: одна сущность на синтетический uid. RAM — приходит из сети и обновляется
+ * сервисом, персистентность не нужна (как location).
+ */
+static const domain_entity_desc_t weather_desc = {
+    .type = (domain_entity_t)HA_ENTITY_WEATHER,
+    .key_size = sizeof(ha_device_uid_t),
+    .payload_size = sizeof(ha_weather_record_t),
+    .capacity = APP_WEATHER_CAPACITY,
     .backing = DOMAIN_BACKING_RAM,
     .persist_key = NULL,
 };
@@ -191,6 +232,15 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &location_desc), "register location")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &group_desc), "register group")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &group_item_desc), "register group-item")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &weather_desc), "register weather")) {
         return;
     }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {

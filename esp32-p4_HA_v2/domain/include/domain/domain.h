@@ -80,6 +80,15 @@ sys_error_t domain_entity_put(domain_t *domain, domain_entity_t type,
                                const domain_fact_meta_t *meta, bool *out_changed);
 sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type,
                                const void *key, void *out_record);
+
+/*
+ * Дешёвая ревизия записи без чтения payload: opaque domain_entity_version_t.
+ * Версия растёт только при реальном изменении записи; отсутствие записи — NOT_FOUND.
+ * Нужна потребителям, которые периодически опрашивают состояние, чтобы не читать
+ * payload зря (docs/clients/DISPLAY.md, docs/domain/DOMAIN_API.md §7).
+ */
+sys_error_t domain_entity_meta(domain_t *domain, domain_entity_t type, const void *key,
+                                domain_entity_meta_t *out_meta);
 sys_error_t domain_entity_remove(domain_t *domain, domain_entity_t type, const void *key,
                                   const domain_fact_meta_t *meta);
 sys_error_t domain_entity_iter(domain_t *domain, domain_entity_t type,

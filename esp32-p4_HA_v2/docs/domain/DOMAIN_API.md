@@ -81,6 +81,7 @@ Domain владеет доменными identity. Их внутреннее у�
 domain_entity_t        — дискриминатор типа сущности (ключ registry)
 domain_event_id_t      — identity записи Journal
 domain_payload_ref_t   — ссылка на transient payload
+domain_entity_version_t — ревизия записи (meta без payload), для сравнения
 ```
 
 Степень прозрачности разная — это важно:
@@ -88,6 +89,7 @@ domain_payload_ref_t   — ссылка на transient payload
 | Тип | Для сервиса |
 |---|---|
 | `domain_event_id_t`, `domain_payload_ref_t` | **полностью opaque**: только копирование и сравнение |
+| `domain_entity_version_t` | **полностью opaque**: только сравнение «изменилось / нет» |
 | ключ сущности | opaque для Domain, **typed для сервиса** через `ha_model` |
 
 Ключ сущности — непрозрачная последовательность байт фиксированной длины; длина задаётся
@@ -100,8 +102,8 @@ ha_endpoint_key_t key = { .device_uid = uid, .endpoint = ep };
 Domain видит те же байты как opaque: состав ключа для него не существует
 (`RECORD_MODEL.md` §5).
 
-`event_id` и `payload_ref` сервис не разбирает никогда: никакой арифметики и никаких
-предположений о внутреннем формате.
+`event_id`, `payload_ref` и `version` сервис не разбирает никогда: никакой арифметики и
+никаких предположений о внутреннем формате.
 
 ## 5. Правило: `mstore_*` наружу не выходят
 
@@ -149,6 +151,10 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
   (`ENTITY_STORE.md:16-25`);
 - поиск по ключу даёт запись целиком; запись — блок байт фиксированного размера,
   заданного типом; Domain содержимое не интерпретирует;
+- дешёвая проверка «запись изменилась» без чтения payload — `domain_entity_meta`
+  (§10): отдаёт opaque `domain_entity_version_t`. Версия живёт в meta хранилища и
+  растёт только при реальном изменении записи (`RECORD_MODEL.md` §4); нужна
+  потребителям, которые периодически опрашивают состояние (`../clients/DISPLAY.md`);
 - списки и связи — данные, а не отношения Domain: `list(entity, prefix)`, составные
   ключи, ссылки внутри записи. Relationship-таблиц нет (`ENTITY_STORE.md:54-61`);
 - фильтры богаче prefix-range добавляются только под доказанного потребителя.
@@ -172,7 +178,8 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 
 - фасад можно вызывать из любой сервисной задачи; синхронизация — внутренность Domain;
 - один lock на экземпляр Domain: под ним целиком идут mutation path (`put` / `remove`),
-  read path (`get` — пишет ключ в scratch типа) и `iter`. Lock **не рекурсивный**;
+  read path (`get` — пишет ключ в scratch типа; `meta` — только `slot_meta`) и `iter`.
+  Lock **не рекурсивный**;
 - сериализация mutation path — не оптимизация, а контракт: без неё последовательность
   `slot_find → slot_meta → slot_update` рвётся и `put` возвращает `STALE`. С сериализацией
   `STALE` для операций над сущностями недостижим и остаётся только семантикой payload;
@@ -197,7 +204,7 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 
 | Подсистема | Что даёт сервису | Поведение |
 |---|---|---|
-| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter`; `put`/`remove` пишут факт по исходу операции | `ENTITY_STORE.md` |
+| Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter / meta`; `put`/`remove` пишут факт по исходу операции; `meta` — opaque `version` без чтения записи | `ENTITY_STORE.md` |
 | Journal | прямой доступ отсутствует: Journal читает только Dispatcher, публичного `domain_journal_read()` для сервисов нет | `JOURNAL.md` |
 | Subscriptions | `domain_subscribe` / `domain_unsubscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |
@@ -226,8 +233,11 @@ Zigbee-семантика и семантика автоматизаций
    `ENTITY_UPSERTED` не создаётся, подписчики не будятся, вызывающий получает
    `changed = false` (`ENTITY_STORE.md` §8). Факт «что-то произошло» при неизменном
    состоянии — это `EVENT`, а не upsert.
-3. **Meta-запрос.** Нужен ли сервису дешёвый opaque-version сущности без чтения записи
-   (polling Display) или достаточно `get`.
+3. ~~**Meta-запрос.**~~ Решено: фасад даёт `domain_entity_meta(type, key, *meta)` —
+   opaque `domain_entity_version_t` без чтения payload (§4, §7, §10). Механизм не новый:
+   версия — это `meta` хранилища, которую mstore уже отдаёт дешёво (`MSTORE.md` §2.8,
+   `slot_meta`); наружу `generation` и прочая физика слота не выходят (§5). Закрывает
+   polling Display (`../clients/DISPLAY.md`).
 4. **Чтение Journal сервисом.** История для UI — только через подписку или нужен
    отдельный read-путь.
 5. **`BUSY`.** Есть ли сценарий, где Domain вынужден отказать в приёме, а не вытеснить

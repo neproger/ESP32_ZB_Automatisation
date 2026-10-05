@@ -36,6 +36,7 @@ entity_type → { таблица/schema, optional validate }
 ```text
 domain_entity_put(type, key, record, meta, *changed)  — создать или обновить
 domain_entity_get(type, key, *record)                 — прочитать
+domain_entity_meta(type, key, *meta)                  — opaque version без записи
 domain_entity_remove(type, key, meta)                 — удалить
 domain_entity_iter(type, cb, ctx)                     — обход записей типа
 ```

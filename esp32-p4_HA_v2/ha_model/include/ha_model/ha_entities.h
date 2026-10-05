@@ -41,6 +41,12 @@ typedef enum {
     /* Локация системного устройства (город/координаты): строка в state (число+тип) не
      * влезает, поэтому это отдельный тип сущности с текстовым полем. Ключ — uid. */
     HA_ENTITY_LOCATION = 6,
+    /* Экраны Display (docs/clients/DISPLAY.md): group — экран, group_item — виджет.
+     * Формы — ha_model/ha_groups.h. */
+    HA_ENTITY_GROUP = 7,
+    HA_ENTITY_GROUP_ITEM = 8,
+    /* Погода системного сервиса (docs/services/SYSTEM.md). Форма — ha_model/ha_weather.h. */
+    HA_ENTITY_WEATHER = 9,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32

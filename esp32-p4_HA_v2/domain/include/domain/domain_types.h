@@ -33,6 +33,19 @@ typedef uint32_t domain_entity_t;
  */
 typedef uint64_t domain_payload_ref_t;
 
+/*
+ * Ревизия записи: opaque, сервис только сравнивает «изменилось / нет»
+ * (docs/domain/DOMAIN_API.md §4). Растёт только при реальном изменении записи;
+ * поколение слота (generation) сюда не входит — это физика хранилища.
+ */
+typedef struct {
+    uint32_t value;
+} domain_entity_version_t;
+
+typedef struct {
+    domain_entity_version_t version;
+} domain_entity_meta_t;
+
 /* Дискриминатор команды: Domain знает только число и callback исполнителя. */
 typedef uint32_t domain_command_t;
 

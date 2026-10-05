@@ -141,6 +141,35 @@ static sys_error_t get_locked(domain_state_t *state, domain_entity_entry_t *entr
     return SYS_OK;
 }
 
+/*
+ * Meta — read path без payload: тот же поиск слота, но вместо slot_read берётся
+ * slot_meta. Отсутствие записи — норма (как в get), прочий сбой — ERROR-факт.
+ */
+static sys_error_t meta_locked(domain_state_t *state, domain_entity_entry_t *entry,
+                                const void *key, domain_entity_meta_t *out_meta)
+{
+    const entity_op_t op =
+        entity_op_begin(state, entry, key, (uint8_t)DOMAIN_OP_ENTITY_GET, NULL);
+
+    mstore_slot_t slot = 0;
+    sys_error_t err = mstore_table_slot_find(&entry->table, key, &slot);
+    if (sys_failed(err)) {
+        if (sys_is(err, SYS_CODE_NOT_FOUND)) {
+            return domain_fail(SYS_CODE_NOT_FOUND); /* записи нет — норма */
+        }
+        return entity_op_error(&op, err);
+    }
+
+    mstore_meta_t slot_meta = {0};
+    err = mstore_table_slot_meta(&entry->table, slot, &slot_meta);
+    if (sys_failed(err)) {
+        return entity_op_error(&op, err);
+    }
+
+    out_meta->version.value = slot_meta.version;
+    return SYS_OK;
+}
+
 static sys_error_t remove_locked(domain_state_t *state, domain_entity_entry_t *entry,
                                   const void *key, const domain_fact_meta_t *meta)
 {
@@ -215,6 +244,23 @@ sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type,
     domain_entity_entry_t *entry = domain_entry_find(state, type);
     const sys_error_t result =
         (entry == NULL) ? domain_fail(SYS_CODE_NOT_FOUND) : get_locked(state, entry, key, out_record, NULL);
+    domain_platform_lock_release(state->lock);
+    return result;
+}
+
+sys_error_t domain_entity_meta(domain_t *domain, domain_entity_t type, const void *key,
+                                domain_entity_meta_t *out_meta)
+{
+    domain_state_t *state = domain_state(domain);
+    if (state == NULL || key == NULL || out_meta == NULL) {
+        return domain_fail(SYS_CODE_INVALID_ARG);
+    }
+
+    domain_platform_lock_acquire(state->lock);
+    domain_entity_entry_t *entry = domain_entry_find(state, type);
+    const sys_error_t result =
+        (entry == NULL) ? domain_fail(SYS_CODE_NOT_FOUND)
+                        : meta_locked(state, entry, key, out_meta);
     domain_platform_lock_release(state->lock);
     return result;
 }

@@ -9,14 +9,15 @@
 |---|---|---|
 | `mstore` | Table + Ring, RAM/flash, region manager; заморожен (`storage/MSTORE_IMPL_JOURNAL.md`) | host-тесты 12/12, hardware verified на P4 |
 | `sys` | единая модель ошибки `sys_error_t` (`ERRORS.md`) | тестами всех слоёв |
-| `domain` | Entity Store, Journal, Transient Payload, Dispatcher, Commands | host-тесты 9/9, IDF-сборка и запуск на P4 |
-| `ha_model` | словарь ZCL, формы сущностей, форма команды | `static_assert` + host-тестами zigbee |
+| `domain` | Entity Store, Journal, Transient Payload, Dispatcher, Commands; дешёвая ревизия записи `domain_entity_meta` (opaque version без payload) | host-тесты 9/9 (в т.ч. `meta`), IDF-сборка и запуск на P4 |
+| `ha_model` | словарь ZCL, формы сущностей (device/state/endpoint/automation/group/group_item/location/weather), форма команды | `static_assert` + host-тестами zigbee |
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
 | `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
 | `system` | сервис времени: SNTP + GeoIP (пояс/город, `ip-api`); синтетический девайс «Время» и сущность `location`; состояния времени и события-тики (`MINUTE/HALF_HOUR/HOUR/DAY`) | запуск на P4: `sntp sync: ESP_OK`, tz/город, snapshot с девайсом/состояниями/location |
 | `web` | Wi-Fi STA через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
-| `ha_p4` (приложение) | bootstrap: типы и ёмкости, задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
+| `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
+| `ha_p4` (приложение) | bootstrap: 9 типов сущностей (device/state/endpoint/automation/device_remove/location/group/group_item/weather), задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 (`display` в прошивку пока не линкуется) |
 
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1, 360 МГц)
 
@@ -48,6 +49,9 @@ TIME-триггер          → правило «будильник» сохр�
 ```text
 нет                      источник кадров (zigbee_stub_feed.c) удалён; репорты, интервью
                          и команды идут настоящим радиоканалом
+display                  порт под панель (esp_lcd + lvgl_port + GT911) не подключён;
+                         UI живёт в host-превью, display_start из app_main не зовётся
+weather                  сущность HA_ENTITY_WEATHER заведена, сервис (Open-Meteo) не написан
 ```
 
 Уход устройства — по сигналу `LEAVE_INDICATION`/`DEVICE_UPDATE` (снятие device,
@@ -63,10 +67,13 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 ## 4. Что дальше
 
 ```text
-1. Погода (system phase 2)          — Open-Meteo; состояния погоды + событие WEATHER_CHANGED
-2. Триггер STATE (порог атрибута)   — «свет по движению», «закрыть по холоду» без кнопки
-3. device_meta (last_seen/rssi/lqi)
-4. Отдельный девайс «Система»       — служебные вещи (uptime, версия) при старте
+1. Display порт под P4    — esp_lcd + lvgl_port + GT911, display_start из app_main;
+                            экраны Display уже собраны и гоняются в host-превью
+2. Погода (system phase 2) — сервис Open-Meteo заполняет HA_ENTITY_WEATHER + событие
+                            WEATHER_CHANGED (сущность и форма уже в Domain)
+3. Триггер STATE (порог атрибута) — «свет по движению», «закрыть по холоду» без кнопки
+4. device_meta (last_seen/rssi/lqi)
+5. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
 ```
 
 Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`
@@ -74,7 +81,7 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 версионный, чтобы не терять данные устройств при миграции mstore).
 
 Порядок прежний: Zigbee — единственный источник состояния, Automation и Web
-потребляют то, что он produces.
+потребляют то, что он производит.
 
 ## 5. Открытые вопросы (где решение, а не здесь)
 
@@ -91,8 +98,10 @@ endpoint'ов и состояния) проверен host-тестом; на ж
   RSSI, хотя AP рабочий (ПК и телефон подключены). Радио/креды не менялись; разбирается.
 - **Concurrency Region Manager.** `bind/release` не синхронизированы между задачами
   (`storage/MSTORE_FLASH_REGIONS.md` §9.6).
-- **Размер раздела.** Под реальное число устройств не пересчитывался: сейчас занято
-  16 КБ из 256 КБ, расчёт — `services/ZIGBEE.md` §10.
+- **Размер раздела.** Ёмкости и расчёт — `storage/MSTORE_FLASH_REGIONS.md` §4 (≈120 КБ из
+  256 КБ с группами); пересчёт под реальное число устройств/групп — `services/ZIGBEE.md` §10.
+- **Экраны Display.** Проекция `(cluster, attr) → widget`, порядок экранов и способ чтения
+  списка виджетов — открыто в `clients/DISPLAY.md` §7.
 
 ## 6. Как собирать и проверять локально
 
@@ -101,6 +110,7 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 domain host-тесты  — domain/tests/README.md
 mstore host-тесты  — те же шаги для mstore/tests
 zigbee host-тесты  — те же шаги для zigbee/tests
+UI превью (без P4) — display/preview/README.md (LVGL Live Preview)
 ```
 
 Все наборы обязательны перед коммитом: `/W4` на MSVC и `-Wall -Wextra -Werror` на
