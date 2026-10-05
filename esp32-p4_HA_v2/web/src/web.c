@@ -365,6 +365,108 @@ static uint16_t web_do_automation_remove(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* --- экраны Display: group / group_item --------------------------------- */
+
+/* Максимум виджетов, снимаемых с экрана за одно удаление (пометки-сироты не растут). */
+#define WEB_GROUP_REMOVE_MAX 64
+
+static uint16_t web_do_group_put(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_group_key_t) + sizeof(ha_group_record_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_group_key_t key;
+    ha_group_record_t record;
+    memcpy(&key, args, sizeof(key));
+    memcpy(&record, args + sizeof(key), sizeof(record));
+    record.title[HA_GROUP_TITLE_MAX - 1] = '\0';
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    const sys_error_t err =
+        domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_GROUP, &key, &record, &meta, &changed);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+typedef struct {
+    uint64_t group_id;
+    size_t count;
+    ha_group_item_key_t keys[WEB_GROUP_REMOVE_MAX];
+} group_items_ctx_t;
+
+static bool collect_group_items(const void *key, const void *record, void *ctx)
+{
+    (void)record;
+    const ha_group_item_key_t *item = (const ha_group_item_key_t *)key;
+    group_items_ctx_t *out = (group_items_ctx_t *)ctx;
+    if (item->group_id == out->group_id && out->count < WEB_GROUP_REMOVE_MAX) {
+        out->keys[out->count++] = *item;
+    }
+    return true;
+}
+
+static uint16_t web_do_group_remove(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_group_key_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_group_key_t key;
+    memcpy(&key, args, sizeof(key));
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+
+    /* Виджеты экрана держатся на group_id в ключе: снимаем их вместе с экраном. */
+    group_items_ctx_t ctx;
+    ctx.group_id = key.id;
+    ctx.count = 0;
+    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, collect_group_items,
+                             &ctx);
+    for (size_t i = 0; i < ctx.count; i++) {
+        (void)domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &ctx.keys[i],
+                                   &meta);
+    }
+
+    const sys_error_t err =
+        domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_GROUP, &key, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+static uint16_t web_do_group_item_put(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_group_item_key_t) + sizeof(ha_group_item_record_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_group_item_key_t key;
+    ha_group_item_record_t record;
+    memcpy(&key, args, sizeof(key));
+    memcpy(&record, args + sizeof(key), sizeof(record));
+    record.title[HA_GROUP_ITEM_TITLE_MAX - 1] = '\0';
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &key,
+                                              &record, &meta, &changed);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+static uint16_t web_do_group_item_remove(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_group_item_key_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_group_item_key_t key;
+    memcpy(&key, args, sizeof(key));
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err =
+        domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &key, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 static void web_request_snapshot(int fd)
 {
     const web_inbox_item_t item = {.kind = 1, .fd = fd};
@@ -401,6 +503,18 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_PERMIT_JOIN:
         status = web_do_permit_join(args, len);
+        break;
+    case WEB_CMD_GROUP_PUT:
+        status = web_do_group_put(args, len);
+        break;
+    case WEB_CMD_GROUP_REMOVE:
+        status = web_do_group_remove(args, len);
+        break;
+    case WEB_CMD_GROUP_ITEM_PUT:
+        status = web_do_group_item_put(args, len);
+        break;
+    case WEB_CMD_GROUP_ITEM_REMOVE:
+        status = web_do_group_item_remove(args, len);
         break;
     default:
         break;

@@ -49,6 +49,11 @@ typedef enum {
     WEB_CMD_DEVICE_REMOVE = 6,
     WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
     WEB_CMD_PERMIT_JOIN = 8,
+    /* Экраны Display (docs/clients/DISPLAY.md): CRUD group / group_item. */
+    WEB_CMD_GROUP_PUT = 9,
+    WEB_CMD_GROUP_REMOVE = 10,
+    WEB_CMD_GROUP_ITEM_PUT = 11,
+    WEB_CMD_GROUP_ITEM_REMOVE = 12,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

@@ -18,6 +18,10 @@ export const CMD = {
   DEVICE_REMOVE: 6,
   DEVICE_REMOVE_CANCEL: 7,
   PERMIT_JOIN: 8,
+  GROUP_PUT: 9,
+  GROUP_REMOVE: 10,
+  GROUP_ITEM_PUT: 11,
+  GROUP_ITEM_REMOVE: 12,
 }
 
 export const HDR = 8
@@ -101,6 +105,52 @@ export function cancelRemoveDevice(uid) {
   const args = new Uint8Array(8)
   new DataView(args.buffer).setBigUint64(0, BigInt(uid), true)
   return encodeCommand(CMD.DEVICE_REMOVE_CANCEL, args)
+}
+
+const enc = new TextEncoder()
+function putText(out, off, text, max) {
+  out.set(enc.encode(text || '').subarray(0, max - 1), off)
+}
+
+// GROUP_PUT args = u64 id | char title[32].
+export function groupPut(id, title) {
+  const out = new Uint8Array(8 + 32)
+  new DataView(out.buffer).setBigUint64(0, BigInt(id), true)
+  putText(out, 8, title, 32)
+  return encodeCommand(CMD.GROUP_PUT, out)
+}
+
+// GROUP_REMOVE args = u64 id.
+export function groupRemove(id) {
+  const out = new Uint8Array(8)
+  new DataView(out.buffer).setBigUint64(0, BigInt(id), true)
+  return encodeCommand(CMD.GROUP_REMOVE, out)
+}
+
+// GROUP_ITEM_PUT args = key{ u64 group_id; u64 uid; u16 cluster; u16 attr; u8 ep } (24) | record{ u16 order; u8 rsv[2]; char title[32] } (36).
+export function groupItemPut(groupId, state, record) {
+  const out = new Uint8Array(24 + 36)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(state.uid), true)
+  dv.setUint16(16, state.cluster, true)
+  dv.setUint16(18, state.attr, true)
+  dv.setUint8(20, state.ep)
+  dv.setUint16(24, record.order || 0, true)
+  putText(out, 28, record.title, 32)
+  return encodeCommand(CMD.GROUP_ITEM_PUT, out)
+}
+
+// GROUP_ITEM_REMOVE args = key (24).
+export function groupItemRemove(groupId, state) {
+  const out = new Uint8Array(24)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(state.uid), true)
+  dv.setUint16(16, state.cluster, true)
+  dv.setUint16(18, state.attr, true)
+  dv.setUint8(20, state.ep)
+  return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
 }
 
 // DEVICE_RENAME args = u64 uid | char name[32].
