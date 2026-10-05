@@ -63,19 +63,35 @@ typedef struct {
     uint16_t rec_size;
 } web_schema_t;
 
-static const web_schema_t SCHEMA[] = {
-    {WEB_ENTITY_DEVICE, sizeof(ha_device_uid_t), sizeof(ha_device_record_t)},
-    {WEB_ENTITY_STATE, sizeof(ha_zb_state_key_t), sizeof(ha_zb_state_record_t)},
-    {WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t)},
-    {WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t)},
-    {WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)},
-    {WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t)},
-    {WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t)},
-    {WEB_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t)},
-    {WEB_ENTITY_WEATHER, sizeof(ha_device_uid_t), sizeof(ha_weather_record_t)},
-    {WEB_ENTITY_WIFI_STATUS, sizeof(ha_device_uid_t), sizeof(ha_wifi_status_record_t)},
-    {WEB_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t)},
-};
+/*
+ * Список типов на проводе задан один раз (X-macro): из него генерируются и строки
+ * таблицы, и компайл-тайм проверка, что запись (1 байт типа + key + record) влезает в
+ * один кадр. Без неё рост записи молча переполнил бы буфер snapshot/дельты (так было,
+ * когда automation вырос до 144 при буфере под endpoint 72).
+ */
+#define WEB_SCHEMA_LIST(X)                                                                  \
+    X(WEB_ENTITY_DEVICE, sizeof(ha_device_uid_t), sizeof(ha_device_record_t))               \
+    X(WEB_ENTITY_STATE, sizeof(ha_zb_state_key_t), sizeof(ha_zb_state_record_t))            \
+    X(WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t))         \
+    X(WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t))   \
+    X(WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)) \
+    X(WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t))           \
+    X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
+    X(WEB_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t))   \
+    X(WEB_ENTITY_WEATHER, sizeof(ha_device_uid_t), sizeof(ha_weather_record_t))             \
+    X(WEB_ENTITY_WIFI_STATUS, sizeof(ha_device_uid_t), sizeof(ha_wifi_status_record_t))     \
+    X(WEB_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t))
+
+#define WEB_SCHEMA_FITS(type, key_size, rec_size)                                  \
+    _Static_assert((1u + (key_size) + (rec_size)) <= WEB_PROTO_MAX_PAYLOAD,        \
+                   "web schema record exceeds WEB_PROTO_MAX_PAYLOAD: " #type);
+WEB_SCHEMA_LIST(WEB_SCHEMA_FITS)
+
+#define WEB_SCHEMA_ROW(type, key_size, rec_size) \
+    { (type), (uint16_t)(key_size), (uint16_t)(rec_size) },
+static const web_schema_t SCHEMA[] = {WEB_SCHEMA_LIST(WEB_SCHEMA_ROW)};
+#undef WEB_SCHEMA_ROW
+
 #define WEB_SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
 
 /* Элемент inbox задачи: факт от Domain либо запрос snapshot конкретному fd. */

@@ -273,7 +273,7 @@ static bool known_any_cb(const void *key, const void *record, void *ctx)
 
 static void seed_known_from_config(void)
 {
-    if (CONFIG_WEB_WIFI_SSID[0] == '\0') {
+    if (CONFIG_WIFI_SSID[0] == '\0') {
         return;
     }
     known_any_t any = {0};
@@ -281,8 +281,8 @@ static void seed_known_from_config(void)
     if (any.any) {
         return;
     }
-    ensure_known(CONFIG_WEB_WIFI_SSID, CONFIG_WEB_WIFI_PASSWORD);
-    ESP_LOGI(TAG, "seeded known Wi-Fi from Kconfig: \"%s\"", CONFIG_WEB_WIFI_SSID);
+    ensure_known(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD);
+    ESP_LOGI(TAG, "seeded known Wi-Fi from Kconfig: \"%s\"", CONFIG_WIFI_SSID);
 }
 
 /* Автоподключение при старте: известная точка с самым сильным сигналом. */
