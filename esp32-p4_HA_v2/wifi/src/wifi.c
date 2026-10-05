@@ -3,8 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "sdkconfig.h"
-
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -47,6 +45,8 @@ typedef struct {
 
 static domain_t *s_domain;
 static QueueHandle_t s_queue;
+/* Глушит автопереподключение на время скана: STA должен быть свободен. */
+static volatile bool s_reconnect_enabled = true;
 
 static sys_error_t wifi_fail(sys_code_t code)
 {
@@ -201,7 +201,9 @@ static bool scan_now(ha_wifi_scan_record_t *out)
     config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
     config.scan_time.active.min = 120;
     config.scan_time.active.max = 300;
-    if (esp_wifi_scan_start(&config, true) != ESP_OK) {
+    const esp_err_t err = esp_wifi_scan_start(&config, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan_start failed: %s", esp_err_to_name(err));
         return false;
     }
 
@@ -229,8 +231,17 @@ static bool scan_now(ha_wifi_scan_record_t *out)
 static void do_scan(void)
 {
     put_status(HA_WIFI_STATE_SCANNING, 0, 0, NULL);
+
+    /* Скан требует свободного STA: снимаем текущее подключение и глушим
+     * автопереподключение, иначе esp_wifi_scan_start вернёт ESP_ERR_WIFI_STATE. */
+    s_reconnect_enabled = false;
+    (void)esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(300));
+
     ha_wifi_scan_record_t scan = {0};
-    if (!scan_now(&scan)) {
+    const bool ok = scan_now(&scan);
+    s_reconnect_enabled = true;
+    if (!ok) {
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
         return;
     }
@@ -253,36 +264,6 @@ static void do_connect(const char *ssid, const char *password)
         return;
     }
     esp_wifi_connect();
-}
-
-/*
- * Bring-up: если известных точек нет, засеваем одну из Kconfig (sdkconfig, не git).
- * Временная мера, пока provisioning (Display/Web) не готов: без неё плата без сети.
- */
-typedef struct {
-    bool any;
-} known_any_t;
-
-static bool known_any_cb(const void *key, const void *record, void *ctx)
-{
-    (void)key;
-    (void)record;
-    ((known_any_t *)ctx)->any = true;
-    return false; /* достаточно наличия любой записи */
-}
-
-static void seed_known_from_config(void)
-{
-    if (CONFIG_WIFI_SSID[0] == '\0') {
-        return;
-    }
-    known_any_t any = {0};
-    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_KNOWN, known_any_cb, &any);
-    if (any.any) {
-        return;
-    }
-    ensure_known(CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD);
-    ESP_LOGI(TAG, "seeded known Wi-Fi from Kconfig: \"%s\"", CONFIG_WIFI_SSID);
 }
 
 /* Автоподключение при старте: известная точка с самым сильным сигналом. */
@@ -323,7 +304,9 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "disconnected");
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
-        esp_wifi_connect(); /* переподключение к текущей конфигурации */
+        if (s_reconnect_enabled) {
+            esp_wifi_connect(); /* переподключение к текущей конфигурации */
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -355,6 +338,11 @@ static sys_error_t wifi_init_stack(void)
     if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK || esp_wifi_start() != ESP_OK) {
         return wifi_fail(SYS_CODE_IO);
     }
+
+    /* Без этого STA с дефолтным power-save пропускает auth-кадры и получает
+     * reason=2 (AUTH_EXPIRE) при хорошем RSSI (прецедент — старый web-сервис). */
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+    (void)esp_wifi_set_country_code("RU", true);
     return SYS_OK;
 }
 
@@ -398,7 +386,6 @@ static void wifi_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    seed_known_from_config();
     autoconnect();
 
     for (;;) {
