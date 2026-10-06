@@ -48,7 +48,9 @@ static void on_scan(lv_event_t *event)
 /* Экран удалён (lv_screen_load_anim с auto_del) — сбрасываем состояние и диалог. */
 static void on_root_deleted(lv_event_t *event)
 {
-    (void)event;
+    if (lv_event_get_target(event) != s_root) {
+        return; /* удаляется старый экран (anim auto_del) — текущие указатели не трогаем */
+    }
     close_dialog();
     s_root = NULL;
     s_status = NULL;

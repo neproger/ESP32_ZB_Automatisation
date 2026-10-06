@@ -23,6 +23,12 @@ void display_start(domain_t *domain);
 /* Шаг опроса: meta -> get -> render_if_needed. Зовётся из задачи LVGL (или превью). */
 void display_poll(void);
 
+/*
+ * Пересобрать UI под палитру из settings (экран настроек меняет тему). Отложенно, в
+ * следующем кадре, чтобы не удалять экран внутри его обработчика события.
+ */
+void display_request_theme_reload(void);
+
 #ifdef __cplusplus
 }
 #endif

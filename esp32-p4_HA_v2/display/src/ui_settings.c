@@ -1,11 +1,13 @@
 #include "ui_settings.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_settings.h"
 #include "ui_compat.h"
 #include "ui_icons.h"
+#include "ui_palette.h"
 #include "ui_style.h"
 #include "ui_widgets.h"
 
@@ -17,11 +19,26 @@ static const char *kTimeoutOptions = "Выкл\n30 секунд\n1 минута\
 
 static domain_t *s_domain;
 static ui_settings_back_cb s_back;
+static ui_settings_theme_cb s_theme;
 static lv_obj_t *s_root;
 static lv_obj_t *s_brightness;
 static lv_obj_t *s_brightness_value;
+static lv_obj_t *s_theme_dd;
 static lv_obj_t *s_timeout;
+static char s_theme_options[48];
 static bool s_syncing; /* подавляет запись при программной установке значений */
+
+/* Список имён тем для dropdown («\n»-разделённый). */
+static void build_theme_options(void)
+{
+    s_theme_options[0] = '\0';
+    for (int i = 0; i < UI_PALETTE_COUNT; ++i) {
+        if (i > 0) {
+            strcat(s_theme_options, "\n");
+        }
+        strcat(s_theme_options, ui_palette_name((ui_palette_id_t)i));
+    }
+}
 
 static void on_back(lv_event_t *event)
 {
@@ -74,12 +91,31 @@ static void on_timeout(lv_event_t *event)
     write_settings(&settings);
 }
 
+static void on_theme(lv_event_t *event)
+{
+    if (s_syncing) {
+        return;
+    }
+    ha_settings_record_t settings = {0};
+    if (!read_settings(&settings)) {
+        return;
+    }
+    settings.palette_id = (uint8_t)lv_dropdown_get_selected(s_theme_dd);
+    write_settings(&settings);
+    if (s_theme != NULL) {
+        s_theme(); /* владелец экранов пересоберёт UI под новую палитру */
+    }
+}
+
 static void on_root_deleted(lv_event_t *event)
 {
-    (void)event;
+    if (lv_event_get_target(event) != s_root) {
+        return; /* удаляется старый экран (anim auto_del) — текущие указатели не трогаем */
+    }
     s_root = NULL;
     s_brightness = NULL;
     s_brightness_value = NULL;
+    s_theme_dd = NULL;
     s_timeout = NULL;
 }
 
@@ -108,10 +144,12 @@ static lv_obj_t *make_row_label(lv_obj_t *row, const char *text)
     return label;
 }
 
-lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back)
+lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back,
+                             ui_settings_theme_cb theme_changed)
 {
     s_domain = domain;
     s_back = back;
+    s_theme = theme_changed;
 
     s_root = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_root, lv_color_hex(UI_COL_BG), 0);
@@ -162,6 +200,15 @@ lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back)
     lv_obj_set_width(s_brightness_value, 64);
     lv_obj_set_style_text_align(s_brightness_value, LV_TEXT_ALIGN_RIGHT, 0);
 
+    /* Тема: подпись + выпадающий список палитр. */
+    build_theme_options();
+    lv_obj_t *theme_row = make_row(card);
+    make_row_label(theme_row, "Тема");
+    s_theme_dd = ui_dropdown_create_styled(theme_row);
+    lv_obj_set_flex_grow(s_theme_dd, 1);
+    lv_dropdown_set_options(s_theme_dd, s_theme_options);
+    lv_obj_add_event_cb(s_theme_dd, on_theme, LV_EVENT_VALUE_CHANGED, NULL);
+
     /* Скринсейвер: подпись + выпадающий список. */
     lv_obj_t *timeout_row = make_row(card);
     make_row_label(timeout_row, "Скринсейвер");
@@ -176,7 +223,7 @@ lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back)
 
 void ui_settings_apply(void)
 {
-    if (s_root == NULL) {
+    if (s_root == NULL || s_brightness == NULL || s_theme_dd == NULL || s_timeout == NULL) {
         return;
     }
     ha_settings_record_t settings = {0};
@@ -190,6 +237,12 @@ void ui_settings_apply(void)
     char text[16] = {0};
     snprintf(text, sizeof(text), "%u %%", (unsigned)settings.brightness_pct);
     lv_label_set_text(s_brightness_value, text);
+
+    const uint16_t theme_sel =
+        (settings.palette_id < UI_PALETTE_COUNT) ? settings.palette_id : UI_PALETTE_RETRO;
+    if (lv_dropdown_get_selected(s_theme_dd) != theme_sel) {
+        lv_dropdown_set_selected(s_theme_dd, theme_sel);
+    }
 
     uint16_t selected = 0;
     for (uint16_t i = 0; i < TIMEOUT_COUNT; ++i) {

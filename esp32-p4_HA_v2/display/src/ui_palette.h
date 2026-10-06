@@ -1,9 +1,9 @@
 #pragma once
 
 /*
- * Единственное место цветов UI. Палитра выбирается макросом UI_PALETTE; всё остальное
- * берёт роли UI_COL_* отсюда. Чтобы примерить другую тему — правится только этот файл
- * (или добавляется пресет ниже).
+ * Единственное место цветов UI. Активная палитра выбирается в рантайме
+ * (`ui_palette_set`, хранится в settings.palette_id) — поэтому роли UI_COL_* это
+ * доступ к текущей палитре, а не compile-time значения. Пресеты — в ui_palette.c.
  *
  * Роли:
  *   UI_COL_BG      фон экрана
@@ -14,40 +14,56 @@
  *   UI_COL_OK      «нормально/занято» (индикаторы)
  *   UI_COL_DANGER  «тревога» (индикаторы)
  *   UI_COL_CHIP    неактивный чип/точка карусели
+ *
+ * Выбор темы меняет цвета только у вновь созданных объектов (LVGL «запекает» цвет в
+ * момент создания), поэтому display после смены пересобирает дерево экранов.
  */
 
-#define UI_PALETTE_DARK 0
-#define UI_PALETTE_WARM 1
+#include <stdint.h>
 
-/* Активная палитра. Меняется здесь одной строкой. */
-#ifndef UI_PALETTE
-#define UI_PALETTE UI_PALETTE_WARM
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-#if UI_PALETTE == UI_PALETTE_WARM
-/*
- * Тёплая палитра из макета: #524646 (тёмно-коричневый), #A8A492 (серо-зелёный),
- * #FCF2E5 (кремовый), #EC5B38 (оранжевый). Производные (CARD/CHIP/OK/DANGER) —
- * оттенки базы, чтобы ролей хватило.
- */
-#define UI_COL_BG     0x524646
-#define UI_COL_CARD   0x5F5252
-#define UI_COL_TEXT   0xFCF2E5
-#define UI_COL_MUTED  0xA8A492
-#define UI_COL_ACCENT 0xEC5B38
-#define UI_COL_OK     0x9DBF6A
-#define UI_COL_DANGER 0xC0392B
-#define UI_COL_CHIP   0x6B5C5C
-#elif UI_PALETTE == UI_PALETTE_DARK
-/* Прежняя тёмно-синяя тема. */
-#define UI_COL_BG     0x0F141A
-#define UI_COL_CARD   0x1B2430
-#define UI_COL_TEXT   0xF3F6F9
-#define UI_COL_MUTED  0x93A1B0
-#define UI_COL_ACCENT 0x37A2F0
-#define UI_COL_OK     0x3FBF7F
-#define UI_COL_DANGER 0xE0533D
-#define UI_COL_CHIP   0x2A3440
-#else
-#error "UI_PALETTE: неизвестная палитра"
+typedef enum {
+    UI_PALETTE_RETRO = 0, /* чёрный/тёмно-синий/оранжевый/серый — по умолчанию */
+    UI_PALETTE_WARM = 1,
+    UI_PALETTE_DARK = 2,
+    UI_PALETTE_SUMMER = 3, /* светлая: жёлтый/бирюзовый */
+    UI_PALETTE_WINTER = 4, /* тёмная: зелёный/мята */
+    UI_PALETTE_COUNT,
+} ui_palette_id_t;
+
+typedef enum {
+    UI_ROLE_BG = 0,
+    UI_ROLE_CARD,
+    UI_ROLE_TEXT,
+    UI_ROLE_MUTED,
+    UI_ROLE_ACCENT,
+    UI_ROLE_OK,
+    UI_ROLE_DANGER,
+    UI_ROLE_CHIP,
+    UI_ROLE_COUNT,
+} ui_palette_role_t;
+
+/* Цвет роли активной палитры (0xRRGGBB). */
+uint32_t ui_palette_color(ui_palette_role_t role);
+
+ui_palette_id_t ui_palette_id(void);
+void ui_palette_set(ui_palette_id_t id);
+
+/* Человекочитаемое имя темы (для выбора в настройках). */
+const char *ui_palette_name(ui_palette_id_t id);
+
+#define UI_COL_BG     ui_palette_color(UI_ROLE_BG)
+#define UI_COL_CARD   ui_palette_color(UI_ROLE_CARD)
+#define UI_COL_TEXT   ui_palette_color(UI_ROLE_TEXT)
+#define UI_COL_MUTED  ui_palette_color(UI_ROLE_MUTED)
+#define UI_COL_ACCENT ui_palette_color(UI_ROLE_ACCENT)
+#define UI_COL_OK     ui_palette_color(UI_ROLE_OK)
+#define UI_COL_DANGER ui_palette_color(UI_ROLE_DANGER)
+#define UI_COL_CHIP   ui_palette_color(UI_ROLE_CHIP)
+
+#ifdef __cplusplus
+}
 #endif

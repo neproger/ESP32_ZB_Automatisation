@@ -7,6 +7,7 @@
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
 #include "ha_model/ha_zigbee.h"
@@ -14,6 +15,7 @@
 #include "ui_menu.h"
 #include "ui_nav_dots.h"
 #include "ui_page.h"
+#include "ui_palette.h"
 #include "ui_settings.h"
 #include "ui_status_bar.h"
 #include "ui_style.h"
@@ -281,7 +283,7 @@ static void open_settings(void)
 {
     collect_groups();
     s_page = NULL;
-    lv_obj_t *root = ui_settings_create(s_domain, return_to_groups);
+    lv_obj_t *root = ui_settings_create(s_domain, return_to_groups, display_request_theme_reload);
     if (root == NULL) {
         return;
     }
@@ -323,21 +325,69 @@ static void apply_theme_font(void)
     lv_display_set_theme(display, theme);
 }
 
+/* Тема хранится в settings (пишет экран настроек); по умолчанию — Retro. */
+static ui_palette_id_t read_settings_palette(void)
+{
+    const ha_settings_key_t key = {.id = HA_SETTINGS_ID};
+    ha_settings_record_t settings = {0};
+    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_SETTINGS, &key, &settings))) {
+        return (ui_palette_id_t)settings.palette_id;
+    }
+    return UI_PALETTE_RETRO;
+}
+
+/* Верхний слой (строка состояния, точки, меню) — общий для старта и смены темы. */
+static void create_chrome(void)
+{
+    apply_theme_font();
+    ui_status_bar_create(s_domain);
+    ui_nav_dots_create();
+    ui_menu_create();
+    ui_menu_set_cb(on_menu);
+}
+
+static void build_ui(void)
+{
+    create_chrome();
+    collect_groups();
+    s_group_index = 0;
+    load_page_now();
+}
+
+/*
+ * Смена темы: LVGL фиксирует цвет при создании объекта, поэтому пересобираем верхний
+ * слой и текущий экран. Вызывается из настроек через async, чтобы не удалять экран
+ * внутри его же обработчика события.
+ */
+static void reload_ui_async(void *unused)
+{
+    (void)unused;
+    ui_palette_set(read_settings_palette());
+    lv_obj_clean(lv_layer_top());
+    create_chrome();
+    collect_groups();
+    if (s_screen_mode == SCREEN_SETTINGS) {
+        open_settings();
+    } else if (s_screen_mode == SCREEN_WIFI) {
+        open_wifi();
+    } else {
+        load_page_now();
+    }
+}
+
+void display_request_theme_reload(void)
+{
+    (void)lv_async_call(reload_ui_async, NULL);
+}
+
 void display_start(domain_t *domain)
 {
     if (domain == NULL) {
         return;
     }
     s_domain = domain;
-
-    apply_theme_font();
-    ui_status_bar_create(domain);
-    ui_nav_dots_create();
-    ui_menu_create();
-    ui_menu_set_cb(on_menu);
-    collect_groups();
-    s_group_index = 0;
-    load_page_now();
+    ui_palette_set(read_settings_palette());
+    build_ui();
 
     (void)lv_timer_create(poll_timer_cb, DISPLAY_POLL_PERIOD_MS, NULL);
 }

@@ -13,6 +13,7 @@
     "../src/ui_menu.c",
     "../src/ui_nav_dots.c",
     "../src/ui_page.c",
+    "../src/ui_palette.c",
     "../src/ui_settings.c",
     "../src/ui_status_bar.c",
     "../src/ui_wifi.c",

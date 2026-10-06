@@ -2,8 +2,8 @@
 
 /*
  * Настройки приложения (docs/services/SETTINGS.md): одна запись в Domain. Поля
- * добавляются вместе с реальным потребителем — не заранее. Сейчас это экран/подсветка;
- * погодные интервалы и прочее появятся, когда будет сервис.
+ * добавляются вместе с реальным потребителем — не заранее. Сейчас это подсветка,
+ * таймаут скринсейвера и тема UI; погодные интервалы и прочее появятся, когда будет сервис.
  *
  * Регистрируется из bootstrap (docs/RECORD_MODEL.md §1.1), читает/пишет — Web и Display.
  */
@@ -25,7 +25,8 @@ typedef struct {
 typedef struct {
     uint32_t screensaver_timeout_ms; /* 0 — скринсейвер выключен */
     uint8_t brightness_pct;          /* подсветка, 0..100 */
-    uint8_t reserved[3];             /* явный padding, RECORD_MODEL §2 */
+    uint8_t palette_id;              /* тема UI (ui_palette_id_t); 0 — по умолчанию */
+    uint8_t reserved[2];             /* явный padding, RECORD_MODEL §2 */
 } ha_settings_record_t;
 
 #ifdef __cplusplus
