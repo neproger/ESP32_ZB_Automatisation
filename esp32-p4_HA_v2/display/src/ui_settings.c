@@ -70,9 +70,7 @@ static void on_brightness(lv_event_t *event)
         return;
     }
     ha_settings_record_t settings = {0};
-    if (!read_settings(&settings)) {
-        return;
-    }
+    (void)read_settings(&settings); /* нет записи (напр. после wipe) — стартуем с нулей */
     settings.brightness_pct = (uint8_t)lv_slider_get_value(s_brightness);
     write_settings(&settings);
 }
@@ -83,9 +81,7 @@ static void on_timeout(lv_event_t *event)
         return;
     }
     ha_settings_record_t settings = {0};
-    if (!read_settings(&settings)) {
-        return;
-    }
+    (void)read_settings(&settings); /* нет записи (напр. после wipe) — стартуем с нулей */
     const uint16_t selected = lv_dropdown_get_selected(s_timeout);
     settings.screensaver_timeout_ms = (selected < TIMEOUT_COUNT) ? kTimeoutsMs[selected] : 0;
     write_settings(&settings);
@@ -97,9 +93,7 @@ static void on_theme(lv_event_t *event)
         return;
     }
     ha_settings_record_t settings = {0};
-    if (!read_settings(&settings)) {
-        return;
-    }
+    (void)read_settings(&settings); /* нет записи (напр. после wipe) — стартуем с нулей */
     settings.palette_id = (uint8_t)lv_dropdown_get_selected(s_theme_dd);
     write_settings(&settings);
     if (s_theme != NULL) {
@@ -227,9 +221,7 @@ void ui_settings_apply(void)
         return;
     }
     ha_settings_record_t settings = {0};
-    if (!read_settings(&settings)) {
-        return;
-    }
+    (void)read_settings(&settings); /* нет записи (напр. после wipe) — стартуем с нулей */
     s_syncing = true;
     if (lv_slider_get_value(s_brightness) != (int32_t)settings.brightness_pct) {
         lv_slider_set_value(s_brightness, settings.brightness_pct, LV_ANIM_OFF);

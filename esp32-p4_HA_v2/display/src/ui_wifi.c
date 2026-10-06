@@ -149,6 +149,7 @@ static void open_dialog(const char *ssid)
     lv_obj_add_event_cb(cancel, on_cancel, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cancel_label = lv_label_create(cancel);
     lv_label_set_text(cancel_label, "Отмена");
+    lv_obj_set_style_text_font(cancel_label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(cancel_label, lv_color_hex(UI_COL_TEXT), 0);
     lv_obj_center(cancel_label);
 
@@ -158,6 +159,7 @@ static void open_dialog(const char *ssid)
     lv_obj_add_event_cb(connect, on_connect, LV_EVENT_CLICKED, NULL);
     lv_obj_t *connect_label = lv_label_create(connect);
     lv_label_set_text(connect_label, "Подключить");
+    lv_obj_set_style_text_font(connect_label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(connect_label, lv_color_hex(UI_COL_TEXT), 0);
     lv_obj_center(connect_label);
 
@@ -213,6 +215,7 @@ static void rebuild_list(void)
         scan.count == 0) {
         lv_obj_t *empty = lv_label_create(s_list);
         lv_label_set_text(empty, "Нет сетей — нажмите «Сканировать»");
+        lv_obj_set_style_text_font(empty, UI_FONT_BODY, 0);
         lv_obj_set_style_text_color(empty, lv_color_hex(UI_COL_MUTED), 0);
         return;
     }
@@ -336,6 +339,7 @@ lv_obj_t *ui_wifi_create(domain_t *domain, ui_wifi_back_cb back)
     lv_obj_add_event_cb(scan, on_scan, LV_EVENT_CLICKED, NULL);
     lv_obj_t *scan_label = lv_label_create(scan);
     lv_label_set_text(scan_label, "Сканировать");
+    lv_obj_set_style_text_font(scan_label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(scan_label, lv_color_hex(UI_COL_TEXT), 0);
     lv_obj_center(scan_label);
 

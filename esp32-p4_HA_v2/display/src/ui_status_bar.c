@@ -135,6 +135,7 @@ static void apply_time_location(void)
     if (strcmp(location_text, s_last_location) != 0) {
         lv_label_set_text(s_location_label, location_text);
         snprintf(s_last_location, sizeof(s_last_location), "%s", location_text);
+        ui_set_hidden(s_location_label, location_text[0] == '\0'); /* нет данных — не рисуем */
     }
 }
 
@@ -196,7 +197,9 @@ static void apply_weather(void)
     if (strcmp(text, s_last_weather) != 0) {
         lv_label_set_text(s_weather_label, text);
         snprintf(s_last_weather, sizeof(s_last_weather), "%s", text);
+        ui_set_hidden(s_weather_label, !present); /* нет данных — не рисуем */
     }
+    ui_set_hidden(s_weather_icon, !present);
 }
 
 void ui_status_bar_apply(void)
