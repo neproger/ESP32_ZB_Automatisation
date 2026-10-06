@@ -213,7 +213,7 @@ static void seed_demo_automation(domain_t *domain)
 
     ha_automation_record_t rule = {0};
     rule.enabled = 1;
-    rule.trigger_command_id = HA_ZB_CMD_ON_OFF_TOGGLE; /* кнопка */
+    rule.trigger_b.event.command_id = HA_ZB_CMD_ON_OFF_TOGGLE; /* кнопка */
     rule.action_endpoint = 2;                          /* реле/лампа устройства */
     rule.action_cluster_id = HA_ZB_CLUSTER_ON_OFF;
     rule.action_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;

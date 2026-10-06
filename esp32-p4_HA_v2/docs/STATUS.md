@@ -13,7 +13,7 @@
 | `ha_model` | словарь ZCL, формы сущностей (device/state/endpoint/automation/group/group_item/location/weather), форма команды | `static_assert` + host-тестами zigbee |
 | `zigbee` | задача сервиса, репорт → состояние, топология endpoint'ов, интервью, подписка (bind + Configure Reporting), события (raw ZCL → EVENT), executor и отправка команд, счётчики диагностики | host-тесты 4/4, запуск на P4 |
 | `zigbee_radio` | spinel UART → RCP `ot_rcp` на C6 → стек Zigbee; комиссионирование, интервью, репорты и команды ZCL | живое устройство ESP32C6-DISPLAY: сеть, интервью, device + endpoint'ы в Domain |
-| `automation` | подписка на EVENT (Zigbee + system), правила (entity `automation`): триггеры `DEVICE_EVENT` и `TIME` (будильник + дни недели), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тест 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
+| `automation` | подписка на EVENT (Zigbee + system) и на `ENTITY_UPSERTED`/`STATE`, правила (entity `automation`): триггеры `DEVICE_EVENT`, `TIME` (будильник + дни недели) и `STATE` (порог атрибута + фронт), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тесты (правило/время/STATE) 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
 | `system` | сервис времени и погоды: SNTP + GeoIP (пояс/город, `ip-api`) + Open-Meteo (`current`, WMO→condition); синтетический девайс «Время», сущности `location` и `weather`; события-тики и `WEATHER_CHANGED` | запуск на P4: `sntp sync: ESP_OK`, tz/город, `weather: cond=2 t=10.5C`, snapshot с девайсом/состояниями/location/weather |
 | `wifi` | сервис Wi-Fi: владелец радио на внешнем C3 (ESP-Hosted); подъём стека, скан, подключение, автоподключение по известным; сущности `wifi_scan/known/status`, команды `HA_CMD_WIFI_SCAN/CONNECT` | host-тест 1/1 (`wifi_select`), IDF-сборка; на железе не проверено (нет P4) |
 | `web` | HTTP+WS (BFF) через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку; радио не владеет | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
@@ -42,6 +42,7 @@ automation            → кнопка → EVENT → правило → COMMAND_
 системный сервис      → SNTP sync; GeoIP пояс/город; девайс «Время» + `location` в Domain
 системный тик         → ENTITY_UPSERTED состояний времени + EVENT (MINUTE_TICK) каждую минуту
 TIME-триггер          → правило «будильник» сохраняется (kind=1, minutes_of_day, weekday_mask)
+STATE-триггер         → состояние атрибута (в union записи, размер 144) + фронт rising/falling
 ```
 
 Платы хватает на сборку и наблюдение: `idf.py build flash monitor` из корня проекта.
@@ -68,15 +69,14 @@ endpoint'ов и состояния) проверен host-тестом; на ж
 ## 4. Что дальше
 
 ```text
-1. Триггер STATE (порог атрибута) — «свет по движению», «закрыть по холоду» без кнопки
-2. device_meta (last_seen/rssi/lqi)
-3. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
-4. Аудио ES8311 / microSD — остальные периферии платы
+1. device_meta (last_seen/rssi/lqi)
+2. Отдельный девайс «Система» — служебные вещи (uptime, версия) при старте
+3. Аудио ES8311 / microSD — остальные периферии платы
 ```
 
-Правила Automation уже создаются из UI (CRUD), поддержаны триггеры `DEVICE_EVENT`/`TIME`
-и условия. Порог `STATE` потребует расширения записи правила (смена `persist_key` на
-версионный, чтобы не терять данные устройств при миграции mstore).
+Правила Automation создаются из UI (CRUD); поддержаны триггеры `DEVICE_EVENT`/`TIME`/
+`STATE` и условия. Порог `STATE` уложился в запись **без** изменения размера (144):
+поля триггера — `union` по видам, `persist_key`/миграция mstore не требуется.
 
 Порядок прежний: Zigbee — единственный источник состояния, Automation и Web
 потребляют то, что он производит.

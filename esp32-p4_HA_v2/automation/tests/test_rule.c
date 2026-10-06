@@ -27,8 +27,8 @@ static ha_automation_record_t demo_rule(void)
 {
     ha_automation_record_t rule = {0};
     rule.enabled = 1;
-    rule.trigger_device_uid = UID;
-    rule.trigger_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
+    rule.trigger_b.event.device_uid = UID;
+    rule.trigger_b.event.command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
     rule.action_endpoint = 2;
     rule.action_cluster_id = HA_ZB_CLUSTER_ON_OFF;
     rule.action_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
@@ -129,8 +129,8 @@ static void test_time(void)
     ha_automation_record_t rule = {0};
     rule.enabled = 1;
     rule.trigger_kind = HA_TRIGGER_TIME;
-    rule.trigger_minutes_of_day = 7 * 60; /* 07:00 */
-    rule.trigger_weekday_mask = 0x1F;     /* Пн-Пт */
+    rule.trigger_a.time.minutes_of_day = 7 * 60; /* 07:00 */
+    rule.trigger_a.time.weekday_mask = 0x1F;     /* Пн-Пт */
 
     CHECK(automation_rule_time_matches(&rule, 7 * 60, 1u << 0));   /* Пн 07:00 */
     CHECK(!automation_rule_time_matches(&rule, 7 * 60, 1u << 5));  /* Сб вне маски */
@@ -150,12 +150,63 @@ static void test_time(void)
     CHECK(!automation_rule_matches(&rule, 0x1234u, 2));
 }
 
+static void test_state(void)
+{
+    ha_automation_record_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger_kind = HA_TRIGGER_STATE;
+    rule.trigger_b.state.device_uid = UID;
+    rule.trigger_b.state.endpoint = 2;
+    rule.trigger_b.state.cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT;
+    rule.trigger_b.state.attr_id = HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE;
+    rule.trigger_b.state.op = HA_CONDITION_OP_LT;
+    rule.trigger_a.state_value = 0.0f; /* < 0 */
+    rule.trigger_b.state.edge = HA_TRIGGER_EDGE_RISING;
+
+    const ha_zb_state_key_t key = {.device_uid = UID,
+                                   .cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT,
+                                   .attr_id = HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE,
+                                   .endpoint = 2};
+
+    /* стало истинно (5 -> -1) — срабатывает; уже истинно (-1 -> -2) — нет. */
+    CHECK(automation_rule_state_matches(&rule, &key, -1.0, true, 5.0));
+    CHECK(!automation_rule_state_matches(&rule, &key, -2.0, true, -1.0));
+    /* стало ложно (-1 -> 3) — для RISING нет; первое наблюдение (-1) — да. */
+    CHECK(!automation_rule_state_matches(&rule, &key, 3.0, true, -1.0));
+    CHECK(automation_rule_state_matches(&rule, &key, -1.0, false, 0.0));
+
+    /* другой endpoint/кластер — не совпадает. */
+    ha_zb_state_key_t other = key;
+    other.endpoint = 3;
+    CHECK(!automation_rule_state_matches(&rule, &other, -1.0, true, 5.0));
+    other = key;
+    other.cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    CHECK(!automation_rule_state_matches(&rule, &other, -1.0, true, 5.0));
+
+    /* FALLING: стало ложно. */
+    rule.trigger_b.state.edge = HA_TRIGGER_EDGE_FALLING;
+    CHECK(automation_rule_state_matches(&rule, &key, 3.0, true, -1.0));
+    CHECK(!automation_rule_state_matches(&rule, &key, -2.0, true, -1.0));
+
+    /* ANY: как только условие верно. */
+    rule.trigger_b.state.edge = HA_TRIGGER_EDGE_ANY;
+    CHECK(automation_rule_state_matches(&rule, &key, -2.0, true, -1.0));
+    CHECK(!automation_rule_state_matches(&rule, &key, 2.0, true, -1.0));
+
+    /* DEVICE_EVENT-правило не матчится как STATE. */
+    ha_automation_record_t ev = {0};
+    ev.enabled = 1;
+    ev.trigger_kind = HA_TRIGGER_DEVICE_EVENT;
+    CHECK(!automation_rule_state_matches(&ev, &key, -1.0, false, 0.0));
+}
+
 int main(void)
 {
     test_matches();
     test_command();
     test_condition();
     test_time();
+    test_state();
 
     if (g_failures != 0) {
         printf("test_rule: %d failure(s)\n", g_failures);

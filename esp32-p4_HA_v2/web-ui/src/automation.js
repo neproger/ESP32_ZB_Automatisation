@@ -23,7 +23,34 @@ export const TRIGGER_CMDS = [[0, 'Любая'], [2, 'Toggle'], [1, 'Вкл']]
 export const TRIGGER_KINDS = [
   [0, 'Событие устройства'],
   [1, 'Время'],
+  [2, 'Состояние'],
 ]
+
+// Операторы STATE-триггера (те же, кроме «содержит биты»).
+export const TRIGGER_OPS = [
+  [1, '='],
+  [2, '≠'],
+  [3, '>'],
+  [4, '<'],
+  [5, '≥'],
+  [6, '≤'],
+]
+
+// Когда срабатывать (ha_automation_trigger_edge_t).
+export const TRIGGER_EDGES = [
+  [0, 'любое изменение'],
+  [1, 'стало истинно'],
+  [2, 'стало ложно'],
+]
+
+export function describeStateTrigger(record, nameOf) {
+  const dev = record.triggerUid && BigInt(record.triggerUid) !== 0n ? nameOf(record.triggerUid) : '—'
+  const op = (TRIGGER_OPS.find(([v]) => v === record.triggerOp) || [, '?'])[1]
+  const isBool = record.triggerCluster === 0x0006 && record.triggerAttr === 0x0000
+  const val = isBool ? (record.triggerValue ? 'Вкл' : 'Выкл') : record.triggerValue
+  const edge = (TRIGGER_EDGES.find(([v]) => v === record.triggerEdge) || [, ''])[1]
+  return `${dev}: ${clusterName(record.triggerCluster)}·${attrName(record.triggerCluster, record.triggerAttr)} ${op} ${val} (${edge})`
+}
 
 export const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 

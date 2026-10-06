@@ -3,7 +3,7 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
-import { describeActionArgs, describeCondition, TRIGGER_CMDS, ACTION_CLUSTERS, minutesToHHMM, maskToDays } from '../automation.js'
+import { describeActionArgs, describeCondition, describeStateTrigger, TRIGGER_CMDS, ACTION_CLUSTERS, minutesToHHMM, maskToDays } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
 import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
@@ -60,9 +60,11 @@ export default function Automations() {
           </div>
           <div className="flow">
             <span className="node trigger">
-              {record.triggerKind === 1
-                ? `Время ${minutesToHHMM(record.triggerMinutesOfDay)} · ${maskToDays(record.triggerWeekdayMask) || '—'}`
-                : `${nameOf(record.triggerUid)} · ${triggerName(record.triggerUid, record.triggerCmd)}`}
+              {record.triggerKind === 2
+                ? `Состояние ${describeStateTrigger(record, nameOf)}`
+                : record.triggerKind === 1
+                  ? `Время ${minutesToHHMM(record.triggerMinutesOfDay)} · ${maskToDays(record.triggerWeekdayMask) || '—'}`
+                  : `${nameOf(record.triggerUid)} · ${triggerName(record.triggerUid, record.triggerCmd)}`}
             </span>
             <span className="arrow">→</span>
             <span className="node action">

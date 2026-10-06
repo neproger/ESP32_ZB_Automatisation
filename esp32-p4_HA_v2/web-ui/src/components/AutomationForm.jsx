@@ -3,8 +3,8 @@ import { store } from '../store.js'
 import { automationPut, zbCommand } from '../proto.js'
 import { uidHex, clusterName, attrName } from '../zcl.js'
 import {
-  ACTION_CLUSTERS, TRIGGER_CMDS, TRIGGER_KINDS, WEEKDAY_LABELS, CONDITION_OPS,
-  buildActionArgs, decodeActionArgs, minutesToHHMM, hhmmToMinutes,
+  ACTION_CLUSTERS, TRIGGER_CMDS, TRIGGER_KINDS, TRIGGER_OPS, TRIGGER_EDGES, WEEKDAY_LABELS,
+  CONDITION_OPS, buildActionArgs, decodeActionArgs, minutesToHHMM, hhmmToMinutes,
 } from '../automation.js'
 import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
@@ -35,6 +35,13 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const [triggerCmd, setTriggerCmd] = useState(existing ? String(existing.triggerCmd) : '2')
   const [timeStr, setTimeStr] = useState(minutesToHHMM(existing ? existing.triggerMinutesOfDay : 420))
   const [weekdayMask, setWeekdayMask] = useState(existing ? existing.triggerWeekdayMask : 0x7f)
+  const isState = (e) => e && e.triggerKind === 2
+  const [stateValue, setStateValue] = useState(isState(existing) ? existing.triggerValue : 0)
+  const [stateEp, setStateEp] = useState(isState(existing) ? existing.triggerEp : 0)
+  const [stateCluster, setStateCluster] = useState(isState(existing) ? existing.triggerCluster : 0)
+  const [stateAttr, setStateAttr] = useState(isState(existing) ? existing.triggerAttr : 0)
+  const [stateOp, setStateOp] = useState(isState(existing) ? existing.triggerOp : 1)
+  const [stateEdge, setStateEdge] = useState(isState(existing) ? existing.triggerEdge : 1)
   const [actionUid, setActionUid] = useState(existing ? existing.actionUid.toString() : '0')
   const [actionEp, setActionEp] = useState(existing ? existing.actionEp : 1)
   const [actionCluster, setActionCluster] = useState(existing ? existing.actionCluster : 0x0006)
@@ -54,6 +61,9 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const triggerOptions = isSystemTrigger
     ? Object.keys(SYSTEM_EVENTS).map(Number).sort((a, b) => a - b).map((id) => [id, SYSTEM_EVENTS[id]])
     : TRIGGER_CMDS
+
+  const stateAttrs = statesFor(triggerUid !== '0' ? BigInt(triggerUid) : 0n)
+  const isBoolState = stateCluster === 0x0006 && stateAttr === 0x0000
 
   const devOptions = (anyLabel) => [
     <option key="0" value="0">{anyLabel}</option>,
@@ -85,8 +95,14 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         triggerKind,
         triggerUid: BigInt(triggerUid),
         triggerCmd: Number(triggerCmd),
-        triggerMinutesOfDay: triggerKind === 1 ? hhmmToMinutes(timeStr) : 0,
-        triggerWeekdayMask: triggerKind === 1 ? weekdayMask : 0,
+        triggerMinutesOfDay: Number(triggerKind) === 1 ? hhmmToMinutes(timeStr) : 0,
+        triggerWeekdayMask: Number(triggerKind) === 1 ? weekdayMask : 0,
+        triggerValue: Number(triggerKind) === 2 ? (Number(stateValue) || 0) : 0,
+        triggerEp: Number(triggerKind) === 2 ? stateEp : 0,
+        triggerCluster: Number(triggerKind) === 2 ? stateCluster : 0,
+        triggerAttr: Number(triggerKind) === 2 ? stateAttr : 0,
+        triggerOp: Number(triggerKind) === 2 ? stateOp : 0,
+        triggerEdge: Number(triggerKind) === 2 ? stateEdge : 0,
         actionUid: BigInt(actionUid),
         actionEp: Number(actionEp),
         actionCluster,
@@ -156,6 +172,46 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
                 </label>
               ))}
             </span>
+          </>
+        ) : Number(triggerKind) === 2 ? (
+          <>
+            <select value={triggerUid} onChange={(e) => {
+              setTriggerUid(e.target.value)
+              setStateCluster(0); setStateAttr(0); setStateEp(0)
+            }}>
+              <option value="0">выберите устройство</option>
+              {devices.map((d) => (
+                <option key={d.key.uid.toString()} value={d.key.uid.toString()}>
+                  {d.record.name || d.record.model || uidHex(d.key.uid)}
+                </option>
+              ))}
+            </select>
+            <select value={stateCluster || stateAttr ? `${stateEp}:${stateCluster}:${stateAttr}` : ''}
+              onChange={(e) => {
+                const [ep, cluster, attr] = e.target.value.split(':').map(Number)
+                setStateEp(ep); setStateCluster(cluster); setStateAttr(attr); setStateValue(1)
+              }}>
+              <option value="">(атрибут)</option>
+              {stateAttrs.map((k) => (
+                <option key={`${k.ep}:${k.cluster}:${k.attr}`} value={`${k.ep}:${k.cluster}:${k.attr}`}>
+                  {clusterName(k.cluster)} · {attrName(k.cluster, k.attr)} (EP{k.ep})
+                </option>
+              ))}
+            </select>
+            <select value={stateOp} onChange={(e) => setStateOp(Number(e.target.value))}>
+              {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            {isBoolState ? (
+              <select value={stateValue ? 1 : 0} onChange={(e) => setStateValue(Number(e.target.value))}>
+                <option value={1}>Вкл</option>
+                <option value={0}>Выкл</option>
+              </select>
+            ) : (
+              <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
+            )}
+            <select value={stateEdge} onChange={(e) => setStateEdge(Number(e.target.value))}>
+              {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
           </>
         ) : (
           <>

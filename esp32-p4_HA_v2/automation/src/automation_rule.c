@@ -12,13 +12,39 @@ static sys_error_t automation_fail(sys_code_t code)
 
 #define CONDITION_EPS 1e-6
 
+/* Применить оператор сравнения к двум числам (общий для условий и STATE-триггера). */
+static bool op_holds(uint8_t op, double actual, double expected)
+{
+    switch ((ha_condition_op_t)op) {
+    case HA_CONDITION_OP_EQ:
+        return fabs(actual - expected) <= CONDITION_EPS;
+    case HA_CONDITION_OP_NE:
+        return fabs(actual - expected) > CONDITION_EPS;
+    case HA_CONDITION_OP_GT:
+        return actual > expected;
+    case HA_CONDITION_OP_LT:
+        return actual < expected;
+    case HA_CONDITION_OP_GE:
+        return actual >= expected;
+    case HA_CONDITION_OP_LE:
+        return actual <= expected;
+    case HA_CONDITION_OP_HAS_BITS:
+        return ((uint32_t)actual & (uint32_t)expected) != 0u;
+    default:
+        return false;
+    }
+}
+
 /*
  * ZCL-значение состояния → число. `raw` хранится по фактической ширине типа
  * (zigbee_radio.c:report_value): знаковые расширены по знаку, single float — биты.
- * Тип вне словаря скаляров не вычислить — условие считается невыполненным.
+ * Тип вне словаря скаляров не вычислить.
  */
-static bool condition_value(const ha_zb_state_record_t *state, double *out)
+bool automation_rule_state_value(const ha_zb_state_record_t *state, double *out)
 {
+    if (state == NULL || out == NULL) {
+        return false;
+    }
     const uint32_t raw = state->raw;
     switch (state->zcl_type) {
     case HA_ZB_TYPE_BOOL:
@@ -57,34 +83,14 @@ static bool condition_value(const ha_zb_state_record_t *state, double *out)
 bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
                                   const ha_zb_state_record_t *state)
 {
-    if (condition == NULL || state == NULL) {
+    if (condition == NULL) {
         return false;
     }
-
     double actual = 0.0;
-    if (!condition_value(state, &actual)) {
+    if (!automation_rule_state_value(state, &actual)) {
         return false;
     }
-    const double expected = (double)condition->value;
-
-    switch ((ha_condition_op_t)condition->op) {
-    case HA_CONDITION_OP_EQ:
-        return fabs(actual - expected) <= CONDITION_EPS;
-    case HA_CONDITION_OP_NE:
-        return fabs(actual - expected) > CONDITION_EPS;
-    case HA_CONDITION_OP_GT:
-        return actual > expected;
-    case HA_CONDITION_OP_LT:
-        return actual < expected;
-    case HA_CONDITION_OP_GE:
-        return actual >= expected;
-    case HA_CONDITION_OP_LE:
-        return actual <= expected;
-    case HA_CONDITION_OP_HAS_BITS:
-        return ((uint32_t)actual & (uint32_t)expected) != 0u;
-    default:
-        return false;
-    }
+    return op_holds(condition->op, actual, (double)condition->value);
 }
 
 bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t device_uid,
@@ -94,10 +100,10 @@ bool automation_rule_matches(const ha_automation_record_t *rule, ha_device_uid_t
         rule->trigger_kind != (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
         return false;
     }
-    if (rule->trigger_device_uid != 0 && rule->trigger_device_uid != device_uid) {
+    if (rule->trigger_b.event.device_uid != 0 && rule->trigger_b.event.device_uid != device_uid) {
         return false;
     }
-    if (rule->trigger_command_id != 0 && rule->trigger_command_id != command_id) {
+    if (rule->trigger_b.event.command_id != 0 && rule->trigger_b.event.command_id != command_id) {
         return false;
     }
     return true;
@@ -109,10 +115,49 @@ bool automation_rule_time_matches(const ha_automation_record_t *rule, uint16_t m
     if (rule == NULL || rule->enabled == 0 || rule->trigger_kind != (uint8_t)HA_TRIGGER_TIME) {
         return false;
     }
-    if (rule->trigger_minutes_of_day != minutes_of_day) {
+    if (rule->trigger_a.time.minutes_of_day != minutes_of_day) {
         return false;
     }
-    return (rule->trigger_weekday_mask & weekday_mask) != 0;
+    return (rule->trigger_a.time.weekday_mask & weekday_mask) != 0;
+}
+
+/*
+ * STATE-триггер: атрибут (device/cluster/attr) изменился и условие (op/value) выполнено
+ * с учётом edge. prev — предыдущее значение (для «стало истинно/ложно»); prev_known
+ * false — предыдущего нет (первое наблюдение).
+ */
+bool automation_rule_state_matches(const ha_automation_record_t *rule, const ha_zb_state_key_t *key,
+                                   double value, bool prev_known, double prev_value)
+{
+    if (rule == NULL || key == NULL || rule->enabled == 0 ||
+        rule->trigger_kind != (uint8_t)HA_TRIGGER_STATE) {
+        return false;
+    }
+    if (rule->trigger_b.state.device_uid == 0 ||
+        rule->trigger_b.state.device_uid != key->device_uid) {
+        return false;
+    }
+    if (rule->trigger_b.state.endpoint != 0 && rule->trigger_b.state.endpoint != key->endpoint) {
+        return false;
+    }
+    if (rule->trigger_b.state.cluster_id != key->cluster_id ||
+        rule->trigger_b.state.attr_id != key->attr_id) {
+        return false;
+    }
+
+    const uint8_t op = rule->trigger_b.state.op;
+    const double expected = (double)rule->trigger_a.state_value;
+    const bool holds = op_holds(op, value, expected);
+
+    switch ((ha_automation_trigger_edge_t)rule->trigger_b.state.edge) {
+    case HA_TRIGGER_EDGE_RISING:
+        return holds && (!prev_known || !op_holds(op, prev_value, expected));
+    case HA_TRIGGER_EDGE_FALLING:
+        return !holds && prev_known && op_holds(op, prev_value, expected);
+    case HA_TRIGGER_EDGE_ANY:
+    default:
+        return holds;
+    }
 }
 
 sys_error_t automation_rule_command(const ha_automation_record_t *rule,

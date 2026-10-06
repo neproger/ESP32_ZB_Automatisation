@@ -33,13 +33,21 @@ typedef struct {
 
 /*
  * Вид триггера. DEVICE_EVENT — событие от устройства (Zigbee-команда или системное
- * событие); TIME — «будильник»: конкретное время суток + набор дней недели, без
- * условий сравнения. Расширяемо: сюда добавятся STATE (порог атрибута) и SUN.
+ * событие); TIME — «будильник»: конкретное время суток + набор дней недели; STATE —
+ * изменение атрибута состояния по условию (device/cluster/attr/op/value + edge).
  */
 typedef enum {
     HA_TRIGGER_DEVICE_EVENT = 0,
     HA_TRIGGER_TIME = 1,
+    HA_TRIGGER_STATE = 2,
 } ha_automation_trigger_kind_t;
+
+/* Когда срабатывать относительно изменения атрибута (STATE). */
+typedef enum {
+    HA_TRIGGER_EDGE_ANY = 0,     /* при любом изменении, когда условие верно */
+    HA_TRIGGER_EDGE_RISING = 1,  /* условие стало истинным (было ложно) */
+    HA_TRIGGER_EDGE_FALLING = 2, /* условие стало ложным (было истинно) */
+} ha_automation_trigger_edge_t;
 
 /* Оператор условия: те же шесть, что в правилах v1 (docs/services/AUTOMATION.md). */
 typedef enum {
@@ -68,20 +76,42 @@ typedef struct {
     float value;
 } ha_automation_condition_t;
 
+/*
+ * Параметры триггера разложены в те же 20 байт (offset 4..23) для всех видов — провод
+ * (WEB_PROTOCOL §5) не меняется между видами. Два union'а: @4..7 (TIME/STATE-порог) и
+ * @8..23 (устройство + специфика вида). device_uid == 0 у EVENT — «любое».
+ */
 typedef struct {
     uint8_t enabled;
     uint8_t action_args_len;
     uint8_t conditions_count;
-    uint8_t trigger_kind;             /* ha_automation_trigger_kind_t */
+    uint8_t trigger_kind; /* ha_automation_trigger_kind_t */
 
-    /* TIME: время срабатывания (минуты от начала суток) и дни недели (бит 0=Пн..6=Вс). */
-    uint16_t trigger_minutes_of_day;
-    uint8_t trigger_weekday_mask;
-    uint8_t reserved;
+    union { /* @4..7 */
+        struct { /* TIME */
+            uint16_t minutes_of_day; /* 0..1439 */
+            uint8_t weekday_mask;    /* бит 0=Пн..6=Вс */
+            uint8_t reserved;
+        } time;
+        float state_value; /* STATE: порог сравнения */
+    } trigger_a;
 
-    /* DEVICE_EVENT: событие (EVENT) от устройства. 0 — «любое». */
-    ha_device_uid_t trigger_device_uid;
-    uint16_t trigger_command_id;
+    union { /* @8..23 */
+        struct { /* DEVICE_EVENT */
+            ha_device_uid_t device_uid;
+            uint16_t command_id;
+            uint8_t reserved[6];
+        } event;
+        struct { /* STATE */
+            ha_device_uid_t device_uid;
+            uint8_t endpoint; /* 0 — любой */
+            uint8_t reserved0;
+            uint16_t cluster_id;
+            uint16_t attr_id;
+            uint8_t op;   /* ha_condition_op_t */
+            uint8_t edge; /* ha_automation_trigger_edge_t */
+        } state;
+    } trigger_b;
 
     /* Действие: Zigbee-команда. device_uid == 0 — устройство-источник события. */
     ha_device_uid_t action_device_uid;
@@ -97,14 +127,24 @@ typedef struct {
 #ifdef __cplusplus
 static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
-static_assert(offsetof(ha_automation_record_t, trigger_device_uid) == 8, "automation: layout trigger");
+static_assert(offsetof(ha_automation_record_t, trigger_a) == 4, "automation: layout trigger_a");
+static_assert(offsetof(ha_automation_record_t, trigger_b) == 8, "automation: layout trigger_b");
+static_assert(offsetof(ha_automation_record_t, trigger_b.event.command_id) == 16, "automation: event cmd");
+static_assert(offsetof(ha_automation_record_t, trigger_b.state.cluster_id) == 18, "automation: state cluster");
+static_assert(offsetof(ha_automation_record_t, trigger_b.state.op) == 22, "automation: state op");
+static_assert(offsetof(ha_automation_record_t, action_device_uid) == 24, "automation: action");
 static_assert(offsetof(ha_automation_record_t, conditions) == 48, "automation: layout conditions");
 static_assert(sizeof(ha_automation_record_t) == 144, "ha_automation_record_t: неожиданный размер");
 static_assert(sizeof(ha_automation_record_t) <= 1024, "automation: больше региона");
 #else
 _Static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 _Static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
-_Static_assert(offsetof(ha_automation_record_t, trigger_device_uid) == 8, "automation: layout trigger");
+_Static_assert(offsetof(ha_automation_record_t, trigger_a) == 4, "automation: layout trigger_a");
+_Static_assert(offsetof(ha_automation_record_t, trigger_b) == 8, "automation: layout trigger_b");
+_Static_assert(offsetof(ha_automation_record_t, trigger_b.event.command_id) == 16, "automation: event cmd");
+_Static_assert(offsetof(ha_automation_record_t, trigger_b.state.cluster_id) == 18, "automation: state cluster");
+_Static_assert(offsetof(ha_automation_record_t, trigger_b.state.op) == 22, "automation: state op");
+_Static_assert(offsetof(ha_automation_record_t, action_device_uid) == 24, "automation: action");
 _Static_assert(offsetof(ha_automation_record_t, conditions) == 48, "automation: layout conditions");
 _Static_assert(sizeof(ha_automation_record_t) == 144, "ha_automation_record_t: неожиданный размер");
 _Static_assert(sizeof(ha_automation_record_t) <= 1024, "automation: больше региона");

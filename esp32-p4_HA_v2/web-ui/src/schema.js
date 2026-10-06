@@ -140,6 +140,13 @@ export function decodeRecord(type, dv) {
         triggerKind: dv.getUint8(3),
         triggerMinutesOfDay: dv.getUint16(4, true),
         triggerWeekdayMask: dv.getUint8(6),
+        /* STATE: порог @4 (f32) и device/ep/cluster/attr/op/edge @8..23. */
+        triggerValue: dv.getFloat32(4, true),
+        triggerEp: dv.getUint8(16),
+        triggerCluster: dv.getUint16(18, true),
+        triggerAttr: dv.getUint16(20, true),
+        triggerOp: dv.getUint8(22),
+        triggerEdge: dv.getUint8(23),
         triggerUid: dv.getBigUint64(8, true),
         triggerCmd: dv.getUint16(16, true),
         actionUid: dv.getBigUint64(24, true),
@@ -195,10 +202,19 @@ export function encodeAutomationRecord(r) {
   dv.setUint8(1, Math.min(args.length, 8))
   dv.setUint8(2, conds.length)
   dv.setUint8(3, kind)
-  dv.setUint16(4, kind === 1 ? (r.triggerMinutesOfDay || 0) : 0, true)
-  dv.setUint8(6, kind === 1 ? (r.triggerWeekdayMask ?? 0x7f) : 0)
   dv.setBigUint64(8, BigInt(r.triggerUid || 0), true)
-  dv.setUint16(16, r.triggerCmd || 0, true)
+  if (kind === 2) {
+    dv.setFloat32(4, Number(r.triggerValue) || 0, true)
+    dv.setUint8(16, r.triggerEp || 0)
+    dv.setUint16(18, r.triggerCluster || 0, true)
+    dv.setUint16(20, r.triggerAttr || 0, true)
+    dv.setUint8(22, r.triggerOp || 1)
+    dv.setUint8(23, r.triggerEdge || 0)
+  } else {
+    dv.setUint16(4, kind === 1 ? (r.triggerMinutesOfDay || 0) : 0, true)
+    dv.setUint8(6, kind === 1 ? (r.triggerWeekdayMask ?? 0x7f) : 0)
+    dv.setUint16(16, r.triggerCmd || 0, true)
+  }
   dv.setBigUint64(24, BigInt(r.actionUid || 0), true)
   dv.setUint8(32, r.actionEp || 0)
   dv.setUint16(34, r.actionCluster || 0, true)

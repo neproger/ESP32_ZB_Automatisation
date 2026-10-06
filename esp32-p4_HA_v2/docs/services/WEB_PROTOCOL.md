@@ -61,7 +61,12 @@ layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
 | 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 trigger_kind; u16 trigger_minutes_of_day; u8 trigger_weekday_mask; u8 rsv; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
 
 `trigger_kind`: 0 — событие устройства (`trigger_uid`/`trigger_cmd`), 1 — время
-(`trigger_minutes_of_day` + `trigger_weekday_mask`).
+(`trigger_minutes_of_day` + `trigger_weekday_mask`), 2 — состояние. Поля триггера —
+`union` по видам, размер записи неизменен (144). Для `kind=2` (`STATE`):
+`trigger_uid` — device_uid (обязателен, ≠0); байты @4..7 — порог `f32`
+(`state_value`); @16 endpoint (0 — любой), @18 cluster (`u16`), @20 attr (`u16`),
+@22 `op` (`ha_condition_op_t`), @23 `edge` (0 любое изменение, 1 стало истинно,
+2 стало ложно).
 
 | 6 | location | `u64 uid` | `{ f32 lat; f32 lon; i16 tz_offset_min; u8 rsv[2]; char name[48]; }` (60) |
 | 7 | group | `u64 id` | `{ char title[32]; }` (32) |

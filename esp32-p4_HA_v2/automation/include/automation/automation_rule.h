@@ -24,6 +24,17 @@ bool automation_rule_time_matches(const ha_automation_record_t *rule, uint16_t m
                                   uint8_t weekday_mask);
 
 /*
+ * Сопоставить STATE-правило изменению атрибута: тот же device/cluster/attr (endpoint 0 —
+ * любой) и условие op/value с учётом edge. value — новое значение, prev — предыдущее
+ * (prev_known=false — предыдущего нет).
+ */
+bool automation_rule_state_matches(const ha_automation_record_t *rule, const ha_zb_state_key_t *key,
+                                   double value, bool prev_known, double prev_value);
+
+/* Декодировать ZCL-значение состояния в число (общее для условий и STATE-триггера). */
+bool automation_rule_state_value(const ha_zb_state_record_t *state, double *out);
+
+/*
  * Собрать Zigbee-команду действия. trigger_uid подставляется, когда у правила
  * action_device_uid == 0 («то же устройство, что вызвало»).
  */
