@@ -7,9 +7,10 @@
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
 #include "ui_compat.h"
+#include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_style.h"
-#include "weather_icons.h"
+#include "wicons.h"
 
 static domain_t *s_domain;
 static lv_obj_t *s_time_label;
@@ -19,7 +20,7 @@ static lv_obj_t *s_weather_label;
 static char s_last_time[8];
 static char s_last_location[HA_LOCATION_NAME_MAX];
 static char s_last_weather[40];
-static const lv_image_dsc_t *s_last_icon;
+static char s_last_glyph[8];
 
 static void on_burger(lv_event_t *event)
 {
@@ -71,7 +72,11 @@ void ui_status_bar_create(domain_t *domain)
     lv_obj_set_flex_align(weather, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
-    s_weather_icon = lv_image_create(weather);
+    /* Иконка погоды — глиф шрифта Weather Icons (красится цветом текста). */
+    s_weather_icon = lv_label_create(weather);
+    lv_obj_set_style_text_font(s_weather_icon, &wicons, 0);
+    lv_obj_set_style_text_color(s_weather_icon, lv_color_hex(UI_COL_TEXT), 0);
+
     s_weather_label = lv_label_create(weather);
     lv_obj_set_style_text_font(s_weather_label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(s_weather_label, lv_color_hex(UI_COL_TEXT), 0);
@@ -85,16 +90,11 @@ void ui_status_bar_create(domain_t *domain)
     lv_obj_set_style_shadow_width(burger, 0, 0);
     lv_obj_set_style_pad_all(burger, 0, 0);
     lv_obj_add_event_cb(burger, on_burger, LV_EVENT_CLICKED, NULL);
-    for (int i = 0; i < 3; ++i) {
-        lv_obj_t *line = lv_obj_create(burger);
-        lv_obj_set_size(line, 26, 3);
-        lv_obj_set_style_radius(line, 2, 0);
-        lv_obj_set_style_bg_color(line, lv_color_hex(UI_COL_TEXT), 0);
-        lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(line, 0, 0);
-        ui_set_scrollable(line, false);
-        lv_obj_align(line, LV_ALIGN_CENTER, 0, (i - 1) * 8);
-    }
+    lv_obj_t *burger_icon = lv_label_create(burger);
+    lv_obj_set_style_text_font(burger_icon, &ui_icons, 0);
+    lv_obj_set_style_text_color(burger_icon, lv_color_hex(UI_COL_TEXT), 0);
+    lv_label_set_text(burger_icon, UI_ICON_BARS);
+    lv_obj_center(burger_icon);
 }
 
 static bool read_u8(uint16_t attr_id, uint8_t *out)
@@ -138,6 +138,43 @@ static void apply_time_location(void)
     }
 }
 
+/* condition -> глиф Weather Icons (см. weather_icons.txt). */
+static const char *weather_glyph(uint8_t condition)
+{
+    switch (condition) {
+    case HA_WEATHER_CLEAR:
+        return WEATHER_ICON_DAY_SUNNY;
+    case HA_WEATHER_CLEAR_NIGHT:
+        return WEATHER_ICON_NIGHT_CLEAR;
+    case HA_WEATHER_PARTLYCLOUDY:
+        return WEATHER_ICON_DAY_CLOUDY;
+    case HA_WEATHER_CLOUDY:
+    case HA_WEATHER_OVERCAST:
+        return WEATHER_ICON_CLOUDY;
+    case HA_WEATHER_FOG:
+        return WEATHER_ICON_FOG;
+    case HA_WEATHER_RAINY:
+        return WEATHER_ICON_RAIN;
+    case HA_WEATHER_POURING:
+        return WEATHER_ICON_SHOWERS;
+    case HA_WEATHER_SNOWY:
+        return WEATHER_ICON_SNOW;
+    case HA_WEATHER_SNOWY_RAINY:
+        return WEATHER_ICON_RAIN_MIX;
+    case HA_WEATHER_HAIL:
+        return WEATHER_ICON_HAIL;
+    case HA_WEATHER_LIGHTNING:
+        return WEATHER_ICON_LIGHTNING;
+    case HA_WEATHER_LIGHTNING_RAINY:
+        return WEATHER_ICON_THUNDERSTORM;
+    case HA_WEATHER_WINDY:
+    case HA_WEATHER_WINDY_VARIANT:
+        return WEATHER_ICON_STRONG_WIND;
+    default:
+        return WEATHER_ICON_THUNDERSTORM;
+    }
+}
+
 static void apply_weather(void)
 {
     ha_weather_record_t weather = {0};
@@ -145,16 +182,16 @@ static void apply_weather(void)
     const bool present =
         sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_WEATHER, &uid, &weather));
 
-    const lv_image_dsc_t *icon = present ? weather_icon_for(weather.condition) : NULL;
+    const char *glyph = present ? weather_glyph(weather.condition) : "";
     char text[40] = "";
     if (present) {
         snprintf(text, sizeof(text), "%.1f°  %u %%", (double)weather.temperature_c100 / 100.0,
                  (unsigned)(weather.humidity_p100 / 100u));
     }
 
-    if (present && icon != s_last_icon) {
-        lv_image_set_src(s_weather_icon, icon);
-        s_last_icon = icon;
+    if (strcmp(glyph, s_last_glyph) != 0) {
+        lv_label_set_text(s_weather_icon, glyph);
+        snprintf(s_last_glyph, sizeof(s_last_glyph), "%s", glyph);
     }
     if (strcmp(text, s_last_weather) != 0) {
         lv_label_set_text(s_weather_label, text);

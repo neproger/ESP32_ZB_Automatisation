@@ -1,8 +1,5 @@
 # Display — клиент Domain (docs/clients/DISPLAY.md). ui/ зависит только от LVGL,
 # Domain API и форм ha_model; ESP-IDF (esp_lcd/lvgl_port) — отдельный port/.
-# Иконки погоды — сгенерированные ассеты (по файлу на условие), glob оправдан.
-file(GLOB WEATHER_ICON_SRCS "icons/wicon_*.c")
-
 idf_component_register(
     SRCS
         "src/display.c"
@@ -16,8 +13,8 @@ idf_component_register(
         "fonts/ui_font_20.c"
         "fonts/ui_font_32.c"
         "fonts/ui_font_48.c"
-        "icons/weather_icons.c"
-        ${WEATHER_ICON_SRCS}
+        "icons/ui_icons.c"
+        "icons/wicons.c"
     INCLUDE_DIRS
         "include"
     PRIV_INCLUDE_DIRS

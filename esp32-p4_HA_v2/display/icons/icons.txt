@@ -1,0 +1,13 @@
+# Имена иконок FontAwesome (free, solid) — UI-хром. Шрифт ui_icons, макросы UI_ICON_*.
+# Погода — отдельный набор: weather_icons.txt (шрифт wicons).
+
+angle-left
+angle-right
+angle-up
+angle-down
+bars
+gear
+wifi
+xmark
+house
+sliders

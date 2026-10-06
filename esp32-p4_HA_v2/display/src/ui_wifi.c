@@ -7,6 +7,7 @@
 #include "ha_model/ha_wifi.h"
 #include "ui_commands.h"
 #include "ui_compat.h"
+#include "ui_icons.h"
 #include "ui_style.h"
 
 #define UI_WIFI_HEADER_H 64
@@ -290,8 +291,8 @@ lv_obj_t *ui_wifi_create(domain_t *domain, ui_wifi_back_cb back)
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COL_CHIP), 0);
     lv_obj_add_event_cb(back_btn, on_back, LV_EVENT_CLICKED, NULL);
     lv_obj_t *back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "<");
-    lv_obj_set_style_text_font(back_label, UI_FONT_HEADER, 0);
+    lv_label_set_text(back_label, UI_ICON_ANGLE_LEFT);
+    lv_obj_set_style_text_font(back_label, &ui_icons, 0);
     lv_obj_set_style_text_color(back_label, lv_color_hex(UI_COL_TEXT), 0);
     lv_obj_center(back_label);
 

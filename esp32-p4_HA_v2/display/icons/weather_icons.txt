@@ -1,0 +1,16 @@
+# Имена иконок Weather Icons (erikflowers) — погода. Шрифт wicons, макросы WEATHER_ICON_*.
+# Маппинг ha_weather_condition_t -> имя — в ui_status_bar.c (weather_glyph).
+
+day-sunny
+night-clear
+day-cloudy
+cloudy
+fog
+rain
+showers
+rain-mix
+snow
+hail
+lightning
+thunderstorm
+strong-wind
