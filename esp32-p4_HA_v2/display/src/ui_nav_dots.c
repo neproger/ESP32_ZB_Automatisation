@@ -13,6 +13,7 @@ static size_t s_count;
 
 void ui_nav_dots_create(void)
 {
+    s_count = 0; /* точка отсчёта сброшена: при пересборке UI точки строятся заново */
     lv_obj_t *layer = lv_layer_top();
     s_bar = lv_obj_create(layer);
     lv_obj_set_size(s_bar, LV_SIZE_CONTENT, UI_NAV_DOTS_H);

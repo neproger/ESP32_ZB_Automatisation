@@ -31,6 +31,13 @@ static void on_burger(lv_event_t *event)
 void ui_status_bar_create(domain_t *domain)
 {
     s_domain = domain;
+    /* Кэши «последних значений» привязаны к прежним меткам. При пересборке UI
+     * (напр. смена темы) метки создаются заново — сбрасываем кэш, иначе apply
+     * посчитает «не изменилось» и новые метки останутся пустыми. */
+    s_last_time[0] = '\0';
+    s_last_location[0] = '\0';
+    s_last_weather[0] = '\0';
+    s_last_glyph[0] = '\0';
 
     lv_obj_t *layer = lv_layer_top();
     lv_obj_set_style_bg_opa(layer, LV_OPA_TRANSP, 0);

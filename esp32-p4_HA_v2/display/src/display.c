@@ -373,6 +373,10 @@ static void reload_ui_async(void *unused)
     } else {
         load_page_now();
     }
+
+    /* После пересборки прогнать один цикл: заполнить короткие метки (строка состояния,
+     * виджеты экрана) актуальными данными из Domain — без «костылей на каждый виджет». */
+    display_poll();
 }
 
 void display_request_theme_reload(void)
