@@ -39,9 +39,11 @@ function readNames(path) {
     .filter(Boolean);
 }
 
-function generate({ fontName, listFile, ttf, resolve, prefix }) {
+function generate({ fontName, listFile, ttf, resolve, resolveAll, prefix }) {
   const names = readNames(join(ICONS_DIR, listFile));
-  const resolved = names.map((name) => {
+  /* Строка "*" означает «весь набор источника» — список имён не ведём вручную. */
+  const list = names.includes("*") ? resolveAll() : names;
+  const resolved = list.map((name) => {
     const code = resolve(name);
     if (code == null) throw new Error(`${listFile}: значок "${name}" не найден`);
     return { macro: `${prefix}_${name.toUpperCase().replace(/-/g, "_")}`, code };
@@ -98,6 +100,7 @@ generate({
   listFile: "icons.txt",
   ttf: FA_TTF,
   resolve: (name) => (FA_META[name] ? parseInt(FA_META[name].unicode, 16) : null),
+  resolveAll: () => Object.keys(FA_META).filter((n) => FA_META[n].unicode),
   prefix: "UI_ICON",
 });
 
@@ -106,5 +109,6 @@ generate({
   listFile: "weather_icons.txt",
   ttf: WI_TTF,
   resolve: (name) => (name in WI_MAP ? WI_MAP[name] : null),
+  resolveAll: () => Object.keys(WI_MAP),
   prefix: "WEATHER_ICON",
 });

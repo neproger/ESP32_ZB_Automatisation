@@ -95,9 +95,9 @@ for each item:
 погоду: иконку условия + температуру + влажность из `HA_ENTITY_WEATHER`
 (`../services/SYSTEM.md` §3.1). Иконки — **иконочные шрифты**: UI-хром из FontAwesome
 (`icons/icons.txt` → `ui_icons`, `UI_ICON_*`), погода из Weather Icons
-(`icons/weather_icons.txt` → `wicons`, `WEATHER_ICON_*`); генератор `icons/tools/gen.mjs`.
-Глиф красится стилем `text_color`, поэтому следует теме. Экраны резервируют под строку
-`UI_STATUSBAR_H` сверху.
+(`icons/weather_icons.txt` → `wicons`, `WEATHER_ICON_*`, набор целиком — строка `*`);
+генератор `icons/tools/gen.mjs`. Глиф красится стилем `text_color`, поэтому следует теме.
+Экраны резервируют под строку `UI_STATUSBAR_H` сверху.
 
 Внизу — навигационные точки-карусель (`ui_nav_dots.c`): по одной на группу, активная
 подсвечена; тоже на `lv_layer_top()`, поэтому не двигаются при переходах.
@@ -105,6 +105,8 @@ for each item:
 В строке состояния — «бургер» (`ui_menu.c`) с выпадающим меню на `lv_layer_top()`:
 «Настройки» и «Wi-Fi». «Настройки» — отдельный экран (`ui_settings.c`): подсветка и
 таймаут скринсейвера, чтение/запись `HA_ENTITY_SETTINGS` (`../services/SETTINGS.md`).
+Контролы берутся из общей базы `ui_widgets` (`ui_slider_create_styled`,
+`ui_dropdown_create_styled`) — не собираются в экране вручную.
 Wi-Fi открывает отдельный экран (`ui_wifi.c`): список
 сетей из `HA_ENTITY_WIFI_SCAN`, статус из `HA_ENTITY_WIFI_STATUS`, кнопка «Сканировать» и
 диалог пароля (`lv_keyboard` + `lv_textarea`). Скан — команда `HA_CMD_WIFI_SCAN`,

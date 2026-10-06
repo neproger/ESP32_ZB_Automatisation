@@ -5,6 +5,7 @@ angle-left
 angle-right
 angle-up
 angle-down
+caret-down
 bars
 gear
 wifi

@@ -165,10 +165,9 @@ lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back)
     /* Скринсейвер: подпись + выпадающий список. */
     lv_obj_t *timeout_row = make_row(card);
     make_row_label(timeout_row, "Скринсейвер");
-    s_timeout = lv_dropdown_create(timeout_row);
+    s_timeout = ui_dropdown_create_styled(timeout_row);
     lv_obj_set_flex_grow(s_timeout, 1);
     lv_dropdown_set_options(s_timeout, kTimeoutOptions);
-    lv_obj_set_style_text_font(s_timeout, UI_FONT_BODY, 0);
     lv_obj_add_event_cb(s_timeout, on_timeout, LV_EVENT_VALUE_CHANGED, NULL);
 
     s_syncing = false;

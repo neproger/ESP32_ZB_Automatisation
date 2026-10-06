@@ -36,6 +36,9 @@ ui_widget_kind_t ui_widget_kind_for(uint16_t cluster_id, uint16_t attr_id);
 /* Слайдер в общем стиле UI (тонкая дорожка + круглый маркер). */
 lv_obj_t *ui_slider_create_styled(lv_obj_t *parent, int min, int max);
 
+/* Выпадающий список в общем стиле UI (стрелка — глиф ui_icons, не встроенный символ). */
+lv_obj_t *ui_dropdown_create_styled(lv_obj_t *parent);
+
 typedef struct ui_widget ui_widget_t;
 
 /*

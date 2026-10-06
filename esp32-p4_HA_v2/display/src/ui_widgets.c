@@ -5,6 +5,7 @@
 #include "ha_model/ha_zigbee.h"
 #include "ui_commands.h"
 #include "ui_compat.h"
+#include "ui_icons.h"
 #include "ui_style.h"
 
 struct ui_widget {
@@ -108,6 +109,24 @@ lv_obj_t *ui_slider_create_styled(lv_obj_t *parent, int min, int max)
     lv_obj_set_style_border_width(slider, 0, LV_PART_KNOB);
     lv_obj_set_style_pad_all(slider, 6, LV_PART_KNOB);
     return slider;
+}
+
+/*
+ * Выпадающий список в общем стиле. Стрелка — встроенный символ dropdown со шрифтом ui_icons
+ * (вместо LV_SYMBOL_DOWN, которого нет в шрифтах UI — иначе «тофу»). Символ рисуется стилем
+ * LV_PART_INDICATOR; pad_column задаёт зазор между текстом и стрелкой, а наличие символа
+ * заставляет dropdown выравнивать текст влево (без символа он центрируется и налезает).
+ */
+lv_obj_t *ui_dropdown_create_styled(lv_obj_t *parent)
+{
+    lv_obj_t *dropdown = lv_dropdown_create(parent);
+    lv_obj_set_style_text_font(dropdown, UI_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(dropdown, 12, LV_PART_MAIN); /* зазор текст ↔ стрелка */
+    lv_obj_set_style_pad_right(dropdown, 12, LV_PART_MAIN);  /* отступ стрелки от края */
+    lv_obj_set_style_text_font(dropdown, &ui_icons, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(dropdown, lv_color_hex(UI_COL_TEXT), LV_PART_INDICATOR);
+    lv_dropdown_set_symbol(dropdown, UI_ICON_CARET_DOWN);
+    return dropdown;
 }
 
 static lv_obj_t *make_slider_row(lv_obj_t *parent, int min, int max, lv_obj_t **out_slider,

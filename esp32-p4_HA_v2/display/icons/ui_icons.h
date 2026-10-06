@@ -14,6 +14,7 @@ LV_FONT_DECLARE(ui_icons);
 #define UI_ICON_ANGLE_RIGHT "\uf105"
 #define UI_ICON_ANGLE_UP "\uf106"
 #define UI_ICON_ANGLE_DOWN "\uf107"
+#define UI_ICON_CARET_DOWN "\uf0d7"
 #define UI_ICON_BARS "\uf0c9"
 #define UI_ICON_GEAR "\uf013"
 #define UI_ICON_WIFI "\uf1eb"

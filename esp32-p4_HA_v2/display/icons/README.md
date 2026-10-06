@@ -5,12 +5,16 @@
 
 | Набор | Список | Источник | Шрифт | Макросы |
 | :-- | :-- | :-- | :-- | :-- |
-| UI-хром | `icons.txt` | FontAwesome (free solid) | `ui_icons` | `UI_ICON_*` |
-| Погода | `weather_icons.txt` | Weather Icons (erikflowers) | `wicons` | `WEATHER_ICON_*` |
+| UI-хром | `icons.txt` | FontAwesome (free solid), курируемый | `ui_icons` | `UI_ICON_*` |
+| Погода | `weather_icons.txt` | Weather Icons (erikflowers), **весь набор** | `wicons` | `WEATHER_ICON_*` |
+
+Строка `*` в списке означает «весь набор источника» (погода включена целиком, 177 глифов,
+~66 КБ флеша). UI-набор держим курируемым: все ~1900 иконок FontAwesome стоят ~561 КБ.
 
 ## Как добавить иконку
 
-1. Дописать имя в нужный список (`icons.txt` или `weather_icons.txt`).
+1. Для UI: дописать имя FontAwesome в `icons.txt`. Погодные иконки уже все включены (`*`),
+   отдельно добавлять не нужно — берётся имя из `WEATHER_ICON_*`.
 2. Сгенерировать шрифты:
    ```cmd
    cd display/icons/tools
