@@ -1,5 +1,6 @@
 #include "ui_widgets.h"
 
+#include <math.h>
 #include <stdio.h>
 
 #include "ha_model/ha_zigbee.h"
@@ -17,16 +18,10 @@ struct ui_widget {
     lv_obj_t *slider;      /* LEVEL / COLOR_TEMP */
     lv_obj_t *value_label; /* подпись уровня/значения/индикатора */
 
-    /* Цвет: свотч + hue/saturation (соседние атрибуты кластера Color). */
-    lv_obj_t *swatch;
-    lv_obj_t *hue_slider;
+    /* Цвет: слайдер оттенка + круг-превью; яркость — общий slider/value_label. */
+    lv_obj_t *swatch;     /* кружок текущего цвета */
+    lv_obj_t *hue_slider; /* оттенок 0..359 */
     lv_obj_t *hue_label;
-    lv_obj_t *sat_slider;
-    lv_obj_t *sat_label;
-    ha_zb_state_key_t hue_key;
-    ha_zb_state_key_t sat_key;
-    uint8_t cur_hue;
-    uint8_t cur_sat;
 };
 
 ui_widget_kind_t ui_widget_kind_for(uint16_t cluster_id, uint16_t attr_id)
@@ -172,14 +167,142 @@ static lv_obj_t *make_indicator(lv_obj_t *parent, ui_widget_t *widget)
     return pill;
 }
 
-static void update_swatch(ui_widget_t *widget)
+/* --- цвет: sRGB <-> HSV <-> CIE xy (для MoveToColor) --- */
+
+static lv_color_t color_from_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
-    if (widget->swatch == NULL) {
+    return lv_color_hex(((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b);
+}
+
+static float clamp01f(float v)
+{
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+static float srgb_to_linear(float c)
+{
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+}
+
+static float linear_to_srgb(float c)
+{
+    return c <= 0.0031308f ? 12.92f * c : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+}
+
+static void rgb8_to_hsv(uint8_t r8, uint8_t g8, uint8_t b8, float *h, float *s, float *v)
+{
+    const float r = r8 / 255.0f, g = g8 / 255.0f, b = b8 / 255.0f;
+    const float mx = fmaxf(r, fmaxf(g, b));
+    const float mn = fminf(r, fminf(g, b));
+    const float d = mx - mn;
+    *v = mx;
+    *s = mx > 0.0f ? d / mx : 0.0f;
+    if (d <= 0.0f) {
+        *h = 0.0f;
         return;
     }
-    const uint16_t deg = (uint16_t)((widget->cur_hue * 360u + 127u) / 254u);
-    const uint8_t pct = (uint8_t)((widget->cur_sat * 100u + 127u) / 254u);
-    lv_obj_set_style_bg_color(widget->swatch, lv_color_hsv_to_rgb(deg, pct, 100), 0);
+    float deg;
+    if (mx == r) {
+        deg = 60.0f * fmodf((g - b) / d, 6.0f);
+    } else if (mx == g) {
+        deg = 60.0f * ((b - r) / d + 2.0f);
+    } else {
+        deg = 60.0f * ((r - g) / d + 4.0f);
+    }
+    if (deg < 0.0f) {
+        deg += 360.0f;
+    }
+    *h = deg;
+}
+
+static void hsv_to_rgb8(float h, float s, float v, uint8_t *r8, uint8_t *g8, uint8_t *b8)
+{
+    const float c = v * s;
+    const float hp = fmodf(h, 360.0f) / 60.0f;
+    const float x = c * (1.0f - fabsf(fmodf(hp, 2.0f) - 1.0f));
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    if (hp < 1.0f) {
+        r = c;
+        g = x;
+    } else if (hp < 2.0f) {
+        r = x;
+        g = c;
+    } else if (hp < 3.0f) {
+        g = c;
+        b = x;
+    } else if (hp < 4.0f) {
+        g = x;
+        b = c;
+    } else if (hp < 5.0f) {
+        r = x;
+        b = c;
+    } else {
+        r = c;
+        b = x;
+    }
+    const float m = v - c;
+    *r8 = (uint8_t)((r + m) * 255.0f + 0.5f);
+    *g8 = (uint8_t)((g + m) * 255.0f + 0.5f);
+    *b8 = (uint8_t)((b + m) * 255.0f + 0.5f);
+}
+
+static void rgb8_to_xy(uint8_t r8, uint8_t g8, uint8_t b8, uint16_t *x_out, uint16_t *y_out)
+{
+    const float r = srgb_to_linear(r8 / 255.0f);
+    const float g = srgb_to_linear(g8 / 255.0f);
+    const float b = srgb_to_linear(b8 / 255.0f);
+    const float X = r * 0.4124f + g * 0.3576f + b * 0.1805f;
+    const float Y = r * 0.2126f + g * 0.7152f + b * 0.0722f;
+    const float Z = r * 0.0193f + g * 0.1192f + b * 0.9505f;
+    const float sum = X + Y + Z;
+    const float x = sum > 0.0f ? X / sum : 0.0f;
+    const float y = sum > 0.0f ? Y / sum : 0.0f;
+    *x_out = (uint16_t)(clamp01f(x) * 65535.0f + 0.5f);
+    *y_out = (uint16_t)(clamp01f(y) * 65535.0f + 0.5f);
+}
+
+static void xy_to_rgb8(uint16_t x16, uint16_t y16, uint8_t *r8, uint8_t *g8, uint8_t *b8)
+{
+    const float x = x16 / 65535.0f;
+    const float y = y16 / 65535.0f;
+    if (y <= 0.0001f) {
+        *r8 = *g8 = *b8 = 255;
+        return;
+    }
+    const float X = x / y;
+    const float Z = (1.0f - x - y) / y;
+    float r = X * 3.2406f - 1.5372f - Z * 0.4986f;
+    float g = -X * 0.9689f + 1.8758f + Z * 0.0415f;
+    float b = X * 0.0557f - 0.204f + Z * 1.057f;
+    float m = fmaxf(r, fmaxf(g, b));
+    if (m < 1.0f) {
+        m = 1.0f;
+    }
+    *r8 = (uint8_t)(clamp01f(linear_to_srgb(r / m)) * 255.0f + 0.5f);
+    *g8 = (uint8_t)(clamp01f(linear_to_srgb(g / m)) * 255.0f + 0.5f);
+    *b8 = (uint8_t)(clamp01f(linear_to_srgb(b / m)) * 255.0f + 0.5f);
+}
+
+/* Оттенок (0..359) в насыщенный цвет: обновляем кружок-превью и маркер слайдера. */
+static void on_color_hue(lv_event_t *event)
+{
+    ui_widget_t *widget = lv_event_get_user_data(event);
+    const uint16_t hue = (uint16_t)lv_slider_get_value(widget->hue_slider);
+    uint8_t r, g, b;
+    hsv_to_rgb8((float)(hue % 360u), 1.0f, 1.0f, &r, &g, &b);
+    const lv_color_t color = color_from_rgb(r, g, b);
+
+    char text[16];
+    snprintf(text, sizeof(text), "%u°", (unsigned)hue);
+    lv_label_set_text(widget->hue_label, text);
+    lv_obj_set_style_bg_color(widget->swatch, color, 0);
+    lv_obj_set_style_bg_color(widget->hue_slider, color, LV_PART_KNOB);
+
+    if (lv_event_get_code(event) == LV_EVENT_RELEASED) {
+        uint16_t x, y;
+        rgb8_to_xy(r, g, b, &x, &y);
+        (void)display_send_color_xy(&widget->state, x, y);
+    }
 }
 
 static void on_switch_changed(lv_event_t *event)
@@ -197,21 +320,9 @@ static void on_slider_released(lv_event_t *event)
         (void)display_send_level(&widget->state, (uint8_t)value);
     } else if (widget->kind == UI_WIDGET_COLOR_TEMP) {
         (void)display_send_color_temperature(&widget->state, (uint16_t)value);
+    } else if (widget->kind == UI_WIDGET_COLOR) {
+        (void)display_send_level(&widget->state, (uint8_t)value); /* яркость */
     }
-}
-
-static void on_color_slider(lv_event_t *event)
-{
-    ui_widget_t *widget = lv_event_get_user_data(event);
-    lv_obj_t *target = lv_event_get_target(event);
-    if (target == widget->hue_slider) {
-        widget->cur_hue = (uint8_t)lv_slider_get_value(widget->hue_slider);
-        (void)display_send_hue(&widget->hue_key, widget->cur_hue);
-    } else if (target == widget->sat_slider) {
-        widget->cur_sat = (uint8_t)lv_slider_get_value(widget->sat_slider);
-        (void)display_send_saturation(&widget->sat_key, widget->cur_sat);
-    }
-    update_swatch(widget);
 }
 
 /* Обёртка живёт ровно столько же, сколько её lv_obj: экран удаляется — виджет освобождён. */
@@ -222,11 +333,6 @@ static void on_widget_deleted(lv_event_t *event)
 
 static void build_color_widget(lv_obj_t *parent, ui_widget_t *widget)
 {
-    widget->hue_key = widget->state;
-    widget->hue_key.attr_id = HA_ZB_ATTR_COLOR_CURRENT_HUE;
-    widget->sat_key = widget->state;
-    widget->sat_key.attr_id = HA_ZB_ATTR_COLOR_CURRENT_SATURATION;
-
     lv_obj_t *col = lv_obj_create(parent);
     lv_obj_set_width(col, lv_pct(100));
     lv_obj_set_height(col, LV_SIZE_CONTENT);
@@ -238,23 +344,44 @@ static void build_color_widget(lv_obj_t *parent, ui_widget_t *widget)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    widget->swatch = lv_obj_create(col);
-    lv_obj_set_size(widget->swatch, 200, 90);
-    lv_obj_set_style_radius(widget->swatch, 16, 0);
-    lv_obj_set_style_border_width(widget->swatch, 0, 0);
+    /* Строка: кружок-превью текущего цвета + слайдер оттенка. */
+    lv_obj_t *row = lv_obj_create(col);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, 16, 0);
+    ui_set_scrollable(row, false);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    widget->swatch = lv_obj_create(row);
+    lv_obj_set_size(widget->swatch, 56, 56);
+    lv_obj_set_style_radius(widget->swatch, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(widget->swatch, 2, 0);
+    lv_obj_set_style_border_color(widget->swatch, lv_color_hex(UI_COL_MUTED), 0);
     lv_obj_set_style_bg_opa(widget->swatch, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
     ui_set_scrollable(widget->swatch, false);
 
-    lv_obj_t *hue_row = make_slider_row(col, 0, 254, &widget->hue_slider, &widget->hue_label);
-    lv_obj_t *sat_row = make_slider_row(col, 0, 254, &widget->sat_slider, &widget->sat_label);
-    lv_obj_set_style_pad_column(hue_row, 12, 0);
-    (void)sat_row;
+    widget->hue_slider = ui_slider_create_styled(row, 0, 359);
+    lv_obj_set_flex_grow(widget->hue_slider, 1);
+    lv_obj_add_event_cb(widget->hue_slider, on_color_hue, LV_EVENT_VALUE_CHANGED, widget);
+    lv_obj_add_event_cb(widget->hue_slider, on_color_hue, LV_EVENT_RELEASED, widget);
 
-    lv_obj_add_event_cb(widget->hue_slider, on_color_slider, LV_EVENT_VALUE_CHANGED, widget);
-    lv_obj_add_event_cb(widget->sat_slider, on_color_slider, LV_EVENT_VALUE_CHANGED, widget);
+    widget->hue_label = lv_label_create(row);
+    lv_obj_set_style_text_font(widget->hue_label, UI_FONT_BODY, 0);
+    lv_obj_set_style_text_color(widget->hue_label, lv_color_hex(UI_COL_TEXT), 0);
+    lv_obj_set_width(widget->hue_label, 56);
+    lv_obj_set_style_text_align(widget->hue_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(widget->hue_label, "—");
+
+    /* Яркость (соседний Level Control). */
+    make_slider_row(col, 0, 254, &widget->slider, &widget->value_label);
+    lv_obj_add_event_cb(widget->slider, on_slider_released, LV_EVENT_RELEASED, widget);
 
     widget->obj = col;
-    update_swatch(widget);
 }
 
 ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent,
@@ -323,7 +450,8 @@ static void apply_absent(ui_widget_t *widget)
     case UI_WIDGET_COLOR:
         lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
         lv_label_set_text(widget->hue_label, "—");
-        lv_label_set_text(widget->sat_label, "—");
+        lv_slider_set_value(widget->slider, 0, LV_ANIM_OFF);
+        lv_label_set_text(widget->value_label, "—");
         break;
     case UI_WIDGET_INDICATOR:
         lv_obj_set_style_bg_color(widget->obj, lv_color_hex(UI_COL_CHIP), 0);
@@ -337,31 +465,49 @@ static void apply_absent(ui_widget_t *widget)
 
 static void apply_color(ui_widget_t *widget)
 {
-    ha_zb_state_record_t hue = {0};
-    ha_zb_state_record_t sat = {0};
-    const bool has_hue = sys_ok(domain_entity_get(widget->domain, (domain_entity_t)HA_ENTITY_STATE,
-                                                  &widget->hue_key, &hue));
-    const bool has_sat = sys_ok(domain_entity_get(widget->domain, (domain_entity_t)HA_ENTITY_STATE,
-                                                  &widget->sat_key, &sat));
-    if (!has_hue && !has_sat) {
-        apply_absent(widget);
-        return;
-    }
-    if (has_hue) {
-        widget->cur_hue = (uint8_t)(hue.raw & 0xFFu);
-        lv_slider_set_value(widget->hue_slider, widget->cur_hue, LV_ANIM_OFF);
-        char text[16] = {0};
-        snprintf(text, sizeof(text), "%u°", (unsigned)((widget->cur_hue * 360u + 127u) / 254u));
+    ha_zb_state_key_t xk = widget->state;
+    xk.attr_id = HA_ZB_ATTR_COLOR_CURRENT_X;
+    ha_zb_state_key_t yk = widget->state;
+    yk.attr_id = HA_ZB_ATTR_COLOR_CURRENT_Y;
+    ha_zb_state_key_t lk = widget->state;
+    lk.cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL;
+    lk.attr_id = HA_ZB_ATTR_LEVEL_CURRENT_LEVEL;
+
+    ha_zb_state_record_t xr = {0};
+    ha_zb_state_record_t yr = {0};
+    ha_zb_state_record_t lr = {0};
+    const bool has_x =
+        sys_ok(domain_entity_get(widget->domain, (domain_entity_t)HA_ENTITY_STATE, &xk, &xr));
+    const bool has_y =
+        sys_ok(domain_entity_get(widget->domain, (domain_entity_t)HA_ENTITY_STATE, &yk, &yr));
+    const bool has_l =
+        sys_ok(domain_entity_get(widget->domain, (domain_entity_t)HA_ENTITY_STATE, &lk, &lr));
+
+    if (has_x && has_y) {
+        uint8_t r, g, b;
+        xy_to_rgb8((uint16_t)(xr.raw & 0xFFFFu), (uint16_t)(yr.raw & 0xFFFFu), &r, &g, &b);
+        float h, s, v;
+        rgb8_to_hsv(r, g, b, &h, &s, &v);
+        const lv_color_t color = color_from_rgb(r, g, b);
+        lv_obj_set_style_bg_color(widget->swatch, color, 0);
+        lv_obj_set_style_bg_color(widget->hue_slider, color, LV_PART_KNOB);
+        lv_slider_set_value(widget->hue_slider, (int32_t)h, LV_ANIM_OFF);
+        char text[16];
+        snprintf(text, sizeof(text), "%u°", (unsigned)(int)h);
         lv_label_set_text(widget->hue_label, text);
+    } else {
+        lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
+        lv_label_set_text(widget->hue_label, "—");
     }
-    if (has_sat) {
-        widget->cur_sat = (uint8_t)(sat.raw & 0xFFu);
-        lv_slider_set_value(widget->sat_slider, widget->cur_sat, LV_ANIM_OFF);
-        char text[16] = {0};
-        snprintf(text, sizeof(text), "%u %%", (unsigned)((widget->cur_sat * 100u + 127u) / 254u));
-        lv_label_set_text(widget->sat_label, text);
+
+    if (has_l) {
+        lv_slider_set_value(widget->slider, (int32_t)(lr.raw & 0xFFu), LV_ANIM_OFF);
+        char text[16];
+        snprintf(text, sizeof(text), "%u / 254", (unsigned)(lr.raw & 0xFFu));
+        lv_label_set_text(widget->value_label, text);
+    } else {
+        lv_label_set_text(widget->value_label, "—");
     }
-    update_swatch(widget);
 }
 
 void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bool present)

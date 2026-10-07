@@ -75,6 +75,12 @@ for each item:
 Управление (on/off, уровень, цвет) уходит командой через Domain, как у любого
 потребителя (`../domain/COMMANDS.md`); прямого обращения к Zigbee-сервису нет.
 
+Виджет **цвета** (`UI_WIDGET_COLOR`): слайдер оттенка (0..359) + кружок-превью
+текущего цвета + слайдер яркости. Оттенок конвертируется sRGB→CIE xy (в
+`ui_widgets.c`) и уходит командой **MoveToColor** (`0x07`, `HA_ZB_CMD_COLOR_MOVE_TO_COLOR`),
+яркость — `MoveToLevel` соседнего Level Control. Превью читает из Domain `CurrentX`/
+`CurrentY` и `CurrentLevel` (соседние атрибуты того же устройства/endpoint).
+
 ## 6. Реализация и превью
 
 Компонент `display`: `src/ui_*` зависит только от LVGL, Domain API и форм `ha_model`;

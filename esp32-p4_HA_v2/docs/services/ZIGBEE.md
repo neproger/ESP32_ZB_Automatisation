@@ -180,7 +180,10 @@ Level Control MoveToLevel               args_len = 1, args[0] = уровень 0
 Реализовано в слое, но вне контракта этого документа: комиссионирование координатора
 (создание сети, её открытие на конечное время, steering), интервью устройства
 (ZDO-дискавери `Active_EP`/`Simple_Desc` + чтение Basic), подписка на состояние
-(binding server-кластеров устройства на координатор + Configure Reporting), приём
+(binding server-кластеров устройства на координатор + Configure Reporting; набор
+reportable-атрибутов — `zigbee_binding.c:REPORT_RULES`: OnOff, Level Control, Color
+Control (hue/sat/X/Y/temp), датчики температуры/влажности/освещённости/присутствия,
+батарея), приём
 событий (входящие cluster-specific команды через сырой ZCL-кадр → `EVENT`) и уход
 устройства (`LEAVE_INDICATION` / `DEVICE_UPDATE` → снятие device/endpoints/state).
 Всё это идёт в задаче радио, результат кладётся в очередь сервиса — как и репорт.

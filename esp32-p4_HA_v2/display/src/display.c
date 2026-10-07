@@ -510,6 +510,32 @@ bool display_send_saturation(const ha_zb_state_key_t *key, uint8_t saturation)
                               NULL));
 }
 
+bool display_send_color_xy(const ha_zb_state_key_t *key, uint16_t x, uint16_t y)
+{
+    if (s_domain == NULL || key == NULL) {
+        return false;
+    }
+    ha_zb_command_t command = {0};
+    command.device_uid = key->device_uid;
+    command.dst_endpoint = key->endpoint;
+    command.cluster_id = HA_ZB_CLUSTER_COLOR_CONTROL;
+    command.command_id = HA_ZB_CMD_COLOR_MOVE_TO_COLOR;
+    command.args_len = 6;
+    command.args[0] = (uint8_t)(x & 0xFFu);
+    command.args[1] = (uint8_t)(x >> 8);
+    command.args[2] = (uint8_t)(y & 0xFFu);
+    command.args[3] = (uint8_t)(y >> 8);
+    command.args[4] = 0; /* transition time, LE */
+    command.args[5] = 0;
+
+    const domain_fact_target_t target = {
+        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .key = &command.device_uid,
+    };
+    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
+                              NULL));
+}
+
 bool display_send_color_temperature(const ha_zb_state_key_t *key, uint16_t mireds)
 {
     if (s_domain == NULL || key == NULL) {

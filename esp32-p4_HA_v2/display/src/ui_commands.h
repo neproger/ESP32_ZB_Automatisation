@@ -18,6 +18,7 @@ bool display_send_onoff(const ha_zb_state_key_t *key, bool on);
 bool display_send_level(const ha_zb_state_key_t *key, uint8_t level);
 bool display_send_hue(const ha_zb_state_key_t *key, uint8_t hue);
 bool display_send_saturation(const ha_zb_state_key_t *key, uint8_t saturation);
+bool display_send_color_xy(const ha_zb_state_key_t *key, uint16_t x, uint16_t y);
 bool display_send_color_temperature(const ha_zb_state_key_t *key, uint16_t mireds);
 
 /* Wi-Fi provisioning (docs/services/WEB.md). */

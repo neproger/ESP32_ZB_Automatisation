@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_zigbee.h"
 #include "ezbee/nwk.h"
+#include "ezbee/zcl/cluster/color_control_desc.h"
 #include "ezbee/zcl/cluster/illuminance_measurement_desc.h"
 #include "ezbee/zcl/cluster/level_desc.h"
 #include "ezbee/zcl/cluster/occupancy_sensing_desc.h"
@@ -16,7 +17,9 @@
 /*
  * Что подписываем и как часто (docs/services/ZIGBEE.md §4). Таблица — единственное
  * место, где перечислены reportable-атрибуты: отсюда же берутся client-кластеры
- * координатора, поэтому списки не расходятся.
+ * координатора, поэтому списки не расходятся. На один cluster может быть несколько
+ * строк — у него несколько reportable-атрибутов (цвет: hue/sat/X/Y/temp); bind
+ * делается один раз на кластер, configure_reporting — на каждый атрибут.
  *
  * reportable_change — минимальное изменение значения для аналоговых атрибутов
  * (в единицах ZCL: уровень 0..254, температура 0.01 °C, влажность 0.01 %).
@@ -38,6 +41,12 @@ typedef struct {
 static const report_rule_t REPORT_RULES[] = {
     {HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF, HA_ZB_TYPE_BOOL, 1, 3600, 1},
     {HA_ZB_CLUSTER_LEVEL_CONTROL, HA_ZB_ATTR_LEVEL_CURRENT_LEVEL, HA_ZB_TYPE_UINT8, 1, 3600, 1},
+    /* Color Control держит независимые атрибуты режимов — по строке на атрибут. */
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_HUE, HA_ZB_TYPE_UINT8, 1, 3600, 1},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_SATURATION, HA_ZB_TYPE_UINT8, 1, 3600, 1},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_X, HA_ZB_TYPE_UINT16, 1, 3600, 8},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_Y, HA_ZB_TYPE_UINT16, 1, 3600, 8},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_COLOR_TEMPERATURE, HA_ZB_TYPE_UINT16, 1, 3600, 1},
     {HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT, HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE, HA_ZB_TYPE_INT16,
      10, 3600, 100},
     {HA_ZB_CLUSTER_RELATIVE_HUMIDITY, HA_ZB_ATTR_HUMIDITY_MEASURED_VALUE, HA_ZB_TYPE_UINT16, 10,
@@ -52,16 +61,6 @@ static const report_rule_t REPORT_RULES[] = {
 
 #define REPORT_RULES_COUNT (sizeof(REPORT_RULES) / sizeof(REPORT_RULES[0]))
 
-static const report_rule_t *report_rule_for(uint16_t cluster_id)
-{
-    for (size_t i = 0; i < REPORT_RULES_COUNT; i++) {
-        if (REPORT_RULES[i].cluster_id == cluster_id) {
-            return &REPORT_RULES[i];
-        }
-    }
-    return NULL;
-}
-
 static ezb_zcl_cluster_desc_t create_client_cluster(uint16_t cluster_id)
 {
     switch (cluster_id) {
@@ -69,6 +68,8 @@ static ezb_zcl_cluster_desc_t create_client_cluster(uint16_t cluster_id)
         return ezb_zcl_on_off_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
     case HA_ZB_CLUSTER_LEVEL_CONTROL:
         return ezb_zcl_level_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
+    case HA_ZB_CLUSTER_COLOR_CONTROL:
+        return ezb_zcl_color_control_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
     case HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT:
         return ezb_zcl_temperature_measurement_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
     case HA_ZB_CLUSTER_RELATIVE_HUMIDITY:
@@ -87,6 +88,16 @@ static ezb_zcl_cluster_desc_t create_client_cluster(uint16_t cluster_id)
 void zigbee_binding_add_client_clusters(ezb_af_ep_desc_t coordinator_endpoint)
 {
     for (size_t i = 0; i < REPORT_RULES_COUNT; i++) {
+        bool seen = false; /* один client-кластер на cluster_id, даже если строк несколько */
+        for (size_t j = 0; j < i; j++) {
+            if (REPORT_RULES[j].cluster_id == REPORT_RULES[i].cluster_id) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
         ezb_zcl_cluster_desc_t cluster = create_client_cluster(REPORT_RULES[i].cluster_id);
         if (cluster == NULL) {
             continue;
@@ -212,12 +223,18 @@ void zigbee_binding_apply(ha_device_uid_t uid, uint16_t short_addr,
             if (endpoint->clusters[c].role != HA_ZB_ROLE_SERVER) {
                 continue;
             }
-            const report_rule_t *rule = report_rule_for(endpoint->clusters[c].cluster_id);
-            if (rule == NULL) {
-                continue;
+            const uint16_t cluster_id = endpoint->clusters[c].cluster_id;
+            bool bound = false; /* bind — на кластер; reporting — на каждый атрибут */
+            for (size_t r = 0; r < REPORT_RULES_COUNT; r++) {
+                if (REPORT_RULES[r].cluster_id != cluster_id) {
+                    continue;
+                }
+                if (!bound) {
+                    bind_cluster(&REPORT_RULES[r], uid, short_addr, endpoint->endpoint);
+                    bound = true;
+                }
+                configure_reporting(&REPORT_RULES[r], short_addr, endpoint->endpoint);
             }
-            bind_cluster(rule, uid, short_addr, endpoint->endpoint);
-            configure_reporting(rule, short_addr, endpoint->endpoint);
         }
     }
 }
