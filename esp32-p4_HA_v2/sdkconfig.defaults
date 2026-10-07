@@ -20,9 +20,9 @@ CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
 CONFIG_ZB_ENABLED=y
 
 #
-# ESP-Hosted: Wi-Fi вынесен на отдельный сопроцессор ESP32-C3 (UART). C6 несёт только
-# 802.15.4 (ot_rcp), esp_hosted для Zigbee не нужен. Пресет платы (SDIO) отключён:
-# с ним диапазон UART-пинов жёстко = 14.
+# ESP-Hosted: Wi-Fi вынесен на отдельный сопроцессор ESP32-C3 по ESP-Hosted SPI.
+# C6 несёт только 802.15.4 (ot_rcp), esp_hosted для Zigbee не нужен. Пресет платы
+# (SDIO) отключён: с ним диапазон SPI-пинов залочен под другую разводку.
 #
 CONFIG_ESP_HOSTED=y
 CONFIG_ESP_HOSTED_HOST_FEAT_RPC=y
@@ -37,20 +37,24 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # набор RPC. Без этого хост ждёт C6 (0x0d) и падает на "chip mismatch".
 CONFIG_SLAVE_IDF_TARGET_ESP32C3=y
 
-# C3 по UART2: P4 GPIO32 (TX) -> C3 GPIO4 (RX); P4 GPIO28 (RX) <- C3 GPIO5 (TX).
-# Reset: P4 GPIO34 -> C3 EN (кнопка RST) — хост сбрасывает CP перед ожиданием
-# handshake, иначе CP отдаёт caps раньше, чем хост начал слушать (гонка загрузки).
-# 115200: на 921600 handshake не проходит, на 460800 Wi-Fi нестабилен (проверено).
-CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_UART=y
-CONFIG_ESP_HOSTED_HOST_UART_PORT=2
-CONFIG_ESP_HOSTED_HOST_UART_TX_GPIO=32
-CONFIG_ESP_HOSTED_HOST_UART_RX_GPIO=28
-CONFIG_ESP_HOSTED_HOST_UART_BAUD=115200
+# C3 по SPI (mode 3). Пины P4 (все на гребёнке JP1) -> C3:
+#   CLK32->CLK6  MOSI28->MOSI7  MISO33<-MISO5  CS31->CS10
+#   HANDSHAKE49<-HS4  DATA_READY50<-DR3  EN34->C3 EN (сброс CP перед handshake).
+# Скорость: 40 МГц (потолок для C3-цели). Mode 3 обязателен на обоих концах
+# (CP-дефолт — mode 3). Если на длинных проводах полезут ошибки — снизить до 26.
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SPI=y
+CONFIG_ESP_HOSTED_HOST_SPI_CLK_GPIO=32
+CONFIG_ESP_HOSTED_HOST_SPI_MOSI_GPIO=28
+CONFIG_ESP_HOSTED_HOST_SPI_MISO_GPIO=33
+CONFIG_ESP_HOSTED_HOST_SPI_CS_GPIO=31
+CONFIG_ESP_HOSTED_HOST_HANDSHAKE_GPIO=49
+CONFIG_ESP_HOSTED_HOST_DATA_READY_GPIO=50
 CONFIG_ESP_HOSTED_HOST_RESET_GPIO=34
+CONFIG_ESP_HOSTED_HOST_SPI_CLK_MHZ=40
 
 # PSRAM: кадровый буфер дисплея 480x800x2 = 768 КБ не влезает в internal.
 CONFIG_SPIRAM=y
 
-# UART к C3: software flow control — больше очереди, чтобы гасить всплески (Display/PSRAM).
-CONFIG_ESP_HOSTED_HOST_UART_TX_Q_SIZE=24
-CONFIG_ESP_HOSTED_HOST_UART_RX_Q_SIZE=24
+# SPI к C3: больше очереди, чтобы гасить всплески (Display/PSRAM).
+CONFIG_ESP_HOSTED_HOST_SPI_TX_Q_SIZE=24
+CONFIG_ESP_HOSTED_HOST_SPI_RX_Q_SIZE=24

@@ -16,7 +16,7 @@
 | `automation` | подписка на EVENT (Zigbee + system) и на `ENTITY_UPSERTED`/`STATE`, правила (entity `automation`): триггеры `DEVICE_EVENT`, `TIME` (будильник + дни недели) и `STATE` (порог атрибута + фронт), условия (AND, в т.ч. оператор «содержит биты»), `domain_post` команды | host-тесты (правило/время/STATE) 1/1, сквозной цикл на P4, TIME-правило сохраняется (`kind/min/mask`) |
 | `system` | сервис времени и погоды: SNTP + GeoIP (пояс/город, `ip-api`) + Open-Meteo (`current`, WMO→condition); синтетический девайс «Время», сущности `location` и `weather`; события-тики и `WEATHER_CHANGED` | запуск на P4: `sntp sync: ESP_OK`, tz/город, `weather: cond=2 t=10.5C`, snapshot с девайсом/состояниями/location/weather |
 | `wifi` | сервис Wi-Fi: владелец радио на внешнем C3 (ESP-Hosted); подъём стека, скан, подключение, автоподключение по известным; сущности `wifi_scan/known/status`, команды `HA_CMD_WIFI_SCAN/CONNECT` | host-тест 1/1 (`wifi_select`), IDF-сборка; на железе не проверено (нет P4) |
-| `web` | HTTP+WS (BFF) через внешний C3 (ESP-Hosted UART); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку; радио не владеет | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
+| `web` | HTTP+WS (BFF) через внешний C3 (ESP-Hosted SPI); бинарный протокол v2 (`services/WEB_PROTOCOL.md`): snapshot, дельта через Domain, команды (Zigbee, CRUD автоматизаций, переименование, устройство на удаление, permit-join); UI (`web-ui`) встроен в прошивку; радио не владеет | устройство отдаёт UI по `/`, `GET /`→200, snapshot и WS-команды проверены |
 | `display` | UI на LVGL 9: экран группы (шапка + скролл-список виджетов), строка состояния на `lv_layer_top` (время/город/погода), бургер-меню, экран Wi-Fi (сети + диалог пароля), экран настроек (подсветка, скринсейвер), навигационные точки; кириллические шрифты, иконки погоды; host-превью с фейковым Domain | IDF-сборка `display` без предупреждений; host-превью (LVGL Live Preview) |
 | `display_p4` | порт Display под плату: ST7701 480×800 MIPI-DSI (DSI bus + DBI io + DPI panel, init вручную), GT911 touch (I2C), esp_lvgl_port; `display_start` из `app_main` | запуск на P4: PSRAM найден, GT911 на 0x5D, LVGL task, порт стартовал (визуальная проверка — за пользователем) |
 | `ha_p4` (приложение) | bootstrap: 13 типов сущностей (device/state/endpoint/automation/device_remove/location/group/group_item/weather/wifi_scan/wifi_known/wifi_status/settings), задача диспетчера, журнал в консоль | запуск на P4 rev 1.3 |
@@ -31,7 +31,8 @@
 канал диагностики     → zigbee.diag, отдельно от журнала фактов
 радиоканал            → spinel UART GPIO29/30 460800 → RCP ot_rcp на C6 поднят
 C6 (ot_rcp)           → 802.15.4 (Zigbee); Wi-Fi вынесен на внешний C3
-Wi-Fi (внешний C3)    → ESP-Hosted UART2 GPIO32/28, reset GPIO34, 115200 → got ip + веб-сервер
+Wi-Fi (внешний C3)    → ESP-Hosted SPI GPIO32/28/33/31+HS49/DR50, reset GPIO34, 40 МГц → got ip + веб-сервер
+esp_hosted SPI        → Wi-Fi и HTTP не конфликтуют; события/отклик ~0.5 c (на UART было узкое место)
 комиссионирование     → сеть сформирована, steering выполнен, открыта на 180 с
 интервью              → Active_EP(3) → Simple_Desc(ep 242/2/1) → Basic "ESP32C6-DISPLAY"
                       → ENTITY_UPSERTED device=1 и три endpoint=3
@@ -96,9 +97,10 @@ endpoint'ов и состояния) проверен host-тестом; на ж
   (NO_AP_FOUND) при хорошем RSSI, потом подключается. Похоже на AP (band steering /
   защита) и/или помехи/просадку 5V от подозрительно горячего C6-RCP (греется до 90 °C).
   C6-RCP унесён на отдельное питание; разбирается.
-- **UART P4↔C3 (esp_hosted).** Транспорт — только software flow control, без checksum;
-  вышe 115200 (`460800`/`921600`) — `bring-up timed out`. Смягчено: очереди 24 на обоих
-  концах, LVGL на ядре 1. Диагностика потерь — `[frame] v1 bad offset` в логе P4.
+- ~~**UART P4↔C3 (esp_hosted).**~~ Решено: линк переведён на **SPI full-duplex** (mode 3,
+  40 МГц), пины `32/28/33/31` + HS`49`/DR`50`, reset `34` (`hardware/...` §4.5).
+  115200-UART был узким местом и не держал 460800/921600 — SPI его снял. Очереди SPI
+  24 (хост) / 20 (CP), LVGL на ядре 1.
 - **Concurrency Region Manager.** `bind/release` не синхронизированы между задачами
   (`storage/MSTORE_FLASH_REGIONS.md` §9.6).
 - **Размер раздела.** Ёмкости и расчёт — `storage/MSTORE_FLASH_REGIONS.md` §4 (≈120 КБ из
