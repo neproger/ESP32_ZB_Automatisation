@@ -58,6 +58,9 @@ CONFIG_ESP_HOSTED_HOST_CP_BRINGUP_ON_TIMEOUT_REATTEMPT=y
 # PSRAM: кадровый буфер дисплея 480x800x2 = 768 КБ не влезает в internal.
 CONFIG_SPIRAM=y
 
+# Цветовой виджет: градиент оттенка на слайдере требует 7 стопов (дефолт 2).
+CONFIG_LV_GRADIENT_MAX_STOPS=8
+
 # SPI к C3: больше очереди, чтобы гасить всплески (Display/PSRAM).
 CONFIG_ESP_HOSTED_HOST_SPI_TX_Q_SIZE=24
 CONFIG_ESP_HOSTED_HOST_SPI_RX_Q_SIZE=24

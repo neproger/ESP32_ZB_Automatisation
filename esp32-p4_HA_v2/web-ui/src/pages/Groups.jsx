@@ -48,12 +48,32 @@ function WidgetForm({ s, group, items, item, onClose }) {
 
   const effUid = uid || (devs[0]?.uid ?? '')
   const states = devs.find((g) => g.uid === effUid)?.list || []
-  const effState = stateStr || (states[0] ? stateKeyStr(states[0].key) : '')
+  // Цвет (X/Y/hue/sat) — это один виджет: показываем одной строкой. Ключ берём от CurrentX
+  // (Display для Color-виджета сам читает пару X/Y), иначе — любой Color-атрибут.
+  const colorKey =
+    states.find((st) => st.key.cluster === 0x0300 && st.key.attr === 0x0003) ||
+    states.find((st) => st.key.cluster === 0x0300 && st.key.attr !== 0x0007)
+  const listStates = []
+  let colorAdded = false
+  for (const st of states) {
+    const isColor = st.key.cluster === 0x0300 && st.key.attr !== 0x0007
+    if (isColor) {
+      if (colorAdded) continue
+      colorAdded = true
+      listStates.push({ key: colorKey.key, label: 'Цвет' })
+      continue
+    }
+    listStates.push({
+      key: st.key,
+      label: `${clusterName(st.key.cluster)} ${attrName(st.key.cluster, st.key.attr)} (EP${st.key.ep}) · ${widgetKind(st.key.cluster, st.key.attr)}`,
+    })
+  }
+  const hasStateStr = listStates.some((o) => stateKeyStr(o.key) === stateStr)
+  const effState = hasStateStr ? stateStr : listStates[0] ? stateKeyStr(listStates[0].key) : ''
 
   const pickDevice = (u) => {
     setUid(u)
-    const list = devs.find((g) => g.uid === u)?.list || []
-    setStateStr(list[0] ? stateKeyStr(list[0].key) : '')
+    setStateStr('')
   }
 
   const save = () => {
@@ -81,10 +101,8 @@ function WidgetForm({ s, group, items, item, onClose }) {
       <div className="af-line">Состояние:
         <select value={effState} onChange={(e) => setStateStr(e.target.value)}>
           <option value="">(состояние)</option>
-          {states.map((st) => (
-            <option key={stateKeyStr(st.key)} value={stateKeyStr(st.key)}>
-              {clusterName(st.key.cluster)} {attrName(st.key.cluster, st.key.attr)} (EP{st.key.ep}) · {widgetKind(st.key.cluster, st.key.attr)}
-            </option>
+          {listStates.map((o) => (
+            <option key={stateKeyStr(o.key)} value={stateKeyStr(o.key)}>{o.label}</option>
           ))}
         </select>
       </div>

@@ -18,10 +18,14 @@ struct ui_widget {
     lv_obj_t *slider;      /* LEVEL / COLOR_TEMP */
     lv_obj_t *value_label; /* подпись уровня/значения/индикатора */
 
-    /* Цвет: слайдер оттенка + круг-превью; яркость — общий slider/value_label. */
+    /* Цвет: превью + слайдеры оттенка/насыщенности; яркость — общий slider/value_label. */
     lv_obj_t *swatch;     /* кружок текущего цвета */
-    lv_obj_t *hue_slider; /* оттенок 0..359 */
+    lv_obj_t *hue_slider; /* оттенок 0..359 (радужный градиент) */
     lv_obj_t *hue_label;
+    lv_obj_t *sat_slider; /* насыщенность 0..100 */
+    lv_obj_t *sat_label;
+
+    lv_timer_t *cooldown; /* SWITCH: снять DISABLED после нажатия */
 };
 
 ui_widget_kind_t ui_widget_kind_for(uint16_t cluster_id, uint16_t attr_id)
@@ -283,33 +287,103 @@ static void xy_to_rgb8(uint16_t x16, uint16_t y16, uint8_t *r8, uint8_t *g8, uin
     *b8 = (uint8_t)(clamp01f(linear_to_srgb(b / m)) * 255.0f + 0.5f);
 }
 
-/* Оттенок (0..359) в насыщенный цвет: обновляем кружок-превью и маркер слайдера. */
-static void on_color_hue(lv_event_t *event)
+/* Радужная дорожка слайдера оттенка (7 стопов; CONFIG_LV_GRADIENT_MAX_STOPS>=7). */
+static void apply_hue_slider_style(lv_obj_t *slider)
 {
-    ui_widget_t *widget = lv_event_get_user_data(event);
-    const uint16_t hue = (uint16_t)lv_slider_get_value(widget->hue_slider);
-    uint8_t r, g, b;
-    hsv_to_rgb8((float)(hue % 360u), 1.0f, 1.0f, &r, &g, &b);
-    const lv_color_t color = color_from_rgb(r, g, b);
+    static lv_grad_dsc_t grad;
+    static bool ready = false;
+    if (!ready) {
+        static const uint32_t cols[7] = {0xFF0000u, 0xFFA500u, 0xFFFF00u, 0x008000u,
+                                         0x0000FFu, 0x800080u, 0xFF0000u};
+        static const uint8_t fracs[7] = {0, 42, 85, 128, 170, 213, 255};
+        grad.dir = LV_GRAD_DIR_HOR;
+        grad.extend = LV_GRAD_EXTEND_PAD;
+        grad.stops_count = 7;
+        for (int i = 0; i < 7; i++) {
+            grad.stops[i].color = lv_color_hex(cols[i]);
+            grad.stops[i].opa = LV_OPA_COVER;
+            grad.stops[i].frac = fracs[i];
+        }
+        ready = true;
+    }
+    lv_obj_set_height(slider, 16);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_grad(slider, &grad, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_border_width(slider, 2, LV_PART_KNOB);
+    lv_obj_set_style_border_color(slider, lv_color_hex(UI_COL_TEXT), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(slider, 4, LV_PART_KNOB);
+}
 
+static lv_color_t color_from_hs(uint16_t hue, uint8_t sat)
+{
+    uint8_t r, g, b;
+    hsv_to_rgb8((float)(hue % 360u), (float)sat / 100.0f, 1.0f, &r, &g, &b);
+    return color_from_rgb(r, g, b);
+}
+
+/* Превью и подписи по текущим положениям слайдеров оттенка/насыщенности. */
+static void update_color_preview(ui_widget_t *widget)
+{
+    const uint16_t hue = (uint16_t)lv_slider_get_value(widget->hue_slider);
+    const uint8_t sat = (uint8_t)lv_slider_get_value(widget->sat_slider);
+    lv_obj_set_style_bg_color(widget->swatch, color_from_hs(hue, sat), 0);
+    lv_obj_set_style_bg_color(widget->sat_slider, color_from_hs(hue, sat), LV_PART_KNOB);
     char text[16];
     snprintf(text, sizeof(text), "%u°", (unsigned)hue);
     lv_label_set_text(widget->hue_label, text);
-    lv_obj_set_style_bg_color(widget->swatch, color, 0);
-    lv_obj_set_style_bg_color(widget->hue_slider, color, LV_PART_KNOB);
-
-    if (lv_event_get_code(event) == LV_EVENT_RELEASED) {
-        uint16_t x, y;
-        rgb8_to_xy(r, g, b, &x, &y);
-        (void)display_send_color_xy(&widget->state, x, y);
-    }
+    snprintf(text, sizeof(text), "%u %%", (unsigned)sat);
+    lv_label_set_text(widget->sat_label, text);
 }
 
+static void on_color_changed(lv_event_t *event)
+{
+    ui_widget_t *widget = lv_event_get_user_data(event);
+    update_color_preview(widget);
+    if (lv_event_get_code(event) != LV_EVENT_RELEASED) {
+        return;
+    }
+    const uint16_t hue = (uint16_t)lv_slider_get_value(widget->hue_slider);
+    const uint8_t sat = (uint8_t)lv_slider_get_value(widget->sat_slider);
+    uint8_t r, g, b;
+    hsv_to_rgb8((float)(hue % 360u), (float)sat / 100.0f, 1.0f, &r, &g, &b);
+    uint16_t x, y;
+    rgb8_to_xy(r, g, b, &x, &y);
+    (void)display_send_color_xy(&widget->state, x, y);
+}
+
+#define UI_SWITCH_LOCK_MS 1500
+
+static void switch_lock_cb(lv_timer_t *timer)
+{
+    ui_widget_t *widget = lv_timer_get_user_data(timer);
+    if (widget != NULL && widget->obj != NULL) {
+        lv_obj_remove_state(widget->obj, LV_STATE_DISABLED);
+    }
+    lv_timer_pause(timer);
+}
+
+/*
+ * Нажатие меняет состояние по логике LVGL, команда уходит сразу, а сам свич блокируется
+ * на UI_SWITCH_LOCK_MS, чтобы не нажать второй раз. Реальное состояние приходит только
+ * репортом от Zigbee (ui_widget_apply) — респонзов мы не ждём (fire-and-forget).
+ */
 static void on_switch_changed(lv_event_t *event)
 {
     ui_widget_t *widget = lv_event_get_user_data(event);
     const bool on = lv_obj_has_state(widget->obj, LV_STATE_CHECKED);
     (void)display_send_onoff(&widget->state, on);
+    lv_obj_add_state(widget->obj, LV_STATE_DISABLED);
+    if (widget->cooldown == NULL) {
+        widget->cooldown = lv_timer_create(switch_lock_cb, UI_SWITCH_LOCK_MS, widget);
+    }
+    if (widget->cooldown != NULL) {
+        lv_timer_set_period(widget->cooldown, UI_SWITCH_LOCK_MS);
+        lv_timer_reset(widget->cooldown);
+        lv_timer_resume(widget->cooldown);
+    }
 }
 
 static void on_slider_released(lv_event_t *event)
@@ -328,7 +402,13 @@ static void on_slider_released(lv_event_t *event)
 /* Обёртка живёт ровно столько же, сколько её lv_obj: экран удаляется — виджет освобождён. */
 static void on_widget_deleted(lv_event_t *event)
 {
-    lv_free(lv_event_get_user_data(event));
+    ui_widget_t *widget = lv_event_get_user_data(event);
+    if (widget != NULL) {
+        if (widget->cooldown != NULL) {
+            lv_timer_delete(widget->cooldown);
+        }
+        lv_free(widget);
+    }
 }
 
 static void build_color_widget(lv_obj_t *parent, ui_widget_t *widget)
@@ -344,38 +424,24 @@ static void build_color_widget(lv_obj_t *parent, ui_widget_t *widget)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    /* Строка: кружок-превью текущего цвета + слайдер оттенка. */
-    lv_obj_t *row = lv_obj_create(col);
-    lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_set_style_pad_column(row, 16, 0);
-    ui_set_scrollable(row, false);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    widget->swatch = lv_obj_create(row);
-    lv_obj_set_size(widget->swatch, 56, 56);
-    lv_obj_set_style_radius(widget->swatch, LV_RADIUS_CIRCLE, 0);
+    /* Прямоугольник текущего цвета (X/Y вместе). */
+    widget->swatch = lv_obj_create(col);
+    lv_obj_set_size(widget->swatch, lv_pct(100), 64);
+    lv_obj_set_style_radius(widget->swatch, 12, 0);
     lv_obj_set_style_border_width(widget->swatch, 2, 0);
     lv_obj_set_style_border_color(widget->swatch, lv_color_hex(UI_COL_MUTED), 0);
     lv_obj_set_style_bg_opa(widget->swatch, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
     ui_set_scrollable(widget->swatch, false);
 
-    widget->hue_slider = ui_slider_create_styled(row, 0, 359);
-    lv_obj_set_flex_grow(widget->hue_slider, 1);
-    lv_obj_add_event_cb(widget->hue_slider, on_color_hue, LV_EVENT_VALUE_CHANGED, widget);
-    lv_obj_add_event_cb(widget->hue_slider, on_color_hue, LV_EVENT_RELEASED, widget);
+    make_slider_row(col, 0, 359, &widget->hue_slider, &widget->hue_label);
+    apply_hue_slider_style(widget->hue_slider);
+    lv_obj_add_event_cb(widget->hue_slider, on_color_changed, LV_EVENT_VALUE_CHANGED, widget);
+    lv_obj_add_event_cb(widget->hue_slider, on_color_changed, LV_EVENT_RELEASED, widget);
 
-    widget->hue_label = lv_label_create(row);
-    lv_obj_set_style_text_font(widget->hue_label, UI_FONT_BODY, 0);
-    lv_obj_set_style_text_color(widget->hue_label, lv_color_hex(UI_COL_TEXT), 0);
-    lv_obj_set_width(widget->hue_label, 56);
-    lv_obj_set_style_text_align(widget->hue_label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(widget->hue_label, "—");
+    make_slider_row(col, 0, 100, &widget->sat_slider, &widget->sat_label);
+    lv_obj_add_event_cb(widget->sat_slider, on_color_changed, LV_EVENT_VALUE_CHANGED, widget);
+    lv_obj_add_event_cb(widget->sat_slider, on_color_changed, LV_EVENT_RELEASED, widget);
 
     /* Яркость (соседний Level Control). */
     make_slider_row(col, 0, 254, &widget->slider, &widget->value_label);
@@ -440,7 +506,9 @@ static void apply_absent(ui_widget_t *widget)
 {
     switch (widget->kind) {
     case UI_WIDGET_SWITCH:
-        lv_obj_remove_state(widget->obj, LV_STATE_CHECKED);
+        if (!lv_obj_has_state(widget->obj, LV_STATE_DISABLED)) {
+            lv_obj_remove_state(widget->obj, LV_STATE_CHECKED);
+        }
         break;
     case UI_WIDGET_LEVEL:
     case UI_WIDGET_COLOR_TEMP:
@@ -488,16 +556,21 @@ static void apply_color(ui_widget_t *widget)
         xy_to_rgb8((uint16_t)(xr.raw & 0xFFFFu), (uint16_t)(yr.raw & 0xFFFFu), &r, &g, &b);
         float h, s, v;
         rgb8_to_hsv(r, g, b, &h, &s, &v);
+        const int sat = (int)(s * 100.0f + 0.5f);
         const lv_color_t color = color_from_rgb(r, g, b);
         lv_obj_set_style_bg_color(widget->swatch, color, 0);
-        lv_obj_set_style_bg_color(widget->hue_slider, color, LV_PART_KNOB);
+        lv_obj_set_style_bg_color(widget->sat_slider, color, LV_PART_KNOB);
         lv_slider_set_value(widget->hue_slider, (int32_t)h, LV_ANIM_OFF);
+        lv_slider_set_value(widget->sat_slider, (int32_t)sat, LV_ANIM_OFF);
         char text[16];
         snprintf(text, sizeof(text), "%u°", (unsigned)(int)h);
         lv_label_set_text(widget->hue_label, text);
+        snprintf(text, sizeof(text), "%d %%", sat);
+        lv_label_set_text(widget->sat_label, text);
     } else {
         lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
         lv_label_set_text(widget->hue_label, "—");
+        lv_label_set_text(widget->sat_label, "—");
     }
 
     if (has_l) {
@@ -527,6 +600,10 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
     char text[48] = {0};
     switch (widget->kind) {
     case UI_WIDGET_SWITCH:
+        /* Во время cooldown (после нажатия) не перетираем выбор пользователя. */
+        if (lv_obj_has_state(widget->obj, LV_STATE_DISABLED)) {
+            break;
+        }
         if ((record->raw & 0xFFu) != 0) {
             lv_obj_add_state(widget->obj, LV_STATE_CHECKED);
         } else {
