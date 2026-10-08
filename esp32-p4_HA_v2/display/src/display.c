@@ -144,14 +144,23 @@ static void item_title(size_t index, char *out, size_t out_size)
         snprintf(out, out_size, "%s", record->title);
         return;
     }
-    const uint64_t uid = s_items.keys[index].state.device_uid;
+    const ha_zb_state_key_t *state = &s_items.keys[index].state;
     ha_device_record_t device = {0};
-    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &device)) &&
-        device.name[0] != '\0') {
-        snprintf(out, out_size, "%s", device.name);
-        return;
+    const char *name = NULL;
+    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &state->device_uid,
+                                 &device))) {
+        if (device.name[0] != '\0') {
+            name = device.name; /* имя, заданное пользователем из UI */
+        } else if (device.model[0] != '\0') {
+            name = device.model;
+        }
     }
-    snprintf(out, out_size, "%016llX", (unsigned long long)uid);
+    if (name != NULL) {
+        snprintf(out, out_size, "%s · EP%u", name, (unsigned)state->endpoint);
+    } else {
+        snprintf(out, out_size, "%016llX · EP%u", (unsigned long long)state->device_uid,
+                 (unsigned)state->endpoint);
+    }
 }
 
 /* --- экраны --- */

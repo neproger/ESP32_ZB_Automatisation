@@ -25,7 +25,9 @@ struct ui_widget {
     lv_obj_t *sat_slider; /* насыщенность 0..100 */
     lv_obj_t *sat_label;
 
-    lv_timer_t *cooldown; /* SWITCH: снять DISABLED после нажатия */
+    lv_timer_t *cooldown; /* SWITCH: снять DISABLED после нажатия/таймаута */
+    bool has_last;        /* SWITCH: есть сохранённое значение из репорта */
+    uint32_t last_raw;
 };
 
 ui_widget_kind_t ui_widget_kind_for(uint16_t cluster_id, uint16_t attr_id)
@@ -107,6 +109,8 @@ lv_obj_t *ui_slider_create_styled(lv_obj_t *parent, int min, int max)
     lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
     lv_obj_set_style_border_width(slider, 0, LV_PART_KNOB);
     lv_obj_set_style_pad_all(slider, 6, LV_PART_KNOB);
+    /* Палец не «теряет» слайдер при небольшом уходе в сторону. */
+    lv_obj_add_flag(slider, LV_OBJ_FLAG_PRESS_LOCK);
     return slider;
 }
 
@@ -583,9 +587,26 @@ static void apply_color(ui_widget_t *widget)
     }
 }
 
+/* Управляющий элемент сейчас под пальцем — не перетираем его значение из Domain. */
+static bool widget_control_pressed(const ui_widget_t *widget)
+{
+    const lv_obj_t *objs[4] = {widget->obj, widget->slider, widget->hue_slider, widget->sat_slider};
+    for (size_t i = 0; i < 4; i++) {
+        if (objs[i] != NULL && lv_obj_has_state((lv_obj_t *)objs[i], LV_STATE_PRESSED)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bool present)
 {
     if (widget == NULL || widget->obj == NULL) {
+        return;
+    }
+    /* Пока палец на слайдере/свиче — не применяем состояние из репорта, иначе
+     * значение скачет между пальцем и последним отчётом. */
+    if (widget_control_pressed(widget)) {
         return;
     }
     if (widget->kind == UI_WIDGET_COLOR) {
@@ -599,17 +620,28 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
 
     char text[48] = {0};
     switch (widget->kind) {
-    case UI_WIDGET_SWITCH:
-        /* Во время cooldown (после нажатия) не перетираем выбор пользователя. */
+    case UI_WIDGET_SWITCH: {
+        const bool value = (record->raw & 0xFFu) != 0;
+        const bool fresh = !widget->has_last || (record->raw != widget->last_raw);
         if (lv_obj_has_state(widget->obj, LV_STATE_DISABLED)) {
-            break;
+            if (!fresh) {
+                break; /* блок держим, пока не придёт новый репорт */
+            }
+            /* Пришло реальное состояние — резко снимаем блок и применяем его. */
+            if (widget->cooldown != NULL) {
+                lv_timer_pause(widget->cooldown);
+            }
+            lv_obj_remove_state(widget->obj, LV_STATE_DISABLED);
         }
-        if ((record->raw & 0xFFu) != 0) {
+        if (value) {
             lv_obj_add_state(widget->obj, LV_STATE_CHECKED);
         } else {
             lv_obj_remove_state(widget->obj, LV_STATE_CHECKED);
         }
+        widget->last_raw = record->raw;
+        widget->has_last = true;
         break;
+    }
     case UI_WIDGET_LEVEL:
         lv_slider_set_value(widget->slider, (int32_t)(record->raw & 0xFFu), LV_ANIM_OFF);
         snprintf(text, sizeof(text), "%u / 254", (unsigned)(record->raw & 0xFFu));

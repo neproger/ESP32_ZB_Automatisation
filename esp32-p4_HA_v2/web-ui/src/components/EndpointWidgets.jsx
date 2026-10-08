@@ -65,7 +65,8 @@ function LevelControl({ current, cmd, send }) {
     <div className="wcol">
       <div className="wlabel">Уровень <b>{pct}%</b></div>
       <input type="range" min="0" max="254" value={value}
-        onChange={(e) => { const v = Number(e.target.value); setValue(v); send(cmd.id, [...u8(v), ...u16(0)]) }} />
+        onChange={(e) => setValue(Number(e.target.value))}
+        onPointerUp={(e) => send(cmd.id, [...u8(Number(e.currentTarget.value)), ...u16(0)])} />
     </div>
   )
 }
@@ -77,7 +78,8 @@ function TempControl({ current, cmd, send }) {
     <div className="wcol">
       <div className="muted">Темп. цвета: {kelvin} K</div>
       <input type="range" min="2000" max="6500" step="100" value={kelvin}
-        onChange={(e) => { const k = Number(e.target.value); setKelvin(k); send(cmd.id, [...u16(1_000_000 / k), ...u16(0)]) }} />
+        onChange={(e) => setKelvin(Number(e.target.value))}
+        onPointerUp={(e) => { const k = Number(e.currentTarget.value); send(cmd.id, [...u16(1_000_000 / k), ...u16(0)]) }} />
     </div>
   )
 }

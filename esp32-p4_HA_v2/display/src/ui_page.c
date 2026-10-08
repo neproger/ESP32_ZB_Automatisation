@@ -23,6 +23,17 @@ struct ui_page {
     void *nav_ctx;
 };
 
+/* Жест начался на управляющем элементе (слайдер/свич) — экран не листаем. */
+static bool gesture_started_on_control(void)
+{
+    for (lv_obj_t *obj = lv_indev_get_active_obj(); obj != NULL; obj = lv_obj_get_parent(obj)) {
+        if (lv_obj_check_type(obj, &lv_slider_class) || lv_obj_check_type(obj, &lv_switch_class)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void on_gesture(lv_event_t *event)
 {
     ui_page_t *page = (ui_page_t *)lv_event_get_user_data(event);
@@ -31,9 +42,10 @@ static void on_gesture(lv_event_t *event)
         return;
     }
     /* Навигация между группами: только горизонтальные жесты. Вертикаль отдана
-     * скроллу списка. */
+     * скроллу списка. При drag по слайдеру/свичу не листаем — иначе значение
+     * «переключает экран» на быстром движении. */
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
+    if ((dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) && !gesture_started_on_control()) {
         page->nav(page->nav_ctx, dir);
     }
 }
