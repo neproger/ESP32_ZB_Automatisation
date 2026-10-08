@@ -5,9 +5,25 @@
 
 #include "domain/domain_event.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "ha_model/ha_entities.h"
 
 static const char *TAG = "journal";
+
+/*
+ * Консольный журнал — обычный подписчик со своим inbox и задачей
+ * (docs/domain/DISPATCHER.md §1): try_push только кладёт факт в очередь, печать идёт в
+ * отдельной задаче. Иначе блокирующая запись в UART (115200, ~8 мс/строка) выполнялась
+ * бы в задаче Dispatcher'а под dispatch_lock и задерживала доставку остальным
+ * подписчикам (Web, Automation) — их отставание росло бы с частотой событий.
+ */
+#define JOURNAL_CONSOLE_QUEUE 16
+#define JOURNAL_CONSOLE_STACK 3584
+#define JOURNAL_CONSOLE_PRIORITY 1
+
+static QueueHandle_t s_inbox;
 
 static const char *fact_kind_name(uint8_t kind)
 {
@@ -118,13 +134,44 @@ static bool journal_log(const domain_event_t *event, void *ctx)
     return true;
 }
 
+static bool journal_console_try_push(const domain_event_t *event, void *ctx)
+{
+    (void)ctx;
+    if (s_inbox == NULL) {
+        return false; /* очередь полна/нет — это локальная потеря диагностики */
+    }
+    return xQueueSend(s_inbox, event, 0) == pdTRUE;
+}
+
+static void journal_console_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        domain_event_t event = {0};
+        if (xQueueReceive(s_inbox, &event, portMAX_DELAY) == pdTRUE) {
+            journal_log(&event, NULL);
+        }
+    }
+}
+
 sys_error_t journal_console_subscribe(domain_t *domain)
 {
+    if (s_inbox == NULL) {
+        s_inbox = xQueueCreate(JOURNAL_CONSOLE_QUEUE, sizeof(domain_event_t));
+        if (s_inbox == NULL) {
+            return sys_error_make(SYS_LAYER_DOMAIN, SYS_CODE_NO_MEM);
+        }
+    }
+    if (xTaskCreate(journal_console_task, "journal", JOURNAL_CONSOLE_STACK, NULL,
+                    JOURNAL_CONSOLE_PRIORITY, NULL) != pdPASS) {
+        return sys_error_make(SYS_LAYER_DOMAIN, SYS_CODE_NO_MEM);
+    }
+
     domain_subscription_desc_t desc = {0};
     desc.kind_mask = 0; /* любые факты */
     desc.source_mask = 0;
     desc.entity = 0;
-    desc.try_push = journal_log;
+    desc.try_push = journal_console_try_push;
     desc.wake = NULL;
     desc.ctx = NULL;
 

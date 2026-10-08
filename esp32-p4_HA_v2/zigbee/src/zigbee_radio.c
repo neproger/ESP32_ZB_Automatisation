@@ -165,6 +165,38 @@ typedef struct {
 
 static interview_device_t s_interview[INTERVIEW_DEVICES_MAX];
 
+/*
+ * Устройства, которым в этой загрузке уже настроены binding/reporting. Host применяет
+ * Configure Reporting только при интервью, а после перезагрузки ХОСТА устройство не
+ * объявляется заново — поэтому при первом его репорте перезапускаем интервью, чтобы
+ * новые настройки (напр. min_interval=0) вступили в силу без перезапуска устройства.
+ */
+#define RADIO_CONFIGURED_MAX 16
+static ha_device_uid_t s_configured_uid[RADIO_CONFIGURED_MAX];
+
+static bool configured_seen(ha_device_uid_t uid)
+{
+    for (size_t i = 0; i < RADIO_CONFIGURED_MAX; i++) {
+        if (s_configured_uid[i] == uid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void configured_add(ha_device_uid_t uid)
+{
+    if (configured_seen(uid)) {
+        return;
+    }
+    for (size_t i = 0; i < RADIO_CONFIGURED_MAX; i++) {
+        if (s_configured_uid[i] == 0) {
+            s_configured_uid[i] = uid;
+            return;
+        }
+    }
+}
+
 static interview_device_t *interview_slot(ha_device_uid_t uid, uint16_t short_addr)
 {
     interview_device_t *free_slot = NULL;
@@ -229,6 +261,7 @@ static void interview_finish(interview_device_t *device)
     /* Без binding и reporting устройство не шлёт состояние координатору. */
     zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
                          device->endpoint_count);
+    configured_add(device->uid); /* reporting настроен в этой загрузке */
 
     device->used = false;
 }
@@ -463,6 +496,16 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
         zigbee_report_t zcl_report = {0};
         if (!report_from(report->in.header, report->info.cluster_id, var, &zcl_report)) {
             continue;
+        }
+
+        /* Первый репорт от устройства после старта хоста: заново применить reporting. */
+        if (!configured_seen(zcl_report.device_uid)) {
+            configured_add(zcl_report.device_uid);
+            if (report->in.header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+                ESP_LOGI(TAG, "reconfigure reporting: re-interview uid=%llx",
+                         (unsigned long long)zcl_report.device_uid);
+                interview_begin(zcl_report.device_uid, report->in.header->src_addr.u.short_addr);
+            }
         }
 
         const sys_error_t err = zigbee_submit_report(&zcl_report);

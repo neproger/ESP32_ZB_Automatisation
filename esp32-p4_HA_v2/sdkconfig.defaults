@@ -40,8 +40,8 @@ CONFIG_SLAVE_IDF_TARGET_ESP32C3=y
 # C3 по SPI (mode 3). Пины P4 (все на гребёнке JP1) -> C3:
 #   CLK32->CLK6  MOSI28->MOSI7  MISO33<-MISO5  CS31->CS10
 #   HANDSHAKE49<-HS4  DATA_READY50<-DR3  EN34->C3 EN (сброс CP перед handshake).
-# Скорость: 40 МГц (потолок для C3-цели). Mode 3 обязателен на обоих концах
-# (CP-дефолт — mode 3). Если на длинных проводах полезут ошибки — снизить до 26.
+# Скорость: 40 МГц (потолок C3-цели). Mode 3 обязателен на обоих концах (CP-дефолт).
+# Периодический bring-up timeout был из-за отпаявшегося провода, не из-за частоты.
 CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SPI=y
 CONFIG_ESP_HOSTED_HOST_SPI_CLK_GPIO=32
 CONFIG_ESP_HOSTED_HOST_SPI_MOSI_GPIO=28
@@ -51,6 +51,9 @@ CONFIG_ESP_HOSTED_HOST_HANDSHAKE_GPIO=49
 CONFIG_ESP_HOSTED_HOST_DATA_READY_GPIO=50
 CONFIG_ESP_HOSTED_HOST_RESET_GPIO=34
 CONFIG_ESP_HOSTED_HOST_SPI_CLK_MHZ=40
+# Транзиентный провал bring-up (SPI-линк/гонка загрузки CP) не должен ронять Wi-Fi:
+# при таймауте хост импульсом сбрасывает CP и повторяет bring-up.
+CONFIG_ESP_HOSTED_HOST_CP_BRINGUP_ON_TIMEOUT_REATTEMPT=y
 
 # PSRAM: кадровый буфер дисплея 480x800x2 = 768 КБ не влезает в internal.
 CONFIG_SPIRAM=y
