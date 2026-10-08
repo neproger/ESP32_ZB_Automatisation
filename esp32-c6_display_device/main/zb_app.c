@@ -156,6 +156,44 @@ static void start_temperature_reporting(void)
     ESP_LOGI(TAG, "temperature reporting started (5..60 s)");
 }
 
+/*
+ * Цвет: штатный ZHA-конфиг цветного светильника не делает Color-атрибуты reportable —
+ * координатор получает 0x86 на Configure Reporting. Поэтому включаем отчёты локально;
+ * они уходят на сбинженный координатор (bind на 0x0300 делает хост).
+ */
+static void start_color_reporting(void)
+{
+    static const struct {
+        uint16_t attr;
+        bool is_u16;
+    } attrs[] = {
+        {EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID, true},
+        {EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID, true},
+        {EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_HUE_ID, false},
+        {EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_SATURATION_ID, false},
+        {EZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_MIREDS_ID, true},
+    };
+
+    for (size_t i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
+        ezb_zcl_reporting_info_t info =
+            ezb_zcl_reporting_info_find(HA_LIGHT_EP, EZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                                        EZB_ZCL_CLUSTER_SERVER, attrs[i].attr, EZB_ZCL_STD_MANUF_CODE);
+        if (info == EZB_ZCL_INVALID_REPORTING_INFO) {
+            ESP_LOGW(TAG, "color attr 0x%04x: no reporting info", attrs[i].attr);
+            continue;
+        }
+        ezb_zcl_attr_variable_t delta = {0};
+        if (attrs[i].is_u16) {
+            delta.u16 = 1;
+        } else {
+            delta.u8 = 1;
+        }
+        (void)ezb_zcl_reporting_info_update(info, 0, 3600, &delta);
+        (void)ezb_zcl_reporting_start_attr_report(info);
+        ESP_LOGI(TAG, "color attr 0x%04x: reporting started", attrs[i].attr);
+    }
+}
+
 /* --------------------------- Zigbee callbacks ---------------------------- */
 
 static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
@@ -239,6 +277,13 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
  */
 #define HA_PROFILE_ID 0x0104U
 
+static void set_color_attr(uint16_t attr_id, const void *value)
+{
+    (void)ezb_zcl_set_attr_value(HA_LIGHT_EP, EZB_ZCL_CLUSTER_ID_COLOR_CONTROL,
+                                 EZB_ZCL_CLUSTER_SERVER, attr_id, EZB_ZCL_STD_MANUF_CODE,
+                                 (void *)value, false);
+}
+
 static bool raw_command_handler(const ezb_zcl_raw_frame_t *raw)
 {
     const ezb_zcl_cmd_hdr_t *h = raw != NULL ? raw->header : NULL;
@@ -256,6 +301,9 @@ static bool raw_command_handler(const ezb_zcl_raw_frame_t *raw)
         raw->payload_length >= 2) {
         s_color_temp = (uint16_t)(p[0] | (p[1] << 8));
         s_color_mode = EZB_ZCL_COLOR_CONTROL_COLOR_MODE_COLOR_TEMPERATURE_MIREDS;
+        /* Пишем и ZCL-атрибуты: reporting (X/Y/CT) уходит только на их изменение. */
+        set_color_attr(EZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_MIREDS_ID, &s_color_temp);
+        set_color_attr(EZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &s_color_mode);
         ui_add_log("RX ColorTemp: %u mireds", s_color_temp);
         apply_light();
     } else if (h->cmd_id == EZB_ZCL_CMD_COLOR_CONTROL_MOVE_TO_COLOR_ID &&
@@ -263,6 +311,9 @@ static bool raw_command_handler(const ezb_zcl_raw_frame_t *raw)
         s_color_x = (uint16_t)(p[0] | (p[1] << 8));
         s_color_y = (uint16_t)(p[2] | (p[3] << 8));
         s_color_mode = EZB_ZCL_COLOR_CONTROL_COLOR_MODE_CURRENT_X_AND_CURRENT_Y;
+        set_color_attr(EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID, &s_color_x);
+        set_color_attr(EZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID, &s_color_y);
+        set_color_attr(EZB_ZCL_ATTR_COLOR_CONTROL_COLOR_MODE_ID, &s_color_mode);
         ui_add_log("RX Color x=0x%04X y=0x%04X", s_color_x, s_color_y);
         apply_light();
     }
@@ -320,6 +371,7 @@ static bool app_signal_handler(const ezb_app_signal_t *app_signal)
             ui_set_network_state("NETWORK OK", 0x66bb6a);
             update_net_info();
             start_temperature_reporting();
+            start_color_reporting();
         }
         break;
     }
@@ -332,6 +384,7 @@ static bool app_signal_handler(const ezb_app_signal_t *app_signal)
             ui_set_network_state("JOINED", 0x66bb6a);
             update_net_info();
             start_temperature_reporting();
+            start_color_reporting();
             ui_add_log("Joined 0x%04hx ch%u", ezb_nwk_get_panid(), ezb_nwk_get_current_channel());
         } else {
             ESP_LOGW(TAG, "Steering failed (0x%02x), retry", status);
