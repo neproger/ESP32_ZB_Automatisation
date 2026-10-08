@@ -4,7 +4,7 @@ import { zbCommand } from '../proto.js'
 import { deriveEndpointMeta, hasReport } from '../capabilities.js'
 import { formatAttrValue } from '../zcl.js'
 import { rgbHexToXy, xyToRgbHex } from '../color.js'
-import { CLUSTERS, u8, u16, OPTIONS } from '../commands.js'
+import { CLUSTERS, u8, u16 } from '../commands.js'
 
 function find(states, cluster, attr) {
   return states.find((s) => s.key.cluster === cluster && s.key.attr === attr) || null
@@ -65,7 +65,7 @@ function LevelControl({ current, cmd, send }) {
     <div className="wcol">
       <div className="wlabel">Уровень <b>{pct}%</b></div>
       <input type="range" min="0" max="254" value={value}
-        onChange={(e) => { const v = Number(e.target.value); setValue(v); send(cmd.id, [...u8(v), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+        onChange={(e) => { const v = Number(e.target.value); setValue(v); send(cmd.id, [...u8(v), ...u16(0)]) }} />
     </div>
   )
 }
@@ -77,7 +77,7 @@ function TempControl({ current, cmd, send }) {
     <div className="wcol">
       <div className="muted">Темп. цвета: {kelvin} K</div>
       <input type="range" min="2000" max="6500" step="100" value={kelvin}
-        onChange={(e) => { const k = Number(e.target.value); setKelvin(k); send(cmd.id, [...u16(1_000_000 / k), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+        onChange={(e) => { const k = Number(e.target.value); setKelvin(k); send(cmd.id, [...u16(1_000_000 / k), ...u16(0)]) }} />
     </div>
   )
 }
@@ -89,7 +89,7 @@ function ColorControl({ current, cmd, send }) {
     <div className="wcol">
       <div className="muted">Цвет</div>
       <input type="color" value={color}
-        onChange={(e) => { setColor(e.target.value); const { x, y } = rgbHexToXy(e.target.value); send(cmd.id, [...u16(x), ...u16(y), ...u16(0), ...(cmd.options ? OPTIONS : [])]) }} />
+        onChange={(e) => { setColor(e.target.value); const { x, y } = rgbHexToXy(e.target.value); send(cmd.id, [...u16(x), ...u16(y), ...u16(0)]) }} />
     </div>
   )
 }

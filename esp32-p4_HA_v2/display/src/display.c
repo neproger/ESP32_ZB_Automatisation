@@ -452,8 +452,10 @@ bool display_send_level(const ha_zb_state_key_t *key, uint8_t level)
     command.dst_endpoint = key->endpoint;
     command.cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL;
     command.command_id = HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL;
-    command.args_len = 1;
+    command.args_len = 3; /* Level(u8) + TransitionTime(u16) */
     command.args[0] = level;
+    command.args[1] = 0;
+    command.args[2] = 0;
 
     const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,
