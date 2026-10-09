@@ -467,6 +467,26 @@ static uint16_t web_do_group_item_remove(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* Локация/пояс (ручное место или пояс): запись сущности LOCATION системы. */
+static uint16_t web_do_location_put(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_device_uid_t) + sizeof(ha_location_record_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_device_uid_t uid;
+    ha_location_record_t record;
+    memcpy(&uid, args, sizeof(uid));
+    memcpy(&record, args + sizeof(uid), sizeof(record));
+    record.name[HA_LOCATION_NAME_MAX - 1] = '\0';
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid,
+                                              &record, &meta, &changed);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 static void web_request_snapshot(int fd)
 {
     const web_inbox_item_t item = {.kind = 1, .fd = fd};
@@ -515,6 +535,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_GROUP_ITEM_REMOVE:
         status = web_do_group_item_remove(args, len);
+        break;
+    case WEB_CMD_LOCATION_PUT:
+        status = web_do_location_put(args, len);
         break;
     default:
         break;

@@ -102,14 +102,18 @@ static const domain_entity_desc_t device_remove_desc = {
     .persist_key = "device_remove",
 };
 
-/* Локация системного устройства (текст): пишет system-сервис, читает UI. */
+/*
+ * Локация/пояс системного устройства. FLASH: пользователь может задать место и пояс
+ * вручную (web), они должны пережить перезагрузку; system обновляет запись, только
+ * пока соответствующий флаг = авто (docs/services/SYSTEM.md).
+ */
 static const domain_entity_desc_t location_desc = {
     .type = (domain_entity_t)HA_ENTITY_LOCATION,
     .key_size = sizeof(ha_device_uid_t),
     .payload_size = sizeof(ha_location_record_t),
     .capacity = APP_LOCATION_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM,
-    .persist_key = NULL,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "location",
 };
 
 /*

@@ -22,6 +22,7 @@ export const CMD = {
   GROUP_REMOVE: 10,
   GROUP_ITEM_PUT: 11,
   GROUP_ITEM_REMOVE: 12,
+  LOCATION_PUT: 13,
 }
 
 export const HDR = 8
@@ -151,6 +152,28 @@ export function groupItemRemove(groupId, state) {
   dv.setUint16(18, state.attr, true)
   dv.setUint8(20, state.ep)
   return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
+}
+
+// LOCATION_PUT args = u64 uid | ha_location_record_t (60).
+export function encodeLocationRecord(r) {
+  const out = new Uint8Array(60)
+  const dv = new DataView(out.buffer)
+  dv.setFloat32(0, Number(r.latitude) || 0, true)
+  dv.setFloat32(4, Number(r.longitude) || 0, true)
+  dv.setInt16(8, Math.round(Number(r.tzOffsetMin) || 0), true)
+  let flags = 0
+  if (r.tzAuto) flags |= 1
+  if (r.posAuto) flags |= 2
+  dv.setUint8(10, flags)
+  putText(out, 12, r.name, 48)
+  return out
+}
+
+export function locationPut(uid, r) {
+  const out = new Uint8Array(8 + 60)
+  new DataView(out.buffer).setBigUint64(0, BigInt(uid), true)
+  out.set(encodeLocationRecord(r), 8)
+  return encodeCommand(CMD.LOCATION_PUT, out)
 }
 
 // DEVICE_RENAME args = u64 uid | char name[32].

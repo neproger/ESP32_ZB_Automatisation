@@ -85,13 +85,17 @@ export function decodeRecord(type, dv) {
     }
     case ENTITY.DEVICE_REMOVE:
       return { requested: dv.getUint8(0) }
-    case ENTITY.LOCATION:
+    case ENTITY.LOCATION: {
+      const flags = dv.getUint8(10)
       return {
         latitude: dv.getFloat32(0, true),
         longitude: dv.getFloat32(4, true),
         tzOffsetMin: dv.getInt16(8, true),
+        tzAuto: (flags & 1) !== 0,
+        posAuto: (flags & 2) !== 0,
         name: cstr(dv, 12, 48),
       }
+    }
     case ENTITY.GROUP:
       return { title: cstr(dv, 0, 32) }
     case ENTITY.GROUP_ITEM:

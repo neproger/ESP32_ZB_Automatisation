@@ -54,6 +54,7 @@ typedef enum {
     WEB_CMD_GROUP_REMOVE = 10,
     WEB_CMD_GROUP_ITEM_PUT = 11,
     WEB_CMD_GROUP_ITEM_REMOVE = 12,
+    WEB_CMD_LOCATION_PUT = 13,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

@@ -49,6 +49,8 @@ static double s_lat;
 static double s_lon;
 static bool s_weather_valid;
 static uint8_t s_weather_condition;
+static ha_location_record_t s_last_location;
+static bool s_have_last_location;
 
 /* --- сущности Domain ---------------------------------------------------- */
 
@@ -99,20 +101,33 @@ static void put_state(uint16_t cluster_id, uint16_t attr_id, uint32_t raw, uint8
                             &changed);
 }
 
-static void put_location(const char *name, double lat, double lon, int32_t tz_offset_min)
+static bool get_location(ha_location_record_t *out)
+{
+    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
+    return sys_ok(
+        domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid, out));
+}
+
+static void put_location_record(const ha_location_record_t *rec)
+{
+    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    bool changed = false;
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid, rec, &meta,
+                            &changed);
+}
+
+static void put_location(const char *name, double lat, double lon, int32_t tz_offset_min,
+                         uint8_t flags)
 {
     ha_location_record_t rec = {0};
     rec.latitude = (float)lat;
     rec.longitude = (float)lon;
     rec.tz_offset_min = (int16_t)tz_offset_min;
+    rec.flags = flags;
     strlcpy(rec.name, name ? name : "", sizeof(rec.name));
-
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid, &rec, &meta,
-                            &changed);
+    put_location_record(&rec);
 }
 
 /* Событие системного девайса: факт EVENT, value.enum = event_id (payload не используется). */
@@ -286,6 +301,50 @@ static bool json_number(const char *json, const char *key, double *out)
     return true;
 }
 
+/* percent-кодирование query: город может быть кириллицей. */
+static void url_encode(const char *in, char *out, size_t out_size)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p != '\0' && n + 4 < out_size; p++) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
+            *p == '-' || *p == '_' || *p == '.' || *p == '~') {
+            out[n++] = (char)*p;
+        } else {
+            out[n++] = '%';
+            out[n++] = hex[*p >> 4];
+            out[n++] = hex[*p & 0x0F];
+        }
+    }
+    out[n] = '\0';
+}
+
+/* Город → координаты (Open-Meteo geocoding): ручное место задаётся именем, без lat/lon. */
+static bool geocode_city(const char *city, double *lat, double *lon)
+{
+    static char body[1024];
+    char enc[128] = {0};
+    char url[256];
+    url_encode(city, enc, sizeof(enc));
+    const int n = snprintf(url, sizeof(url),
+                           "http://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&"
+                           "language=en&format=json",
+                           enc);
+    if (n <= 0 || n >= (int)sizeof(url)) {
+        return false;
+    }
+    if (http_get_text(url, body, sizeof(body)) != ESP_OK) {
+        ESP_LOGW(TAG, "geocode http failed");
+        return false;
+    }
+    const char *results = strstr(body, "\"results\":");
+    if (results == NULL) {
+        ESP_LOGW(TAG, "geocode: нет results для \"%s\"", city);
+        return false;
+    }
+    return json_number(results, "latitude", lat) && json_number(results, "longitude", lon);
+}
+
 /* GeoIP: город + координаты + смещение пояса. Один вызов на старте. */
 static bool fetch_location(char *city, size_t city_size, double *lat, double *lon, int32_t *offset_sec)
 {
@@ -325,18 +384,62 @@ static bool fetch_location(char *city, size_t city_size, double *lat, double *lo
 
 static void resolve_location(void)
 {
+    ha_location_record_t loc = {0};
+    const bool have = get_location(&loc);
+    const bool pos_manual =
+        have && (loc.flags & HA_LOCATION_FLAG_POS_AUTO) == 0 && loc.name[0] != '\0';
+    const bool tz_manual = have && (loc.flags & HA_LOCATION_FLAG_TZ_AUTO) == 0;
+
+    /* Ручное место: имя (+ координаты, если есть; иначе геокодируем). */
+    if (pos_manual) {
+        double lat = loc.latitude;
+        double lon = loc.longitude;
+        if (fabs(lat) < 1e-4 && fabs(lon) < 1e-4) {
+            if (geocode_city(loc.name, &lat, &lon)) {
+                loc.latitude = (float)lat;
+                loc.longitude = (float)lon;
+            }
+        }
+        s_lat = lat;
+        s_lon = lon;
+        if (tz_manual) {
+            s_tz_offset_min = loc.tz_offset_min;
+            apply_tz((int32_t)loc.tz_offset_min * 60);
+        } else {
+            char city[64] = {0};
+            double glat = 0.0, glon = 0.0;
+            int32_t off = 0;
+            if (fetch_location(city, sizeof(city), &glat, &glon, &off)) {
+                s_tz_offset_min = off / 60;
+                apply_tz(off);
+            }
+            loc.flags |= HA_LOCATION_FLAG_TZ_AUTO;
+        }
+        put_location_record(&loc);
+        ESP_LOGI(TAG, "location (manual): %s (%.4f, %.4f) tz=%d", loc.name, s_lat, s_lon,
+                 (int)s_tz_offset_min);
+        return;
+    }
+
+    /* Авто-место из GeoIP. */
     char city[64] = {0};
     double lat = 0.0;
     double lon = 0.0;
     int32_t offset_sec = 0;
-
     for (int attempt = 1; attempt <= SYSTEM_GEOIP_ATTEMPTS; attempt++) {
         if (fetch_location(city, sizeof(city), &lat, &lon, &offset_sec)) {
-            apply_tz(offset_sec);
-            s_tz_offset_min = offset_sec / 60;
             s_lat = lat;
             s_lon = lon;
-            put_location(city[0] ? city : "Unknown", lat, lon, s_tz_offset_min);
+            if (tz_manual) {
+                s_tz_offset_min = loc.tz_offset_min;
+                apply_tz((int32_t)s_tz_offset_min * 60);
+            } else {
+                s_tz_offset_min = offset_sec / 60;
+                apply_tz(offset_sec);
+            }
+            const uint8_t flags =
+                HA_LOCATION_FLAG_POS_AUTO | (tz_manual ? 0u : HA_LOCATION_FLAG_TZ_AUTO);
+            put_location(city[0] ? city : "Unknown", lat, lon, s_tz_offset_min, flags);
             ESP_LOGI(TAG, "location: %s (%.4f, %.4f)", city[0] ? city : "?", lat, lon);
             return;
         }
@@ -344,7 +447,7 @@ static void resolve_location(void)
     }
 
     ESP_LOGW(TAG, "geoip unavailable; keeping UTC");
-    put_location("Unknown", 0.0, 0.0, 0);
+    put_location("Unknown", 0.0, 0.0, 0, HA_LOCATION_FLAG_POS_AUTO | HA_LOCATION_FLAG_TZ_AUTO);
 }
 
 /* --- погода (Open-Meteo) ------------------------------------------------ */
@@ -532,6 +635,7 @@ static void system_task(void *arg)
     put_endpoint();
     resolve_location();
     refresh_weather();
+    s_have_last_location = get_location(&s_last_location);
 
     uint32_t minutes_since_weather = 0;
     for (;;) {
@@ -547,11 +651,23 @@ static void system_task(void *arg)
             refresh_weather();
         }
 
-        /* Спим до начала следующей минуты; пересчитываем после погоды (HTTP мог занять время). */
-        const time_t after = time(NULL);
-        struct tm t2 = {0};
-        localtime_r(&after, &t2);
-        vTaskDelay(pdMS_TO_TICKS((uint32_t)((60 - t2.tm_sec) * 1000)));
+        /* Спим до начала следующей минуты, но мелкими шагами: ручная правка места/пояса
+         * (web) применяется за считанные секунды, а не раз в минуту. */
+        uint32_t remain_ms = (uint32_t)((60 - tmv.tm_sec) * 1000);
+        while (remain_ms > 0) {
+            const uint32_t chunk_ms = remain_ms > 5000 ? 5000 : remain_ms;
+            vTaskDelay(pdMS_TO_TICKS(chunk_ms));
+            remain_ms -= chunk_ms;
+
+            ha_location_record_t loc = {0};
+            if (get_location(&loc) &&
+                (!s_have_last_location || memcmp(&loc, &s_last_location, sizeof(loc)) != 0)) {
+                resolve_location();
+                (void)get_location(&s_last_location); /* запоминаем то, что записал system */
+                s_have_last_location = true;
+                refresh_weather();
+            }
+        }
     }
 }
 

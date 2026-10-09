@@ -128,11 +128,19 @@ typedef struct {
 /* Локация (ключ — uid системного устройства): текст города + координаты + tz-offset. */
 #define HA_LOCATION_NAME_MAX 48
 
+/*
+ * Флаги локации: выставленный бит = значение берётся автоматически (GeoIP), снятый —
+ * ручное значение пользователя (тогда system его не перетирает).
+ */
+#define HA_LOCATION_FLAG_TZ_AUTO 0x01u  /* пояс: авто (GeoIP) / вручную tz_offset_min */
+#define HA_LOCATION_FLAG_POS_AUTO 0x02u /* место: авто (GeoIP) / вручную name+lat+lon */
+
 typedef struct {
     float latitude;
     float longitude;
     int16_t tz_offset_min;
-    uint8_t reserved[2];
+    uint8_t flags; /* HA_LOCATION_FLAG_* */
+    uint8_t reserved;
     char name[HA_LOCATION_NAME_MAX];
 } ha_location_record_t;
 
