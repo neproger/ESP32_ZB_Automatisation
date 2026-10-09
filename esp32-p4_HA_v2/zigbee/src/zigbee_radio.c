@@ -64,55 +64,92 @@ static StaticSemaphore_t s_radio_init_done_storage;
 static SemaphoreHandle_t s_radio_init_done;
 static sys_error_t s_radio_init_error;
 
-/*
- * Значение репорта копируется по фактической ширине типа: в записи оно лежит в u32,
- * а знаковые типы должны прийти расширенными по знаку (zigbee_state.c).
- */
-static bool report_value(const ezb_zcl_report_attr_variable_t *var, zigbee_report_t *out)
+static bool device_uid_from(const ezb_address_t *addr, ha_device_uid_t *out);
+
+/* Скаляр ZCL → raw u32 (в записи значение лежит в u32; знаковые — расширены по знаку). */
+static bool zcl_value_to_raw(uint8_t attr_type, const void *value, uint32_t *out_raw)
 {
-    switch (var->attr_type) {
+    if (value == NULL) {
+        return false;
+    }
+    switch (attr_type) {
     case HA_ZB_TYPE_BOOL:
     case HA_ZB_TYPE_BITMAP8:
     case HA_ZB_TYPE_UINT8:
     case HA_ZB_TYPE_ENUM8: {
-        uint8_t value = 0;
-        memcpy(&value, var->attr_value, sizeof(value));
-        out->raw = value;
+        uint8_t v = 0;
+        memcpy(&v, value, sizeof(v));
+        *out_raw = v;
         break;
     }
     case HA_ZB_TYPE_INT8: {
-        int8_t value = 0;
-        memcpy(&value, var->attr_value, sizeof(value));
-        out->raw = (uint32_t)(int32_t)value;
+        int8_t v = 0;
+        memcpy(&v, value, sizeof(v));
+        *out_raw = (uint32_t)(int32_t)v;
         break;
     }
     case HA_ZB_TYPE_UINT16:
     case HA_ZB_TYPE_ENUM16: {
-        uint16_t value = 0;
-        memcpy(&value, var->attr_value, sizeof(value));
-        out->raw = value;
+        uint16_t v = 0;
+        memcpy(&v, value, sizeof(v));
+        *out_raw = v;
         break;
     }
     case HA_ZB_TYPE_INT16: {
-        int16_t value = 0;
-        memcpy(&value, var->attr_value, sizeof(value));
-        out->raw = (uint32_t)(int32_t)value;
+        int16_t v = 0;
+        memcpy(&v, value, sizeof(v));
+        *out_raw = (uint32_t)(int32_t)v;
         break;
     }
     case HA_ZB_TYPE_UINT32:
     case HA_ZB_TYPE_INT32:
     case HA_ZB_TYPE_SINGLE_FLOAT: {
-        uint32_t value = 0;
-        memcpy(&value, var->attr_value, sizeof(value));
-        out->raw = value;
+        uint32_t v = 0;
+        memcpy(&v, value, sizeof(v));
+        *out_raw = v;
         break;
     }
     default:
         return false; /* тип вне словаря скаляров: факта не будет */
     }
+    return true;
+}
 
+static bool report_value(const ezb_zcl_report_attr_variable_t *var, zigbee_report_t *out)
+{
+    if (!zcl_value_to_raw(var->attr_type, var->attr_value, &out->raw)) {
+        return false;
+    }
     out->zcl_type = var->attr_type;
     return true;
+}
+
+/*
+ * Ответ на Read Attributes для состояния (после интервью): превращаем в репорты, чтобы
+ * состояние появилось сразу, не дожидаясь первого change/periodic репорта.
+ */
+static void state_read_on_attr_rsp(const ezb_zcl_cmd_read_attr_rsp_message_t *message)
+{
+    if (message == NULL || message->in.header == NULL ||
+        message->in.header->src_addr.addr_mode != EZB_ADDR_MODE_SHORT) {
+        return;
+    }
+    for (const ezb_zcl_read_attr_rsp_variable_t *var = message->in.variables; var != NULL;
+         var = var->next) {
+        if (var->status != EZB_ZCL_STATUS_SUCCESS || var->attr_value == NULL) {
+            continue;
+        }
+        zigbee_report_t rep = {0};
+        if (!device_uid_from(&message->in.header->src_addr, &rep.device_uid) ||
+            !zcl_value_to_raw(var->attr_type, var->attr_value, &rep.raw)) {
+            continue;
+        }
+        rep.endpoint = message->in.header->src_ep;
+        rep.cluster_id = message->info.cluster_id;
+        rep.attr_id = var->attr_id;
+        rep.zcl_type = var->attr_type;
+        (void)zigbee_submit_report(&rep);
+    }
 }
 
 /* EUI-64 источника кадра: расширенный адрес как есть, короткий — через таблицу стека. */
@@ -238,6 +275,39 @@ static void interview_drop(ha_device_uid_t uid)
     }
 }
 
+/* Прочитать текущие значения reportable-атрибутов (после подписки), чтобы состояние
+ * появилось сразу, а не ждало change/periodic репорта. */
+static void interview_read_states(const interview_device_t *device)
+{
+    for (uint8_t e = 0; e < device->endpoint_count; e++) {
+        const zigbee_interview_endpoint_t *ep = &device->endpoints[e];
+        for (uint8_t c = 0; c < ep->cluster_count; c++) {
+            if (ep->clusters[c].role != HA_ZB_ROLE_SERVER) {
+                continue;
+            }
+            const uint16_t cluster_id = ep->clusters[c].cluster_id;
+            uint16_t attrs[16] = {0};
+            const uint8_t n = zigbee_binding_attrs_for(cluster_id, attrs, 16);
+            if (n == 0) {
+                continue;
+            }
+            const ezb_zcl_read_attr_cmd_t request = {
+                .cmd_ctrl =
+                    {
+                        .dst_addr.addr_mode = EZB_ADDR_MODE_SHORT,
+                        .dst_addr.u.short_addr = device->short_addr,
+                        .dst_ep = ep->endpoint,
+                        .src_ep = COORDINATOR_ENDPOINT,
+                        .cluster_id = cluster_id,
+                    },
+                .payload.attr_number = n,
+                .payload.attr_field = attrs,
+            };
+            (void)ezb_zcl_read_attr_cmd_req(&request);
+        }
+    }
+}
+
 /* Интервью собрано: отдать его задаче сервиса для записи в Domain (ZIGBEE.md §6). */
 static void interview_finish(interview_device_t *device)
 {
@@ -261,7 +331,8 @@ static void interview_finish(interview_device_t *device)
     /* Без binding и reporting устройство не шлёт состояние координатору. */
     zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
                          device->endpoint_count);
-    configured_add(device->uid); /* reporting настроен в этой загрузке */
+    interview_read_states(device); /* сразу читаем текущее состояние атрибутов */
+    configured_add(device->uid);   /* reporting настроен в этой загрузке */
 
     device->used = false;
 }
@@ -469,7 +540,13 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
     }
 
     if (callback_id == EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID) {
-        interview_on_read_attr((const ezb_zcl_cmd_read_attr_rsp_message_t *)message);
+        const ezb_zcl_cmd_read_attr_rsp_message_t *rsp =
+            (const ezb_zcl_cmd_read_attr_rsp_message_t *)message;
+        if (rsp != NULL && rsp->info.cluster_id == EZB_ZCL_CLUSTER_ID_BASIC) {
+            interview_on_read_attr(rsp);
+        } else {
+            state_read_on_attr_rsp(rsp);
+        }
         return;
     }
 
