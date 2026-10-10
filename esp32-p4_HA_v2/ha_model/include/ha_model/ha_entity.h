@@ -10,6 +10,7 @@
  * отдельные шаги; здесь их сознательно нет.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -24,6 +25,36 @@ extern "C" {
 typedef uint64_t ha_entity_id_t;
 
 #define HA_ENTITY_ID_NONE ((ha_entity_id_t)0u)
+
+/*
+ * Владелец identity — namespace/issuer, а не «transport» (id может создавать не только
+ * физический транспорт). Значения стабильные, не переиспользуются.
+ */
+typedef enum {
+    HA_ENTITY_ISSUER_ZIGBEE = 1,
+    HA_ENTITY_ISSUER_SYSTEM = 2,
+    HA_ENTITY_ISSUER_WEATHER = 3,
+    HA_ENTITY_ISSUER_GPIO = 4,
+} ha_entity_issuer_t;
+
+/* Максимальный размер seed для derivation (Zigbee seed — 9 байт). */
+#define HA_ENTITY_ID_DERIVE_SEED_MAX 64u
+
+/*
+ * Детерминированный вывод entity_id (Шаг A, A0.3): SipHash-2-4 с фиксированным
+ * compile-time ключом проекта над каноническим входом
+ *   LE32(issuer) || LE32(seed_len) || seed
+ * Результат 0 (зарезервирован) детерминированно маппится в 1. Без random salt —
+ * иначе теряется стабильность. Не зависит от порядка discovery/reboot.
+ * false-случай: seed_len > HA_ENTITY_ID_DERIVE_SEED_MAX → HA_ENTITY_ID_NONE.
+ */
+ha_entity_id_t ha_entity_id_derive(uint32_t issuer, const void *seed, size_t seed_len);
+
+/*
+ * SipHash-2-4 (reference). Экспортируется как чистый стабильный примитив (используется
+ * derivation; проверяется на официальном тест-векторе). key — 16 байт.
+ */
+uint64_t ha_siphash24(const uint8_t key[16], const void *data, size_t len);
 
 /* Ключ сущности в Entity Store: только логическая identity. */
 typedef struct {

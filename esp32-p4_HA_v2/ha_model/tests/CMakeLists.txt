@@ -8,9 +8,10 @@ enable_testing()
 
 # Пассивный словарь: тестируется только чистый lookup и содержимое дескрипторов.
 set(HA_PROPERTIES_SRC ../src/ha_properties.c)
+set(HA_ENTITY_SRC ../src/ha_entity.c)
 
 function(ha_model_add_test name)
-    add_executable(${name} ${name}.c ${HA_PROPERTIES_SRC})
+    add_executable(${name} ${name}.c ${HA_PROPERTIES_SRC} ${HA_ENTITY_SRC})
     target_include_directories(${name} PRIVATE ../include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)

@@ -173,7 +173,23 @@ ha_entity_id_t ha_entity_id_derive(uint32_t issuer, const void *seed, size_t see
 ```
 
 Форма: `Zigbee physical (uid+endpoint) → seed → entity_id`; `cluster+attr → property_id`;
-canonical: `(entity_id, property_id)`. Алгоритм hash и сам API — **A0.3** (не A0.2).
+canonical: `(entity_id, property_id)`.
+
+**Алгоритм вывода (фиксировано, A0.3):**
+
+```text
+entity_id = SipHash-2-4(fixed_project_key, LE32(issuer) || LE32(seed_len) || seed)
+0 -> 1
+```
+
+- `SipHash-2-4` с **фиксированным compile-time ключом проекта** (не секрет — стабильность
+  между reboot/build). Не CRC64 (checksum, не identity), не packing (транспорт в ID), не
+  runtime-random key (ломает стабильность), не stdlib/SHA (нет stable cross-build contract).
+- issuer IDs — стабильные константы (`HA_ENTITY_ISSUER_*`, не переиспользуются).
+- `0` (зарезервированный `HA_ENTITY_ID_NONE`) детерминированно маппится в `1`; **без**
+  rehash/random salt.
+- API: `ha_entity_id_derive(uint32_t issuer, const void *seed, size_t seed_len)` +
+  `ha_siphash24` (проверяется на официальном тест-векторе).
 
 ## 4. Фазы A (без «большого взрыва»)
 
@@ -184,7 +200,8 @@ A0  logical entity identity + binding model (canonical state пока не ме�
               id+key, минимальный record, host-тест
     [x] A0.2  Zigbee-private binding `zb_entity_binding_t { entity_id, device_uid, endpoint }`
               (без поля transport), двусторонний lookup physical↔entity; host-тест
-    [ ] A0.3  детерминированная derivation entity_id из binding (алгоритм — §5)
+    [x] A0.3  derivation `entity_id`: `ha_entity_id_derive` + `ha_siphash24` (fixed key,
+              LE32(issuer)||LE32(len)||seed, 0→1); golden/вектор-тесты
     [ ] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
     [ ] A0.5  tests: reboot / порядок discovery / re-interview → та же identity
 
@@ -244,11 +261,5 @@ A8  удалить transitional Web/Domain paths
    **Weather** — отдельная entity `ENTITY_WEATHER` с semantic properties. **Location/settings** —
    отдельные config entities (не live property state), в Property-модель не тащить.
 
-Открыто (решить в **A0.3**, аккуратно и один раз):
-
-- **Точный алгоритм derivation `entity_id`** — конкретная функция от binding. Требования:
-  детерминизм, устойчивость к порядку discovery, отсутствие коллизий, стабильность при re-pair
-  (EUI стабилен). Кандидаты: `hash64(transport, uid, endpoint, logical_slot)` с фиксированным
-  seed; либо персистентный id, выданный один раз и хранимый в binding (но тогда он должен
-  переживать erase/reboot — противоречит «восстановим из binding»). Предпочтение — чистая
-  детерминированная derivation без хранения отдельного id.
+Решено (A0.3): алгоритм derivation — `SipHash-2-4(fixed key, LE32(issuer)||LE32(len)||seed)`,
+`0→1` (см. §3.1). Открытых решений по identity не осталось.

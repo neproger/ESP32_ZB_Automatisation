@@ -4,6 +4,7 @@
 idf_component_register(
     SRCS
         "src/ha_properties.c"
+        "src/ha_entity.c"
     INCLUDE_DIRS
         "include"
 )

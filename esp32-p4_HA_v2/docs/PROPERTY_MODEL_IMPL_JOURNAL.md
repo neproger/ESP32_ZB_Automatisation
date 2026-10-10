@@ -302,6 +302,7 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | A0.1 не задаёт вывод `entity_id` | derivation (seed→id) — A0.3; форма модели не должна зависеть от hash |
 | 2026-10-10 | A0.2 binding — Zigbee-private `{ entity_id, device_uid, endpoint }`, без поля `transport` | таблица Zigbee-specific; transport не тащим в binding |
 | 2026-10-10 | seed для A0.3 — канонические байты `[uid LE(8) | endpoint(1)]`, issuer (не transport) | нельзя `hash(&struct)` (padding/endian); cluster/attr в seed не входят (это Property) |
+| 2026-10-10 | Derivation: `SipHash-2-4(fixed project key, LE32(issuer)||LE32(len)||seed)`, `0→1` | стабильный u64 из короткого seed; fixed key → reboot-stable; не CRC/packing/random |
 
 ## 5. От чего отказались
 
@@ -390,6 +391,9 @@ TLV / самоописание приложения              — запре�
             { entity_id, device_uid, endpoint } (без transport), двусторонний lookup
             physical↔entity; host-тест `test_entity_binding` (zigbee 5/5). §3.1 STEP_A_PLAN
             зафиксировал binding/seed. Аддитивно; IDF зелёный
+2026-10-10  шаг A, A0.3: `ha_entity_id_derive` + `ha_siphash24` (fixed key,
+            LE32(issuer)||LE32(len)||seed, 0→1); `ha_entity_issuer_t`. Golden + официальный
+            SipHash-вектор в `test_entity`. §5 закрыт (algorithm fixed). IDF зелёный
 ```
 
 ## 7. Открытые вопросы
