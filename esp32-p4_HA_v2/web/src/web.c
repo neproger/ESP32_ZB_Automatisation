@@ -13,6 +13,7 @@
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_logical_device.h"
 #include "ha_model/ha_rule.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_state.h"
@@ -237,16 +238,31 @@ static void web_broadcast(uint8_t type, uint16_t seq, const void *payload, uint1
 
 /* --- canonical v3 (A6.1): identity = entity_id, без uid/endpoint/cluster/attr ----- */
 
-static bool web3_entity_payload(ha_entity_id_t entity_id, const char *name, uint8_t *out,
-                                uint16_t *out_len)
+static bool web3_entity_payload(ha_entity_id_t entity_id, ha_device_id_t device_id,
+                                const char *name, uint8_t *out, uint16_t *out_len)
 {
     put_u64(out, entity_id);
-    memset(out + 8, 0, HA_ENTITY_NAME_MAX);
+    put_u64(out + 8, device_id);
+    memset(out + 16, 0, HA_ENTITY_NAME_MAX);
     if (name != NULL) {
         const size_t n = strnlen(name, HA_ENTITY_NAME_MAX);
-        memcpy(out + 8, name, n);
+        memcpy(out + 16, name, n);
     }
     *out_len = (uint16_t)WEB_MSG3_ENTITY_SIZE;
+    return true;
+}
+
+/* Logical Device (B5): device_id + parent_device_id + name (для группировки/дерева). */
+static bool web3_device_payload(ha_device_id_t device_id,
+                                const ha_logical_device_record_t *record, uint8_t *out,
+                                uint16_t *out_len)
+{
+    put_u64(out, device_id);
+    put_u64(out + 8, record->parent_device_id);
+    memset(out + 16, 0, HA_LOGICAL_DEVICE_NAME_MAX);
+    const size_t n = strnlen(record->name, HA_LOGICAL_DEVICE_NAME_MAX);
+    memcpy(out + 16, record->name, n);
+    *out_len = (uint16_t)WEB_MSG3_DEVICE_SIZE;
     return true;
 }
 
@@ -434,8 +450,22 @@ static bool snapshot_emit_entity3(const void *key, const void *record, void *ctx
     const ha_entity_record_t *rec = (const ha_entity_record_t *)record;
     uint8_t out[WEB_MSG3_ENTITY_SIZE];
     uint16_t len = 0;
-    if (web3_entity_payload(*(const ha_entity_id_t *)key, rec->name, out, &len)) {
+    if (web3_entity_payload(*(const ha_entity_id_t *)key, rec->device_id, rec->name, out, &len)) {
         web_send_frame(s->fd, WEB_MSG3_ENTITY, 0, out, len);
+    }
+    (*s->count)++;
+    return true;
+}
+
+/* Logical Device (B5): группировка Device → Entity. */
+static bool snapshot_emit_device3(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_MSG3_DEVICE_SIZE];
+    uint16_t len = 0;
+    if (web3_device_payload(*(const ha_device_id_t *)key,
+                            (const ha_logical_device_record_t *)record, out, &len)) {
+        web_send_frame(s->fd, WEB_MSG3_DEVICE, 0, out, len);
     }
     (*s->count)++;
     return true;
@@ -489,6 +519,7 @@ static void web_send_snapshot(int fd)
     }
     /* canonical v3 */
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
@@ -510,6 +541,8 @@ static void web_send_snapshot(int fd)
 
     snapshot_ctx_t v3 = {.fd = fd, .schema = NULL, .count = &sent};
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_emit_entity3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, snapshot_emit_device3,
+                       &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
                        snapshot_emit_property3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES,
@@ -571,12 +604,29 @@ static void web_send_fact(const domain_event_t *event)
         if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
             ha_entity_record_t record = {0};
             if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record)) &&
-                web3_entity_payload(entity_id, record.name, out, &len)) {
+                web3_entity_payload(entity_id, record.device_id, record.name, out, &len)) {
                 web_broadcast(WEB_MSG3_ENTITY, 0, out, len);
             }
         } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
-            (void)web3_entity_payload(entity_id, NULL, out, &len);
+            (void)web3_entity_payload(entity_id, HA_DEVICE_ID_NONE, NULL, out, &len);
             web_broadcast(WEB_MSG3_ENTITY_REMOVE, 0, out, len);
+        }
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_LOGICAL_DEVICE &&
+        event->key_size == sizeof(ha_logical_device_key_t)) {
+        const ha_device_id_t device_id = *(const ha_device_id_t *)event->key;
+        uint8_t out[WEB_MSG3_DEVICE_SIZE];
+        uint16_t len = 0;
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_logical_device_record_t record = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record)) &&
+                web3_device_payload(device_id, &record, out, &len)) {
+                web_broadcast(WEB_MSG3_DEVICE, 0, out, len);
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            put_u64(out, device_id);
+            web_broadcast(WEB_MSG3_DEVICE_REMOVE, 0, out, 8);
         }
         return;
     }

@@ -25,7 +25,8 @@ const semAutomations = new Map()
 const semGroupItems = new Map()
 
 // Canonical v3 (Шаг A, A6.1c): identity = entity_id. Это карты обычного UI.
-const semEntities = new Map()      // entityStr → { id, name }
+const semEntities = new Map()      // entityStr → { id, deviceId, name }
+const semDevices = new Map()       // deviceStr → { id, parentId, name }
 const propStates = new Map()       // `${entity}:${property}` → { entity, property, kind, value }
 const propCapabilities = new Map() // entityStr → [{ property, actions }]
 const dec = new TextDecoder()
@@ -126,6 +127,7 @@ function onFrame(buf) {
     semAutomations.clear()
     semGroupItems.clear()
     semEntities.clear()
+    semDevices.clear()
     propStates.clear()
     propCapabilities.clear()
     return
@@ -181,7 +183,18 @@ function onFrame(buf) {
     if (frame.type === MSG3.ENTITY_REMOVE) {
       semEntities.delete(key)
     } else {
-      semEntities.set(key, { id, name: textAt(payload, 8, 32) })
+      semEntities.set(key, { id, deviceId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
+    }
+    emit()
+    return
+  }
+  if (frame.type === MSG3.DEVICE || frame.type === MSG3.DEVICE_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = id.toString()
+    if (frame.type === MSG3.DEVICE_REMOVE) {
+      semDevices.delete(key)
+    } else {
+      semDevices.set(key, { id, parentId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
     }
     emit()
     return
@@ -348,8 +361,20 @@ export const store = {
   get semEntities() {
     return semEntities
   },
+  get semDevices() {
+    return semDevices
+  },
   entityName(entity) {
     return semEntities.get(entity.toString())?.name ?? ''
+  },
+  deviceName(device) {
+    return semDevices.get(device.toString())?.name ?? ''
+  },
+  // Entity, принадлежащие Device (device_id == device).
+  entitiesOfDevice(device) {
+    const out = []
+    for (const e of semEntities.values()) if (e.deviceId === device) out.push(e)
+    return out
   },
   // Свойства Entity (с известным значением): [{ entity, property, kind, value }].
   entityProperties(entity) {

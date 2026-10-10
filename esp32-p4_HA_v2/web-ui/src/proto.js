@@ -48,6 +48,8 @@ export const MSG3 = {
   AUTOMATION: 0x36,
   AUTOMATION_REMOVE: 0x37,
   EVENT: 0x38,
+  DEVICE: 0x39,
+  DEVICE_REMOVE: 0x3A,
 }
 
 export const HDR = 8

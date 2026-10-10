@@ -647,7 +647,14 @@ TLV / самоописание приложения              — запре�
             Entity с device_id == Logical Device (bind ok=1). device_id сверен с hand-computed
             derivation (MATCH). После reboot device_id тот же (детерминирован), ownership
             восстановлен (device_register идемпотентен); второе устройство (uid=20a716…,
-            1 endpoint) → свой id. Добавлены info-логи zigbee: device:/entity->device.
+            1 endpoint) → свой id.             Добавлены info-логи zigbee: device:/entity->device.
+2026-10-11  Step B, B5 — WS v3 + UI: Device → Entity grouping. Backend: WEB_MSG3_DEVICE/
+            _REMOVE (device_id, parent_device_id, name) из HA_ENTITY_LOGICAL_DEVICE (snapshot+
+            delta); ENTITY v3 DTO расширен device_id (48B). Frontend: store semDevices +
+            semEntities.deviceId; Entities группирует по Device (дерево по parent; «Без
+            устройства» отдельно). Проверено на P4 скриптом: DEVICE(parent=0) и ENTITY с
+            device_id приходят; первый ENTITY-кадр при create (device=NONE), затем на bind
+            (owner) — ожидаемая двухшаговая ensure→bind граница. IDF + web-ui зелёные.
 ```
 
 ## 7. Открытые вопросы

@@ -112,6 +112,13 @@ typedef enum {
      * DTO (14): u64 source_entity @0, u8 event_id @8, u8 value_kind @9, u32 value_bits @10.
      */
     WEB_MSG3_EVENT = 0x38,
+    /*
+     * Logical Device (Шаг B, B5): identity = device_id; дерево по parent_device_id.
+     * DTO (48): u64 device_id @0, u64 parent_device_id @8, char name[32] @16.
+     * REMOVE (8): u64 device_id @0.
+     */
+    WEB_MSG3_DEVICE = 0x39,
+    WEB_MSG3_DEVICE_REMOVE = 0x3A,
 } web_msg3_t;
 
 /*
@@ -127,7 +134,8 @@ typedef enum {
 #define WEB_MSG_DIAG_ZB_STATE 0x42u
 #define WEB_MSG_DIAG_ZB_REMOVE 0x43u
 
-#define WEB_MSG3_ENTITY_SIZE 40u /* u64 entity_id + char name[HA_ENTITY_NAME_MAX=32] */
+#define WEB_MSG3_ENTITY_SIZE 48u /* u64 entity_id + u64 device_id + char name[32] */
+#define WEB_MSG3_DEVICE_SIZE 48u /* u64 device_id + u64 parent_device_id + char name[32] */
 #define WEB_MSG3_PROPERTY_STATE_SIZE 15u
 #define WEB_MSG3_PROPERTY_STATE_REMOVE_SIZE 10u
 
