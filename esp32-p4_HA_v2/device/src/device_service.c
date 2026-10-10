@@ -42,7 +42,17 @@ sys_error_t device_register(domain_t *domain, uint8_t origin, const ha_device_de
     ha_logical_device_record_t existing = {0};
     if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, &key,
                                  &existing))) {
-        *out_device_id = device_id; /* имя/связи — собственность Device, не перетираем */
+        /* Имя — собственность Device: initial name заполняем только если пусто. */
+        if (existing.name[0] == '\0' && desc->name[0] != '\0') {
+            ha_logical_device_record_t rec = existing;
+            copy_field(rec.name, sizeof(rec.name), desc->name);
+            domain_fact_meta_t meta = {0};
+            meta.source = origin;
+            bool changed = false;
+            (void)domain_entity_put(domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, &key, &rec,
+                                    &meta, &changed);
+        }
+        *out_device_id = device_id;
         return SYS_OK;
     }
 
@@ -94,6 +104,28 @@ sys_error_t device_bind_entity(domain_t *domain, uint8_t origin, ha_device_id_t 
     bool changed = false;
     return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record, &meta,
                              &changed);
+}
+
+sys_error_t device_rename(domain_t *domain, uint8_t origin, ha_device_id_t device_id,
+                          const char *name)
+{
+    if (domain == NULL || name == NULL || device_id == HA_DEVICE_ID_NONE) {
+        return device_fail(SYS_CODE_INVALID_ARG);
+    }
+    const ha_logical_device_key_t key = {.id = device_id};
+    ha_logical_device_record_t record = {0};
+    const sys_error_t found = domain_entity_get(domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE,
+                                               &key, &record);
+    if (sys_failed(found)) {
+        return found;
+    }
+    copy_field(record.name, sizeof(record.name), name);
+
+    domain_fact_meta_t meta = {0};
+    meta.source = origin;
+    bool changed = false;
+    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, &key, &record,
+                             &meta, &changed);
 }
 
 typedef struct {

@@ -73,6 +73,8 @@ typedef enum {
      * HA_CMD_PROPERTY (adapter резолвит entity→addr, мост кодирует). Без uid/ep/cluster/attr.
      */
     WEB_CMD_PROPERTY_COMMAND = 19,
+    /* Rename Logical Device (Шаг B, B6): u64 device_id @0, char name[32] @8. */
+    WEB_CMD_DEVICE_RENAME = 20,
 } web_cmd_t;
 
 /*

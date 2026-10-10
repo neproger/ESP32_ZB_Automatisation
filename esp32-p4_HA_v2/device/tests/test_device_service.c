@@ -188,11 +188,57 @@ static void test_remove_unbinds_and_deletes(void)
     CHECK(sys_ok(domain_deinit(&d)));
 }
 
+/* B6: initial name заполняется если пусто; rename меняет только name; повторный register не перетирает. */
+static void test_rename_and_initial_name(void)
+{
+    domain_t d;
+    memset(&d, 0, sizeof(d));
+    ctx_init(&d);
+
+    const ha_device_desc_t unnamed = {.source = HA_SOURCE_ZIGBEE,
+                                      .native_id = ROOT_NATIVE,
+                                      .parent_native_id = "",
+                                      .name = ""};
+    ha_device_id_t id = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &unnamed, &id)));
+
+    /* initial name из adapter заполняет пустое имя */
+    ha_device_desc_t named = unnamed;
+    snprintf(named.name, sizeof(named.name), "%s", "Реле");
+    ha_device_id_t again = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &named, &again)));
+    CHECK(again == id);
+    ha_logical_device_record_t rec = {0};
+    CHECK(get_device(&d, id, &rec) && strcmp(rec.name, "Реле") == 0);
+
+    /* rename меняет только name; source/native/parent не трогает */
+    CHECK(sys_ok(device_rename(&d, DOMAIN_SOURCE_UI, id, "Кухня")));
+    memset(&rec, 0, sizeof(rec));
+    CHECK(get_device(&d, id, &rec));
+    CHECK(strcmp(rec.name, "Кухня") == 0);
+    CHECK(rec.source == HA_SOURCE_ZIGBEE);
+    CHECK(strcmp(rec.native_id, ROOT_NATIVE) == 0);
+    CHECK(rec.parent_device_id == HA_DEVICE_ID_NONE);
+
+    /* повторный register (другое имя) не перетирает пользовательское */
+    ha_device_desc_t other = unnamed;
+    memcpy(other.name, "Zzz", 4);
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &other, &again)));
+    memset(&rec, 0, sizeof(rec));
+    CHECK(get_device(&d, id, &rec) && strcmp(rec.name, "Кухня") == 0);
+
+    /* rename отсутствующего Device → NOT_FOUND */
+    CHECK(sys_is(device_rename(&d, DOMAIN_SOURCE_UI, 0xDEADull, "x"), SYS_CODE_NOT_FOUND));
+
+    CHECK(sys_ok(domain_deinit(&d)));
+}
+
 int main(void)
 {
     test_register_and_idempotent();
     test_parent_and_bind();
     test_remove_unbinds_and_deletes();
+    test_rename_and_initial_name();
 
     if (g_failures == 0) {
         printf("all device-service tests passed\n");

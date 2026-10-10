@@ -12,6 +12,7 @@
 #include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "device/device_service.h"
 #include "ha_model/ha_groups.h"
 #include "ha_model/ha_logical_device.h"
 #include "ha_model/ha_rule.h"
@@ -833,6 +834,23 @@ static uint16_t web_do_property_command(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* Rename Logical Device (B6): u64 device_id + char name[32]; через Device service. */
+static uint16_t web_do_device_rename(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_device_id_t) + HA_LOGICAL_DEVICE_NAME_MAX) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_device_id_t device_id = 0;
+    memcpy(&device_id, args, sizeof(device_id));
+    char name[HA_LOGICAL_DEVICE_NAME_MAX + 1] = {0};
+    memcpy(name, args + sizeof(device_id), HA_LOGICAL_DEVICE_NAME_MAX);
+    name[HA_LOGICAL_DEVICE_NAME_MAX] = '\0';
+
+    const sys_error_t err =
+        device_rename(s_domain, (uint8_t)DOMAIN_SOURCE_UI, device_id, name);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 /* Rename логической Entity по entity_id (A6.1): adapter не участвует. */
 static uint16_t web_do_entity_rename(const uint8_t *args, size_t len)
 {
@@ -1270,6 +1288,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
     switch (cmd) {
     case WEB_CMD_ENTITY_RENAME:
         status = web_do_entity_rename(args, len);
+        break;
+    case WEB_CMD_DEVICE_RENAME:
+        status = web_do_device_rename(args, len);
         break;
     case WEB_CMD_PROPERTY_COMMAND:
         status = web_do_property_command(args, len);

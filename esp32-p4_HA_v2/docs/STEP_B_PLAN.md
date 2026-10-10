@@ -145,7 +145,9 @@ B4'  Zigbee adapter: интервью строит нормализованны�
 B5   WS v3 + UI: Device → Entity grouping (дерево по parent)                              [x]
      (WEB_MSG3_DEVICE(+REMOVE): device_id/parent/name; ENTITY v3 += device_id; UI Entities
      группирует Device → Entity, дерево по parent, «Без устройства» отдельно.)
-B6   rename Logical Device (в Domain; reverse device binding не нужен)
+B6   rename Logical Device (в Domain; reverse device binding не нужен)                     [x]
+     (device_rename меняет только name; initial name из adapter — только если пусто;
+     WEB_CMD_DEVICE_RENAME v3; UI — редактируемое имя Device.)
 B7   removal lifecycle + adapter dispatcher
 B8   старый uid-keyed HA_ENTITY_DEVICE → HA_ENTITY_ZB_DIAG_DEVICE + cleanup
 B9   boundary review + smoke на P4

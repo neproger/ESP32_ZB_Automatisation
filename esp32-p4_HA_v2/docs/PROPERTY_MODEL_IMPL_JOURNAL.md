@@ -655,6 +655,13 @@ TLV / самоописание приложения              — запре�
             устройства» отдельно). Проверено на P4 скриптом: DEVICE(parent=0) и ENTITY с
             device_id приходят; первый ENTITY-кадр при create (device=NONE), затем на bind
             (owner) — ожидаемая двухшаговая ensure→bind граница. IDF + web-ui зелёные.
+2026-10-11  Step B, B6 — rename Logical Device. device_rename(domain, origin, device_id, name)
+            меняет только name (native_id/source/parent и Entity.name не трогает); отсутствующий
+            Device → NOT_FOUND. device_register: initial name из adapter заполняет только пустое
+            имя (существующее пользовательское не перетирается). Web: WEB_CMD_DEVICE_RENAME
+            (u64 device_id + name[32]) → device_rename (UI origin); web REQUIRES device. UI:
+            редактируемое имя Device в группе. Проверено на P4: device 71b213ac527a6357
+            "" → "Кухня" (наблюдалось в snapshot). device 1/1, IDF + web-ui зелёные.
 ```
 
 ## 7. Открытые вопросы

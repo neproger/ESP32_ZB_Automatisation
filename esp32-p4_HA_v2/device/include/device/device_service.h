@@ -43,6 +43,13 @@ sys_error_t device_bind_entity(domain_t *domain, uint8_t origin, ha_device_id_t 
  */
 sys_error_t device_remove(domain_t *domain, uint8_t origin, ha_device_id_t device_id);
 
+/*
+ * Переименовать Logical Device (только name; native_id/source/parent и Entity.name не трогает).
+ * Device должна существовать → иначе NOT_FOUND.
+ */
+sys_error_t device_rename(domain_t *domain, uint8_t origin, ha_device_id_t device_id,
+                          const char *name);
+
 #ifdef __cplusplus
 }
 #endif

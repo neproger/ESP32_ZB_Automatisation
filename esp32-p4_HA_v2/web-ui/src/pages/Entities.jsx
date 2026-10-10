@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { permitJoin } from '../proto.js'
+import { permitJoin, deviceRename } from '../proto.js'
 import EntityCard from '../components/EntityCard.jsx'
 
 const JOIN_SECONDS = 180
@@ -9,14 +9,25 @@ const JOIN_SECONDS = 180
 // Устройства сгруппированы как Logical Device → Entity (дерево по parent). Ordinary UI —
 // на canonical entity_id/device_id; без uid/endpoint.
 
-const deviceLabel = (d) => d.name || 'Device ' + d.id.toString().slice(-8)
-
 function DeviceGroup({ device, devices, s }) {
+  const [name, setName] = useState(device.name || '')
+  useEffect(() => setName(device.name || ''), [device.name])
+
   const children = devices.filter((x) => x.parentId === device.id)
   const entities = store.entitiesOfDevice(device.id)
   return (
     <div className="device-group">
-      <h3 className="device-title">{deviceLabel(device)}</h3>
+      <div className="device-head">
+        <input
+          className="name"
+          value={name}
+          placeholder="(без имени)"
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => store.send(deviceRename(device.id, name))}
+          onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+        />
+        <span className="uid">{device.id.toString().slice(-8)}</span>
+      </div>
       {entities.map((e) => <EntityCard key={e.id.toString()} ent={e} />)}
       {children.map((c) => (
         <DeviceGroup key={c.id.toString()} device={c} devices={devices} s={s} />
