@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { renameDevice, removeDevice, cancelRemoveDevice } from '../proto.js'
-import { uidHex, clusterName, describeProfile, describeDeviceId, hex16 } from '../zcl.js'
+import { uidHex } from '../zcl.js'
 import EndpointWidgets from '../components/EndpointWidgets.jsx'
-import StateAttr from '../components/StateAttr.jsx'
 
 export default function DeviceDetail({ uid }) {
   const s = useStore()
@@ -23,14 +22,13 @@ export default function DeviceDetail({ uid }) {
     )
   }
 
-  const states = [...s.states.values()].filter((st) => st.key.uid === target)
   const endpoints = [...s.endpoints.values()]
     .filter((e) => e.key.uid === target)
     .sort((a, b) => a.key.ep - b.key.ep)
 
   return (
     <section>
-      <p className="pad"><a href="#/devices">← Устройства</a></p>
+      <p className="pad"><a href="#/devices">← Устройства</a> · <a href="#/diagnostics">Диагностика</a></p>
       <div className="card">
         <div className="title">
           <input
@@ -53,38 +51,17 @@ export default function DeviceDetail({ uid }) {
           )}
         </div>
 
-        <h3>Endpoints</h3>
+        <h3>Управление</h3>
         {endpoints.length === 0 ? (
           <p className="muted">топология ещё не собрана</p>
         ) : (
           endpoints.map((e) => (
             <div className="endpoint" key={e.key.ep}>
-              <div className="ep-head">
-                EP{e.key.ep}
-                <span className="uid">
-                  profile {describeProfile(e.record.profile) || hex16(e.record.profile)} · id{' '}
-                  {describeDeviceId(e.record.deviceId) || hex16(e.record.deviceId)}
-                </span>
-              </div>
-              <div className="attrs">
-                {e.record.clusters.map((c) => (
-                  <span className="attr small" key={c.id}>
-                    {clusterName(c.id)}{c.role === 1 ? '' : ' (client)'}
-                  </span>
-                ))}
-              </div>
+              <div className="ep-head"><span className="ep-badge">EP{e.key.ep}</span></div>
               <EndpointWidgets uid={target} ep={e.key.ep} />
             </div>
           ))
         )}
-
-        <h3>Атрибуты (сырые)</h3>
-        <div className="attrs">
-          {states.length === 0 && <span className="muted">атрибутов пока нет</span>}
-          {states.map((st) => (
-            <StateAttr key={`${st.key.cluster}:${st.key.attr}:${st.key.ep}`} uid={target} st={st} />
-          ))}
-        </div>
       </div>
     </section>
   )

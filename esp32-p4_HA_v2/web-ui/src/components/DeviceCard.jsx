@@ -1,9 +1,21 @@
 import { useEffect, useState } from 'react'
 import { store } from '../store.js'
 import { renameDevice, removeDevice, cancelRemoveDevice } from '../proto.js'
-import { uidHex, clusterName } from '../zcl.js'
+import { uidHex } from '../zcl.js'
 import EndpointWidgets from './EndpointWidgets.jsx'
-import StateAttr from './StateAttr.jsx'
+import { propertyName, propertyUnit } from '../semantics.js'
+
+function semStatesOf(uid) {
+  const out = []
+  for (const st of store.semStates.values()) if (st.uid === uid) out.push(st)
+  out.sort((a, b) => a.property - b.property || a.ep - b.ep)
+  return out
+}
+function formatSem(st) {
+  if (st.value == null) return '—'
+  if (typeof st.value === 'boolean') return st.value ? 'да' : 'нет'
+  return `${Number(st.value).toFixed(1)} ${propertyUnit(st.property)}`
+}
 
 export default function DeviceCard({ dev }) {
   const { key, record } = dev
@@ -14,7 +26,7 @@ export default function DeviceCard({ dev }) {
   const endpoints = [...store.endpoints.values()]
     .filter((e) => e.key.uid === key.uid)
     .sort((a, b) => a.key.ep - b.key.ep)
-  const states = [...store.states.values()].filter((s) => s.key.uid === key.uid)
+  const states = semStatesOf(key.uid)
 
   return (
     <div className="card">
@@ -42,27 +54,17 @@ export default function DeviceCard({ dev }) {
 
       {endpoints.map((e) => (
         <div className="endpoint" key={e.key.ep}>
-          <div className="ep-head">
-            <span className="ep-badge">EP{e.key.ep}</span>
-            <span className="clusters">
-              {e.record.clusters.map((c) => (
-                <span className="chip sm" key={c.id}>{clusterName(c.id)}{c.role === 1 ? '' : ' ·client'}</span>
-              ))}
-            </span>
-          </div>
-          <EndpointWidgets
-            uid={key.uid}
-            ep={e.key.ep}
-            record={e.record}
-            states={states.filter((s) => s.key.ep === e.key.ep)}
-          />
+          <div className="ep-head"><span className="ep-badge">EP{e.key.ep}</span></div>
+          <EndpointWidgets uid={key.uid} ep={e.key.ep} />
         </div>
       ))}
 
-      {endpoints.length === 0 && states.length > 0 && (
+      {states.length > 0 && (
         <div className="attrs">
           {states.map((st) => (
-            <StateAttr key={`${st.key.ep}:${st.key.cluster}:${st.key.attr}`} uid={key.uid} st={st} />
+            <span className="attr small" key={`${st.ep}:${st.property}`}>
+              {propertyName(st.property)}: <b>{formatSem(st)}</b>
+            </span>
           ))}
         </div>
       )}

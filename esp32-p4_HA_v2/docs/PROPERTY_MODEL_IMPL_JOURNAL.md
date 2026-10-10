@@ -206,8 +206,10 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       + `WEB_CMD_SEMANTIC_GROUP_ITEM_PUT` (16)/`_REMOVE` (17); persistent `group_item` остаётся
       raw, BFF проецирует raw↔property (UNKNOWN не публикуем); `Groups.jsx` — только
       (uid,ep,property) + `semState`/`propertyName`
-- [ ] **5.5.3** SystemStatus/DeviceCard/StateAttr → semantic states (без raw key/cluster)
-- [ ] **5.5.4** raw Zigbee/state/endpoint → отдельный Diagnostics-экран
+- [x] **5.5.3** SystemStatus/DeviceCard/DeviceDetail → semantic states (`semState`) и vocabulary;
+      обычные страницы не читают raw state map/cluster
+- [x] **5.5.4** raw Zigbee (cluster/attr/zcl_type/raw, endpoint profile) → отдельный
+      `Diagnostics`-экран (читает существующий raw store, без нового backend protocol)
 - [ ] **5.5.5** удалить мёртвое: `zbCommand`, `automationPut`, `encodeAutomationRecord`, raw
       automation decode, `store.automations`, `capabilities.js` (мёртв), `commands.js`
 - [ ] **5.5.6** `zcl.js` → diagnostics-only (или удалить)
@@ -289,6 +291,7 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Capabilities endpoint'а — отдельный аддитивный message (0x17/0x18); без строк/units | UI строит контролы из семантики, не из clusters; имена/units — vocabulary UI |
 | 2026-10-10 | `group_item` хранится raw до A, но consumer-контракт — semantic (facade) | не мигрировать storage зря; consumer уже semantic |
 | 2026-10-10 | Group item с UNKNOWN property не публикуется в semantic stream | UI всё равно нечего с ним делать; raw остаётся в Diagnostics |
+| 2026-10-10 | raw Zigbee — только на Diagnostics-экране (без нового backend protocol) | raw ENTITY уже приходит; это допустимое применение transitional ABI |
 
 ## 5. От чего отказались
 
@@ -356,6 +359,9 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 5.5.2: semantic group item (facade над raw); WEB_MSG_SEMANTIC_GROUP_ITEM/
             _REMOVE + semantic PUT/REMOVE; Groups.jsx — property+semState. На P4 приходят
             semantic items (lamp ep2: POWER/COLOR_X, ep3: TEMP; system: TIME_UTC)
+2026-10-10  фаза 5.5.3–5.5.4: обычные страницы (SystemStatus/DeviceCard/DeviceDetail) только на
+            semStates; raw Zigbee вынесен в Diagnostics-экран. grep обычных страниц: ZCL нет
+            (кроме CSS-класса). IDF + web-ui зелёные, прошито на P4
 ```
 
 ## 7. Открытые вопросы
