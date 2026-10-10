@@ -14,7 +14,6 @@ set(ZIGBEE_CORE
     ../src/zigbee_topology.c
     ../src/zigbee_interview.c
     ../src/zigbee_entity_binding.c
-    ../src/zigbee_device_binding.c
     ../../ha_model/src/ha_entity.c
     ../../ha_model/src/ha_properties.c
     ../../semantics/src/semantics.c)
@@ -80,4 +79,3 @@ zigbee_add_test(test_entity_identity)
 zigbee_add_test(test_property_state)
 zigbee_add_test(test_event_entity)
 zigbee_add_test(test_command_entity)
-zigbee_add_test(test_device_binding)

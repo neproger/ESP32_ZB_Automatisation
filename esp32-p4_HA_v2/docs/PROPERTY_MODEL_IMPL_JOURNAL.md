@@ -604,6 +604,13 @@ TLV / самоописание приложения              — запре�
             места → false; RAM-only. Не смешан с entity binding (entity_id ↔ EUI64+endpoint).
             host test test_device_binding. Нужен для B7 (device_id → EUI64 → unpair). zigbee
             10/10, IDF зелёный. Дальше B4: interview создаёт Logical Device + связывает Entity.
+2026-10-11  Step B — B3 ОТКАЧЕН (решение): отдельный device-binding registry `device_id ↔
+            EUI64` признан лишней инфраструктурой. Forward `device_id = derive(ZIGBEE, EUI64)`
+            вычисляется всегда, reverse нужен лишь для редкого unpair → делается scan'ом
+            известных Zigbee-устройств, а не вторым registry. Entity binding остаётся (горячий
+            путь команды). Удалены zigbee_device_binding.{h,c} + тест; CMake восстановлен;
+            STEP_B_PLAN обновлён (B3 снят, B4/B7 уточнены). Принцип: не строить общий индекс,
+            пока дешёвый scan закрывает редкий сценарий.
 ```
 
 ## 7. Открытые вопросы

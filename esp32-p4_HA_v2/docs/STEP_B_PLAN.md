@@ -107,18 +107,25 @@ ABI. Разовый controlled erase (как A7): Logical Device и `device_id` 
 ## Порядок
 
 ```text
-B0  docs + model contracts (этот документ) + фиксация решений
-B1  ha_device_id_t + модель Logical Device (ha_model, пассивная форма) + тесты
-B2  Entity.device_id + смена ABI (mstore erase), обновить формы/ключи
-B3  Zigbee adapter: derivation device_id + device binding (device_id <=> EUI64) + тесты
-B4  интервью создаёт/обновляет Logical Device и связывает Entity (device_id)
+B0  docs + model contracts (этот документ) + фиксация решений                                   [x]
+B1  ha_device_id_t + модель Logical Device (ha_model, пассивная форма) + тесты                  [x]
+B2  Entity.device_id + ownership (RAM-таблица → без flash-erase) + тесты                        [x]
+B4  интервью: EUI64 → derive device_id → ensure Logical Device → Entity.device_id
 B5  WS v3 + UI: grouping Device -> Entities
-B6  rename: Logical Device rename (уже есть ENTITY_RENAME для Entity; добавить DEVICE_RENAME v3)
-B7  lifecycle: Remove Logical Device -> adapter unpair -> clean Entity + Device
+B6  rename Logical Device в Domain (reverse device binding не нужен)
+B7  lifecycle: Remove Logical Device -> Zigbee scan known devices (derive(uid) == device_id)
+    -> unpair -> iter Entity where device_id matches
 B8  переименовать старый uid-keyed HA_ENTITY_DEVICE -> HA_ENTITY_ZB_DIAG_DEVICE
     (diagnostics-only, по аналогии с ZB_DIAG_STATE) + cleanup комментариев/веба
 B9  review: инварианты, grep (Domain не знает EUI64), тесты, smoke на P4
 ```
+
+B3 (**device-binding registry `device_id ↔ EUI64`**) — **снят с плана как лишняя
+инфраструктура** (решение). Forward `device_id = derive(ZIGBEE, EUI64)` вычисляется всегда;
+reverse (`device_id → EUI64`) нужен только для редкого unpair, и делается scan'ом известных
+Zigbee-устройств (`derive(uid) == device_id`), а не вторым registry. Entity binding
+(`entity_id ↔ EUI64 + endpoint`) остаётся: он на горячем пути каждой команды. Принцип тот же,
+что с Automation/mstore: не строить общий индекс, пока дешёвый scan закрывает редкий случай.
 
 Каждая фаза — чекпоинт (сборка + host-тесты + при необходимости P4 + коммит). Реализацию
 начинать с B1 после подтверждения этого плана.
