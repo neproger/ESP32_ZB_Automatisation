@@ -168,7 +168,7 @@ void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpo
     out[0] = '\0';
     ha_device_record_t device = {0};
     if (domain == NULL ||
-        sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &device)) ||
+        sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &device)) ||
         device.name[0] == '\0') {
         return;
     }

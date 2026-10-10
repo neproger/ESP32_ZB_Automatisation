@@ -39,7 +39,7 @@ static void ctx_init(ctx_t *c)
     domain_init(&c->d, 4, 16, 8, 64);
 
     const domain_entity_desc_t device = {
-        .type = (domain_entity_t)HA_ENTITY_DEVICE,
+        .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
         .key_size = sizeof(ha_device_uid_t),
         .payload_size = sizeof(ha_device_record_t),
         .capacity = 4,

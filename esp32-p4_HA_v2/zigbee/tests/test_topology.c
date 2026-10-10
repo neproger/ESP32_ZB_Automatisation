@@ -68,7 +68,7 @@ static void flash_off(mstore_nor_sim_t *sim)
 static void register_types(domain_t *domain)
 {
     domain_entity_desc_t device = {0};
-    device.type = (domain_entity_t)HA_ENTITY_DEVICE;
+    device.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE;
     device.key_size = sizeof(ha_device_uid_t);
     device.payload_size = sizeof(ha_device_record_t);
     device.capacity = 32;
@@ -128,7 +128,7 @@ static void test_topology_is_written_once(void)
 
     /* Устройство появилось вместе с первым endpoint'ом. */
     ha_device_record_t device_record = {0};
-    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID,
                                    &device_record)));
 
     ha_endpoint_key_t key = {0};
@@ -147,7 +147,7 @@ static void test_topology_is_written_once(void)
     CHECK(sys_ok(zigbee_topology_apply(&domain, &desc, &changed)));
     CHECK(!changed);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 1);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 1);
 
     CHECK(sys_ok(domain_deinit(&domain)));
     flash_off(sim);

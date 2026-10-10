@@ -68,7 +68,7 @@ static void flash_off(mstore_nor_sim_t *sim)
 static void register_types(domain_t *domain)
 {
     domain_entity_desc_t device = {0};
-    device.type = (domain_entity_t)HA_ENTITY_DEVICE;
+    device.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE;
     device.key_size = sizeof(ha_device_uid_t);
     device.payload_size = sizeof(ha_device_record_t);
     device.capacity = 32;
@@ -144,7 +144,7 @@ static void test_interview_writes_device_and_topology(void)
     CHECK(sys_ok(zigbee_interview_apply(&domain, &result)));
 
     ha_device_record_t device_record = {0};
-    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID,
                                    &device_record)));
     CHECK(strcmp(device_record.model, "TS0201") == 0);
 
@@ -198,12 +198,12 @@ static void test_leave_removes_entities(void)
     bool changed = false;
     CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
 
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 1);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 1);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 1);
 
     CHECK(sys_ok(zigbee_device_remove(&domain, UID)));
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 0);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 0);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 0);
 

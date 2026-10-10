@@ -2,12 +2,12 @@
 // Только провод: дискриминаторы, layout key/record, декод и кодирование.
 
 export const ENTITY = {
-  DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5, LOCATION: 6,
+  ZB_DIAG_DEVICE: 1, STATE: 2, ENDPOINT: 3, AUTOMATION: 4, DEVICE_REMOVE: 5, LOCATION: 6,
   GROUP: 7, GROUP_ITEM: 8, WEATHER: 9, WIFI_STATUS: 12, SETTINGS: 13,
 }
 
 export const SCHEMA = {
-  [ENTITY.DEVICE]: { keySize: 8, recSize: 64 },
+  [ENTITY.ZB_DIAG_DEVICE]: { keySize: 8, recSize: 64 },
   [ENTITY.STATE]: { keySize: 16, recSize: 8 },
   [ENTITY.ENDPOINT]: { keySize: 16, recSize: 72 },
   [ENTITY.AUTOMATION]: { keySize: 8, recSize: 144 },
@@ -30,7 +30,7 @@ function cstr(dv, off, len) {
 
 export function decodeKey(type, dv) {
   switch (type) {
-    case ENTITY.DEVICE:
+    case ENTITY.ZB_DIAG_DEVICE:
       return { uid: dv.getBigUint64(0, true) }
     case ENTITY.STATE:
       return {
@@ -70,7 +70,7 @@ export function decodeKey(type, dv) {
 
 export function decodeRecord(type, dv) {
   switch (type) {
-    case ENTITY.DEVICE:
+    case ENTITY.ZB_DIAG_DEVICE:
       return { name: cstr(dv, 0, 32), model: cstr(dv, 32, 32) }
     case ENTITY.STATE:
       return { raw: dv.getUint32(0, true), zclType: dv.getUint8(4) }
@@ -169,7 +169,7 @@ export function decodeRecord(type, dv) {
 
 export function entityId(type, key) {
   switch (type) {
-    case ENTITY.DEVICE:
+    case ENTITY.ZB_DIAG_DEVICE:
       return `dev:${key.uid}`
     case ENTITY.STATE:
       return `st:${key.uid}:${key.ep}:${key.cluster}:${key.attr}`

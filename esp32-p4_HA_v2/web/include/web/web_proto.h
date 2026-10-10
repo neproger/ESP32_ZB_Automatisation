@@ -18,7 +18,7 @@
 #define WEB_PROTO_MAX_FRAME (WEB_PROTO_HDR_SIZE + WEB_PROTO_MAX_PAYLOAD)
 
 /* Совпадает с ha_entity_t (ha_model/ha_entities.h); проверяется static_assert в web.c. */
-#define WEB_ENTITY_DEVICE 1u
+#define WEB_ENTITY_ZB_DIAG_DEVICE 1u
 #define WEB_ENTITY_ZB_DIAG_STATE 2u
 #define WEB_ENTITY_ENDPOINT 3u
 #define WEB_ENTITY_AUTOMATION 4u

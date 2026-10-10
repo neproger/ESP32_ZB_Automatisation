@@ -46,7 +46,7 @@ static const char *TAG = "web";
 /* Максимальный входящий кадр целиком (заголовок + payload), не только команда. */
 #define WEB_CMD_BUF WEB_PROTO_MAX_FRAME
 
-_Static_assert(WEB_ENTITY_DEVICE == (uint32_t)HA_ENTITY_DEVICE, "entity id: device");
+_Static_assert(WEB_ENTITY_ZB_DIAG_DEVICE == (uint32_t)HA_ENTITY_ZB_DIAG_DEVICE, "entity id: device");
 _Static_assert(WEB_ENTITY_ZB_DIAG_STATE == (uint32_t)HA_ENTITY_ZB_DIAG_STATE, "entity id: state");
 _Static_assert(WEB_ENTITY_ENDPOINT == (uint32_t)HA_ENTITY_ENDPOINT, "entity id: endpoint");
 _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
@@ -408,7 +408,7 @@ static bool snapshot_emit_diag(const void *key, const void *record, void *ctx)
     snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
     uint8_t out[WEB_PROTO_MAX_PAYLOAD];
     switch (s->schema->type) {
-    case WEB_ENTITY_DEVICE:
+    case WEB_ENTITY_ZB_DIAG_DEVICE:
         web_send_frame(s->fd, WEB_MSG_DIAG_ZB_DEVICE, 0, out,
                        diag_device_payload((const ha_device_uid_t *)key,
                                            (const ha_device_record_t *)record, out));
@@ -526,7 +526,7 @@ static void web_send_snapshot(int fd)
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_count, &total);
     /* diagnostics raw (A1.5) */
-    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENDPOINT, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, snapshot_count, &total);
 
@@ -554,11 +554,11 @@ static void web_send_snapshot(int fd)
                        &v3);
 
     const web_schema_t diag_schema[3] = {
-        {WEB_ENTITY_DEVICE, 0, 0},
+        {WEB_ENTITY_ZB_DIAG_DEVICE, 0, 0},
         {WEB_ENTITY_ENDPOINT, 0, 0},
         {WEB_ENTITY_ZB_DIAG_STATE, 0, 0},
     };
-    const domain_entity_t diag_types[3] = {HA_ENTITY_DEVICE, HA_ENTITY_ENDPOINT,
+    const domain_entity_t diag_types[3] = {HA_ENTITY_ZB_DIAG_DEVICE, HA_ENTITY_ENDPOINT,
                                            HA_ENTITY_ZB_DIAG_STATE};
     for (size_t i = 0; i < 3; i++) {
         snapshot_ctx_t dc = {.fd = fd, .schema = &diag_schema[i], .count = &sent};
@@ -709,7 +709,7 @@ static void web_send_fact(const domain_event_t *event)
     }
 
     /* diagnostics raw (A1.5): DEVICE/ENDPOINT/STATE идут отдельным каналом. */
-    if (event->entity == (uint32_t)HA_ENTITY_DEVICE &&
+    if (event->entity == (uint32_t)HA_ENTITY_ZB_DIAG_DEVICE &&
         event->key_size == sizeof(ha_device_uid_t)) {
         uint8_t out[WEB_PROTO_MAX_PAYLOAD];
         if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
@@ -1101,7 +1101,7 @@ static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
     memcpy(&uid, args, sizeof(uid));
 
     const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .entity = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
         .key = &uid,
     };
     domain_fact_meta_t meta = {0};

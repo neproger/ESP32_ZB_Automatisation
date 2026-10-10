@@ -77,7 +77,7 @@ sys_error_t zigbee_device_set_model(domain_t *domain, ha_device_uid_t uid, const
     /* Имя задаёт пользователь: читаем существующую запись, чтобы её не затереть. */
     ha_device_record_t record = {0};
     const sys_error_t found =
-        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record);
+        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &record);
     if (sys_failed(found) && !sys_is(found, SYS_CODE_NOT_FOUND)) {
         return found;
     }
@@ -92,7 +92,7 @@ sys_error_t zigbee_device_set_model(domain_t *domain, ha_device_uid_t uid, const
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
 
-    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record, &meta,
+    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &record, &meta,
                              out_changed);
 }
 
@@ -101,7 +101,7 @@ sys_error_t zigbee_device_ensure(domain_t *domain, ha_device_uid_t uid)
 {
     ha_device_record_t existing = {0};
     const sys_error_t found =
-        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &existing);
+        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &existing);
     if (sys_ok(found) || !sys_is(found, SYS_CODE_NOT_FOUND)) {
         return found;
     }
@@ -111,7 +111,7 @@ sys_error_t zigbee_device_ensure(domain_t *domain, ha_device_uid_t uid)
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
 
     bool changed = false;
-    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record, &meta,
+    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &record, &meta,
                              &changed);
 }
 
@@ -182,7 +182,7 @@ sys_error_t zigbee_device_remove(domain_t *domain, ha_device_uid_t uid)
 
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-    err = domain_entity_remove(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &meta);
+    err = domain_entity_remove(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &meta);
     if (sys_failed(err) && !sys_is(err, SYS_CODE_NOT_FOUND)) {
         return err;
     }
@@ -228,7 +228,7 @@ sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, 
     /* Устройства без интервью в Domain нет: репорт от него — не факт (§9.4). */
     ha_device_record_t device = {0};
     const sys_error_t known =
-        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &report->device_uid, &device);
+        domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &report->device_uid, &device);
     if (sys_failed(known)) {
         return known;
     }

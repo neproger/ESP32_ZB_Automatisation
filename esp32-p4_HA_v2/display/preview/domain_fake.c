@@ -202,7 +202,7 @@ sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type, const void
         return sys_error_make(SYS_LAYER_DOMAIN, SYS_CODE_INVALID_ARG);
     }
 
-    if (type == (domain_entity_t)HA_ENTITY_DEVICE) {
+    if (type == (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) {
         const ha_device_uid_t uid = *(const ha_device_uid_t *)key;
         for (size_t i = 0; i < sizeof(s_devices) / sizeof(s_devices[0]); ++i) {
             if (s_devices[i].uid == uid) {

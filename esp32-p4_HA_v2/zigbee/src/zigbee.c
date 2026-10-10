@@ -220,7 +220,7 @@ static void zigbee_event_publish(const zigbee_event_t *event)
 
     ha_device_record_t device = {0};
     const bool has_device = sys_ok(domain_entity_get(
-        s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &event->device_uid, &device));
+        s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &event->device_uid, &device));
     ha_event_t semantic = {0};
     if (!semantics_decode_event(&physical, has_device ? &device : NULL, &semantic)) {
         return;
@@ -356,7 +356,7 @@ static void zigbee_task(void *arg)
                     desc.source = HA_SOURCE_ZIGBEE;
                     (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
                     ha_device_record_t device = {0};
-                    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE,
+                    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
                                                  &result.uid, &device))) {
                         size_t n = strlen(device.name);
                         if (n >= sizeof(desc.name)) {

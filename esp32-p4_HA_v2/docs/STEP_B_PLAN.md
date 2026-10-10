@@ -154,7 +154,9 @@ B7   removal lifecycle + adapter dispatcher                                     
      успех → cascade: Entity/PROPERTY_STATE/CAPABILITIES/GROUP_ITEM delete (automation refs —
      keep); забыть adapter entity bindings; удалить Logical Device. Ошибка remover → cleanup не
      выполняется. Дерево (parent) — каскад детей в будущем.)
-B8   старый uid-keyed HA_ENTITY_DEVICE → HA_ENTITY_ZB_DIAG_DEVICE + cleanup
+B8   старый uid-keyed HA_ENTITY_DEVICE → HA_ENTITY_ZB_DIAG_DEVICE + cleanup                      [x]
+     (rename enum/WEB-тег/JS ENTITY key; raw Zigbee device — только diag-канал; ordinary UI не
+     подписан; Logical Device lifecycle не менялся.)
 B9   boundary review + smoke на P4
 ```
 

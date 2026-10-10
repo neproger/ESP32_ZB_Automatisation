@@ -67,7 +67,7 @@ static domain_t s_domain;
 
 /* Устройство переживает перезагрузку: имя задаёт пользователь, модель — Basic-кластер. */
 static const domain_entity_desc_t device_desc = {
-    .type = (domain_entity_t)HA_ENTITY_DEVICE,
+    .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
     .key_size = sizeof(ha_device_uid_t),
     .payload_size = sizeof(ha_device_record_t),
     .capacity = APP_DEVICE_CAPACITY,

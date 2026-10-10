@@ -83,7 +83,7 @@ static void flash_off(mstore_nor_sim_t *sim)
 static void register_types(domain_t *domain)
 {
     domain_entity_desc_t device = {0};
-    device.type = (domain_entity_t)HA_ENTITY_DEVICE;
+    device.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE;
     device.key_size = sizeof(ha_device_uid_t);
     device.payload_size = sizeof(ha_device_record_t);
     device.capacity = 32;
@@ -173,7 +173,7 @@ static void test_report_without_interview_is_dropped(void)
     bool changed = false;
     CHECK(sys_is(zigbee_state_apply(&domain, &report, &changed), SYS_CODE_NOT_FOUND));
     CHECK(!changed);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 0);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 0);
 
     CHECK(sys_ok(domain_deinit(&domain)));
@@ -201,7 +201,7 @@ static void test_interviewed_device_gets_state(void)
     CHECK(changed);
 
     ha_device_record_t device_record = {0};
-    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID,
                                    &device_record)));
     CHECK(strcmp(device_record.model, "TS0001") == 0);
 
@@ -216,16 +216,16 @@ static void test_interviewed_device_gets_state(void)
     /* Повтор того же значения — не изменение: запись и устройство не множатся. */
     CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
     CHECK(!changed);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 1);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 1);
 
     /* Повторное интервью обновляет модель, не множа запись. */
     CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0002", &changed)));
     CHECK(changed);
-    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID,
                                    &device_record)));
     CHECK(strcmp(device_record.model, "TS0002") == 0);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 1);
 
     CHECK(sys_ok(domain_deinit(&domain)));
     flash_off(sim);
@@ -259,7 +259,7 @@ static void test_attributes_are_independent(void)
     CHECK(changed);
 
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 3);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE) == 1);
 
     /* Другой атрибут меняется независимо: число записей не растёт. */
     const zigbee_report_t level_again = report_of(HA_ZB_CLUSTER_LEVEL_CONTROL,
@@ -296,7 +296,7 @@ static void test_device_persists_but_state_does_not(void)
     register_types(&reopened);
 
     ha_device_record_t device_record = {0};
-    CHECK(sys_ok(domain_entity_get(&reopened, (domain_entity_t)HA_ENTITY_DEVICE, &UID,
+    CHECK(sys_ok(domain_entity_get(&reopened, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID,
                                    &device_record)));
 
     /* Состояние — RAM: после перезагрузки его приносят репорты, а не хранилище. */

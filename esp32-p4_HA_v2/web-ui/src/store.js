@@ -6,7 +6,7 @@ import { VALUE_KIND } from './semantics.js'
 // useSyncExternalStore(store.subscribe, store.getVersion).
 
 const maps = {
-  [ENTITY.DEVICE]: new Map(),
+  [ENTITY.ZB_DIAG_DEVICE]: new Map(),
   [ENTITY.STATE]: new Map(),
   [ENTITY.ENDPOINT]: new Map(),
   [ENTITY.AUTOMATION]: new Map(),
@@ -243,7 +243,7 @@ function onFrame(buf) {
   }
   // Diagnostics raw Zigbee (A1.5): отдельный канал, наполняет raw-карты для Diagnostics.
   if (frame.type === DIAG.ZB_DEVICE || frame.type === DIAG.ZB_ENDPOINT || frame.type === DIAG.ZB_STATE) {
-    const type = frame.type === DIAG.ZB_DEVICE ? ENTITY.DEVICE
+    const type = frame.type === DIAG.ZB_DEVICE ? ENTITY.ZB_DIAG_DEVICE
       : frame.type === DIAG.ZB_ENDPOINT ? ENTITY.ENDPOINT : ENTITY.STATE
     const schema = SCHEMA[type]
     const keyDv = new DataView(payload.buffer, payload.byteOffset, schema.keySize)
@@ -258,7 +258,7 @@ function onFrame(buf) {
   }
   if (frame.type === DIAG.ZB_REMOVE) {
     const kind = payload.getUint8(0)
-    const type = kind === 1 ? ENTITY.DEVICE : kind === 2 ? ENTITY.STATE : ENTITY.ENDPOINT
+    const type = kind === 1 ? ENTITY.ZB_DIAG_DEVICE : kind === 2 ? ENTITY.STATE : ENTITY.ENDPOINT
     const schema = SCHEMA[type]
     const keyDv = new DataView(payload.buffer, payload.byteOffset + 1, schema.keySize)
     const key = decodeKey(type, keyDv)
@@ -318,7 +318,7 @@ export const store = {
     return status
   },
   get devices() {
-    return maps[ENTITY.DEVICE]
+    return maps[ENTITY.ZB_DIAG_DEVICE]
   },
   get states() {
     return maps[ENTITY.STATE]

@@ -31,7 +31,9 @@ extern "C" {
  * наружу тип передаётся строковым именем (docs/RECORD_MODEL.md:60-63).
  */
 typedef enum {
-    HA_ENTITY_DEVICE = 1,
+    /* Raw Zigbee device (EUI64-ключ, name/model) — adapter-private и diagnostics (канал
+     * WEB_MSG_DIAG_ZB_*). НЕ часть canonical Device/Entity-модели (та — HA_ENTITY_LOGICAL_DEVICE). */
+    HA_ENTITY_ZB_DIAG_DEVICE = 1,
     /* Raw Zigbee-состояние — ТОЛЬКО diagnostics backing-store (A1.5), не часть домена.
      * Каноническая истина состояния — HA_ENTITY_PROPERTY_STATE; наружу идёт каналом
      * WEB_MSG_DIAG_ZB_*, не через v3. */

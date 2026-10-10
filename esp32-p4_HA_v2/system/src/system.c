@@ -67,7 +67,7 @@ static void put_device(void)
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &rec, &meta, &changed);
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &rec, &meta, &changed);
 }
 
 static void put_endpoint(void)
@@ -165,7 +165,7 @@ static void publish_event(uint8_t event_id)
 
     const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
     const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .entity = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
         .key = &uid,
     };
     domain_fact_meta_t meta = {0};

@@ -26,6 +26,6 @@ sys_error_t zigbee_command_check(domain_t *domain, const ha_zb_command_t *comman
 
     /* Отправлять некуда: устройство ещё не названо Zigbee, значит адресат неизвестен. */
     ha_device_record_t record = {0};
-    return domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &command->device_uid,
+    return domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &command->device_uid,
                              &record);
 }

@@ -58,7 +58,7 @@ static void ctx_init(ctx_t *c, size_t entity_cap)
     };
     domain_register_entity(&c->d, &entity_desc);
     const domain_entity_desc_t device_desc = {
-        .type = (domain_entity_t)HA_ENTITY_DEVICE,
+        .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
         .key_size = sizeof(ha_device_uid_t),
         .payload_size = sizeof(ha_device_record_t),
         .capacity = 4,
@@ -79,7 +79,7 @@ static void put_device(ctx_t *c, ha_device_uid_t uid, const char *name)
     memcpy(rec.name, name, n);
     domain_fact_meta_t meta = {0};
     bool changed = false;
-    domain_entity_put(&c->d, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &rec, &meta, &changed);
+    domain_entity_put(&c->d, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &rec, &meta, &changed);
 }
 
 static bool domain_has(ctx_t *c, ha_entity_id_t id)

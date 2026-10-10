@@ -23,7 +23,7 @@ function describe(ev, s) {
   }
   const { entityType, key, record, action } = ev
   switch (entityType) {
-    case ENTITY.DEVICE:
+    case ENTITY.ZB_DIAG_DEVICE:
       return action === 'remove'
         ? `устройство ${deviceLabel(s.devices, key.uid)} удалено`
         : `устройство ${record.name || record.model || uidHex(key.uid)}`

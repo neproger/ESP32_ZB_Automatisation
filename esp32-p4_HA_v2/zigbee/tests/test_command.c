@@ -46,7 +46,7 @@ static void flash_off(mstore_nor_sim_t *sim)
 static void register_types(domain_t *domain)
 {
     domain_entity_desc_t device = {0};
-    device.type = (domain_entity_t)HA_ENTITY_DEVICE;
+    device.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE;
     device.key_size = sizeof(ha_device_uid_t);
     device.payload_size = sizeof(ha_device_record_t);
     device.capacity = 32;
@@ -104,7 +104,7 @@ static void test_known_device_is_accepted(void)
 
     ha_device_record_t record = {0};
     bool changed = false;
-    CHECK(sys_ok(domain_entity_put(&domain, (domain_entity_t)HA_ENTITY_DEVICE, &UID, &record, NULL,
+    CHECK(sys_ok(domain_entity_put(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &UID, &record, NULL,
                                    &changed)));
 
     const ha_zb_command_t command = command_for(UID, 0);

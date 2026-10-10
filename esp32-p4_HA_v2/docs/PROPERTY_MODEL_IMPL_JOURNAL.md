@@ -672,6 +672,13 @@ TLV / самоописание приложения              — запре�
             трогаем. UI: LOGICAL_DEVICE_REMOVE(device_id) + кнопка «Удалить». host test device
             (cascade + remover + повторное удаление → NOT_FOUND). device 1/1, IDF + web-ui зелёные.
             (Hardware-removal smoke не триггерился — разспарит реальное устройство.)
+2026-10-11  Step B, B8 — rename старого uid-keyed transport device. HA_ENTITY_DEVICE →
+            HA_ENTITY_ZB_DIAG_DEVICE, WEB_ENTITY_DEVICE → WEB_ENTITY_ZB_DIAG_DEVICE, frontend
+            ENTITY.DEVICE → ENTITY.ZB_DIAG_DEVICE (+ key в schema.js); DEVICE_REMOVE-варианты не
+            тронуты. Raw Zigbee device (EUI64-ключ, name/model) — adapter-private и только
+            diagnostics (канал WEB_MSG_DIAG_ZB_DEVICE); ordinary Web/UI на него не подписан.
+            Логическая модель Device не менялась. grep старых имён = 0. ha_model 5/5,
+            semantics 1/1, automation 1/1, device 1/1, zigbee 9/9, IDF + web-ui зелёные.
 ```
 
 ## 7. Открытые вопросы
