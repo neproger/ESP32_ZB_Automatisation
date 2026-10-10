@@ -12,8 +12,9 @@
 
 #include <stdbool.h>
 
+#include "ha_model/ha_commands.h"   /* ha_zb_command_t */
 #include "ha_model/ha_entities.h"   /* ha_zb_state_key_t, ha_zb_state_record_t */
-#include "ha_model/ha_properties.h" /* ha_property_id_t, ha_value_t */
+#include "ha_model/ha_properties.h" /* ha_property_id_t, ha_value_t, ha_command_value_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,16 @@ bool semantics_property_key(const ha_zb_state_key_t *context, ha_property_id_t p
 
 /* Числовой вид значения (для сравнения). false — HA_VALUE_NONE. */
 bool semantics_value_to_double(const ha_value_t *value, double *out);
+
+/*
+ * Собрать физическую команду из семантического запроса: target(device/endpoint) +
+ * property + action (+ value). Транспортная кодировка (scale, transition, direction,
+ * LE, args_len) принадлежит мосту. false — нет такого (property, action) или value
+ * не той формы (SCALAR vs XY).
+ */
+bool semantics_build_command(const ha_zb_state_key_t *target, ha_property_id_t property,
+                             ha_action_id_t action, const ha_command_value_t *value,
+                             ha_zb_command_t *out);
 
 #ifdef __cplusplus
 }

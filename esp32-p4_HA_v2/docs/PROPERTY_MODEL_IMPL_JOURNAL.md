@@ -90,19 +90,22 @@
 **Чекпоинт 2.** Host-тесты зелёные; на P4: правило срабатывает, виджет рисуется. Откат —
 revert. Риск: неполный маппинг — `UNKNOWN` деградирует явно, без ложной семантики.
 
-### Фаза 3 — команды: Property + Action
+### Фаза 3 — команды: Property + Action + value
 
-Цель: действие выражается семантикой (`PROPERTY_POWER + ACTION_ON`), ZCL-маппинг — в мосте.
+Уточнено перед реализацией: команда не всегда один скаляр (`MoveToColor` = X и Y), поэтому
+semantic request и физическая команда разделены, а `COLOR SET(x, y)` — отдельная capability.
 
-- [ ] `ha_action_id_t` (ON/OFF/TOGGLE/SET) в словаре
-- [ ] `zb_action_map`: (property, action) → (cluster, command_id, args encoder); target
-      `(device_uid, endpoint)` задаёт **вызывающий** — не property-mapping
-- [ ] **Command path:** потребитель зовёт мост → получает `ha_zb_command_t` → постит
-      существующий `HA_CMD_ZIGBEE_CLUSTER` (Domain и маршрутизация не меняются)
-- [ ] Automation action: runtime resolve `(cluster/command)` → `(property, action)`; запись
-      правила НЕ меняется
-- [ ] Display/Web: контролы отправляют по семантике через мост
-- [ ] `commands.js`/`display_send_*`: кодирование args — в мосте (не в потребителях)
+- [x] **3.0** контракт: `ha_command_value_t` (`SCALAR`/`XY`), `HA_PROPERTY_COLOR` (командная
+      capability); `COLOR_X`/`COLOR_Y` остаются state-свойствами
+- [x] **3.1** мост: `semantics_build_command(target, property, action, value) → ha_zb_command_t`;
+      приватная `zb_action_map` + кодировщики (`scale`/`transition`/`direction`/LE)
+- [x] **3.2** Display → `display_send_command()` (семантический); `display_send_onoff/level/
+      hue/saturation/color_xy/color_temperature` удалены
+- [x] **3.3** из Display убрано кодирование (`%→254`, `K→mired`, LE): Display шлёт %, °, K, xy
+- [x] **3.4** Automation execution: сохранённая физическая action-запись остаётся **opaque**
+      (`automation_rule_command` копирует без интерпретации); перекодировка — шаг A
+- [x] **3.5** tests: семантический запрос → та же `ha_zb_command_t`, что раньше
+      (OnOff/Level/MoveToColor/…); host `test_semantics` 1/1
 
 **Чекпоинт 3.** На P4: вкл/выкл/уровень/цвет работают, как раньше (те же кадры). Откат —
 revert. Риск: кодирование args (level 3 байта и т.п.) — покрыть тестом паритета кадров.
@@ -170,6 +173,9 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | Display: форма виджета и формат — по свойству/единице; слайдеры в семантике (level %, цветовая температура K) | UI перестаёт знать ZCL; ZCL-аргументы команды конвертируются на границе (command-path — фаза 3) |
 | 2026-10-10 | Display: соседние состояния (`apply_color`, часы) — через `semantics_property_key()` | потребитель не конструирует ZCL-ключи; ручных `cluster/attr` в UI нет |
 | 2026-10-10 | IAS: `ZONE_STATE` — enrollment, тревога — `ZoneStatus`; `HA_PROPERTY_ALARM` не введён | не тащить неверную семантику; решать под реальное устройство |
+| 2026-10-10 | Команды: `COLOR SET(x,y)` — отдельная capability; `COLOR_X/COLOR_Y` — state | не сводить все команды к одному скаляру; args[] наружу не тащить |
+| 2026-10-10 | Запись Automation (action) остаётся opaque physical; мост её не перекодирует на fire | не платить CPU за `ZCL→semantic→ZCL`; ZCL↔semantic записи — шаг A |
+| 2026-10-10 | Display не кодирует ZCL (%, °, K, xy наружу); transition/direction/LE — в мосте | потребитель не знает кодировки |
 
 ## 5. От чего отказались
 
@@ -196,6 +202,10 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 2.3–2.5: Display (ui_widgets: kind/format/apply_color + слайдеры в семантике;
             ui_status_bar: часы через мост) — UI больше не знает ZCL; IAS-вывод (ZONE_STATE ≠
             тревога); IDF зелёная, прошито на P4
+2026-10-10  фаза 3.0–3.5: semantic command (ha_command_value_t SCALAR/XY, HA_PROPERTY_COLOR);
+            semantics_build_command + zb_action_map; Display → display_send_command (кодирование
+            убрано из UI); Automation action остаётся opaque; test_semantics 1/1 (команды),
+            IDF зелёная, прошито на P4
 ```
 
 ## 7. Открытые вопросы

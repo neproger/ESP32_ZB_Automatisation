@@ -279,3 +279,189 @@ bool semantics_value_to_double(const ha_value_t *value, double *out)
         return false;
     }
 }
+
+/* --- Семантические команды (фаза 3): (property, action, value) → ZCL --- */
+
+typedef enum {
+    ZB_CMD_NONE = 0,      /* без аргументов */
+    ZB_CMD_LEVEL_PERCENT, /* SET: % → 0..254 */
+    ZB_CMD_HUE_DEG,       /* SET: градусы → 0..254 (direction shortest) */
+    ZB_CMD_SAT_PERCENT,   /* SET: % → 0..254 */
+    ZB_CMD_MIREDS_FROM_K, /* SET: K → mireds */
+    ZB_CMD_XY,            /* SET: xy 0..1 → 0..65535 */
+} zb_cmd_encode_t;
+
+typedef struct {
+    ha_property_id_t property;
+    ha_action_id_t action;
+    uint16_t cluster_id;
+    uint8_t command_id;
+    uint8_t encode; /* zb_cmd_encode_t */
+} zb_action_map_t;
+
+static const zb_action_map_t ZB_ACTION_MAP[] = {
+    {HA_PROPERTY_POWER, HA_ACTION_ON, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_ON, ZB_CMD_NONE},
+    {HA_PROPERTY_POWER, HA_ACTION_OFF, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_OFF, ZB_CMD_NONE},
+    {HA_PROPERTY_POWER, HA_ACTION_TOGGLE, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_TOGGLE, ZB_CMD_NONE},
+    {HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, HA_ZB_CLUSTER_LEVEL_CONTROL,
+     HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL, ZB_CMD_LEVEL_PERCENT},
+    {HA_PROPERTY_COLOR_HUE, HA_ACTION_SET, HA_ZB_CLUSTER_COLOR_CONTROL,
+     HA_ZB_CMD_COLOR_MOVE_TO_HUE, ZB_CMD_HUE_DEG},
+    {HA_PROPERTY_COLOR_SATURATION, HA_ACTION_SET, HA_ZB_CLUSTER_COLOR_CONTROL,
+     HA_ZB_CMD_COLOR_MOVE_TO_SATURATION, ZB_CMD_SAT_PERCENT},
+    {HA_PROPERTY_COLOR_TEMPERATURE, HA_ACTION_SET, HA_ZB_CLUSTER_COLOR_CONTROL,
+     HA_ZB_CMD_COLOR_MOVE_TO_COLOR_TEMPERATURE, ZB_CMD_MIREDS_FROM_K},
+    {HA_PROPERTY_COLOR, HA_ACTION_SET, HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_CMD_COLOR_MOVE_TO_COLOR,
+     ZB_CMD_XY},
+};
+
+static const zb_action_map_t *action_find(ha_property_id_t property, ha_action_id_t action)
+{
+    const size_t count = sizeof(ZB_ACTION_MAP) / sizeof(ZB_ACTION_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_ACTION_MAP[i].property == property && ZB_ACTION_MAP[i].action == action) {
+            return &ZB_ACTION_MAP[i];
+        }
+    }
+    return NULL;
+}
+
+static bool command_scalar(const ha_command_value_t *value, double *out)
+{
+    if (value == NULL || value->kind != HA_COMMAND_VALUE_SCALAR) {
+        return false;
+    }
+    return semantics_value_to_double(&value->value.scalar, out);
+}
+
+static uint8_t percent_to_level(double pct)
+{
+    if (pct < 0.0) {
+        pct = 0.0;
+    }
+    if (pct > 100.0) {
+        pct = 100.0;
+    }
+    return (uint8_t)(pct * 254.0 / 100.0 + 0.5);
+}
+
+static uint8_t degrees_to_hue(double deg)
+{
+    deg = fmod(deg, 360.0);
+    if (deg < 0.0) {
+        deg += 360.0;
+    }
+    return (uint8_t)(deg * 254.0 / 360.0 + 0.5);
+}
+
+static uint16_t kelvin_to_mireds(double kelvin)
+{
+    if (kelvin <= 0.0) {
+        return 0;
+    }
+    double m = 1000000.0 / kelvin;
+    if (m > 65535.0) {
+        m = 65535.0;
+    }
+    return (uint16_t)(m + 0.5);
+}
+
+static uint16_t unit_to_u16(double v)
+{
+    if (v < 0.0) {
+        v = 0.0;
+    }
+    if (v > 1.0) {
+        v = 1.0;
+    }
+    return (uint16_t)(v * 65535.0 + 0.5);
+}
+
+static bool encode_args(uint8_t encode, const ha_command_value_t *value, uint8_t *args, uint8_t *len)
+{
+    for (int i = 0; i < 6; i++) {
+        args[i] = 0; /* transition time / direction / резерв — всегда в мосте */
+    }
+    switch ((zb_cmd_encode_t)encode) {
+    case ZB_CMD_NONE:
+        *len = 0;
+        return true;
+    case ZB_CMD_LEVEL_PERCENT: {
+        double pct = 0.0;
+        if (!command_scalar(value, &pct)) {
+            return false;
+        }
+        args[0] = percent_to_level(pct);
+        *len = 3;
+        return true;
+    }
+    case ZB_CMD_HUE_DEG: {
+        double deg = 0.0;
+        if (!command_scalar(value, &deg)) {
+            return false;
+        }
+        args[0] = degrees_to_hue(deg);
+        args[1] = 0; /* direction: shortest */
+        *len = 4;
+        return true;
+    }
+    case ZB_CMD_SAT_PERCENT: {
+        double pct = 0.0;
+        if (!command_scalar(value, &pct)) {
+            return false;
+        }
+        args[0] = percent_to_level(pct);
+        *len = 3;
+        return true;
+    }
+    case ZB_CMD_MIREDS_FROM_K: {
+        double kelvin = 0.0;
+        if (!command_scalar(value, &kelvin)) {
+            return false;
+        }
+        const uint16_t mireds = kelvin_to_mireds(kelvin);
+        args[0] = (uint8_t)(mireds & 0xFFu);
+        args[1] = (uint8_t)(mireds >> 8);
+        *len = 4;
+        return true;
+    }
+    case ZB_CMD_XY: {
+        if (value == NULL || value->kind != HA_COMMAND_VALUE_XY) {
+            return false;
+        }
+        const uint16_t x = unit_to_u16(value->value.xy.x);
+        const uint16_t y = unit_to_u16(value->value.xy.y);
+        args[0] = (uint8_t)(x & 0xFFu);
+        args[1] = (uint8_t)(x >> 8);
+        args[2] = (uint8_t)(y & 0xFFu);
+        args[3] = (uint8_t)(y >> 8);
+        *len = 6;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool semantics_build_command(const ha_zb_state_key_t *target, ha_property_id_t property,
+                             ha_action_id_t action, const ha_command_value_t *value,
+                             ha_zb_command_t *out)
+{
+    if (target == NULL || out == NULL) {
+        return false;
+    }
+    const zb_action_map_t *entry = action_find(property, action);
+    if (entry == NULL) {
+        return false;
+    }
+    ha_zb_command_t command = {0};
+    command.device_uid = target->device_uid;
+    command.dst_endpoint = target->endpoint;
+    command.cluster_id = entry->cluster_id;
+    command.command_id = entry->command_id;
+    if (!encode_args(entry->encode, value, command.args, &command.args_len)) {
+        return false;
+    }
+    *out = command;
+    return true;
+}

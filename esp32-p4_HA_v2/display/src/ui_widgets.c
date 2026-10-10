@@ -64,6 +64,16 @@ static bool decode_state(domain_t *domain, const ha_zb_state_key_t *key, ha_valu
     return semantics_state_value(key, &record, out);
 }
 
+/* Скалярное значение семантической команды. */
+static ha_command_value_t scalar_command(float v)
+{
+    ha_command_value_t cv = {0};
+    cv.kind = HA_COMMAND_VALUE_SCALAR;
+    cv.value.scalar.kind = HA_VALUE_FLOAT;
+    cv.value.scalar.value.f32 = v;
+    return cv;
+}
+
 /* Текст значения по единице свойства. */
 static void format_property(ha_property_id_t property, const ha_value_t *value, char *out,
                             size_t out_size)
@@ -360,9 +370,12 @@ static void on_color_changed(lv_event_t *event)
     const uint8_t sat = (uint8_t)lv_slider_get_value(widget->sat_slider);
     uint8_t r, g, b;
     hsv_to_rgb8((float)(hue % 360u), (float)sat / 100.0f, 1.0f, &r, &g, &b);
-    uint16_t x, y;
-    rgb8_to_xy(r, g, b, &x, &y);
-    (void)display_send_color_xy(&widget->state, x, y);
+    uint16_t x16 = 0, y16 = 0;
+    rgb8_to_xy(r, g, b, &x16, &y16);
+    const ha_command_value_t color = {.kind = HA_COMMAND_VALUE_XY,
+                                      .value.xy = {.x = (float)x16 / 65535.0f,
+                                                   .y = (float)y16 / 65535.0f}};
+    (void)display_send_command(&widget->state, HA_PROPERTY_COLOR, HA_ACTION_SET, &color);
 }
 
 #define UI_SWITCH_LOCK_MS 1500
@@ -385,7 +398,8 @@ static void on_switch_changed(lv_event_t *event)
 {
     ui_widget_t *widget = lv_event_get_user_data(event);
     const bool on = lv_obj_has_state(widget->obj, LV_STATE_CHECKED);
-    (void)display_send_onoff(&widget->state, on);
+    (void)display_send_command(&widget->state, HA_PROPERTY_POWER,
+                               on ? HA_ACTION_ON : HA_ACTION_OFF, NULL);
     lv_obj_add_state(widget->obj, LV_STATE_DISABLED);
     if (widget->cooldown == NULL) {
         widget->cooldown = lv_timer_create(switch_lock_cb, UI_SWITCH_LOCK_MS, widget);
@@ -397,24 +411,22 @@ static void on_switch_changed(lv_event_t *event)
     }
 }
 
-/*
- * Слайдеры — в семантических единицах (level/яркость: %, цветовая температура: K);
- * ZCL-аргументы команды конвертируются здесь (command-path — отдельная фаза).
- */
+/* Слайдеры — в семантических единицах (level/яркость: %, цветовая температура: K);
+ * кодировку ZCL делает мост. */
 static void on_slider_released(lv_event_t *event)
 {
     ui_widget_t *widget = lv_event_get_user_data(event);
-    const int32_t value = lv_slider_get_value(widget->slider);
+    const float value = (float)lv_slider_get_value(widget->slider);
     if (widget->kind == UI_WIDGET_LEVEL) {
-        const uint8_t level = (uint8_t)((value * 254 + 50) / 100);
-        (void)display_send_level(&widget->state, level);
+        const ha_command_value_t cv = scalar_command(value);
+        (void)display_send_command(&widget->state, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
     } else if (widget->kind == UI_WIDGET_COLOR_TEMP) {
-        const uint32_t kelvin = (uint32_t)value;
-        const uint16_t mireds = kelvin > 0 ? (uint16_t)(1000000u / kelvin) : 0;
-        (void)display_send_color_temperature(&widget->state, mireds);
+        const ha_command_value_t cv = scalar_command(value);
+        (void)display_send_command(&widget->state, HA_PROPERTY_COLOR_TEMPERATURE, HA_ACTION_SET,
+                                   &cv);
     } else if (widget->kind == UI_WIDGET_COLOR) {
-        const uint8_t level = (uint8_t)((value * 254 + 50) / 100); /* яркость, % */
-        (void)display_send_level(&widget->state, level);
+        const ha_command_value_t cv = scalar_command(value); /* яркость, % */
+        (void)display_send_command(&widget->state, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
     }
 }
 

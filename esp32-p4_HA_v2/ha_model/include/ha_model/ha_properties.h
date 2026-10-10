@@ -50,6 +50,12 @@ typedef enum {
     HA_PROPERTY_SYSTEM_WEEKDAY_MASK = 19,
     HA_PROPERTY_SYSTEM_MINUTES_OF_DAY = 20,
     HA_PROPERTY_SYSTEM_TZ_OFFSET = 21,
+
+    /*
+     * Командная capability (не состояние): состояния цвета — COLOR_X/COLOR_Y,
+     * а команда физически задаёт цвет как одну величину — COLOR SET(x, y).
+     */
+    HA_PROPERTY_COLOR = 22,
 } ha_property_id_t;
 
 /* Намерение над свойством. Смысл — «что сделать», адресат задаёт вызывающий. */
@@ -109,6 +115,27 @@ typedef struct {
 /* Общие подсказки потребителям (не Zigbee и не хранение). */
 #define HA_PROPERTY_FLAG_NONE 0u
 #define HA_PROPERTY_FLAG_READ_ONLY (1u << 0) /* измерение, не управляемое */
+
+/*
+ * Значение семантической команды. Скаляр — для level/яркости/hue/sat/color-temp;
+ * XY — для цвета (COLOR SET(x, y)). Не все команды сводятся к одному скаляру.
+ */
+typedef enum {
+    HA_COMMAND_VALUE_NONE = 0,
+    HA_COMMAND_VALUE_SCALAR = 1,
+    HA_COMMAND_VALUE_XY = 2,
+} ha_command_value_kind_t;
+
+typedef struct {
+    ha_command_value_kind_t kind;
+    union {
+        ha_value_t scalar;
+        struct {
+            float x;
+            float y;
+        } xy;
+    } value;
+} ha_command_value_t;
 
 /* Описание свойства: смысл, а не кодировка. Диапазон — семантический. */
 typedef struct {

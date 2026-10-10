@@ -9,17 +9,16 @@
 #include <stdint.h>
 
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_properties.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-bool display_send_onoff(const ha_zb_state_key_t *key, bool on);
-bool display_send_level(const ha_zb_state_key_t *key, uint8_t level);
-bool display_send_hue(const ha_zb_state_key_t *key, uint8_t hue);
-bool display_send_saturation(const ha_zb_state_key_t *key, uint8_t saturation);
-bool display_send_color_xy(const ha_zb_state_key_t *key, uint16_t x, uint16_t y);
-bool display_send_color_temperature(const ha_zb_state_key_t *key, uint16_t mireds);
+/* Семантическая команда: target (device/endpoint) + property + action (+ value).
+ * ZCL-кодировку делает мост semantics — UI её не знает. */
+bool display_send_command(const ha_zb_state_key_t *target, ha_property_id_t property,
+                          ha_action_id_t action, const ha_command_value_t *value);
 
 /* Wi-Fi provisioning (docs/services/WEB.md). */
 bool display_send_wifi_scan(void);

@@ -67,6 +67,15 @@ static double val_double(const ha_value_t *v)
     }
 }
 
+static ha_command_value_t scalar(float v)
+{
+    ha_command_value_t cv = {0};
+    cv.kind = HA_COMMAND_VALUE_SCALAR;
+    cv.value.scalar.kind = HA_VALUE_FLOAT;
+    cv.value.scalar.value.f32 = v;
+    return cv;
+}
+
 /* decode convenience: false if unmapped/undecodable. */
 static bool decode(uint16_t cluster, uint16_t attr, uint32_t raw, uint8_t type, double *out)
 {
@@ -194,8 +203,8 @@ static void test_property_key(void)
     CHECK(semantics_property_key(&context, HA_PROPERTY_POWER, &out));
     CHECK(out.cluster_id == HA_ZB_CLUSTER_ON_OFF);
 
-    /* незамапленное свойство и NULL-контекст → false */
-    CHECK(!semantics_property_key(&context, HA_PROPERTY_SYSTEM_HOUR, &out));
+    /* командное свойство (нет state-ключа) и NULL-контекст → false */
+    CHECK(!semantics_property_key(&context, HA_PROPERTY_COLOR, &out));
     CHECK(!semantics_property_key(NULL, HA_PROPERTY_POWER, &out));
 }
 
@@ -232,12 +241,74 @@ static void test_identity_and_failures(void)
     CHECK(v.kind == HA_VALUE_FLOAT);
 }
 
+/* --- Семантический запрос → та же физическая команда, что раньше (фаза 3.5) --- */
+static void test_build_command(void)
+{
+    ha_zb_state_key_t target = {0};
+    target.device_uid = 0x00124B000A1B2C3Dull;
+    target.endpoint = 2;
+
+    ha_zb_command_t cmd = {0};
+    ha_command_value_t cv = {0};
+
+    /* POWER ON/OFF/TOGGLE — без аргументов (args_len 0). */
+    CHECK(semantics_build_command(&target, HA_PROPERTY_POWER, HA_ACTION_ON, NULL, &cmd));
+    CHECK(cmd.device_uid == target.device_uid && cmd.dst_endpoint == 2);
+    CHECK(cmd.cluster_id == HA_ZB_CLUSTER_ON_OFF && cmd.command_id == HA_ZB_CMD_ON_OFF_ON);
+    CHECK(cmd.args_len == 0);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_POWER, HA_ACTION_OFF, NULL, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_ON_OFF_OFF);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_POWER, HA_ACTION_TOGGLE, NULL, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_ON_OFF_TOGGLE);
+
+    /* BRIGHTNESS SET 70% → 0..254. */
+    cv = scalar(70.0f);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv, &cmd));
+    CHECK(cmd.cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL);
+    CHECK(cmd.command_id == HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL);
+    CHECK(cmd.args_len == 3 && cmd.args[0] == 178 && cmd.args[1] == 0 && cmd.args[2] == 0);
+
+    /* COLOR_TEMPERATURE SET 4000 K → mireds 250. */
+    cv = scalar(4000.0f);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_COLOR_TEMPERATURE, HA_ACTION_SET, &cv, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_COLOR_MOVE_TO_COLOR_TEMPERATURE);
+    CHECK(cmd.args_len == 4 && cmd.args[0] == 250 && cmd.args[1] == 0);
+
+    /* COLOR_HUE SET 120° → 85 (direction shortest). */
+    cv = scalar(120.0f);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_COLOR_HUE, HA_ACTION_SET, &cv, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_COLOR_MOVE_TO_HUE);
+    CHECK(cmd.args_len == 4 && cmd.args[0] == 85 && cmd.args[1] == 0);
+
+    /* COLOR_SATURATION SET 80% → 203. */
+    cv = scalar(80.0f);
+    CHECK(semantics_build_command(&target, HA_PROPERTY_COLOR_SATURATION, HA_ACTION_SET, &cv, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_COLOR_MOVE_TO_SATURATION);
+    CHECK(cmd.args_len == 3 && cmd.args[0] == 203);
+
+    /* COLOR SET(x,y) → MoveToColor, xy 0..1 → 0..65535 LE. */
+    cv = (ha_command_value_t){.kind = HA_COMMAND_VALUE_XY, .value.xy = {.x = 0.3f, .y = 0.4f}};
+    CHECK(semantics_build_command(&target, HA_PROPERTY_COLOR, HA_ACTION_SET, &cv, &cmd));
+    CHECK(cmd.command_id == HA_ZB_CMD_COLOR_MOVE_TO_COLOR);
+    CHECK(cmd.args_len == 6);
+    CHECK(cmd.args[0] == 0xCD && cmd.args[1] == 0x4C); /* 0.3*65535 = 19661 */
+    CHECK(cmd.args[2] == 0x66 && cmd.args[3] == 0x66); /* 0.4*65535 = 26214 */
+
+    /* Неверная форма значения / нет маппинга / NULL target. */
+    CHECK(!semantics_build_command(&target, HA_PROPERTY_COLOR, HA_ACTION_SET, NULL, &cmd));
+    cv = scalar(50.0f);
+    CHECK(!semantics_build_command(&target, HA_PROPERTY_COLOR, HA_ACTION_SET, &cv, &cmd));
+    CHECK(!semantics_build_command(&target, HA_PROPERTY_TEMPERATURE, HA_ACTION_SET, &cv, &cmd));
+    CHECK(!semantics_build_command(NULL, HA_PROPERTY_POWER, HA_ACTION_ON, NULL, &cmd));
+}
+
 int main(void)
 {
     test_parity();
     test_normalization();
     test_identity_and_failures();
     test_property_key();
+    test_build_command();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");

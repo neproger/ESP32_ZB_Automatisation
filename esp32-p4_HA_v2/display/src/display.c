@@ -11,6 +11,7 @@
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
 #include "ha_model/ha_zigbee.h"
+#include "semantics/semantics.h"
 #include "ui_commands.h"
 #include "ui_menu.h"
 #include "ui_nav_dots.h"
@@ -432,142 +433,23 @@ void display_poll(void)
     ui_nav_dots_update(s_groups.count, s_group_index);
 }
 
-bool display_send_onoff(const ha_zb_state_key_t *key, bool on)
+/* Семантическая команда: ZCL-кодировку (scale/transition/direction/LE/args_len) делает мост. */
+bool display_send_command(const ha_zb_state_key_t *target, ha_property_id_t property,
+                          ha_action_id_t action, const ha_command_value_t *value)
 {
-    if (s_domain == NULL || key == NULL) {
+    if (s_domain == NULL || target == NULL) {
         return false;
     }
     ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_ON_OFF;
-    command.command_id = on ? HA_ZB_CMD_ON_OFF_ON : HA_ZB_CMD_ON_OFF_OFF;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
-                              NULL));
-}
-
-bool display_send_level(const ha_zb_state_key_t *key, uint8_t level)
-{
-    if (s_domain == NULL || key == NULL) {
+    if (!semantics_build_command(target, property, action, value, &command)) {
         return false;
     }
-    ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL;
-    command.command_id = HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL;
-    command.args_len = 3; /* Level(u8) + TransitionTime(u16) */
-    command.args[0] = level;
-    command.args[1] = 0;
-    command.args[2] = 0;
 
-    const domain_fact_target_t target = {
+    const domain_fact_target_t fact = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,
         .key = &command.device_uid,
     };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
-                              NULL));
-}
-
-bool display_send_hue(const ha_zb_state_key_t *key, uint8_t hue)
-{
-    if (s_domain == NULL || key == NULL) {
-        return false;
-    }
-    ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_COLOR_CONTROL;
-    command.command_id = HA_ZB_CMD_COLOR_MOVE_TO_HUE;
-    command.args_len = 4;
-    command.args[0] = hue;    /* hue 0..254 */
-    command.args[1] = 0;      /* direction: shortest */
-    command.args[2] = 0;      /* transition time, LE */
-    command.args[3] = 0;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
-                              NULL));
-}
-
-bool display_send_saturation(const ha_zb_state_key_t *key, uint8_t saturation)
-{
-    if (s_domain == NULL || key == NULL) {
-        return false;
-    }
-    ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_COLOR_CONTROL;
-    command.command_id = HA_ZB_CMD_COLOR_MOVE_TO_SATURATION;
-    command.args_len = 3;
-    command.args[0] = saturation; /* 0..254 */
-    command.args[1] = 0;          /* transition time, LE */
-    command.args[2] = 0;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
-                              NULL));
-}
-
-bool display_send_color_xy(const ha_zb_state_key_t *key, uint16_t x, uint16_t y)
-{
-    if (s_domain == NULL || key == NULL) {
-        return false;
-    }
-    ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_COLOR_CONTROL;
-    command.command_id = HA_ZB_CMD_COLOR_MOVE_TO_COLOR;
-    command.args_len = 6;
-    command.args[0] = (uint8_t)(x & 0xFFu);
-    command.args[1] = (uint8_t)(x >> 8);
-    command.args[2] = (uint8_t)(y & 0xFFu);
-    command.args[3] = (uint8_t)(y >> 8);
-    command.args[4] = 0; /* transition time, LE */
-    command.args[5] = 0;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
-                              NULL));
-}
-
-bool display_send_color_temperature(const ha_zb_state_key_t *key, uint16_t mireds)
-{
-    if (s_domain == NULL || key == NULL) {
-        return false;
-    }
-    ha_zb_command_t command = {0};
-    command.device_uid = key->device_uid;
-    command.dst_endpoint = key->endpoint;
-    command.cluster_id = HA_ZB_CLUSTER_COLOR_CONTROL;
-    command.command_id = HA_ZB_CMD_COLOR_MOVE_TO_COLOR_TEMPERATURE;
-    command.args_len = 4;
-    command.args[0] = (uint8_t)(mireds & 0xFFu);
-    command.args[1] = (uint8_t)(mireds >> 8);
-    command.args[2] = 0; /* transition time, LE */
-    command.args[3] = 0;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target,
+    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &fact,
                               NULL));
 }
 
