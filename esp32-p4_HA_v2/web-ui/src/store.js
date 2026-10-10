@@ -25,6 +25,8 @@ const semStates = new Map()
 const semAutomations = new Map()
 // Семантические capabilities endpoint'а: ключ "uid:ep" → [{ property, actions }].
 const semCapabilities = new Map()
+// Semantic group items: ключ "group:uid:ep:property" → { groupId, uid, ep, property, order, title }.
+const semGroupItems = new Map()
 
 // Декод rule-wire (зеркало web.c:web_encode_sem_rule). Без ZCL.
 function decodeSemRule(dv, base) {
@@ -120,6 +122,7 @@ function onFrame(buf) {
     semStates.clear()
     semAutomations.clear()
     semCapabilities.clear()
+    semGroupItems.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
@@ -145,6 +148,26 @@ function onFrame(buf) {
         caps.push({ property, actions })
       }
       semCapabilities.set(key, caps)
+    }
+    emit()
+    return
+  }
+  if (frame.type === MSG.SEMANTIC_GROUP_ITEM || frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
+    const groupId = payload.getBigUint64(0, true)
+    const uid = payload.getBigUint64(8, true)
+    const ep = payload.getUint8(16)
+    const property = payload.getUint16(17, true)
+    const key = `${groupId}:${uid}:${ep}:${property}`
+    if (frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
+      semGroupItems.delete(key)
+    } else {
+      const tb = new Uint8Array(payload.buffer, payload.byteOffset + 21, 32)
+      const end = tb.indexOf(0)
+      semGroupItems.set(key, {
+        groupId, uid, ep, property,
+        order: payload.getUint16(19, true),
+        title: new TextDecoder().decode(end === -1 ? tb : tb.subarray(0, end)),
+      })
     }
     emit()
     return
@@ -291,6 +314,9 @@ export const store = {
   },
   get semCapabilities() {
     return semCapabilities
+  },
+  get semGroupItems() {
+    return semGroupItems
   },
   endpointCapabilities(uid, ep) {
     return semCapabilities.get(`${uid}:${ep}`) || []

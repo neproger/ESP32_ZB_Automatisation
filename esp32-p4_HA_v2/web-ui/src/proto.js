@@ -14,6 +14,8 @@ export const MSG = {
   EVENT: 0x16,
   SEMANTIC_CAPABILITIES: 0x17,
   SEMANTIC_CAPABILITIES_REMOVE: 0x18,
+  SEMANTIC_GROUP_ITEM: 0x19,
+  SEMANTIC_GROUP_ITEM_REMOVE: 0x1A,
   COMMAND: 0x20,
 }
 
@@ -33,6 +35,8 @@ export const CMD = {
   LOCATION_PUT: 13,
   SEMANTIC_COMMAND: 14,
   SEMANTIC_AUTOMATION_PUT: 15,
+  SEMANTIC_GROUP_ITEM_PUT: 16,
+  SEMANTIC_GROUP_ITEM_REMOVE: 17,
 }
 
 export const HDR = 8
@@ -203,6 +207,29 @@ export function groupItemPut(groupId, state, record) {
   dv.setUint16(24, record.order || 0, true)
   putText(out, 28, record.title, 32)
   return encodeCommand(CMD.GROUP_ITEM_PUT, out)
+}
+
+// Semantic group item → raw делает backend. PUT (53): group_id,u64;uid,u64;ep,u8;property,u16;order,u16;title[32].
+export function semanticGroupItemPut(groupId, item) {
+  const out = new Uint8Array(53)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(item.uid), true)
+  dv.setUint8(16, item.ep)
+  dv.setUint16(17, item.property, true)
+  dv.setUint16(19, item.order || 0, true)
+  putText(out, 21, item.title || '', 32)
+  return encodeCommand(CMD.SEMANTIC_GROUP_ITEM_PUT, out)
+}
+// REMOVE (19): group_id,u64;uid,u64;ep,u8;property,u16.
+export function semanticGroupItemRemove(groupId, uid, ep, property) {
+  const out = new Uint8Array(19)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(uid), true)
+  dv.setUint8(16, ep)
+  dv.setUint16(17, property, true)
+  return encodeCommand(CMD.SEMANTIC_GROUP_ITEM_REMOVE, out)
 }
 
 // GROUP_ITEM_REMOVE args = key (24).

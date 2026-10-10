@@ -65,6 +65,13 @@ typedef enum {
      */
     WEB_MSG_SEMANTIC_CAPABILITIES = 0x17,
     WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE = 0x18,
+    /*
+     * Semantic group item (Фаза 5.5.2): persistent raw, BFF проецирует raw↔property.
+     * ITEM (53): u64 group_id, u64 uid, u8 ep, u16 property, u16 order, char title[32].
+     * REMOVE (19): u64 group_id, u64 uid, u8 ep, u16 property. UNKNOWN property не публикуем.
+     */
+    WEB_MSG_SEMANTIC_GROUP_ITEM = 0x19,
+    WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE = 0x1A,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 
@@ -104,6 +111,10 @@ typedef enum {
      *   action{u64 uid,u8 ep,u16 property,u8 action,u8 value_kind[,value]}
      */
     WEB_CMD_SEMANTIC_AUTOMATION_PUT = 15,
+    /* Semantic group item: PUT (53): group_id,uid,ep,property,order,title[32];
+     * REMOVE (19): group_id,uid,ep,property. Backend → raw key через semantics_property_key. */
+    WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
+    WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE = 17,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {
