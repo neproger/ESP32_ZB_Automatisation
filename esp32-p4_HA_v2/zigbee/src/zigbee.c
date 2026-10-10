@@ -170,14 +170,8 @@ static sys_error_t zigbee_permit_execute(domain_command_t type, const void *args
 }
 
 /*
- * EVENT: value = семантический HA_EVENT_* (общий vocabulary), payload = сырой
- * ha_zb_event_t. Payload — ВРЕМЕННЫЙ compatibility shim для legacy-правил DEVICE_EVENT
- * (удалить на шаге A, когда запись правила получит semantic event id).
- */
-/*
- * A3.1: semantic event адресуется источником-Entity, а не (uid, endpoint). Публикуется
- * отдельным фактом на HA_ENTITY_ENTITY, чтобы новый engine (A3.3) матчил (source, event_id)
- * без device_uid/raw. Параллельно живёт legacy DEVICE-факт до A3.3.
+ * Semantic event адресуется источником-Entity (ключ = entity_id), без device_uid/raw.
+ * Command → event_id маппит мост (semantics); Entity резолвит binding.
  */
 static void zigbee_publish_entity_event(ha_entity_id_t source_entity, ha_event_id_t event_id)
 {
@@ -211,47 +205,24 @@ static void zigbee_event_publish(const zigbee_event_t *event)
     const bool has_device = sys_ok(domain_entity_get(
         s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &event->device_uid, &device));
     ha_event_t semantic = {0};
-    const bool mapped = semantics_decode_event(&physical, has_device ? &device : NULL, &semantic);
+    if (!semantics_decode_event(&physical, has_device ? &device : NULL, &semantic)) {
+        return;
+    }
 
     ha_entity_id_t source_entity = HA_ENTITY_ID_NONE;
-    (void)zigbee_entity_lookup(event->device_uid, event->endpoint, &source_entity);
-    semantic.source_entity = source_entity;
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &event->device_uid,
-    };
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = mapped ? (uint32_t)semantic.id : (uint32_t)HA_EVENT_NONE;
-
-    domain_payload_ref_t ref = 0;
-    const sys_error_t err =
-        domain_payload_put(s_domain, &target, &meta, &physical, sizeof(physical), &ref);
-    if (sys_failed(err)) {
-        ESP_LOGW(TAG, "event not published: uid=%llx cluster=%04x err=%u",
-                 (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
-                 (unsigned)err.code);
-        zigbee_diag_record(ZIGBEE_DIAG_EVENT, err);
+    if (!zigbee_entity_lookup(event->device_uid, event->endpoint, &source_entity)) {
         return;
     }
     ESP_LOGI(TAG, "event: uid=%llx cluster=%04x cmd=%02x ep=%u -> %u",
              (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
-             (unsigned)event->command_id, (unsigned)event->endpoint,
-             (unsigned)(mapped ? semantic.id : HA_EVENT_NONE));
-
-    /* A3.1: параллельный entity-адресованный факт (источник = Entity устройства-endpoint). */
-    if (mapped) {
-        zigbee_publish_entity_event(source_entity, semantic.id);
-    }
+             (unsigned)event->command_id, (unsigned)event->endpoint, (unsigned)semantic.id);
+    zigbee_publish_entity_event(source_entity, semantic.id);
 }
 
 /*
- * A1.2: canonical property state — тень raw (truth пока raw, переключение — A1.4).
- * Публикуем, только если endpoint уже имеет logical Entity (после интервью) и атрибут
- * есть в семантическом словаре; иначе смысл не выдумываем, raw остаётся единственной
- * записью. Неудача записи тени не отменяет raw — поэтому только лог.
+ * Canonical property state: адресуется (entity_id, property_id). Публикуем, только если
+ * endpoint уже имеет logical Entity (после интервью) и атрибут есть в семантическом
+ * словаре; иначе смысл не выдумываем (raw остаётся только диагностической записью).
  */
 static void zigbee_publish_property_state(const zigbee_report_t *report)
 {

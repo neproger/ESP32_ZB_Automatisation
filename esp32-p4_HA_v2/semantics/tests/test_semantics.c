@@ -185,32 +185,6 @@ static void test_normalization(void)
 }
 
 /* --- Обратный маппинг: property → физический ключ в том же объекте --- */
-static void test_property_key(void)
-{
-    ha_zb_state_key_t context = {0};
-    context.device_uid = 0x00124B000A1B2C3Dull;
-    context.endpoint = 1;
-
-    ha_zb_state_key_t out = {0};
-    CHECK(semantics_property_key(&context, HA_PROPERTY_COLOR_X, &out));
-    CHECK(out.device_uid == context.device_uid);
-    CHECK(out.endpoint == 1);
-    CHECK(out.cluster_id == HA_ZB_CLUSTER_COLOR_CONTROL);
-    CHECK(out.attr_id == HA_ZB_ATTR_COLOR_CURRENT_X);
-
-    CHECK(semantics_property_key(&context, HA_PROPERTY_BRIGHTNESS, &out));
-    CHECK(out.cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL);
-    CHECK(out.attr_id == HA_ZB_ATTR_LEVEL_CURRENT_LEVEL);
-
-    CHECK(semantics_property_key(&context, HA_PROPERTY_POWER, &out));
-    CHECK(out.cluster_id == HA_ZB_CLUSTER_ON_OFF);
-
-    /* командное свойство (нет state-ключа) и NULL-контекст → false */
-    CHECK(!semantics_property_key(&context, HA_PROPERTY_COLOR, &out));
-    CHECK(!semantics_property_key(NULL, HA_PROPERTY_POWER, &out));
-}
-
-/* --- Семантическая идентификация и отказы --- */
 static void test_identity_and_failures(void)
 {
     const ha_zb_state_key_t temp = key(HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT,
@@ -344,38 +318,6 @@ static void test_decode_event(void)
 }
 
 /* --- Capabilities: cluster→properties, property→actions (5.0) --- */
-static void test_capabilities(void)
-{
-    ha_property_id_t props[8];
-    ha_action_id_t acts[4];
-
-    size_t n = semantics_cluster_properties(HA_ZB_CLUSTER_ON_OFF, props, 8);
-    CHECK(n == 1 && props[0] == HA_PROPERTY_POWER);
-
-    n = semantics_cluster_properties(HA_ZB_CLUSTER_COLOR_CONTROL, props, 8);
-    CHECK(n == 5);
-    bool has_x = false, has_ct = false;
-    for (size_t i = 0; i < n; i++) {
-        if (props[i] == HA_PROPERTY_COLOR_X) has_x = true;
-        if (props[i] == HA_PROPERTY_COLOR_TEMPERATURE) has_ct = true;
-    }
-    CHECK(has_x && has_ct);
-
-    CHECK(semantics_cluster_properties(0x1234, props, 8) == 0);
-    /* max ограничивает выдачу */
-    CHECK(semantics_cluster_properties(HA_ZB_CLUSTER_COLOR_CONTROL, props, 2) == 2);
-
-    n = semantics_property_actions(HA_PROPERTY_POWER, acts, 4);
-    CHECK(n == 3 && acts[0] == HA_ACTION_ON && acts[2] == HA_ACTION_TOGGLE);
-
-    n = semantics_property_actions(HA_PROPERTY_BRIGHTNESS, acts, 4);
-    CHECK(n == 1 && acts[0] == HA_ACTION_SET);
-
-    n = semantics_property_actions(HA_PROPERTY_COLOR, acts, 4);
-    CHECK(n == 1 && acts[0] == HA_ACTION_SET);
-}
-
-/* --- Компилятор semantic-правила → physical record (5.3.6) --- */
 static void test_cluster_capabilities(void)
 {
     ha_capability_t caps[8];
@@ -433,10 +375,8 @@ int main(void)
     test_parity();
     test_normalization();
     test_identity_and_failures();
-    test_property_key();
     test_build_command();
     test_decode_event();
-    test_capabilities();
     test_endpoint_capabilities();
     test_cluster_capabilities();
 

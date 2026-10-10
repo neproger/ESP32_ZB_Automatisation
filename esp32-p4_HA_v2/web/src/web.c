@@ -57,10 +57,6 @@ _Static_assert(WEB_ENTITY_WEATHER == (uint32_t)HA_ENTITY_WEATHER, "entity id: we
 _Static_assert(WEB_ENTITY_WIFI_STATUS == (uint32_t)HA_ENTITY_WIFI_STATUS, "entity id: wifi-status");
 _Static_assert(WEB_ENTITY_SETTINGS == (uint32_t)HA_ENTITY_SETTINGS, "entity id: settings");
 
-/* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
-_Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
-
-
 /* Схема записи: браузер знает те же размеры (web-ui/src/schema.js). */
 typedef struct {
     uint8_t type;
@@ -151,7 +147,7 @@ static void put_u64(uint8_t *out, uint64_t value)
 }
 
 /* Стабильный wire-кодек семантического скаляра: u8 kind + u32 bits (общий для
- * command ingress и semantic state). bits трактуется по kind. */
+ * command ingress и property state). bits трактуется по kind. */
 static bool bits_to_value(ha_value_kind_t kind, uint32_t bits, ha_value_t *out)
 {
     out->kind = kind;
@@ -296,18 +292,11 @@ static bool web3_capabilities_payload(ha_entity_id_t entity_id,
     return true;
 }
 
-/* ha_rule_t (уже семантическая, entity-native) → wire DTO. Без compile/decompile. */
-static bool semantic_automation_payload(const ha_automation_key_t *key, const ha_rule_t *rule,
-                                        uint8_t *out, uint16_t *out_len)
-{
-    return web_rule_encode(key, rule, out, out_len) == (uint16_t)SYS_CODE_OK;
-}
-
 /*
  * Canonical group_item → wire (A4): identity уже entity/property, мост не нужен.
  * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
  */
-static bool semantic_group_item_payload(const ha_group_item_key_t *key,
+static bool group_item_payload(const ha_group_item_key_t *key,
                                         const ha_group_item_record_t *record, uint8_t *out,
                                         uint16_t *out_len)
 {
@@ -321,7 +310,7 @@ static bool semantic_group_item_payload(const ha_group_item_key_t *key,
 }
 
 /* REMOVE (18): u64 group_id, u64 entity, u16 property. */
-static bool semantic_group_item_remove_payload(const ha_group_item_key_t *key, uint8_t *out,
+static bool group_item_remove_payload(const ha_group_item_key_t *key, uint8_t *out,
                                                uint16_t *out_len)
 {
     put_u64(out, key->group_id);
@@ -430,9 +419,9 @@ static bool snapshot_emit_group_item(const void *key, const void *record, void *
     snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
     uint8_t out[WEB_PROTO_MAX_PAYLOAD];
     uint16_t len = 0;
-    if (semantic_group_item_payload((const ha_group_item_key_t *)key,
+    if (group_item_payload((const ha_group_item_key_t *)key,
                                     (const ha_group_item_record_t *)record, out, &len)) {
-        web_send_frame(s->fd, WEB_MSG_SEMANTIC_GROUP_ITEM, 0, out, len);
+        web_send_frame(s->fd, WEB_MSG_GROUP_ITEM, 0, out, len);
     }
     (*s->count)++;
     return true;
@@ -553,7 +542,7 @@ static void web_send_snapshot(int fd)
  * uid/endpoint/raw payload. DTO (14): u64 source_entity @0, u8 event_id @8,
  * u8 value_kind @9, u32 value_bits @10. Legacy DEVICE-keyed события игнорируем.
  */
-static void web_send_semantic_event(const domain_event_t *event)
+static void web_send_event(const domain_event_t *event)
 {
     if (event->entity != (uint32_t)HA_ENTITY_ENTITY ||
         event->key_size != sizeof(ha_entity_id_t)) {
@@ -570,7 +559,7 @@ static void web_send_semantic_event(const domain_event_t *event)
 static void web_send_fact(const domain_event_t *event)
 {
     if (event->kind == (uint8_t)DOMAIN_FACT_EVENT) {
-        web_send_semantic_event(event);
+        web_send_event(event);
         return;
     }
 
@@ -652,17 +641,17 @@ static void web_send_fact(const domain_event_t *event)
             if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record))) {
                 uint8_t out[WEB_PROTO_MAX_PAYLOAD];
                 uint16_t len = 0;
-                if (semantic_group_item_payload((const ha_group_item_key_t *)event->key, &record,
+                if (group_item_payload((const ha_group_item_key_t *)event->key, &record,
                                                 out, &len)) {
-                    web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM, 0, out, len);
+                    web_broadcast(WEB_MSG_GROUP_ITEM, 0, out, len);
                 }
             }
         } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
             uint8_t out[WEB_PROTO_MAX_PAYLOAD];
             uint16_t len = 0;
-            if (semantic_group_item_remove_payload((const ha_group_item_key_t *)event->key, out,
+            if (group_item_remove_payload((const ha_group_item_key_t *)event->key, out,
                                                    &len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE, 0, out, len);
+                web_broadcast(WEB_MSG_GROUP_ITEM_REMOVE, 0, out, len);
             }
         }
         return;
@@ -1154,7 +1143,7 @@ static uint16_t web_do_group_remove(const uint8_t *args, size_t len)
 }
 
 /* Canonical group item: браузер шлёт (group_id, entity, property) — ключ уже entity-native. */
-static uint16_t web_do_semantic_group_item_put(const uint8_t *a, size_t len)
+static uint16_t web_do_group_item_put(const uint8_t *a, size_t len)
 {
     if (len != 52) {
         return SYS_CODE_INVALID_SIZE;
@@ -1176,7 +1165,7 @@ static uint16_t web_do_semantic_group_item_put(const uint8_t *a, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
-static uint16_t web_do_semantic_group_item_remove(const uint8_t *a, size_t len)
+static uint16_t web_do_group_item_remove(const uint8_t *a, size_t len)
 {
     if (len != 18) {
         return SYS_CODE_INVALID_SIZE;
@@ -1257,11 +1246,11 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         status = web_do_group_remove(args, len);
         break;
 
-    case WEB_CMD_SEMANTIC_GROUP_ITEM_PUT:
-        status = web_do_semantic_group_item_put(args, len);
+    case WEB_CMD_GROUP_ITEM_PUT:
+        status = web_do_group_item_put(args, len);
         break;
-    case WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE:
-        status = web_do_semantic_group_item_remove(args, len);
+    case WEB_CMD_GROUP_ITEM_REMOVE:
+        status = web_do_group_item_remove(args, len);
         break;
     case WEB_CMD_LOCATION_PUT:
         status = web_do_location_put(args, len);

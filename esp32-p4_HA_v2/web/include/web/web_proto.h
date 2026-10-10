@@ -43,8 +43,8 @@ typedef enum {
      * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
      * REMOVE (18): u64 group_id @0, u64 entity @8, u16 property @16.
      */
-    WEB_MSG_SEMANTIC_GROUP_ITEM = 0x19,
-    WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE = 0x1A,
+    WEB_MSG_GROUP_ITEM = 0x19,
+    WEB_MSG_GROUP_ITEM_REMOVE = 0x1A,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 
@@ -56,14 +56,14 @@ typedef enum {
     WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
     WEB_CMD_PERMIT_JOIN = 8,
     /* Экраны Display (docs/clients/DISPLAY.md): CRUD group. Виджеты — entity-native
-     * (WEB_CMD_SEMANTIC_GROUP_ITEM_PUT/REMOVE ниже). */
+     * (WEB_CMD_GROUP_ITEM_PUT/REMOVE ниже). */
     WEB_CMD_GROUP_PUT = 9,
     WEB_CMD_GROUP_REMOVE = 10,
     WEB_CMD_LOCATION_PUT = 13,
     /* Canonical group item: PUT (52): group_id,entity,property,order,title[32];
      * REMOVE (18): group_id,entity,property. Ключ entity-native (A4). */
-    WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
-    WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE = 17,
+    WEB_CMD_GROUP_ITEM_PUT = 16,
+    WEB_CMD_GROUP_ITEM_REMOVE = 17,
     /* Переименование Entity (Шаг A, A6.1): u64 entity_id @0, char name[32] @8. Adapter не
      * участвует — имя принадлежит Entity. */
     WEB_CMD_ENTITY_RENAME = 18,

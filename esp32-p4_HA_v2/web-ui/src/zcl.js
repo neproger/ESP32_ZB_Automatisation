@@ -9,11 +9,6 @@ export function uidHex(uid) {
   return '0x' + uid.toString(16).padStart(16, '0')
 }
 
-export const CLUSTER_ONOFF = 0x0006
-export const CLUSTER_LEVEL = 0x0008
-export const CMD_ONOFF = { OFF: 0, ON: 1, TOGGLE: 2 }
-export const CMD_LEVEL_MOVE_TO = 0x00
-
 const ATTR_NAMES = {
   '0:4': 'производитель',
   '0:5': 'модель',
@@ -66,16 +61,6 @@ const DEVICE_IDS = {
   0x0405: 'Датчик влажности',
 }
 
-// Проекция (cluster, attr) → виджет Display (зеркало ui_widget_kind_for).
-export function widgetKind(cluster, attr) {
-  if (cluster === 0x0006 && attr === 0x0000) return 'Переключатель'
-  if (cluster === 0x0008 && attr === 0x0000) return 'Уровень'
-  if (cluster === 0x0300) return attr === 0x0007 ? 'Темп. цвета' : 'Цвет'
-  if (cluster === 0x0406 && attr === 0x0000) return 'Индикатор'
-  if (cluster === 0x0500 && attr === 0x0000) return 'Индикатор'
-  return 'Значение'
-}
-
 export function describeProfile(id) {
   return id === 0x0104 ? 'Home Automation' : null
 }
@@ -84,7 +69,7 @@ export function describeDeviceId(id) {
 }
 
 // name + unit + scale + signed для известных атрибутов.
-export function describeAttr(cluster, attr) {
+function describeAttr(cluster, attr) {
   if (cluster === 0x0006 && attr === 0x0000) return { name: 'OnOff' }
   if (cluster === 0x0008 && attr === 0x0000) return { name: 'CurrentLevel' }
   if (cluster === 0x0300 && attr === 0x0003) return { name: 'CurrentX' }

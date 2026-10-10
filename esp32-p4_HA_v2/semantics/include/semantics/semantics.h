@@ -32,13 +32,6 @@ ha_property_id_t semantics_property_from_key(const ha_zb_state_key_t *key);
 bool semantics_state_value(const ha_zb_state_key_t *key, const ha_zb_state_record_t *state,
                            ha_value_t *out);
 
-/*
- * Обратный маппинг: физический ключ свойства в том же объекте (device/endpoint берутся из
- * context). Потребитель не собирает cluster/attr сам. false — свойство не замаплено.
- */
-bool semantics_property_key(const ha_zb_state_key_t *context, ha_property_id_t property,
-                            ha_zb_state_key_t *out);
-
 /* Числовой вид значения (для сравнения). false — HA_VALUE_NONE. */
 bool semantics_value_to_double(const ha_value_t *value, double *out);
 
@@ -65,15 +58,7 @@ typedef struct {
 bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_record_t *device,
                             ha_event_t *out);
 
-/*
- * Capabilities для BFF/UI: какие semantic-свойства отдаёт кластер (server) и какие
- * действия поддерживает свойство. Заменяет inference UI по cluster/attr.
- * Возвращают число записанных (<= max).
- */
-size_t semantics_cluster_properties(uint16_t cluster_id, ha_property_id_t *out, size_t max);
-size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out, size_t max);
-
-/* Semantic capabilities server-кластера: свойство + его действия. Для BFF endpoint-capabilities. */
+/* Semantic capabilities server-кластера: свойство + его действия (для canonical capabilities). */
 size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out, size_t max);
 
 /*

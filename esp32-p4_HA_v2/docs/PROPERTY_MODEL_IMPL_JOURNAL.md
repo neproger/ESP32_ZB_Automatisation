@@ -562,6 +562,15 @@ TLV / самоописание приложения              — запре�
             старые physical state/automation/group_item после cold boot не подхватываются, откат
             не поддерживается. Добавлен docs/STEP_A_FINAL_STATE.md (инварианты, слои, WS v3,
             diagnostics, не-Entity подсистемы, migration/rollback). IDF зелёный.
+2026-10-10  шаг A, A8 cleanup (только удаление мёртвого, без изменения модели). Удалено:
+            legacy DEVICE-keyed event publish + physical ha_zb_event_t payload (событие теперь
+            только entity-адресованное); semantics_property_key / cluster_properties /
+            property_actions + map_find_by_property (+ тесты); web semantic_automation_payload,
+            ha_zb_command_t static_assert; мёртвые экспорты zcl.js. Переименовано
+            SEMANTIC_GROUP_ITEM→GROUP_ITEM, web_send_semantic_event→web_send_event; поправлены
+            устаревшие комментарии. Weather/Location/WiFi оставлены отдельными config/status
+            подсистемами. grep: удалённые символы = 0. ha_model 4/4, semantics 1/1, zigbee 9/9,
+            automation 1/1, IDF + web-ui зелёные. Шаг A полностью завершён.
 ```
 
 ## 7. Открытые вопросы

@@ -90,17 +90,6 @@ static const zb_property_map_t *map_find(uint16_t cluster_id, uint16_t attr_id)
     return NULL;
 }
 
-static const zb_property_map_t *map_find_by_property(ha_property_id_t property)
-{
-    const size_t count = sizeof(ZB_MAP) / sizeof(ZB_MAP[0]);
-    for (size_t i = 0; i < count; i++) {
-        if (ZB_MAP[i].property == property) {
-            return &ZB_MAP[i];
-        }
-    }
-    return NULL;
-}
-
 /*
  * Значение по фактическому ZCL-типу (тот же разбор, что был в Automation): знак и
  * ширину задаёт тип записи, а не таблица. Тип вне словаря скаляров — отказ.
@@ -233,25 +222,6 @@ bool semantics_state_value(const ha_zb_state_key_t *key, const ha_zb_state_recor
 
     store_value(ha_property_desc(entry->property)->value_kind, value, out);
     return out->kind != HA_VALUE_NONE;
-}
-
-bool semantics_property_key(const ha_zb_state_key_t *context, ha_property_id_t property,
-                            ha_zb_state_key_t *out)
-{
-    if (context == NULL || out == NULL) {
-        return false;
-    }
-    const zb_property_map_t *entry = map_find_by_property(property);
-    if (entry == NULL) {
-        return false;
-    }
-    ha_zb_state_key_t key = {0};
-    key.device_uid = context->device_uid;
-    key.endpoint = context->endpoint;
-    key.cluster_id = entry->cluster_id;
-    key.attr_id = entry->attr_id;
-    *out = key;
-    return true;
 }
 
 bool semantics_value_to_double(const ha_value_t *value, double *out)
@@ -515,57 +485,6 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
         }
     }
     return false;
-}
-
-/* --- Capabilities (фаза 5): что кластер/свойство умеет, без inference в UI --- */
-
-size_t semantics_cluster_properties(uint16_t cluster_id, ha_property_id_t *out, size_t max)
-{
-    if (out == NULL || max == 0) {
-        return 0;
-    }
-    size_t n = 0;
-    const size_t count = sizeof(ZB_MAP) / sizeof(ZB_MAP[0]);
-    for (size_t i = 0; i < count; i++) {
-        if (ZB_MAP[i].cluster_id != cluster_id) {
-            continue;
-        }
-        const ha_property_id_t property = ZB_MAP[i].property;
-        bool duplicate = false;
-        for (size_t j = 0; j < n; j++) {
-            if (out[j] == property) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            continue;
-        }
-        if (n < max) {
-            out[n] = property;
-        }
-        n++;
-    }
-    return (n < max) ? n : max;
-}
-
-size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out, size_t max)
-{
-    if (out == NULL || max == 0) {
-        return 0;
-    }
-    size_t n = 0;
-    const size_t count = sizeof(ZB_ACTION_MAP) / sizeof(ZB_ACTION_MAP[0]);
-    for (size_t i = 0; i < count; i++) {
-        if (ZB_ACTION_MAP[i].property != property) {
-            continue;
-        }
-        if (n < max) {
-            out[n] = ZB_ACTION_MAP[i].action;
-        }
-        n++;
-    }
-    return (n < max) ? n : max;
 }
 
 /* --- Capabilities сервер-кластера (фаза 5.5): свойство + действия --------- */

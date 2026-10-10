@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { groupPut, groupRemove, semanticGroupItemPut, semanticGroupItemRemove } from '../proto.js'
+import { groupPut, groupRemove, groupItemPut, groupItemRemove } from '../proto.js'
 import { propertyName, propertyUnit } from '../semantics.js'
 import Modal from '../components/Modal.jsx'
 
@@ -54,9 +54,9 @@ function WidgetForm({ s, group, items, item, onClose }) {
     if (!effEntity || !effProp) return
     const order = item ? item.order : (items.length ? Math.max(...items.map((it) => it.order)) + 1 : 0)
     if (item && (item.entity.toString() !== effEntity || item.property !== effProp)) {
-      store.send(semanticGroupItemRemove(group.key.id, item.entity, item.property))
+      store.send(groupItemRemove(group.key.id, item.entity, item.property))
     }
-    store.send(semanticGroupItemPut(group.key.id, { entity: BigInt(effEntity), property: effProp, order, title: title.trim() }))
+    store.send(groupItemPut(group.key.id, { entity: BigInt(effEntity), property: effProp, order, title: title.trim() }))
     onClose()
   }
 
@@ -80,7 +80,7 @@ function WidgetForm({ s, group, items, item, onClose }) {
       <div className="af-line">
         <button onClick={save} disabled={!effEntity || !effProp}>Сохранить</button>
         {item && (
-          <button className="ghost danger" onClick={() => { store.send(semanticGroupItemRemove(group.key.id, item.entity, item.property)); onClose() }}>Удалить</button>
+          <button className="ghost danger" onClick={() => { store.send(groupItemRemove(group.key.id, item.entity, item.property)); onClose() }}>Удалить</button>
         )}
         <button className="ghost" onClick={onClose}>Отмена</button>
       </div>
@@ -97,8 +97,8 @@ function GroupCard({ group, items, s }) {
     if (j < 0 || j >= items.length) return
     const a = items[index]
     const b = items[j]
-    store.send(semanticGroupItemPut(group.key.id, { ...a, order: b.order }))
-    store.send(semanticGroupItemPut(group.key.id, { ...b, order: a.order }))
+    store.send(groupItemPut(group.key.id, { ...a, order: b.order }))
+    store.send(groupItemPut(group.key.id, { ...b, order: a.order }))
   }
 
   return (

@@ -135,12 +135,12 @@ function onFrame(buf) {
     emit()
     return
   }
-  if (frame.type === MSG.SEMANTIC_GROUP_ITEM || frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
+  if (frame.type === MSG.GROUP_ITEM || frame.type === MSG.GROUP_ITEM_REMOVE) {
     const groupId = payload.getBigUint64(0, true)
     const entity = payload.getBigUint64(8, true)
     const property = payload.getUint16(16, true)
     const key = `${groupId}:${entity}:${property}`
-    if (frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
+    if (frame.type === MSG.GROUP_ITEM_REMOVE) {
       semGroupItems.delete(key)
     } else {
       semGroupItems.set(key, {

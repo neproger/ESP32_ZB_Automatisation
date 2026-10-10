@@ -324,9 +324,14 @@ A7  erase старого physical state ABI                                     
       group_item) после cold boot не подхватывается; откат не поддерживается.
       Удалить raw state store/таблицы; освободить регионы.
 
-A8  удалить transitional Web/Domain paths
-      WEB_CMD_ZB_COMMAND, raw AUTOMATION/GROUP_ITEM, schema raw decoders (кроме Diagnostics),
-      per-save compile/decompile.
+A8  cleanup transitional (только удаление мёртвого, без изменения модели)                   [x]
+      Удалены: legacy DEVICE-keyed event publish + physical ha_zb_event_t payload; мёртвые
+      функции моста semantics_property_key / semantics_cluster_properties /
+      semantics_property_actions (+ map_find_by_property, + тесты); web `semantic_automation_payload`
+      и `ha_zb_command_t` static_assert; мёртвые экспорты zcl.js (CLUSTER_ONOFF/LEVEL, CMD_ONOFF/
+      LEVEL_MOVE_TO, widgetKind, describeAttr). Переименовано: SEMANTIC_GROUP_ITEM→GROUP_ITEM
+      (msg/command/функции), web_send_semantic_event→web_send_event. Обновлены устаревшие
+      комментарии. Weather/Location/WiFi НЕ переводились в Entity (config/status подсистемы).
 ```
 
 Каждая фаза заканчивается чекпоинтом (сборка + host-тесты + проверка на P4 + коммит).
