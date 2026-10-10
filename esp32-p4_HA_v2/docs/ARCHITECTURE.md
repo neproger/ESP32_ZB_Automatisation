@@ -7,12 +7,19 @@
 
 ### 1.1. Главный принцип
 
-**Zigbee semantics are authoritative.**
+**Device state is authoritative; transport representation is adapter-owned.**
 
-Мы встраиваемся в существующую модель Zigbee и принимаем её как есть. Команда — это
-намерение; подтверждённое состояние приходит только из Zigbee; отсутствие репорта —
-отсутствие факта, а не ошибка. Поверх Zigbee не вводим optimistic state, корреляцию
-command→result, synthetic acknowledgements.
+Каноническое состояние приходит только от устройства через транспорт-адаптер и
+подтверждается его репортом; отсутствие репорта — отсутствие факта, а не ошибка. Поверх
+транспорта не вводим optimistic state, корреляцию command→result, synthetic
+acknowledgements.
+
+**Переходный период (см. `PROPERTY_MODEL.md`).** Сейчас canonical state identity остаётся
+Zigbee-производной (`device_uid/endpoint/cluster/attr`), но верхнеслойная семантика —
+`Property/Action/Event`. Zigbee-координата — это **физический адрес и adapter-owned
+представление**, а не общий смысл: `cluster/attr/command` не интерпретируются верхними
+слоями. Замена canonical identity на `(entity_id, property_id)` — шаг A, отложена до
+второго транспорта.
 
 Отсюда три категории данных. Больше ничего поверх не строим.
 
@@ -97,8 +104,9 @@ subscriber (contact + filter)
 - Для работы с системой они зависят от Domain API; для общей формы canonical records —
   от `ha_model` (`RECORD_MODEL.md`). `ha_model` — словарь, а не слой: он не находится
   между сервисами и Domain и не является runtime-посредником.
-- `ha_model` не линкует Domain и не содержит логики: только формы, лимиты и стабильный
-  словарь идентификаторов.
+- `ha_model` не линкует Domain и не содержит runtime/service-логики: только формы,
+  immutable-словари и чистые lookup-функции (напр. `ha_property_desc(id)`), лимиты и
+  стабильный словарь идентификаторов. Мутируемого состояния и поведения сервисов здесь нет.
 
 ## 2. mstore — слой хранения
 

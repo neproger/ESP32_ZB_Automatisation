@@ -52,11 +52,17 @@ physical identity (не меняем):   (device_uid, endpoint, cluster_id, attr
         ↓ property_resolve(...)
 semantic property:               HA_PROPERTY_TEMPERATURE / POWER / BRIGHTNESS / ...
         ↓
-Automation / Display / Web / Agent — работают только с семантикой
+Automation / Display / Web / Agent — семантика; physical ref — opaque address
 ```
 
 Ключевой тезис: **ZCL остаётся identity физического состояния, но перестаёт быть его
 семантикой для верхних слоёв.**
+
+**Инвариант B.** Потребитель вправе переносить physical reference
+(`device_uid/endpoint/cluster/attr`) как **непрозрачный адрес** — хранить, копировать,
+передавать — но **не вправе интерпретировать** `cluster/attr/command` и ветвиться по ним.
+До A Zigbee-identity физически ещё присутствует в записях, но Zigbee-**смысл** уже не
+протекает: им владеет только мост.
 
 Обобщаем не только state, но и команды/события — иначе половина протечки останется:
 
@@ -113,19 +119,32 @@ typedef struct {
     uint16_t         cluster_id;
     uint16_t         attr_id;
     ha_property_id_t property;
-    uint8_t          zcl_type;
-    uint8_t          signedness;
-    float            scale;    /* ZCL-encoding: 0.01 °C и т.п. */
+    uint8_t          expected_type; /* optional: только validation/diagnostics */
+    uint8_t          reserved;
+    float            scale;         /* ZCL-encoding: 0.01 °C и т.п. */
     float            offset;
 } zb_property_map_t;
 ```
 
-Плюс симметричные таблицы для действий и событий:
+Числовое декодирование идёт по **фактическому** `state->zcl_type` (он уже в
+`ha_zb_state_record_t`): знак и ширину задаёт ZCL-тип, а не таблица. `expected_type` — лишь
+для валидации/диагностики: устройство вправе прислать другой допустимый тип, и он не должен
+быть прочитан ложно. Отдельный `signedness` не нужен.
+
+Плюс таблицы для действий и событий, но с оговорками:
 
 ```text
-действие:  (property, action)  → (cluster_id, command_id, args encoding)
-событие:   (cluster_id, command_id|attr) → HA_EVENT_* и его параметры
+действие:  (property, action)  → (cluster_id, command_id, args encoder)
+           target = физический (device_uid, endpoint) — задаёт ВЫЗЫВАЮЩИЙ, а не mapping
+событие:   маппер допускает профиль (device/model) + payload-декодер;
+           одной статической таблицей (cluster/command → SINGLE_PRESS) не ограничиваемся —
+           разные производители кодируют press/hold/double разными командами, payload и
+           vendor-кластерами
 ```
+
+Физический `device_uid + endpoint` в действии **не** выводится из property: свойство говорит
+*что сделать*, адресат — *где*. Для событий заранее **не обещаем** единую статическую
+таблицу: контракт допускает профиль устройства и декодер payload.
 
 ### 4.3. Правило разделения
 
@@ -135,6 +154,26 @@ ha_model     — имя, тип значения, единица, диапазо
 zigbee       — радио, ZDO/ZCL, интервью, binding. Использует нормализацию.
 потребители  — семантика (Property/Action/Event). ZCL не импортируют.
 ```
+
+### 4.4. Общий runtime value (`ha_value_t`)
+
+У `bridge_decode()` должен быть **один** контракт результата, иначе Automation/Display/Web
+заведут по своему представлению и семантика снова размножится. Вводим маленький тип:
+
+```c
+typedef enum { HA_VALUE_NONE, HA_VALUE_BOOL, HA_VALUE_I32, HA_VALUE_U32,
+               HA_VALUE_FLOAT, HA_VALUE_ENUM } ha_value_kind_t;
+
+typedef struct {
+    ha_value_kind_t kind;
+    union { bool b; int32_t i; uint32_t u; float f; uint32_t e; } v;
+} ha_value_t;
+```
+
+Поверх него: Automation сравнивает, Display форматирует (по `ha_property_desc`), Web
+сериализует. Тип фиксированного размера, без логики, живёт в `ha_model` (форма близка к
+`domain_value_t`; сведение к одному типу — отдельный вопрос, `ha_model` не линкует Domain).
+Решается **до фазы 1**.
 
 ## 5. Где живёт маппинг (уточнение к первоначальной идее)
 
@@ -225,16 +264,33 @@ B выбран так, чтобы A перестал быть архитекту
 до шага A).
 
 ```text
-0. Словарь Property/Action/Event + дескрипторы в ha_model   (аддитивно, без поведения)
-1. Мост: zb_property_map, единое декодирование state
+0. Словарь Property/Action/Event + дескрипторы + ha_value_t в ha_model  (аддитивно)
+1. Мост: zb_property_map, единый bridge_decode(...) -> ha_value_t
 2. Потребители state переходят на property (automation runtime, display widget/format)
-3. Команды: Property + Action, zb_action_map
-4. События: HA_EVENT_* и маппинг сырых ZCL-событий
+3. Команды: Property + Action; вызов моста даёт ha_zb_command_t, постится существующий
+   HA_CMD_ZIGBEE_CLUSTER (Domain не меняется)
+4. События: HA_EVENT_*, маппер с профилем устройства/payload-декодером
 5. Web-адаптер отдаёт семантику в UI; фронт теряет ZCL-словарь
 ── A (позже): canonical identity (entity_id, property_id) + erase + WS v3
 ```
 
-## 10. Открытые вопросы
+## 10. Решённое и открытые вопросы
+
+Уже решено (см. §3–§4):
+
+```text
+invariant B          consumer переносит physical ref как opaque address, но не ветвится
+                     по cluster/attr/command
+zb_property_map      (cluster,attr) → property + scale/offset + optional expected_type;
+                     декодирование по state->zcl_type; signedness не нужен
+ha_value_t           единый runtime-результат bridge_decode (см. §4.4)
+command path (фаза3) мост → ha_zb_command_t → существующий HA_CMD_ZIGBEE_CLUSTER
+action target        (device_uid, endpoint) задаёт вызывающий, не property-mapping
+event mapper         допускает профиль устройства + payload-декодер, не одну таблицу
+attr_scale           уезжает в мост (scale — свойство ZCL-кодировки)
+```
+
+Открыто:
 
 1. **Имя/расположение модуля-моста** (`semantics` / `ha_property` / `zcl_map`), что линкует
    `ha_model`, `zigbee` и потребителей, но не Domain.
@@ -242,11 +298,13 @@ B выбран так, чтобы A перестал быть архитекту
    общем словаре смысла). Проверить, кто ещё импортирует `ha_zigbee.h` кроме моста/zigbee.
 3. **Полнота `value_kind`/`unit`**: перечислить единицы (celsius, percent, kelvin, mired,
    lux, volt, none) и дефолт для неизвестных пар.
-4. **Отношение к `zcl_type`**: остаётся ли `zcl_type` в `ha_zb_state_record_t` после B
-   (потребителям он нужен только через мост) — решить на фазе 2.
+4. **Отношение к `zcl_type`** в `ha_zb_state_record_t` после B (потребителям он нужен только
+   через мост) — решить на фазе 2.
 5. **`HA_PROPERTY_UNKNOWN`**: как показывать неизвестные пары в UI/display (деградация без
    ложной семантики).
-6. **Action для `SET`**: как выражать «установить в значение» vs `ON/OFF/TOGGLE` в общем
-   словаре (единый `SET` + property value, или отдельные действия).
-7. **Судьба `attr_scale`**: полностью уезжает в мост (scale — свойство ZCL-кодировки), в
-   `ha_model` не остаётся.
+6. **Action для `SET`**: как выражать «установить в значение» vs `ON/OFF/TOGGLE` (единый
+   `SET` + property value, или отдельные действия).
+7. **`ha_value_t` vs `domain_value_t`**: свести ли к одному типу (форма близка), с учётом
+   того что `ha_model` не линкует Domain.
+8. **Профиль события** (device/model + payload-декодер): форма таблицы и как задаётся
+   (по модели устройства / по cluster+command).

@@ -26,6 +26,8 @@
    flash.
 5. **Домен/провод не трогаем** до A. Если фазе нужен аддитивный байт — только через
    `reserved` существующей записи, с `static_assert`, и отдельным решением в §4.
+6. **Physical ref — opaque address.** Потребитель носит `(uid/ep/cluster/attr)` как адрес,
+   но не ветвится по `cluster/attr/command`; смысл даёт только мост.
 
 ## 3. План по фазам (чекпоинты)
 
@@ -35,6 +37,7 @@
 `ha_property_desc_t` (имя, `value_kind`, `unit`, `range`, `flags`) — **без ZCL**.
 
 - [ ] `ha_model/include/ha_model/ha_properties.h`: enum'ы и дескриптор (+ `ha_property_desc(id)`)
+- [ ] `ha_value_t` (kind + фиксированный union) — единый runtime-результат (см. `PROPERTY_MODEL.md` §4.4)
 - [ ] таблица дескрипторов для известных свойств; `UNKNOWN` как честная деградация
 - [ ] host-тест: lookup дескриптора, границы `range`, дефолт `UNKNOWN`
 - [ ] НИЧЕГО не подключаем к существующим путям (поведение системы не меняется)
@@ -77,7 +80,10 @@
 Цель: действие выражается семантикой (`PROPERTY_POWER + ACTION_ON`), ZCL-маппинг — в мосте.
 
 - [ ] `ha_action_id_t` (ON/OFF/TOGGLE/SET) в словаре
-- [ ] `zb_action_map`: (property, action) → (cluster, command_id, args encoding)
+- [ ] `zb_action_map`: (property, action) → (cluster, command_id, args encoder); target
+      `(device_uid, endpoint)` задаёт **вызывающий** — не property-mapping
+- [ ] **Command path:** потребитель зовёт мост → получает `ha_zb_command_t` → постит
+      существующий `HA_CMD_ZIGBEE_CLUSTER` (Domain и маршрутизация не меняются)
 - [ ] Automation action: runtime resolve `(cluster/command)` → `(property, action)`; запись
       правила НЕ меняется
 - [ ] Display/Web: контролы отправляют по семантике через мост
@@ -91,7 +97,8 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 Цель: сырые ZCL-события устройства → семантические id.
 
 - [ ] `ha_event_id_t` (SINGLE_PRESS/DOUBLE_PRESS/HOLD/...)
-- [ ] маппинг сырого события → `HA_EVENT_*` в мосте
+- [ ] маппер сырого события → `HA_EVENT_*`: допускает **профиль устройства (device/model)
+      + payload-декодер**, не только одну статическую таблицу `cluster/command`
 - [ ] Automation `DEVICE_EVENT` триггер работает по семантическому событию (runtime)
 
 **Чекпоинт 4.** На P4: правило на нажатие кнопки срабатывает. Откат — revert. Риск: у
@@ -126,6 +133,12 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | Обобщаем не только state, но и Action/Event | иначе половина протечки остаётся в командах/событиях |
 | 2026-10-10 | `property_id` не хранится в персистентных записях (resolve в рантайме) | иначе миграция storage уже на фазе B |
 | 2026-10-10 | Маппинг ZCL ↔ семантика — в отдельном модуле-мосте, не в `zigbee` и не в `ha_model` | потребители не должны зависеть от сервиса `zigbee` (`ARCHITECTURE.md` §1.4) |
+| 2026-10-10 | `zb_property_map`: `expected_type` optional, декодирование по `state->zcl_type`, `signedness` не вводится | тип уже приходит в записи; устройство может прислать другой допустимый тип — его нельзя прочитать ложно |
+| 2026-10-10 | Единый runtime-результат — `ha_value_t` (kind + union) | иначе Automation/Display/Web заведут свои представления семантики |
+| 2026-10-10 | Command path фазы 3: мост → `ha_zb_command_t` → существующий `HA_CMD_ZIGBEE_CLUSTER` | не трогаем Domain и маршрутизацию команд |
+| 2026-10-10 | Action: target `(device_uid, endpoint)` задаёт вызывающий; property-mapping задаёт только команду | свойство = «что», адресат = «где» |
+| 2026-10-10 | Event mapper допускает профиль устройства + payload-декодер, не одну статическую таблицу | кнопки разных вендоров кодируют press/hold/double по-разному |
+| 2026-10-10 | Инвариант B: physical ref носится как opaque address, ветвиться по cluster/attr/command нельзя | до A identity физически протекает, но смысл — нет |
 
 ## 5. От чего отказались
 
@@ -151,3 +164,5 @@ TLV / самоописание приложения              — запре�
 4. Нужен ли аддитивный тег «источник транспорта» в событии/состоянии (сейчас не нужен).
 5. Как быть с устройствами, где один endpoint = несколько логических сущностей (влияет на
    будущую A, не на B).
+6. `ha_value_t` vs `domain_value_t` — сводить ли к одному типу (форма близка).
+7. Форма профиля события (по модели устройства / по cluster+command) и где он живёт.
