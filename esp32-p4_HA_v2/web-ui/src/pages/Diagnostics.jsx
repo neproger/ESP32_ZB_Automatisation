@@ -56,7 +56,7 @@ export default function Diagnostics() {
             <div className="attrs">
               {states.length === 0 && <span className="muted">атрибутов пока нет</span>}
               {states.map((st) => (
-                <StateAttr key={`${st.key.cluster}:${st.key.attr}:${st.key.ep}`} uid={d.key.uid} st={st} />
+                <StateAttr key={`${st.key.cluster}:${st.key.attr}:${st.key.ep}`} st={st} />
               ))}
             </div>
           </div>

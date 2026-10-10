@@ -546,6 +546,17 @@ TLV / самоописание приложения              — запре�
             AUTOMATION/GROUP_ITEM/EVENT) + commands (PROPERTY/ENTITY_RENAME/AUTOMATION/GROUP_ITEM).
             Остаётся raw ENTITY-состояние как отдельный диагностический канал (снимется в A1.5).
             ha_model 4/4, semantics 1/1, zigbee 9/9, automation 1/1, IDF + web-ui зелёные.
+2026-10-10  шаг A, A6 review + A1.4/A1.5. Ревью A6 зелёный: обычный контракт entity-native,
+            без uid/endpoint/cluster/attr, read/write симметричны, fallback к raw нет.
+            A1.5 (выбран вариант 1 с границей имени): raw state вынесен в diagnostics-only —
+            HA_ENTITY_STATE → HA_ENTITY_ZB_DIAG_STATE; отдельный канал WEB_MSG_DIAG_ZB_DEVICE/
+            ENDPOINT/STATE/REMOVE (вне web_msg3_t, transport-specific); Diagnostics.jsx читает
+            diag-канал и стал read-only (удалён SEMANTIC_COMMAND); raw ENTITY DEVICE/ENDPOINT/
+            STATE убраны из обычного snapshot; удалены неиспользуемые WEB_CMD_ZB_COMMAND/
+            DEVICE_RENAME/SEMANTIC_COMMAND и их обработчики. PROPERTY_STATE — единственный
+            production state; grep HA_ENTITY_STATE = 0. ha_model 4/4, semantics 1/1, zigbee 9/9,
+            automation 1/1, IDF + web-ui зелёные. Осталось по плану: A7 (erase старого physical
+            state ABI), A8 (удаление Dial/weather/location/wifi из raw-классификации при желании).
 ```
 
 ## 7. Открытые вопросы

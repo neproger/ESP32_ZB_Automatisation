@@ -101,7 +101,7 @@ static void put_state(uint16_t cluster_id, uint16_t attr_id, uint32_t raw, uint8
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_STATE, &key, &rec, &meta,
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &key, &rec, &meta,
                             &changed);
 
     /*

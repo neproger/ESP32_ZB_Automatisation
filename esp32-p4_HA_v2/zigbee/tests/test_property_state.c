@@ -47,7 +47,7 @@ static void ctx_init(ctx_t *c)
         .persist_key = NULL,
     };
     const domain_entity_desc_t raw = {
-        .type = (domain_entity_t)HA_ENTITY_STATE,
+        .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE,
         .key_size = sizeof(ha_zb_state_key_t),
         .payload_size = sizeof(ha_zb_state_record_t),
         .capacity = 16,
@@ -138,7 +138,7 @@ static void assert_parity(ctx_t *c, ha_device_uid_t uid, uint8_t ep, uint16_t cl
         .endpoint = ep,
     };
     ha_zb_state_record_t raw_record = {0};
-    CHECK(sys_ok(domain_entity_get(&c->d, (domain_entity_t)HA_ENTITY_STATE, &raw_key, &raw_record)));
+    CHECK(sys_ok(domain_entity_get(&c->d, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &raw_key, &raw_record)));
 
     ha_value_t projected = {0};
     CHECK(semantics_state_value(&raw_key, &raw_record, &projected));
@@ -222,7 +222,7 @@ static void test_unmapped_attr_has_no_canonical(void)
         .endpoint = 1,
     };
     ha_zb_state_record_t raw_record = {0};
-    CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_STATE, &raw_key, &raw_record)));
+    CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &raw_key, &raw_record)));
     CHECK(count_type(&c, (domain_entity_t)HA_ENTITY_PROPERTY_STATE) == 0);
 
     domain_deinit(&c.d);

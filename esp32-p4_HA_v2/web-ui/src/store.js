@@ -1,4 +1,4 @@
-import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
+import { MSG, MSG3, DIAG, decodeFrame, snapshot } from './proto.js'
 import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
 import { VALUE_KIND } from './semantics.js'
 
@@ -225,6 +225,32 @@ function onFrame(buf) {
       }
       propCapabilities.set(key, caps)
     }
+    emit()
+    return
+  }
+  // Diagnostics raw Zigbee (A1.5): отдельный канал, наполняет raw-карты для Diagnostics.
+  if (frame.type === DIAG.ZB_DEVICE || frame.type === DIAG.ZB_ENDPOINT || frame.type === DIAG.ZB_STATE) {
+    const type = frame.type === DIAG.ZB_DEVICE ? ENTITY.DEVICE
+      : frame.type === DIAG.ZB_ENDPOINT ? ENTITY.ENDPOINT : ENTITY.STATE
+    const schema = SCHEMA[type]
+    const keyDv = new DataView(payload.buffer, payload.byteOffset, schema.keySize)
+    const key = decodeKey(type, keyDv)
+    const id = entityId(type, key)
+    const recDv = new DataView(payload.buffer, payload.byteOffset + schema.keySize, schema.recSize)
+    const record = decodeRecord(type, recDv)
+    maps[type].set(id, { key, record })
+    if (!syncing) logEvent('upsert', type, key, record)
+    emit()
+    return
+  }
+  if (frame.type === DIAG.ZB_REMOVE) {
+    const kind = payload.getUint8(0)
+    const type = kind === 1 ? ENTITY.DEVICE : kind === 2 ? ENTITY.STATE : ENTITY.ENDPOINT
+    const schema = SCHEMA[type]
+    const keyDv = new DataView(payload.buffer, payload.byteOffset + 1, schema.keySize)
+    const key = decodeKey(type, keyDv)
+    maps[type].delete(entityId(type, key))
+    if (!syncing) logEvent('remove', type, key, null)
     emit()
     return
   }

@@ -75,7 +75,7 @@ static const domain_entity_desc_t device_desc = {
  * здесь означала бы запись во flash на каждый репорт (docs/RECORD_MODEL.md:123-138).
  */
 static const domain_entity_desc_t state_desc = {
-    .type = (domain_entity_t)HA_ENTITY_STATE,
+    .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE,
     .key_size = sizeof(ha_zb_state_key_t),
     .payload_size = sizeof(ha_zb_state_record_t),
     .capacity = APP_STATE_CAPACITY,

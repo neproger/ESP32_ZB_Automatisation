@@ -81,7 +81,7 @@ static void value_text(const domain_value_t *value, char *out, size_t size)
 static void format_key(uint32_t entity, const uint8_t *key, uint8_t key_size, char *out,
                        size_t size)
 {
-    if (entity == (uint32_t)HA_ENTITY_STATE && key_size == sizeof(ha_zb_state_key_t)) {
+    if (entity == (uint32_t)HA_ENTITY_ZB_DIAG_STATE && key_size == sizeof(ha_zb_state_key_t)) {
         const ha_zb_state_key_t *state_key = (const ha_zb_state_key_t *)key;
         snprintf(out, size, "uid=%llx ep=%u cluster=%04x attr=%04x",
                  (unsigned long long)state_key->device_uid, (unsigned)state_key->endpoint,

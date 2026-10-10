@@ -228,8 +228,15 @@ A1  canonical state (entity_id, property_id)                                    
                 непримапленный атрибут/lookup-miss -> canonical не выдумывается
       [x] A1.3  parity-тест raw-projection == canonical (test_property_state:
                 known-match / unmapped-без-canonical / endpoint-часть-адреса)
-      [ ] A1.4  переключить readers на canonical state
-      [ ] A1.5  убрать raw state как canonical truth
+      [x] A1.4  обычные readers используют только canonical PROPERTY_STATE (Automation, Web v3,
+                Groups, Display, SystemStatus/ui_status_bar). Raw STATE остаётся лишь в
+                диагностическом канале.
+      [x] A1.5  raw state перестал быть truth: HA_ENTITY_STATE → HA_ENTITY_ZB_DIAG_STATE
+                (diagnostics-only), отдаётся каналом WEB_MSG_DIAG_ZB_* (вне web_msg3_t);
+                Diagnostics.jsx читает diag-канал и он read-only; удалены raw ENTITY-кадры
+                DEVICE/ENDPOINT/STATE из обычного snapshot и неиспользуемые
+                WEB_CMD_ZB_COMMAND/DEVICE_RENAME/SEMANTIC_COMMAND. PROPERTY_STATE —
+                единственный production state. grep HA_ENTITY_STATE = 0.
 
       РЕВИЗИЯ ПОРЯДКА (принято): A1.4/A1.5 гейтятся адресацией. Читатели (Web/Display/
       Automation) адресуют состояние по (uid,ep,cluster,attr) и намеренно НЕ зависят от

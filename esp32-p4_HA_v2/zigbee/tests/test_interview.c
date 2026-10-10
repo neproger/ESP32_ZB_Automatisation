@@ -77,7 +77,7 @@ static void register_types(domain_t *domain)
     CHECK(sys_ok(domain_register_entity(domain, &device)));
 
     domain_entity_desc_t state = {0};
-    state.type = (domain_entity_t)HA_ENTITY_STATE;
+    state.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE;
     state.key_size = sizeof(ha_zb_state_key_t);
     state.payload_size = sizeof(ha_zb_state_record_t);
     state.capacity = 256;
@@ -200,12 +200,12 @@ static void test_leave_removes_entities(void)
 
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 1);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 1);
 
     CHECK(sys_ok(zigbee_device_remove(&domain, UID)));
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ENDPOINT) == 0);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 0);
 
     CHECK(sys_ok(zigbee_device_remove(&domain, UID))); /* повтор — не ошибка */
 

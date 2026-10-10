@@ -45,7 +45,7 @@ static const char *TAG = "web";
 #define WEB_CMD_BUF WEB_PROTO_MAX_FRAME
 
 _Static_assert(WEB_ENTITY_DEVICE == (uint32_t)HA_ENTITY_DEVICE, "entity id: device");
-_Static_assert(WEB_ENTITY_STATE == (uint32_t)HA_ENTITY_STATE, "entity id: state");
+_Static_assert(WEB_ENTITY_ZB_DIAG_STATE == (uint32_t)HA_ENTITY_ZB_DIAG_STATE, "entity id: state");
 _Static_assert(WEB_ENTITY_ENDPOINT == (uint32_t)HA_ENTITY_ENDPOINT, "entity id: endpoint");
 _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
 _Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
@@ -75,9 +75,6 @@ typedef struct {
  * когда automation вырос до 144 при буфере под endpoint 72).
  */
 #define WEB_SCHEMA_LIST(X)                                                                  \
-    X(WEB_ENTITY_DEVICE, sizeof(ha_device_uid_t), sizeof(ha_device_record_t))               \
-    X(WEB_ENTITY_STATE, sizeof(ha_zb_state_key_t), sizeof(ha_zb_state_record_t))            \
-    X(WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t))         \
     X(WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)) \
     X(WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t))           \
     X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
@@ -363,6 +360,70 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
     return true;
 }
 
+/* --- diagnostics: raw Zigbee (A1.5) ------------------------------------- */
+
+#define DIAG_KIND_DEVICE 1u
+#define DIAG_KIND_STATE 2u
+#define DIAG_KIND_ENDPOINT 3u
+
+static uint16_t diag_device_payload(const ha_device_uid_t *uid, const ha_device_record_t *rec,
+                                    uint8_t *out)
+{
+    memcpy(out, uid, sizeof(*uid));
+    memcpy(out + sizeof(*uid), rec, sizeof(*rec));
+    return (uint16_t)(sizeof(*uid) + sizeof(*rec));
+}
+
+static uint16_t diag_endpoint_payload(const ha_endpoint_key_t *key, const ha_endpoint_record_t *rec,
+                                      uint8_t *out)
+{
+    memcpy(out, key, sizeof(*key));
+    memcpy(out + sizeof(*key), rec, sizeof(*rec));
+    return (uint16_t)(sizeof(*key) + sizeof(*rec));
+}
+
+static uint16_t diag_state_payload(const ha_zb_state_key_t *key, const ha_zb_state_record_t *rec,
+                                   uint8_t *out)
+{
+    memcpy(out, key, sizeof(*key));
+    memcpy(out + sizeof(*key), rec, sizeof(*rec));
+    return (uint16_t)(sizeof(*key) + sizeof(*rec));
+}
+
+static uint16_t diag_remove_payload(uint8_t kind, const void *key, size_t key_size, uint8_t *out)
+{
+    out[0] = kind;
+    memcpy(out + 1, key, key_size);
+    return (uint16_t)(1 + key_size);
+}
+
+static bool snapshot_emit_diag(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    switch (s->schema->type) {
+    case WEB_ENTITY_DEVICE:
+        web_send_frame(s->fd, WEB_MSG_DIAG_ZB_DEVICE, 0, out,
+                       diag_device_payload((const ha_device_uid_t *)key,
+                                           (const ha_device_record_t *)record, out));
+        break;
+    case WEB_ENTITY_ENDPOINT:
+        web_send_frame(s->fd, WEB_MSG_DIAG_ZB_ENDPOINT, 0, out,
+                       diag_endpoint_payload((const ha_endpoint_key_t *)key,
+                                             (const ha_endpoint_record_t *)record, out));
+        break;
+    case WEB_ENTITY_ZB_DIAG_STATE:
+        web_send_frame(s->fd, WEB_MSG_DIAG_ZB_STATE, 0, out,
+                       diag_state_payload((const ha_zb_state_key_t *)key,
+                                          (const ha_zb_state_record_t *)record, out));
+        break;
+    default:
+        break;
+    }
+    (*s->count)++;
+    return true;
+}
+
 /* canonical group_item (A4): identity = (group, entity, property). */
 static bool snapshot_emit_group_item(const void *key, const void *record, void *ctx)
 {
@@ -443,6 +504,10 @@ static void web_send_snapshot(int fd)
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_count, &total);
+    /* diagnostics raw (A1.5) */
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENDPOINT, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
@@ -464,6 +529,18 @@ static void web_send_snapshot(int fd)
                        snapshot_emit_automation3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_emit_group_item,
                        &v3);
+
+    const web_schema_t diag_schema[3] = {
+        {WEB_ENTITY_DEVICE, 0, 0},
+        {WEB_ENTITY_ENDPOINT, 0, 0},
+        {WEB_ENTITY_ZB_DIAG_STATE, 0, 0},
+    };
+    const domain_entity_t diag_types[3] = {HA_ENTITY_DEVICE, HA_ENTITY_ENDPOINT,
+                                           HA_ENTITY_ZB_DIAG_STATE};
+    for (size_t i = 0; i < 3; i++) {
+        snapshot_ctx_t dc = {.fd = fd, .schema = &diag_schema[i], .count = &sent};
+        domain_entity_iter(s_domain, diag_types[i], snapshot_emit_diag, &dc);
+    }
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -591,6 +668,57 @@ static void web_send_fact(const domain_event_t *event)
         return;
     }
 
+    /* diagnostics raw (A1.5): DEVICE/ENDPOINT/STATE идут отдельным каналом. */
+    if (event->entity == (uint32_t)HA_ENTITY_DEVICE &&
+        event->key_size == sizeof(ha_device_uid_t)) {
+        uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_device_record_t rec = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &rec))) {
+                web_broadcast(WEB_MSG_DIAG_ZB_DEVICE, 0, out,
+                              diag_device_payload((const ha_device_uid_t *)event->key, &rec, out));
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            web_broadcast(WEB_MSG_DIAG_ZB_REMOVE, 0, out,
+                          diag_remove_payload(DIAG_KIND_DEVICE, event->key,
+                                              sizeof(ha_device_uid_t), out));
+        }
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_ENDPOINT &&
+        event->key_size == sizeof(ha_endpoint_key_t)) {
+        uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_endpoint_record_t rec = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &rec))) {
+                web_broadcast(WEB_MSG_DIAG_ZB_ENDPOINT, 0, out,
+                              diag_endpoint_payload((const ha_endpoint_key_t *)event->key, &rec,
+                                                    out));
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            web_broadcast(WEB_MSG_DIAG_ZB_REMOVE, 0, out,
+                          diag_remove_payload(DIAG_KIND_ENDPOINT, event->key,
+                                              sizeof(ha_endpoint_key_t), out));
+        }
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_ZB_DIAG_STATE &&
+        event->key_size == sizeof(ha_zb_state_key_t)) {
+        uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_zb_state_record_t rec = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &rec))) {
+                web_broadcast(WEB_MSG_DIAG_ZB_STATE, 0, out,
+                              diag_state_payload((const ha_zb_state_key_t *)event->key, &rec, out));
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            web_broadcast(WEB_MSG_DIAG_ZB_REMOVE, 0, out,
+                          diag_remove_payload(DIAG_KIND_STATE, event->key,
+                                              sizeof(ha_zb_state_key_t), out));
+        }
+        return;
+    }
+
     const web_schema_t *schema = schema_for((uint8_t)event->entity);
     if (schema == NULL || event->key_size != schema->key_size) {
         return;
@@ -614,126 +742,6 @@ static void web_send_fact(const domain_event_t *event)
 }
 
 /* --- команды ------------------------------------------------------------ */
-
-static uint16_t web_do_zb_command(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_zb_command_t)) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_zb_command_t command;
-    memcpy(&command, args, sizeof(command));
-    if (command.args_len > HA_ZB_COMMAND_ARGS_MAX) {
-        return SYS_CODE_INVALID_ARG;
-    }
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = command.command_id;
-
-    const sys_error_t err =
-        domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target, &meta);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
-/*
- * Семантическая команда: браузер шлёт property/action/value, ZCL-кодировку делает мост.
- * Граница доверия (WS): валидируем размер, форму значения и конечность чисел.
- */
-static uint16_t web_do_semantic_command(const uint8_t *args, size_t len)
-{
-    if (len < 13) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    const uint64_t device_uid = get_u64(args + 0);
-    const uint8_t endpoint = args[8];
-    const uint16_t property_id = get_u16(args + 9);
-    const uint8_t action_id = args[11];
-    const uint8_t value_kind = args[12];
-
-    ha_command_value_t value = {0};
-    if (value_kind == (uint8_t)HA_COMMAND_VALUE_NONE) {
-        if (len != 13) { /* strict: точный размер каждой формы */
-            return SYS_CODE_INVALID_SIZE;
-        }
-        value.kind = HA_COMMAND_VALUE_NONE;
-    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
-        if (len != 18) {
-            return SYS_CODE_INVALID_SIZE;
-        }
-        const ha_value_kind_t scalar_kind = (ha_value_kind_t)args[13];
-        const uint32_t bits = get_u32(args + 14);
-        value.kind = HA_COMMAND_VALUE_SCALAR;
-        if (!bits_to_value(scalar_kind, bits, &value.value.scalar)) {
-            return SYS_CODE_INVALID_ARG;
-        }
-    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
-        if (len != 21) {
-            return SYS_CODE_INVALID_SIZE;
-        }
-        const uint32_t xb = get_u32(args + 13);
-        const uint32_t yb = get_u32(args + 17);
-        float x = 0.0f;
-        float y = 0.0f;
-        memcpy(&x, &xb, sizeof(x));
-        memcpy(&y, &yb, sizeof(y));
-        if (!isfinite(x) || !isfinite(y)) {
-            return SYS_CODE_INVALID_ARG;
-        }
-        value.kind = HA_COMMAND_VALUE_XY;
-        value.value.xy.x = x;
-        value.value.xy.y = y;
-    } else {
-        return SYS_CODE_INVALID_ARG;
-    }
-
-    const ha_zb_state_key_t target = {.device_uid = device_uid, .endpoint = endpoint};
-    ha_zb_command_t command = {0};
-    if (!semantics_build_command(&target, (ha_property_id_t)property_id, (ha_action_id_t)action_id,
-                                 &value, &command)) {
-        return SYS_CODE_INVALID_ARG; /* unknown property/action или неверная форма значения */
-    }
-
-    const domain_fact_target_t fact = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = command.command_id;
-    const sys_error_t err =
-        domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &fact, &meta);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
-static uint16_t web_do_device_rename(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_device_uid_t) + HA_DEVICE_NAME_MAX) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_device_uid_t uid;
-    memcpy(&uid, args, sizeof(uid));
-
-    ha_device_record_t record = {0};
-    sys_error_t err = domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record);
-    if (sys_failed(err)) {
-        return err.code;
-    }
-    memcpy(record.name, args + sizeof(uid), HA_DEVICE_NAME_MAX);
-    record.name[HA_DEVICE_NAME_MAX - 1] = '\0';
-
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    bool changed = false;
-    err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record, &meta,
-                            &changed);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
 
 /* Canonical команда по entity (A6.1c): строим ha_property_command_t и постим HA_CMD_PROPERTY. */
 static uint16_t web_do_property_command(const uint8_t *args, size_t len)
@@ -1221,15 +1229,6 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
 
     uint16_t status = (uint16_t)SYS_CODE_INVALID_ARG;
     switch (cmd) {
-    case WEB_CMD_ZB_COMMAND:
-        status = web_do_zb_command(args, len);
-        break;
-    case WEB_CMD_SEMANTIC_COMMAND:
-        status = web_do_semantic_command(args, len);
-        break;
-    case WEB_CMD_DEVICE_RENAME:
-        status = web_do_device_rename(args, len);
-        break;
     case WEB_CMD_ENTITY_RENAME:
         status = web_do_entity_rename(args, len);
         break;

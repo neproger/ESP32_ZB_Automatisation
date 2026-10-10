@@ -169,7 +169,7 @@ sys_error_t zigbee_device_remove(domain_t *domain, ha_device_uid_t uid)
         return zigbee_fail(SYS_CODE_INVALID_ARG);
     }
 
-    sys_error_t err = remove_device_entities(domain, (domain_entity_t)HA_ENTITY_STATE,
+    sys_error_t err = remove_device_entities(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE,
                                              sizeof(ha_zb_state_key_t), uid);
     if (sys_failed(err)) {
         return err;
@@ -244,6 +244,6 @@ sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, 
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
     meta.value = zigbee_value_compact(report);
 
-    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_STATE, &key, &record, &meta,
+    return domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &key, &record, &meta,
                              out_changed);
 }

@@ -212,7 +212,7 @@ sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type, const void
         }
         return not_found();
     }
-    if (type == (domain_entity_t)HA_ENTITY_STATE) {
+    if (type == (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) {
         for (size_t i = 0; i < sizeof(s_states) / sizeof(s_states[0]); ++i) {
             if (memcmp(&s_states[i].key, key, sizeof(ha_zb_state_key_t)) == 0) {
                 *(ha_zb_state_record_t *)out_record = s_states[i].record;

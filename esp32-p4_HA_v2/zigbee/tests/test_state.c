@@ -92,7 +92,7 @@ static void register_types(domain_t *domain)
     CHECK(sys_ok(domain_register_entity(domain, &device)));
 
     domain_entity_desc_t state = {0};
-    state.type = (domain_entity_t)HA_ENTITY_STATE;
+    state.type = (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE;
     state.key_size = sizeof(ha_zb_state_key_t);
     state.payload_size = sizeof(ha_zb_state_record_t);
     state.capacity = 256;
@@ -174,7 +174,7 @@ static void test_report_without_interview_is_dropped(void)
     CHECK(sys_is(zigbee_state_apply(&domain, &report, &changed), SYS_CODE_NOT_FOUND));
     CHECK(!changed);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 0);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 0);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 0);
 
     CHECK(sys_ok(domain_deinit(&domain)));
     flash_off(sim);
@@ -208,7 +208,7 @@ static void test_interviewed_device_gets_state(void)
     ha_zb_state_key_t key = {0};
     zigbee_state_key_build(&report, &key);
     ha_zb_state_record_t state_record = {0};
-    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_STATE, &key,
+    CHECK(sys_ok(domain_entity_get(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &key,
                                    &state_record)));
     CHECK(state_record.raw == 1u);
     CHECK(state_record.zcl_type == HA_ZB_TYPE_BOOL);
@@ -217,7 +217,7 @@ static void test_interviewed_device_gets_state(void)
     CHECK(sys_ok(zigbee_state_apply(&domain, &report, &changed)));
     CHECK(!changed);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 1);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 1);
 
     /* Повторное интервью обновляет модель, не множа запись. */
     CHECK(sys_ok(zigbee_device_set_model(&domain, UID, "TS0002", &changed)));
@@ -258,7 +258,7 @@ static void test_attributes_are_independent(void)
     CHECK(sys_ok(zigbee_state_apply(&domain, &temperature, &changed)));
     CHECK(changed);
 
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 3);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 3);
     CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_DEVICE) == 1);
 
     /* Другой атрибут меняется независимо: число записей не растёт. */
@@ -267,7 +267,7 @@ static void test_attributes_are_independent(void)
                                                   HA_ZB_TYPE_UINT8, 40);
     CHECK(sys_ok(zigbee_state_apply(&domain, &level_again, &changed)));
     CHECK(changed);
-    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_STATE) == 3);
+    CHECK(record_count(&domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE) == 3);
 
     CHECK(sys_ok(domain_deinit(&domain)));
     flash_off(sim);
@@ -303,7 +303,7 @@ static void test_device_persists_but_state_does_not(void)
     ha_zb_state_key_t key = {0};
     zigbee_state_key_build(&report, &key);
     ha_zb_state_record_t state_record = {0};
-    CHECK(sys_is(domain_entity_get(&reopened, (domain_entity_t)HA_ENTITY_STATE, &key,
+    CHECK(sys_is(domain_entity_get(&reopened, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &key,
                                    &state_record),
                  SYS_CODE_NOT_FOUND));
 

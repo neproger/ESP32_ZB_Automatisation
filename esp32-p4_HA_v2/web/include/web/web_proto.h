@@ -19,7 +19,7 @@
 
 /* Совпадает с ha_entity_t (ha_model/ha_entities.h); проверяется static_assert в web.c. */
 #define WEB_ENTITY_DEVICE 1u
-#define WEB_ENTITY_STATE 2u
+#define WEB_ENTITY_ZB_DIAG_STATE 2u
 #define WEB_ENTITY_ENDPOINT 3u
 #define WEB_ENTITY_AUTOMATION 4u
 #define WEB_ENTITY_DEVICE_REMOVE 5u
@@ -50,8 +50,6 @@ typedef enum {
 
 typedef enum {
     WEB_CMD_SNAPSHOT = 1,
-    WEB_CMD_ZB_COMMAND = 2,
-    WEB_CMD_DEVICE_RENAME = 3,
     WEB_CMD_AUTOMATION_PUT = 4,
     WEB_CMD_AUTOMATION_REMOVE = 5,
     WEB_CMD_DEVICE_REMOVE = 6,
@@ -62,17 +60,6 @@ typedef enum {
     WEB_CMD_GROUP_PUT = 9,
     WEB_CMD_GROUP_REMOVE = 10,
     WEB_CMD_LOCATION_PUT = 13,
-    /*
-     * Семантическая команда (аддитивно, без WS v3): браузер шлёт property+action+value,
-     * ZCL-кодировку делает Web через semantics. Стабильный LE DTO (без C enum/union):
-     *   @0  u64 device_uid
-     *   @8  u8  endpoint
-     *   @9  u16 property_id  (ha_property_id_t)
-     *   @11 u8  action_id    (ha_action_id_t)
-     *   @12 u8  value_kind    (HA_COMMAND_VALUE_*)
-     *   value: NONE — нет; SCALAR @13 u8 kind + @14 u32 bits; XY @13 f32 x + @17 f32 y
-     */
-    WEB_CMD_SEMANTIC_COMMAND = 14,
     /* Canonical group item: PUT (52): group_id,entity,property,order,title[32];
      * REMOVE (18): group_id,entity,property. Ключ entity-native (A4). */
     WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
@@ -126,6 +113,19 @@ typedef enum {
      */
     WEB_MSG3_EVENT = 0x38,
 } web_msg3_t;
+
+/*
+ * Diagnostics-канал (A1.5): transport-specific raw Zigbee, НЕ часть web_msg3_t и НЕ
+ * доменная модель. Здесь допустимы uid/endpoint/cluster/attr/zcl_type/raw.
+ *   DIAG_ZB_DEVICE   (72): ha_device_uid_t(8) + ha_device_record_t(64)
+ *   DIAG_ZB_ENDPOINT (88): ha_endpoint_key_t(16) + ha_endpoint_record_t(72)
+ *   DIAG_ZB_STATE    (24): ha_zb_state_key_t(16) + ha_zb_state_record_t(8)
+ *   DIAG_ZB_REMOVE    (rem): u8 kind (1=device,2=state,3=endpoint) + сырой ключ
+ */
+#define WEB_MSG_DIAG_ZB_DEVICE 0x40u
+#define WEB_MSG_DIAG_ZB_ENDPOINT 0x41u
+#define WEB_MSG_DIAG_ZB_STATE 0x42u
+#define WEB_MSG_DIAG_ZB_REMOVE 0x43u
 
 #define WEB_MSG3_ENTITY_SIZE 40u /* u64 entity_id + char name[HA_ENTITY_NAME_MAX=32] */
 #define WEB_MSG3_PROPERTY_STATE_SIZE 15u

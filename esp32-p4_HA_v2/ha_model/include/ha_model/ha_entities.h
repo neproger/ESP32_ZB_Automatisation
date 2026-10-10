@@ -32,7 +32,10 @@ extern "C" {
  */
 typedef enum {
     HA_ENTITY_DEVICE = 1,
-    HA_ENTITY_STATE = 2,
+    /* Raw Zigbee-состояние — ТОЛЬКО diagnostics backing-store (A1.5), не часть домена.
+     * Каноническая истина состояния — HA_ENTITY_PROPERTY_STATE; наружу идёт каналом
+     * WEB_MSG_DIAG_ZB_*, не через v3. */
+    HA_ENTITY_ZB_DIAG_STATE = 2,
     HA_ENTITY_ENDPOINT = 3,
     HA_ENTITY_AUTOMATION = 4,
     /* Список устройств на удаление: ключ — uid. Устройство всё равно нужно удалить из
@@ -55,8 +58,8 @@ typedef enum {
     HA_ENTITY_SETTINGS = 13,
     /* Логическая сущность (Шаг A): transport-agnostic identity. Форма — ha_model/ha_entity.h. */
     HA_ENTITY_ENTITY = 14,
-    /* Canonical property state (Шаг A): семантическая истина (entity_id, property_id).
-     * Форма — ha_model/ha_state.h. Соседствует с raw HA_ENTITY_STATE до A1.4. */
+    /* Canonical property state (Шаг A): единственный production state — семантическая
+     * истина (entity_id, property_id). Форма — ha_model/ha_state.h. */
     HA_ENTITY_PROPERTY_STATE = 15,
     /* Canonical capabilities (Шаг A): что Entity умеет. Форма — ha_model/ha_capabilities.h. */
     HA_ENTITY_CAPABILITIES = 16,

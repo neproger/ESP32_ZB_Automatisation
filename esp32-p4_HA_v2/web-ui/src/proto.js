@@ -14,8 +14,6 @@ export const MSG = {
 
 export const CMD = {
   SNAPSHOT: 1,
-  ZB_COMMAND: 2,
-  DEVICE_RENAME: 3,
   AUTOMATION_PUT: 4,
   AUTOMATION_REMOVE: 5,
   DEVICE_REMOVE: 6,
@@ -23,14 +21,19 @@ export const CMD = {
   PERMIT_JOIN: 8,
   GROUP_PUT: 9,
   GROUP_REMOVE: 10,
-  GROUP_ITEM_PUT: 11,
-  GROUP_ITEM_REMOVE: 12,
   LOCATION_PUT: 13,
-  SEMANTIC_COMMAND: 14,
   SEMANTIC_GROUP_ITEM_PUT: 16,
   SEMANTIC_GROUP_ITEM_REMOVE: 17,
   ENTITY_RENAME: 18,
   PROPERTY_COMMAND: 19,
+}
+
+// Diagnostics raw Zigbee (A1.5): transport-specific, вне web v3. Здесь допустимы uid/ep/cluster/raw.
+export const DIAG = {
+  ZB_DEVICE: 0x40,
+  ZB_ENDPOINT: 0x41,
+  ZB_STATE: 0x42,
+  ZB_REMOVE: 0x43,
 }
 
 // v3 canonical (Шаг A, A6.0): identity = entity_id, без uid/endpoint/cluster/attr.
@@ -77,28 +80,6 @@ export function encodeFrame(type, payload) {
   dv.setUint16(4, seq, true)
   out.set(payload, HDR)
   return { seq, bytes: out }
-}
-
-// SEMANTIC_COMMAND: стабильный LE DTO — u64 uid @0, u8 ep @8, u16 property @9, u8 action @11,
-// u8 value_kind @12; SCALAR: u8 kind @13 + f32 @14; XY: f32 x @13 + f32 y @17. Без ZCL.
-export function semanticCommand({ uid, ep, property, action, value }) {
-  const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
-  const size = 13 + (kind === COMMAND_VALUE.SCALAR ? 5 : kind === COMMAND_VALUE.XY ? 8 : 0)
-  const out = new Uint8Array(size)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, BigInt(uid), true)
-  dv.setUint8(8, ep)
-  dv.setUint16(9, property, true)
-  dv.setUint8(11, action)
-  dv.setUint8(12, kind)
-  if (kind === COMMAND_VALUE.SCALAR) {
-    dv.setUint8(13, VALUE_KIND.FLOAT)
-    dv.setFloat32(14, Number(value), true)
-  } else if (kind === COMMAND_VALUE.XY) {
-    dv.setFloat32(13, Number(value.xy.x), true)
-    dv.setFloat32(17, Number(value.xy.y), true)
-  }
-  return encodeCommand(CMD.SEMANTIC_COMMAND, out)
 }
 
 // Semantic-правило → physical record делает бэкенд. Rule-wire (зеркало web.c:web_encode_sem_rule).
