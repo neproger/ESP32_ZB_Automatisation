@@ -285,9 +285,15 @@ static bool semantic_state_remove_payload(const ha_zb_state_key_t *key, uint8_t 
 
 /* --- canonical v3 (A6.1): identity = entity_id, без uid/endpoint/cluster/attr ----- */
 
-static bool web3_entity_payload(ha_entity_id_t entity_id, uint8_t *out, uint16_t *out_len)
+static bool web3_entity_payload(ha_entity_id_t entity_id, const char *name, uint8_t *out,
+                                uint16_t *out_len)
 {
     put_u64(out, entity_id);
+    memset(out + 8, 0, HA_ENTITY_NAME_MAX);
+    if (name != NULL) {
+        const size_t n = strnlen(name, HA_ENTITY_NAME_MAX);
+        memcpy(out + 8, name, n);
+    }
     *out_len = (uint16_t)WEB_MSG3_ENTITY_SIZE;
     return true;
 }
@@ -514,11 +520,11 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
 /* canonical v3: ENTITY и PROPERTY_STATE не входят в v2 SCHEMA — отдельные эмиттеры. */
 static bool snapshot_emit_entity3(const void *key, const void *record, void *ctx)
 {
-    (void)record;
     snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    const ha_entity_record_t *rec = (const ha_entity_record_t *)record;
     uint8_t out[WEB_MSG3_ENTITY_SIZE];
     uint16_t len = 0;
-    if (web3_entity_payload(*(const ha_entity_id_t *)key, out, &len)) {
+    if (web3_entity_payload(*(const ha_entity_id_t *)key, rec->name, out, &len)) {
         web_send_frame(s->fd, WEB_MSG3_ENTITY, 0, out, len);
     }
     (*s->count)++;
@@ -608,10 +614,14 @@ static void web_send_fact(const domain_event_t *event)
         const ha_entity_id_t entity_id = *(const ha_entity_id_t *)event->key;
         uint8_t out[WEB_MSG3_ENTITY_SIZE];
         uint16_t len = 0;
-        (void)web3_entity_payload(entity_id, out, &len);
         if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
-            web_broadcast(WEB_MSG3_ENTITY, 0, out, len);
+            ha_entity_record_t record = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record)) &&
+                web3_entity_payload(entity_id, record.name, out, &len)) {
+                web_broadcast(WEB_MSG3_ENTITY, 0, out, len);
+            }
         } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            (void)web3_entity_payload(entity_id, NULL, out, &len);
             web_broadcast(WEB_MSG3_ENTITY_REMOVE, 0, out, len);
         }
         return;
@@ -840,6 +850,23 @@ static uint16_t web_do_device_rename(const uint8_t *args, size_t len)
     bool changed = false;
     err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &record, &meta,
                             &changed);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+/* Rename логической Entity по entity_id (A6.1): adapter не участвует. */
+static uint16_t web_do_entity_rename(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_entity_id_t) + HA_ENTITY_NAME_MAX) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_entity_rename_t request = {0};
+    memcpy(&request.entity, args, sizeof(request.entity));
+    memcpy(request.name, args + sizeof(request.entity), HA_ENTITY_NAME_MAX);
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err =
+        domain_post(s_domain, HA_CMD_ENTITY_RENAME, &request, sizeof(request), NULL, &meta);
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
@@ -1367,6 +1394,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_DEVICE_RENAME:
         status = web_do_device_rename(args, len);
+        break;
+    case WEB_CMD_ENTITY_RENAME:
+        status = web_do_entity_rename(args, len);
         break;
     case WEB_CMD_AUTOMATION_PUT:
         status = web_do_automation_put(args, len);

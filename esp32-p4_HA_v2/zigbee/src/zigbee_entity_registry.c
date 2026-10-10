@@ -1,5 +1,7 @@
 #include "zigbee/zigbee_entity_registry.h"
 
+#include <string.h>
+
 #include "esp_log.h"
 #include "zigbee/zigbee_entity_binding.h"
 
@@ -14,9 +16,19 @@ static size_t s_binding_count;
 sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
                                  ha_entity_id_t *out_entity_id)
 {
+    /* Initial name: зигби может предложить имя устройства; имя Entity ему не принадлежит. */
+    char initial_name[sizeof(((ha_entity_record_t *)0)->name)] = {0};
+    ha_device_record_t device = {0};
+    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &device))) {
+        memcpy(initial_name, device.name, sizeof(initial_name));
+        initial_name[sizeof(initial_name) - 1] = '\0';
+    }
+
     const size_t before = s_binding_count;
-    const sys_error_t err = zb_entity_ensure_entity(domain, s_bindings, ZB_ENTITY_BINDING_MAX,
-                                                    &s_binding_count, uid, endpoint, out_entity_id);
+    const sys_error_t err =
+        zb_entity_ensure_entity(domain, s_bindings, ZB_ENTITY_BINDING_MAX, &s_binding_count, uid,
+                                endpoint, initial_name[0] != '\0' ? initial_name : NULL,
+                                out_entity_id);
     if (sys_failed(err)) {
         ESP_LOGW(TAG, "entity ensure failed uid=%llx ep=%u err=%u", (unsigned long long)uid,
                  (unsigned)endpoint, (unsigned)err.code);

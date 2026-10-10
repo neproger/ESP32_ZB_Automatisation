@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "automation/automation.h"
 #include "display_p4/display_p4.h"
@@ -8,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
+#include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
@@ -262,6 +264,41 @@ static void seed_demo_automation(domain_t *domain)
     }
 }
 
+/*
+ * Rename логической Entity (HA_CMD_ENTITY_RENAME): меняет Entity.name напрямую. Имя
+ * принадлежит Entity, adapter в переименовании не участвует.
+ */
+static sys_error_t entity_rename_execute(domain_command_t type, const void *args, size_t args_size,
+                                         void *ctx)
+{
+    (void)type;
+    (void)ctx;
+    if (args == NULL || args_size != sizeof(ha_entity_rename_t)) {
+        return sys_error_make(SYS_LAYER_DOMAIN, SYS_CODE_INVALID_ARG);
+    }
+    const ha_entity_rename_t *request = (const ha_entity_rename_t *)args;
+    const ha_entity_key_t key = {.id = request->entity};
+    ha_entity_record_t record = {0};
+    const sys_error_t found =
+        domain_entity_get(&s_domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record);
+    if (sys_failed(found)) {
+        return found;
+    }
+
+    size_t length = strnlen(request->name, sizeof(request->name));
+    if (length >= sizeof(record.name)) {
+        length = sizeof(record.name) - 1;
+    }
+    memcpy(record.name, request->name, length);
+    record.name[length] = '\0';
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    return domain_entity_put(&s_domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record, &meta,
+                             &changed);
+}
+
 static bool start_step(sys_error_t err, const char *what)
 {
     if (sys_failed(err)) {
@@ -342,6 +379,11 @@ void app_main(void)
     }
     if (!start_step(domain_register_entity(&s_domain, &property_state_desc),
                     "register property-state")) {
+        return;
+    }
+    if (!start_step(domain_register_command(&s_domain, HA_CMD_ENTITY_RENAME,
+                                            entity_rename_execute, NULL),
+                    "register entity-rename")) {
         return;
     }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {

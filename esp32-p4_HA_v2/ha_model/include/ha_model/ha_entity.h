@@ -76,22 +76,24 @@ typedef struct {
 } ha_entity_key_t;
 
 /*
- * Минимальная transport-independent metadata. Сейчас её нет: запись содержит лишь
- * explicit reserved (по docs/RECORD_MODEL.md запись не может быть нулевого размера).
- * Реальные поля появятся, только когда возникнет потребность.
+ * Логическая metadata Entity. Имя — свойство логической сущности, а не транспорта:
+ * adapter может задать initial name при первом создании (напр. из имени устройства),
+ * но владеет и меняет имя Entity (rename по entity_id). Транспорт/pv-полей здесь нет.
  */
+#define HA_ENTITY_NAME_MAX 32
+
 typedef struct {
-    uint8_t reserved;
+    char name[HA_ENTITY_NAME_MAX];
 } ha_entity_record_t;
 
 #ifdef __cplusplus
 static_assert(sizeof(ha_entity_id_t) == 8, "ha_entity_id_t: неожиданный размер");
 static_assert(sizeof(ha_entity_key_t) == 8, "ha_entity_key_t: неожиданный размер");
-static_assert(sizeof(ha_entity_record_t) == 1, "ha_entity_record_t: неожиданный размер");
+static_assert(sizeof(ha_entity_record_t) == HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
 #else
 _Static_assert(sizeof(ha_entity_id_t) == 8, "ha_entity_id_t: неожиданный размер");
 _Static_assert(sizeof(ha_entity_key_t) == 8, "ha_entity_key_t: неожиданный размер");
-_Static_assert(sizeof(ha_entity_record_t) == 1, "ha_entity_record_t: неожиданный размер");
+_Static_assert(sizeof(ha_entity_record_t) == HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
 #endif
 
 #ifdef __cplusplus

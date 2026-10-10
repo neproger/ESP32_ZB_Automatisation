@@ -1,5 +1,7 @@
 #include "zigbee/zigbee_entity_binding.h"
 
+#include <string.h>
+
 bool zb_entity_binding_find_entity(const zb_entity_binding_t *list, size_t count,
                                    ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out)
 {
@@ -93,7 +95,7 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
 
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
-                                    ha_entity_id_t *out_entity_id)
+                                    const char *initial_name, ha_entity_id_t *out_entity_id)
 {
     if (domain == NULL || list == NULL || count == NULL || out_entity_id == NULL) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
@@ -105,7 +107,25 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
     }
 
     const ha_entity_key_t key = {.id = id};
-    const ha_entity_record_t record = {0};
+
+    /* Entity уже есть: пользовательское имя — его собственность, не перетираем. */
+    ha_entity_record_t existing = {0};
+    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &existing))) {
+        *out_entity_id = id;
+        return SYS_OK;
+    }
+
+    /* Первое создание: adapter даёт initial name; далее владеет Entity. */
+    ha_entity_record_t record = {0};
+    if (initial_name != NULL) {
+        size_t length = strlen(initial_name);
+        if (length >= sizeof(record.name)) {
+            length = sizeof(record.name) - 1;
+        }
+        memcpy(record.name, initial_name, length);
+        record.name[length] = '\0';
+    }
+
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
     bool changed = false;

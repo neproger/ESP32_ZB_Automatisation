@@ -51,6 +51,12 @@ extern "C" {
  */
 #define HA_CMD_PROPERTY 6u
 
+/*
+ * Переименование логической Entity (args = ha_entity_rename_t, Шаг A, A6.1). Меняет
+ * Entity.name напрямую; adapter не участвует — имя принадлежит Entity, а не транспорту.
+ */
+#define HA_CMD_ENTITY_RENAME 7u
+
 /* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
 #define HA_ZB_COMMAND_ARGS_MAX 16u
 
@@ -80,9 +86,16 @@ typedef struct {
     ha_command_value_t value;
 } ha_property_command_t;
 
+/* Аргумент HA_CMD_ENTITY_RENAME. */
+typedef struct {
+    ha_entity_id_t entity;
+    char name[HA_ENTITY_NAME_MAX];
+} ha_entity_rename_t;
+
 #ifdef __cplusplus
 static_assert(sizeof(ha_zb_command_t) == 32, "ha_zb_command_t: неожиданный размер");
 static_assert(sizeof(ha_property_command_t) == 28, "ha_property_command_t: неожиданный размер");
+static_assert(sizeof(ha_entity_rename_t) == 40, "ha_entity_rename_t: неожиданный размер");
 #endif
 
 #ifdef __cplusplus

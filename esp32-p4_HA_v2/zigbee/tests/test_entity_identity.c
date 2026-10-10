@@ -70,7 +70,7 @@ static bool domain_has(ctx_t *c, ha_entity_id_t id)
 static ha_entity_id_t ensure(ctx_t *c, uint64_t uid, uint8_t ep, sys_error_t *err)
 {
     ha_entity_id_t id = HA_ENTITY_ID_NONE;
-    *err = zb_entity_ensure_entity(&c->d, c->reg, REG_CAP, &c->n, uid, ep, &id);
+    *err = zb_entity_ensure_entity(&c->d, c->reg, REG_CAP, &c->n, uid, ep, NULL, &id);
     return id;
 }
 
@@ -152,6 +152,31 @@ static void test_atomicity(void)
     (void)got;
 }
 
+/* A6.1: adapter даёт initial name при создании; повторный ensure имя НЕ перетирает. */
+static void test_name_initialized_and_not_clobbered(void)
+{
+    ctx_t c;
+    ctx_init(&c, 4);
+    ha_entity_id_t id = HA_ENTITY_ID_NONE;
+
+    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, "Kitchen", &id)));
+
+    const ha_entity_key_t key = {.id = id};
+    ha_entity_record_t record = {0};
+    CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record)));
+    CHECK(strcmp(record.name, "Kitchen") == 0);
+
+    /* Повторное ensure с другим initial name — пользовательское имя сохраняется. */
+    ha_entity_id_t again = HA_ENTITY_ID_NONE;
+    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, "Other", &again)));
+    CHECK(again == id);
+    memset(&record, 0, sizeof(record));
+    CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record)));
+    CHECK(strcmp(record.name, "Kitchen") == 0);
+
+    domain_deinit(&c.d);
+}
+
 int main(void)
 {
     mstore_nor_sim_t *sim = NULL;
@@ -163,6 +188,7 @@ int main(void)
     test_reboot_repair();
     test_endpoint_change();
     test_atomicity();
+    test_name_initialized_and_not_clobbered();
 
     mstore_platform_flash_set_device(NULL);
     mstore_nor_sim_destroy(sim);

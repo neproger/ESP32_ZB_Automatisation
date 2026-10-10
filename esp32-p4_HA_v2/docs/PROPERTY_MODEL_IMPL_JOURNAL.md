@@ -464,6 +464,14 @@ TLV / самоописание приложения              — запре�
             ENDPOINT(uid,ep) через мост, а web не имеет binding) и frontend identity = entity_id.
             Найден продуктовый вопрос: ENTITY пока без metadata (имени) → обычный UI не сможет
             показывать имена. Требуется решение (см. диалог): name в ENTITY, owner — adapter.
+2026-10-10  шаг A, A6.1a — Entity logical metadata (решение владельца): `ha_entity_record_t`
+            = { char name[32] }. Принцип: «adapter создаёт/связывает Entity и может
+            инициализировать metadata; далее логической metadata владеет Domain Entity».
+            zb_entity_ensure_entity принимает initial_name, при существующей Entity имя НЕ
+            перетирает; registry берёт initial name из DEVICE.name. Rename — generic
+            HA_CMD_ENTITY_RENAME(entity_id,name) (executor в bootstrap, adapter не участвует),
+            web-команда WEB_CMD_ENTITY_RENAME; v3 ENTITY теперь несёт name (40B).
+            ha_model 4/4, zigbee 9/9 (test_entity_identity + name init/no-clobber), IDF зелёный
 ```
 
 ## 7. Открытые вопросы

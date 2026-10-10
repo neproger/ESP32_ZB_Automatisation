@@ -115,6 +115,9 @@ typedef enum {
      * REMOVE (19): group_id,uid,ep,property. Backend → raw key через semantics_property_key. */
     WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
     WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE = 17,
+    /* Переименование Entity (Шаг A, A6.1): u64 entity_id @0, char name[32] @8. Adapter не
+     * участвует — имя принадлежит Entity. */
+    WEB_CMD_ENTITY_RENAME = 18,
 } web_cmd_t;
 
 /*
@@ -124,7 +127,7 @@ typedef enum {
  * read-сущности идентичности; команды/остальное — на A6.2+.
  *
  * Раскладки (LE, без C enum/union на проводе):
- *   ENTITY (8):                 u64 entity_id @0
+ *   ENTITY (40):                u64 entity_id @0, char name[32] @8
  *   ENTITY_REMOVE (8):          u64 entity_id @0
  *   PROPERTY_STATE (15):        u64 entity_id @0, u16 property @8, u8 value_kind @10, u32 bits @11
  *   PROPERTY_STATE_REMOVE (10): u64 entity_id @0, u16 property @8
@@ -141,7 +144,7 @@ typedef enum {
     WEB_MSG3_CAPABILITIES_REMOVE = 0x35,
 } web_msg3_t;
 
-#define WEB_MSG3_ENTITY_SIZE 8u
+#define WEB_MSG3_ENTITY_SIZE 40u /* u64 entity_id + char name[HA_ENTITY_NAME_MAX=32] */
 #define WEB_MSG3_PROPERTY_STATE_SIZE 15u
 #define WEB_MSG3_PROPERTY_STATE_REMOVE_SIZE 10u
 

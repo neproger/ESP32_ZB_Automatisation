@@ -273,9 +273,12 @@ A6  WS v3                                                                       
                 (web_proto.h WEB_MSG3_*, web-ui/proto.js MSG3). Без uid/endpoint/cluster/attr.
       [~] A6.1  backend отдаёт v3 + frontend identity = entity_id. Промежуточно:
                 [x] backend ENTITY + PROPERTY_STATE из canonical (snapshot + delta)
-                [ ] backend CAPABILITIES (нужен canonical-источник: сущность по entity, не по uid/ep)
+                [x] ENTITY metadata: логическое `name` (владелец — Entity); adapter задаёт
+                    initial name при создании, повторный ensure имя НЕ перетирает; rename —
+                    generic `HA_CMD_ENTITY_RENAME(entity_id, name)` (WEB_CMD_ENTITY_RENAME),
+                    adapter не участвует; v3 ENTITY несёт name
+                [ ] backend CAPABILITIES (canonical-таблица по entity_id, пишет adapter)
                 [ ] frontend identity = entity_id (semState(entity,property)/capabilities(entity))
-                [ ] ENTITY metadata (name) — для отображения; иначе UI без имён (см. вопрос)
       Далее возврат к A3.3–A3.5, затем A4, затем A6.2+ (AUTOMATION/GROUP_ITEM/EVENT/commands)
       и A6.x (удаление v2 semantic transitional wire).
 
