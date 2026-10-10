@@ -184,7 +184,9 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       (неоднозначный event, BETWEEN на STATE-триггере) → отказ
 - [x] **5.3.4a** обратная проекция `semantics_decompile_automation` (physical → semantic) + host-тест;
       невыразимое правило → `false` (Web/UI покажет как legacy/raw, не выдумывая смысл)
-- [ ] **5.3.4b** semantic automation DTO в Web (аддитивно, рядом с raw `ENTITY AUTOMATION`)
+- [x] **5.3.4b** semantic automation DTO: `WEB_MSG_SEMANTIC_AUTOMATION` (0x14) / `_REMOVE` (0x15),
+      общий rule-кодек (read=write), snapshot+delta; `representable=0` для legacy/невыразимого;
+      browser store `semAutomations` по id; raw `ENTITY AUTOMATION` без изменений
 - [ ] **5.3.4c/d** frontend читает и сохраняет только semantic rule
 - [x] **5.3.5** старый `WEB_CMD_AUTOMATION_PUT` оставлен transitional
 - [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
@@ -259,6 +261,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | BETWEEN на STATE-триггере → отказ компиляции | в legacy-записи триггера нет второго порога |
 | 2026-10-10 | Симметрия: `semantics_decompile_automation` (physical → semantic) для read-path UI | иначе frontend перестал бы писать ZCL, но продолжал его читать/понимать |
 | 2026-10-10 | Невыразимое правило (неизвестный event/action, transition≠0) → `false`, UI показывает legacy/raw | не выдумывать смысл там, где reverse неоднозначен |
+| 2026-10-10 | Rule-wire — один кодек для PUT и STATE; state DTO = id + representable + rule | read/write формы не разъедутся |
+| 2026-10-10 | В snapshot (внутри `domain_entity_iter`) НЕ звать `domain_entity_get` | локи Domain реентерабельно не берутся: был дедлок web-задачи; профиль устройства резолвим только в delta |
 
 ## 5. От чего отказались
 
@@ -311,6 +315,9 @@ TLV / самоописание приложения              — запре�
             компилятора; на P4 проверено (TIME→POWER ON → запись #100). 5.3.4 (UI) — далее
 2026-10-10  фаза 5.3.4a: semantics_decompile_automation (physical→semantic) + round-trip и
             отказы в host-тесте. Читающая сторона Automation готова к semantic UI
+2026-10-10  фаза 5.3.4b: WEB_MSG_SEMANTIC_AUTOMATION/_REMOVE (общий rule-wire кодек),
+            snapshot+delta проекция, browser semAutomations. На P4 приходят 5 правил
+            (TIME/STATE/EVENT), representable=1. Пофикшен дедлок (domain-лок) в snapshot
 ```
 
 ## 7. Открытые вопросы

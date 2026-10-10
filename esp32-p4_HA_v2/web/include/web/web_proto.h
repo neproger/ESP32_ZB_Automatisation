@@ -44,6 +44,13 @@ typedef enum {
      */
     WEB_MSG_SEMANTIC_STATE = 0x12,
     WEB_MSG_SEMANTIC_STATE_REMOVE = 0x13,
+    /*
+     * Аддитивно (Фаза 5.3.4b): семантическое правило рядом с raw ENTITY AUTOMATION.
+     * STATE (переменной длины): u64 id @0, u8 representable @8, [semantic rule @9 если 1].
+     * REMOVE: u64 id @0. Rule-wire совпадает с WEB_CMD_SEMANTIC_AUTOMATION_PUT (без id).
+     */
+    WEB_MSG_SEMANTIC_AUTOMATION = 0x14,
+    WEB_MSG_SEMANTIC_AUTOMATION_REMOVE = 0x15,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 

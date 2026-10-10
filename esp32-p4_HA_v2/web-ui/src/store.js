@@ -21,6 +21,63 @@ const maps = {
 
 // Семантическое состояние: ключ (uid, ep, property) — идентичность, готовая к шагу A.
 const semStates = new Map()
+// Семантические правила: ключ — id. { id, representable, rule|null }.
+const semAutomations = new Map()
+
+// Декод rule-wire (зеркало web.c:web_encode_sem_rule). Без ZCL.
+function decodeSemRule(dv, base) {
+  let o = base
+  const enabled = dv.getUint8(o); o += 1
+  const triggerKind = dv.getUint8(o); o += 1
+  const trigger = { kind: triggerKind }
+  if (triggerKind === 0) {
+    trigger.deviceUid = dv.getBigUint64(o, true); o += 8
+    trigger.eventId = dv.getUint8(o); o += 1
+  } else if (triggerKind === 1) {
+    trigger.minutesOfDay = dv.getUint16(o, true); o += 2
+    trigger.weekdayMask = dv.getUint8(o); o += 1
+  } else if (triggerKind === 2) {
+    trigger.deviceUid = dv.getBigUint64(o, true); o += 8
+    trigger.endpoint = dv.getUint8(o); o += 1
+    trigger.property = dv.getUint16(o, true); o += 2
+    trigger.op = dv.getUint8(o); o += 1
+    trigger.edge = dv.getUint8(o); o += 1
+    trigger.value = dv.getFloat32(o, true); o += 4
+    trigger.value2 = dv.getFloat32(o, true); o += 4
+  }
+  const conditionsCount = dv.getUint8(o); o += 1
+  const conditions = []
+  for (let i = 0; i < conditionsCount; i++) {
+    conditions.push({
+      deviceUid: dv.getBigUint64(o, true),
+      endpoint: dv.getUint8(o + 8),
+      property: dv.getUint16(o + 9, true),
+      op: dv.getUint8(o + 11),
+      value: dv.getFloat32(o + 12, true),
+      value2: dv.getFloat32(o + 16, true),
+    })
+    o += 20
+  }
+  const action = {
+    deviceUid: dv.getBigUint64(o, true),
+    endpoint: dv.getUint8(o + 8),
+    property: dv.getUint16(o + 9, true),
+    action: dv.getUint8(o + 11),
+    valueKind: dv.getUint8(o + 12),
+  }
+  o += 13
+  if (action.valueKind === 1) { // SCALAR: u8 kind + u32/f32
+    const kind = dv.getUint8(o); o += 1
+    action.scalarKind = kind
+    action.value = kind === 4 ? dv.getFloat32(o, true) : dv.getUint32(o, true)
+    o += 4
+  } else if (action.valueKind === 2) { // XY
+    action.x = dv.getFloat32(o, true)
+    action.y = dv.getFloat32(o + 4, true)
+    o += 8
+  }
+  return { enabled, trigger, conditions, action }
+}
 
 const EVENT_LOG_MAX = 200
 const events = []
@@ -59,10 +116,23 @@ function onFrame(buf) {
     syncing = true
     for (const k in maps) maps[k].clear()
     semStates.clear()
+    semAutomations.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
     syncing = false
+    emit()
+    return
+  }
+  if (frame.type === MSG.SEMANTIC_AUTOMATION || frame.type === MSG.SEMANTIC_AUTOMATION_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = id.toString()
+    if (frame.type === MSG.SEMANTIC_AUTOMATION_REMOVE) {
+      semAutomations.delete(key)
+    } else {
+      const representable = payload.getUint8(8) === 1
+      semAutomations.set(key, { id, representable, rule: representable ? decodeSemRule(payload, 9) : null })
+    }
     emit()
     return
   }
@@ -177,6 +247,9 @@ export const store = {
   },
   get semStates() {
     return semStates
+  },
+  get semAutomations() {
+    return semAutomations
   },
   // Семантическое состояние по (uid, ep, property): { uid, ep, property, kind, value } | undefined.
   semState(uid, ep, property) {
