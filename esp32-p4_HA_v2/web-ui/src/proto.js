@@ -189,26 +189,25 @@ export function groupRemove(id) {
   return encodeCommand(CMD.GROUP_REMOVE, out)
 }
 
-// Semantic group item → raw делает backend. PUT (53): group_id,u64;uid,u64;ep,u8;property,u16;order,u16;title[32].
+// Canonical group item (A4): identity = (group_id, entity_id, property).
+// PUT (52): group_id,u64 @0; entity,u64 @8; property,u16 @16; order,u16 @18; title[32] @20.
 export function semanticGroupItemPut(groupId, item) {
-  const out = new Uint8Array(53)
+  const out = new Uint8Array(52)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
-  dv.setBigUint64(8, BigInt(item.uid), true)
-  dv.setUint8(16, item.ep)
-  dv.setUint16(17, item.property, true)
-  dv.setUint16(19, item.order || 0, true)
-  putText(out, 21, item.title || '', 32)
+  dv.setBigUint64(8, BigInt(item.entity), true)
+  dv.setUint16(16, item.property, true)
+  dv.setUint16(18, item.order || 0, true)
+  putText(out, 20, item.title || '', 32)
   return encodeCommand(CMD.SEMANTIC_GROUP_ITEM_PUT, out)
 }
-// REMOVE (19): group_id,u64;uid,u64;ep,u8;property,u16.
-export function semanticGroupItemRemove(groupId, uid, ep, property) {
-  const out = new Uint8Array(19)
+// REMOVE (18): group_id,u64 @0; entity,u64 @8; property,u16 @16.
+export function semanticGroupItemRemove(groupId, entity, property) {
+  const out = new Uint8Array(18)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
-  dv.setBigUint64(8, BigInt(uid), true)
-  dv.setUint8(16, ep)
-  dv.setUint16(17, property, true)
+  dv.setBigUint64(8, BigInt(entity), true)
+  dv.setUint16(16, property, true)
   return encodeCommand(CMD.SEMANTIC_GROUP_ITEM_REMOVE, out)
 }
 

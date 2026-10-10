@@ -140,19 +140,16 @@ function onFrame(buf) {
   }
   if (frame.type === MSG.SEMANTIC_GROUP_ITEM || frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
     const groupId = payload.getBigUint64(0, true)
-    const uid = payload.getBigUint64(8, true)
-    const ep = payload.getUint8(16)
-    const property = payload.getUint16(17, true)
-    const key = `${groupId}:${uid}:${ep}:${property}`
+    const entity = payload.getBigUint64(8, true)
+    const property = payload.getUint16(16, true)
+    const key = `${groupId}:${entity}:${property}`
     if (frame.type === MSG.SEMANTIC_GROUP_ITEM_REMOVE) {
       semGroupItems.delete(key)
     } else {
-      const tb = new Uint8Array(payload.buffer, payload.byteOffset + 21, 32)
-      const end = tb.indexOf(0)
       semGroupItems.set(key, {
-        groupId, uid, ep, property,
-        order: payload.getUint16(19, true),
-        title: new TextDecoder().decode(end === -1 ? tb : tb.subarray(0, end)),
+        groupId, entity, property,
+        order: payload.getUint16(18, true),
+        title: textAt(payload, 20, 32),
       })
     }
     emit()

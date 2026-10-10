@@ -525,6 +525,16 @@ TLV / самоописание приложения              — запре�
             Найдено/исправлено: правило с HA_ENTITY_ID_SOURCE могло совпасть при source_entity==NONE
             (resolve давал NONE==NONE). Добавлены guard'ы (source/entity NONE → no match) +
             тесты. automation 1/1, IDF зелёный.
+2026-10-10  шаг A, A4 — group_item entity-native. ha_group_item_key_t.state = ha_state_key_t
+            (entity, property); persist_key group_item_v2 (erase старого physical ABI). Web:
+            семантический group_item wire стал canonical (group_id, entity, property, order,
+            title) — мост не нужен; raw group_item path и WEB_CMD_GROUP_ITEM_* удалены. UI
+            Groups — entity-native (entity+property из capabilities). Display: виджет читает
+            canonical PROPERTY_STATE для значения и соседних свойств (X/Y/яркость) той же
+            Entity; команды → HA_CMD_PROPERTY; заголовок виджета — имя Entity. physical
+            ha_zb_state_key_t из Display ушёл. ha_model 4/4, semantics 1/1, zigbee 9/9,
+            automation 1/1, IDF + web-ui зелёные. Дальше: A6.2+ (остальные v3/удаление v2),
+            A1.4 (остальные readers), A1.5 (raw cleanup).
 ```
 
 ## 7. Открытые вопросы

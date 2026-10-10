@@ -81,7 +81,6 @@ typedef struct {
     X(WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)) \
     X(WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t))           \
     X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
-    X(WEB_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t))   \
     X(WEB_ENTITY_WEATHER, sizeof(ha_device_uid_t), sizeof(ha_weather_record_t))             \
     X(WEB_ENTITY_WIFI_STATUS, sizeof(ha_device_uid_t), sizeof(ha_wifi_status_record_t))     \
     X(WEB_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t))
@@ -383,37 +382,31 @@ done:
     return true;
 }
 
-/* raw group_item → semantic (group_id, uid, ep, property). UNKNOWN property → не публикуем. */
+/*
+ * Canonical group_item → wire (A4): identity уже entity/property, мост не нужен.
+ * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
+ */
 static bool semantic_group_item_payload(const ha_group_item_key_t *key,
                                         const ha_group_item_record_t *record, uint8_t *out,
                                         uint16_t *out_len)
 {
-    const ha_property_id_t property = semantics_property_from_key(&key->state);
-    if (property == HA_PROPERTY_UNKNOWN) {
-        return false;
-    }
     put_u64(out, key->group_id);
-    put_u64(out + 8, key->state.device_uid);
-    out[16] = key->state.endpoint;
-    put_u16(out + 17, (uint16_t)property);
-    put_u16(out + 19, record->order);
-    memcpy(out + 21, record->title, HA_GROUP_ITEM_TITLE_MAX);
-    *out_len = 21 + HA_GROUP_ITEM_TITLE_MAX;
+    put_u64(out + 8, key->state.entity);
+    put_u16(out + 16, (uint16_t)key->state.property);
+    put_u16(out + 18, record->order);
+    memcpy(out + 20, record->title, HA_GROUP_ITEM_TITLE_MAX);
+    *out_len = 20 + HA_GROUP_ITEM_TITLE_MAX;
     return true;
 }
 
+/* REMOVE (18): u64 group_id, u64 entity, u16 property. */
 static bool semantic_group_item_remove_payload(const ha_group_item_key_t *key, uint8_t *out,
                                                uint16_t *out_len)
 {
-    const ha_property_id_t property = semantics_property_from_key(&key->state);
-    if (property == HA_PROPERTY_UNKNOWN) {
-        return false;
-    }
     put_u64(out, key->group_id);
-    put_u64(out + 8, key->state.device_uid);
-    out[16] = key->state.endpoint;
-    put_u16(out + 17, (uint16_t)property);
-    *out_len = 19;
+    put_u64(out + 8, key->state.entity);
+    put_u16(out + 16, (uint16_t)key->state.property);
+    *out_len = 18;
     return true;
 }
 
@@ -456,13 +449,20 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
                                (const ha_endpoint_record_t *)record, cap, &cap_len)) {
             web_send_frame(s->fd, WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
         }
-    } else if (s->schema->type == WEB_ENTITY_GROUP_ITEM) {
-        uint8_t gi[WEB_PROTO_MAX_PAYLOAD];
-        uint16_t gi_len = 0;
-        if (semantic_group_item_payload((const ha_group_item_key_t *)key,
-                                        (const ha_group_item_record_t *)record, gi, &gi_len)) {
-            web_send_frame(s->fd, WEB_MSG_SEMANTIC_GROUP_ITEM, 0, gi, gi_len);
-        }
+    }
+    (*s->count)++;
+    return true;
+}
+
+/* canonical group_item (A4): identity = (group, entity, property). */
+static bool snapshot_emit_group_item(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    uint16_t len = 0;
+    if (semantic_group_item_payload((const ha_group_item_key_t *)key,
+                                    (const ha_group_item_record_t *)record, out, &len)) {
+        web_send_frame(s->fd, WEB_MSG_SEMANTIC_GROUP_ITEM, 0, out, len);
     }
     (*s->count)++;
     return true;
@@ -533,6 +533,7 @@ static void web_send_snapshot(int fd)
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
@@ -552,6 +553,8 @@ static void web_send_snapshot(int fd)
                        snapshot_emit_capabilities3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
                        snapshot_emit_automation3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_emit_group_item,
+                       &v3);
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -658,6 +661,28 @@ static void web_send_fact(const domain_event_t *event)
         }
         return;
     }
+    if (event->entity == (uint32_t)HA_ENTITY_GROUP_ITEM &&
+        event->key_size == sizeof(ha_group_item_key_t)) {
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_group_item_record_t record = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record))) {
+                uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+                uint16_t len = 0;
+                if (semantic_group_item_payload((const ha_group_item_key_t *)event->key, &record,
+                                                out, &len)) {
+                    web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM, 0, out, len);
+                }
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+            uint16_t len = 0;
+            if (semantic_group_item_remove_payload((const ha_group_item_key_t *)event->key, out,
+                                                   &len)) {
+                web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE, 0, out, len);
+            }
+        }
+        return;
+    }
 
     const web_schema_t *schema = schema_for((uint8_t)event->entity);
     if (schema == NULL || event->key_size != schema->key_size) {
@@ -691,14 +716,6 @@ static void web_send_fact(const domain_event_t *event)
                                    (const ha_endpoint_record_t *)record, cap, &cap_len)) {
                 web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
             }
-        } else if (schema->type == WEB_ENTITY_GROUP_ITEM &&
-                   event->key_size == sizeof(ha_group_item_key_t)) {
-            uint8_t gi[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t gi_len = 0;
-            if (semantic_group_item_payload((const ha_group_item_key_t *)event->key,
-                                            (const ha_group_item_record_t *)record, gi, &gi_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM, 0, gi, gi_len);
-            }
         }
     } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
         web_broadcast(WEB_MSG_ENTITY_REMOVE, 0, payload, (uint16_t)(1 + schema->key_size));
@@ -713,14 +730,6 @@ static void web_send_fact(const domain_event_t *event)
                    event->key_size == sizeof(ha_endpoint_key_t)) {
             web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE, 0, event->key,
                           (uint16_t)sizeof(ha_endpoint_key_t));
-        } else if (schema->type == WEB_ENTITY_GROUP_ITEM &&
-                   event->key_size == sizeof(ha_group_item_key_t)) {
-            uint8_t gi[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t gi_len = 0;
-            if (semantic_group_item_remove_payload((const ha_group_item_key_t *)event->key, gi,
-                                                   &gi_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE, 0, gi, gi_len);
-            }
         }
     }
 }
@@ -1257,64 +1266,19 @@ static uint16_t web_do_group_remove(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
-static uint16_t web_do_group_item_put(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_group_item_key_t) + sizeof(ha_group_item_record_t)) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_group_item_key_t key;
-    ha_group_item_record_t record;
-    memcpy(&key, args, sizeof(key));
-    memcpy(&record, args + sizeof(key), sizeof(record));
-    record.title[HA_GROUP_ITEM_TITLE_MAX - 1] = '\0';
-
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    bool changed = false;
-    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &key,
-                                              &record, &meta, &changed);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
-static uint16_t web_do_group_item_remove(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_group_item_key_t)) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_group_item_key_t key;
-    memcpy(&key, args, sizeof(key));
-
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    const sys_error_t err =
-        domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &key, &meta);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
-/*
- * Semantic group item → raw: браузер шлёт (group_id, uid, ep, property), backend восстанавливает
- * physical key через semantics_property_key; persistent layout не меняется.
- */
+/* Canonical group item: браузер шлёт (group_id, entity, property) — ключ уже entity-native. */
 static uint16_t web_do_semantic_group_item_put(const uint8_t *a, size_t len)
 {
-    if (len != 53) {
+    if (len != 52) {
         return SYS_CODE_INVALID_SIZE;
     }
-    const uint64_t group_id = get_u64(a);
-    const uint64_t uid = get_u64(a + 8);
-    const uint8_t ep = a[16];
-    const ha_property_id_t property = (ha_property_id_t)get_u16(a + 17);
-    const ha_zb_state_key_t context = {.device_uid = uid, .endpoint = ep};
-    ha_zb_state_key_t state = {0};
-    if (!semantics_property_key(&context, property, &state)) {
-        return SYS_CODE_INVALID_ARG;
-    }
     ha_group_item_key_t key = {0};
-    key.group_id = group_id;
-    key.state = state;
+    key.group_id = get_u64(a);
+    key.state.entity = get_u64(a + 8);
+    key.state.property = (ha_property_id_t)get_u16(a + 16);
     ha_group_item_record_t record = {0};
-    record.order = get_u16(a + 19);
-    memcpy(record.title, a + 21, HA_GROUP_ITEM_TITLE_MAX);
+    record.order = get_u16(a + 18);
+    memcpy(record.title, a + 20, HA_GROUP_ITEM_TITLE_MAX);
     record.title[HA_GROUP_ITEM_TITLE_MAX - 1] = '\0';
 
     domain_fact_meta_t meta = {0};
@@ -1327,21 +1291,13 @@ static uint16_t web_do_semantic_group_item_put(const uint8_t *a, size_t len)
 
 static uint16_t web_do_semantic_group_item_remove(const uint8_t *a, size_t len)
 {
-    if (len != 19) {
+    if (len != 18) {
         return SYS_CODE_INVALID_SIZE;
     }
-    const uint64_t group_id = get_u64(a);
-    const uint64_t uid = get_u64(a + 8);
-    const uint8_t ep = a[16];
-    const ha_property_id_t property = (ha_property_id_t)get_u16(a + 17);
-    const ha_zb_state_key_t context = {.device_uid = uid, .endpoint = ep};
-    ha_zb_state_key_t state = {0};
-    if (!semantics_property_key(&context, property, &state)) {
-        return SYS_CODE_INVALID_ARG;
-    }
     ha_group_item_key_t key = {0};
-    key.group_id = group_id;
-    key.state = state;
+    key.group_id = get_u64(a);
+    key.state.entity = get_u64(a + 8);
+    key.state.property = (ha_property_id_t)get_u16(a + 16);
 
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;
@@ -1422,12 +1378,7 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
     case WEB_CMD_GROUP_REMOVE:
         status = web_do_group_remove(args, len);
         break;
-    case WEB_CMD_GROUP_ITEM_PUT:
-        status = web_do_group_item_put(args, len);
-        break;
-    case WEB_CMD_GROUP_ITEM_REMOVE:
-        status = web_do_group_item_remove(args, len);
-        break;
+
     case WEB_CMD_SEMANTIC_GROUP_ITEM_PUT:
         status = web_do_semantic_group_item_put(args, len);
         break;

@@ -2,87 +2,85 @@ import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { groupPut, groupRemove, semanticGroupItemPut, semanticGroupItemRemove } from '../proto.js'
-import { uidHex } from '../zcl.js'
 import { propertyName, propertyUnit } from '../semantics.js'
 import Modal from '../components/Modal.jsx'
 
-// Экраны Display: group — экран, semantic group item — виджет. Виджет ссылается на
-// semantic-состояние (uid, ep, property); persistent запись остаётся raw (facade в BFF).
+// Экраны Display: group — экран, group_item — виджет. Виджет ссылается на canonical
+// свойство Entity (entity_id, property); identity — entity, а не uid/ep.
 
-function deviceName(devices, uid) {
-  for (const { key, record } of devices.values()) {
-    if (key.uid === uid) return record.name || record.model || uidHex(uid)
-  }
-  return uidHex(uid)
+function entityName(s, entity) {
+  return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
 }
 
-// semantic-состояния, сгруппированные по устройству.
-function devicesWithStates(s) {
-  const byDev = new Map()
-  for (const st of s.semStates.values()) {
-    const uid = st.uid.toString()
-    if (!byDev.has(uid)) byDev.set(uid, new Map())
-    byDev.get(uid).set(`${st.ep}:${st.property}`, { ep: st.ep, property: st.property })
-  }
+// Свойства Entity: capabilities + известные значения.
+function propsOf(entity) {
+  const set = new Map()
+  for (const cap of store.capabilities(entity)) set.set(cap.property, cap.property)
+  for (const st of store.entityProperties(entity)) set.set(st.property, st.property)
+  return [...set.values()].sort((a, b) => a - b)
+}
+
+// Entity, у которых есть свойства (для выпадающего списка).
+function entitiesWithProps(s) {
   const out = []
-  for (const [uid, m] of byDev) {
-    out.push({ uid, name: deviceName(s.devices, BigInt(uid)), list: [...m.values()] })
+  for (const e of s.semEntities.values()) {
+    const props = propsOf(e.id)
+    if (props.length > 0) out.push({ id: e.id, name: e.name || e.id.toString().slice(-6), props })
   }
   out.sort((a, b) => a.name.localeCompare(b.name))
   return out
 }
 
-function stateValue(s, uid, ep, property) {
-  const v = s.semStateLegacy(uid, ep, property)?.value
+function stateValue(s, entity, property) {
+  const v = store.semState(entity, property)?.value
   if (v == null) return '—'
   if (typeof v === 'boolean') return v ? 'да' : 'нет'
   return `${Number(v).toFixed(1)} ${propertyUnit(property)}`
 }
 
-// Форма виджета: устройство → состояние(property) → подпись. Общая для «новый»/«изменить».
+// Форма виджета: Entity → свойство → подпись.
 function WidgetForm({ s, group, items, item, onClose }) {
-  const devs = devicesWithStates(s)
-  const [uid, setUid] = useState(item ? item.uid.toString() : '')
-  const [stateKey, setStateKey] = useState(item ? `${item.ep}:${item.property}` : '')
+  const ents = entitiesWithProps(s)
+  const [entity, setEntity] = useState(item ? item.entity.toString() : '')
+  const [property, setProperty] = useState(item ? item.property : 0)
   const [title, setTitle] = useState(item ? item.title : '')
 
-  const effUid = uid || (devs[0]?.uid ?? '')
-  const list = devs.find((g) => g.uid === effUid)?.list || []
-  const hasKey = list.some((o) => `${o.ep}:${o.property}` === stateKey)
-  const effKey = hasKey ? stateKey : list[0] ? `${list[0].ep}:${list[0].property}` : ''
+  const effEntity = entity || (ents[0]?.id.toString() ?? '')
+  const list = ents.find((g) => g.id.toString() === effEntity)?.props || []
+  const hasProp = list.includes(property)
+  const effProp = hasProp ? property : (list[0] ?? 0)
 
   const save = () => {
-    if (!effKey) return
-    const [ep, property] = effKey.split(':').map(Number)
+    if (!effEntity || !effProp) return
     const order = item ? item.order : (items.length ? Math.max(...items.map((it) => it.order)) + 1 : 0)
-    if (item && (item.ep !== ep || item.property !== property)) {
-      store.send(semanticGroupItemRemove(group.key.id, item.uid, item.ep, item.property))
+    if (item && (item.entity.toString() !== effEntity || item.property !== effProp)) {
+      store.send(semanticGroupItemRemove(group.key.id, item.entity, item.property))
     }
-    store.send(semanticGroupItemPut(group.key.id, { uid: BigInt(effUid), ep, property, order, title: title.trim() }))
+    store.send(semanticGroupItemPut(group.key.id, { entity: BigInt(effEntity), property: effProp, order, title: title.trim() }))
     onClose()
   }
 
   return (
     <div className="form-grid">
-      <div className="af-line">Устройство:
-        <select value={effUid} onChange={(e) => { setUid(e.target.value); setStateKey('') }}>
-          {devs.length === 0 && <option value="">(нет устройств с состояниями)</option>}
-          {devs.map((g) => <option key={g.uid} value={g.uid}>{g.name}</option>)}
+      <div className="af-line">Сущность:
+        <select value={effEntity} onChange={(e) => { setEntity(e.target.value); setProperty(0) }}>
+          {ents.length === 0 && <option value="">(нет сущностей со свойствами)</option>}
+          {ents.map((g) => <option key={g.id.toString()} value={g.id.toString()}>{g.name}</option>)}
         </select>
       </div>
-      <div className="af-line">Состояние:
-        <select value={effKey} onChange={(e) => setStateKey(e.target.value)}>
-          <option value="">(состояние)</option>
-          {list.map((o) => <option key={`${o.ep}:${o.property}`} value={`${o.ep}:${o.property}`}>{propertyName(o.property)} (EP{o.ep})</option>)}
+      <div className="af-line">Свойство:
+        <select value={effProp} onChange={(e) => setProperty(Number(e.target.value))}>
+          <option value={0}>(свойство)</option>
+          {list.map((p) => <option key={p} value={p}>{propertyName(p)}</option>)}
         </select>
       </div>
       <div className="af-line">Подпись:
         <input type="text" value={title} placeholder="(необязательно)" onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="af-line">
-        <button onClick={save} disabled={!effKey}>Сохранить</button>
+        <button onClick={save} disabled={!effEntity || !effProp}>Сохранить</button>
         {item && (
-          <button className="ghost danger" onClick={() => { store.send(semanticGroupItemRemove(group.key.id, item.uid, item.ep, item.property)); onClose() }}>Удалить</button>
+          <button className="ghost danger" onClick={() => { store.send(semanticGroupItemRemove(group.key.id, item.entity, item.property)); onClose() }}>Удалить</button>
         )}
         <button className="ghost" onClick={onClose}>Отмена</button>
       </div>
@@ -115,11 +113,11 @@ function GroupCard({ group, items, s }) {
       {items.length === 0 && <div className="muted">виджетов нет</div>}
       <div className="item-list">
         {items.map((it, i) => (
-          <div className="flow" key={`${it.uid}:${it.ep}:${it.property}`}>
+          <div className="flow" key={`${it.entity}:${it.property}`}>
             <span className="node action">{it.title || propertyName(it.property)}</span>
-            <span className="muted">{deviceName(s.devices, it.uid)} · {propertyName(it.property)} (EP{it.ep})</span>
+            <span className="muted">{entityName(s, it.entity)} · {propertyName(it.property)}</span>
             <span className="spacer" />
-            <span className="sensor">{stateValue(s, it.uid, it.ep, it.property)}</span>
+            <span className="sensor">{stateValue(s, it.entity, it.property)}</span>
             <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
             <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1}>↓</button>
             <button className="ghost" onClick={() => setForm({ item: it })}>Изменить</button>

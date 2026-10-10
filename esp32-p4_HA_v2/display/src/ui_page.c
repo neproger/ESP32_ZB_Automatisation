@@ -1,6 +1,7 @@
 #include "ui_page.h"
 
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_state.h"
 #include "ui_compat.h"
 #include "ui_style.h"
 #include "ui_widgets.h"
@@ -11,7 +12,7 @@
 
 typedef struct {
     ui_widget_t *widget;
-    ha_zb_state_key_t state;
+    ha_state_key_t state;
 } ui_page_entry_t;
 
 struct ui_page {
@@ -82,7 +83,7 @@ static lv_obj_t *make_item_card(domain_t *domain, lv_obj_t *list, const ui_page_
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COL_MUTED), 0);
     lv_label_set_text(title, (item->title != NULL) ? item->title : "");
 
-    entry->state = (item->state != NULL) ? *item->state : (ha_zb_state_key_t){0};
+    entry->state = (item->state != NULL) ? *item->state : (ha_state_key_t){0};
     entry->widget = ui_widget_create(domain, card, &entry->state);
     return card;
 }
@@ -155,11 +156,11 @@ void ui_page_apply(ui_page_t *page)
         return;
     }
     for (size_t i = 0; i < page->count; ++i) {
-        ha_zb_state_record_t record = {0};
+        ha_state_record_t record = {0};
         const bool present = sys_ok(domain_entity_get(page->domain,
-                                                      (domain_entity_t)HA_ENTITY_STATE,
+                                                      (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
                                                       &page->entries[i].state, &record));
-        ui_widget_apply(page->entries[i].widget, &record, present);
+        ui_widget_apply(page->entries[i].widget, &record.value, present);
     }
 }
 

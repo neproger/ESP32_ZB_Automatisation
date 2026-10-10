@@ -6,7 +6,9 @@
 #include "lvgl.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_state.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
@@ -145,22 +147,16 @@ static void item_title(size_t index, char *out, size_t out_size)
         snprintf(out, out_size, "%s", record->title);
         return;
     }
-    const ha_zb_state_key_t *state = &s_items.keys[index].state;
-    ha_device_record_t device = {0};
-    const char *name = NULL;
-    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &state->device_uid,
-                                 &device))) {
-        if (device.name[0] != '\0') {
-            name = device.name; /* имя, заданное пользователем из UI */
-        } else if (device.model[0] != '\0') {
-            name = device.model;
-        }
-    }
-    if (name != NULL) {
-        snprintf(out, out_size, "%s · EP%u", name, (unsigned)state->endpoint);
+    /* Заголовок виджета — имя Entity (A4: identity — entity_id, не устройство). */
+    const ha_entity_id_t entity = s_items.keys[index].state.entity;
+    const ha_entity_key_t key = {.id = entity};
+    ha_entity_record_t record_entity = {0};
+    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, &key,
+                                 &record_entity)) &&
+        record_entity.name[0] != '\0') {
+        snprintf(out, out_size, "%s", record_entity.name);
     } else {
-        snprintf(out, out_size, "%016llX · EP%u", (unsigned long long)state->device_uid,
-                 (unsigned)state->endpoint);
+        snprintf(out, out_size, "%016llX", (unsigned long long)entity);
     }
 }
 
@@ -433,24 +429,21 @@ void display_poll(void)
     ui_nav_dots_update(s_groups.count, s_group_index);
 }
 
-/* Семантическая команда: ZCL-кодировку (scale/transition/direction/LE/args_len) делает мост. */
-bool display_send_command(const ha_zb_state_key_t *target, ha_property_id_t property,
-                          ha_action_id_t action, const ha_command_value_t *value)
+/* Семантическая команда по entity: adapter резолвит entity→addr и кодирует (HA_CMD_PROPERTY). */
+bool display_send_command(ha_entity_id_t entity, ha_property_id_t property, ha_action_id_t action,
+                          const ha_command_value_t *value)
 {
-    if (s_domain == NULL || target == NULL) {
+    if (s_domain == NULL) {
         return false;
     }
-    ha_zb_command_t command = {0};
-    if (!semantics_build_command(target, property, action, value, &command)) {
-        return false;
+    ha_property_command_t command = {0};
+    command.entity = entity;
+    command.property = property;
+    command.action = (uint8_t)action;
+    if (value != NULL) {
+        command.value = *value;
     }
-
-    const domain_fact_target_t fact = {
-        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
-        .key = &command.device_uid,
-    };
-    return sys_ok(domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &fact,
-                              NULL));
+    return sys_ok(domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, NULL));
 }
 
 bool display_send_wifi_scan(void)

@@ -59,9 +59,10 @@ typedef enum {
     WEB_MSG_SEMANTIC_CAPABILITIES = 0x17,
     WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE = 0x18,
     /*
-     * Semantic group item (Фаза 5.5.2): persistent raw, BFF проецирует raw↔property.
-     * ITEM (53): u64 group_id, u64 uid, u8 ep, u16 property, u16 order, char title[32].
-     * REMOVE (19): u64 group_id, u64 uid, u8 ep, u16 property. UNKNOWN property не публикуем.
+     * Canonical group item (A4): identity = (group_id, entity_id, property_id). Хранимая
+     * запись уже entity-native, мост не нужен.
+     * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
+     * REMOVE (18): u64 group_id @0, u64 entity @8, u16 property @16.
      */
     WEB_MSG_SEMANTIC_GROUP_ITEM = 0x19,
     WEB_MSG_SEMANTIC_GROUP_ITEM_REMOVE = 0x1A,
@@ -77,11 +78,10 @@ typedef enum {
     WEB_CMD_DEVICE_REMOVE = 6,
     WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
     WEB_CMD_PERMIT_JOIN = 8,
-    /* Экраны Display (docs/clients/DISPLAY.md): CRUD group / group_item. */
+    /* Экраны Display (docs/clients/DISPLAY.md): CRUD group. Виджеты — entity-native
+     * (WEB_CMD_SEMANTIC_GROUP_ITEM_PUT/REMOVE ниже). */
     WEB_CMD_GROUP_PUT = 9,
     WEB_CMD_GROUP_REMOVE = 10,
-    WEB_CMD_GROUP_ITEM_PUT = 11,
-    WEB_CMD_GROUP_ITEM_REMOVE = 12,
     WEB_CMD_LOCATION_PUT = 13,
     /*
      * Семантическая команда (аддитивно, без WS v3): браузер шлёт property+action+value,
@@ -94,8 +94,8 @@ typedef enum {
      *   value: NONE — нет; SCALAR @13 u8 kind + @14 u32 bits; XY @13 f32 x + @17 f32 y
      */
     WEB_CMD_SEMANTIC_COMMAND = 14,
-    /* Semantic group item: PUT (53): group_id,uid,ep,property,order,title[32];
-     * REMOVE (19): group_id,uid,ep,property. Backend → raw key через semantics_property_key. */
+    /* Canonical group item: PUT (52): group_id,entity,property,order,title[32];
+     * REMOVE (18): group_id,entity,property. Ключ entity-native (A4). */
     WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
     WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE = 17,
     /* Переименование Entity (Шаг A, A6.1): u64 entity_id @0, char name[32] @8. Adapter не

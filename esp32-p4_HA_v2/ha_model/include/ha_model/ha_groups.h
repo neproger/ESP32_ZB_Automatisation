@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "ha_model/ha_entities.h"
+#include "ha_model/ha_state.h" /* ha_state_key_t: (entity_id, property_id) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,13 +37,13 @@ typedef struct {
 } ha_group_record_t;
 
 /*
- * Виджет на экране: ссылка на состояние + порядок + подпись. Ключ — составной
- * `(group_id, state)`; `state` — существующий ключ Entity Store (ha_entities.h).
- * `order` задаёт порядок виджетов на экране; `title` — подпись виджета.
+ * Виджет на экране: ссылка на canonical-свойство + порядок + подпись. Ключ — составной
+ * `(group_id, state)`; `state` — entity-адресованное свойство (ha_state.h), без ZCL.
+ * `order` задаёт порядок виджетов; `title` — подпись (не зависит от имени Entity).
  */
 typedef struct {
     uint64_t group_id;
-    ha_zb_state_key_t state;
+    ha_state_key_t state;
 } ha_group_item_key_t;
 
 typedef struct {

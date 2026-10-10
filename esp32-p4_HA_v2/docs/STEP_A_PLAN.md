@@ -269,8 +269,12 @@ A3  Automation persistent semantic                                              
       WEB_MSG_SEMANTIC_AUTOMATION(+REMOVE), WEB_CMD_SEMANTIC_AUTOMATION_PUT, physical rule codec.
       Prereq: canonical System properties (system пишет PROPERTY_STATE). **A3 завершён.**
 
-A4  Group Item persistent semantic
-      Ключ (group, entity, property) вместо raw (uid,ep,cluster,attr).
+A4  Group Item persistent semantic                                                        [x]
+      Ключ (group, entity, property) вместо raw (uid,ep,cluster,attr). Реализовано:
+      ha_group_item_key_t.state = ha_state_key_t; persist_key group_item_v2 (erase старого ABI).
+      Web отдаёт/принимает group_item напрямую в entity/property (без моста); UI Groups —
+      entity-native; Display читает canonical PROPERTY_STATE, команды — HA_CMD_PROPERTY,
+      заголовок виджета — имя Entity. Physical-key путь group_item удалён.
 
 A5  event shim removal
       Убрать raw ha_zb_event_t из payload; rule хранит event_id.

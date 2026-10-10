@@ -144,7 +144,7 @@ static const domain_entity_desc_t group_item_desc = {
     .payload_size = sizeof(ha_group_item_record_t),
     .capacity = APP_GROUP_ITEM_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "group_item",
+    .persist_key = "group_item_v2", /* ключ теперь entity/property: старый ABI не читаем */
 };
 
 /*

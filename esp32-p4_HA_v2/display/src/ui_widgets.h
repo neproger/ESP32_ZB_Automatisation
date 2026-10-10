@@ -1,12 +1,12 @@
 #pragma once
 
 /*
- * Виджет одного состояния: group_item ссылается на состояние ключом Domain, а UI
- * выбирает форму по семантике свойства (мост `semantics`) и показывает значение в
- * человеческих единицах. Форма — проекция, а не хранимая сущность (docs/clients/DISPLAY.md §4).
+ * Виджет одного свойства Entity: group_item ссылается на canonical-адрес (entity, property),
+ * а UI выбирает форму по семантике свойства и показывает значение в человеческих единицах.
+ * Форма — проекция, а не хранимая сущность (docs/clients/DISPLAY.md §4).
  *
- * Цвету нужны соседние свойства (X/Y/яркость) — берутся через `semantics_property_key()`
- * в том же объекте, без ручных ZCL-ключей.
+ * Цвету нужны соседние свойства (X/Y/яркость) той же Entity — читаются из canonical
+ * PROPERTY_STATE(entity, ...), без ручных ZCL-ключей.
  */
 
 #include <stdbool.h>
@@ -15,8 +15,8 @@
 #include "lvgl.h"
 
 #include "domain/domain.h"
-#include "ha_model/ha_entities.h"
 #include "ha_model/ha_properties.h"
+#include "ha_model/ha_state.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,9 +46,8 @@ typedef struct ui_widget ui_widget_t;
  * Виджет владеет своими lv_obj и освобождает обёртку при удалении объекта (то есть при
  * удалении экрана/карточки). Отдельного destroy нет: удаляется lv_obj владельца.
  */
-ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent,
-                              const ha_zb_state_key_t *state);
-void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bool present);
+ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent, const ha_state_key_t *state);
+void ui_widget_apply(ui_widget_t *widget, const ha_value_t *value, bool present);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "semantics/semantics.h"
 #include "sys/sys_error.h"
@@ -12,9 +13,9 @@
 
 struct ui_widget {
     ui_widget_kind_t kind;
-    ha_property_id_t property; /* семантика состояния (через мост) */
+    ha_property_id_t property; /* семантика свойства */
     domain_t *domain;
-    ha_zb_state_key_t state;
+    ha_state_key_t state; /* canonical (entity_id, property_id) */
 
     lv_obj_t *obj;         /* корневой объект виджета */
     lv_obj_t *slider;      /* LEVEL / COLOR_TEMP */
@@ -28,8 +29,8 @@ struct ui_widget {
     lv_obj_t *sat_label;
 
     lv_timer_t *cooldown; /* SWITCH: снять DISABLED после нажатия/таймаута */
-    bool has_last;        /* SWITCH: есть сохранённое значение из репорта */
-    uint32_t last_raw;
+    bool has_last; /* SWITCH: есть сохранённое значение */
+    uint32_t last_bits;
 };
 
 /* Форма виджета — по семантике свойства, а не по ZCL-координате. */
@@ -54,14 +55,40 @@ ui_widget_kind_t ui_widget_kind_for(ha_property_id_t property)
     }
 }
 
-/* Прочитать состояние по ключу и декодировать в семантику (через мост). */
-static bool decode_state(domain_t *domain, const ha_zb_state_key_t *key, ha_value_t *out)
+/* Прочитать canonical-значение свойства Entity. */
+static bool read_property(domain_t *domain, ha_entity_id_t entity, ha_property_id_t property,
+                          ha_value_t *out)
 {
-    ha_zb_state_record_t record = {0};
-    if (sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_STATE, key, &record))) {
+    const ha_state_key_t key = {.entity = entity, .property = property};
+    ha_state_record_t record = {0};
+    if (sys_failed(
+            domain_entity_get(domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &key, &record))) {
         return false;
     }
-    return semantics_state_value(key, &record, out);
+    *out = record.value;
+    return true;
+}
+
+/* Битовая проекция значения — для определения «свежести» (изменилось ли). */
+static uint32_t value_bits(const ha_value_t *v)
+{
+    switch (v->kind) {
+    case HA_VALUE_BOOL:
+        return v->value.b ? 1u : 0u;
+    case HA_VALUE_I32:
+        return (uint32_t)v->value.i32;
+    case HA_VALUE_U32:
+        return v->value.u32;
+    case HA_VALUE_FLOAT: {
+        uint32_t bits = 0;
+        memcpy(&bits, &v->value.f32, sizeof(bits));
+        return bits;
+    }
+    case HA_VALUE_ENUM:
+        return v->value.enum_value;
+    default:
+        return 0;
+    }
 }
 
 /* Скалярное значение семантической команды. */
@@ -375,7 +402,7 @@ static void on_color_changed(lv_event_t *event)
     const ha_command_value_t color = {.kind = HA_COMMAND_VALUE_XY,
                                       .value.xy = {.x = (float)x16 / 65535.0f,
                                                    .y = (float)y16 / 65535.0f}};
-    (void)display_send_command(&widget->state, HA_PROPERTY_COLOR, HA_ACTION_SET, &color);
+    (void)display_send_command(widget->state.entity, HA_PROPERTY_COLOR, HA_ACTION_SET, &color);
 }
 
 #define UI_SWITCH_LOCK_MS 1500
@@ -398,7 +425,7 @@ static void on_switch_changed(lv_event_t *event)
 {
     ui_widget_t *widget = lv_event_get_user_data(event);
     const bool on = lv_obj_has_state(widget->obj, LV_STATE_CHECKED);
-    (void)display_send_command(&widget->state, HA_PROPERTY_POWER,
+    (void)display_send_command(widget->state.entity, HA_PROPERTY_POWER,
                                on ? HA_ACTION_ON : HA_ACTION_OFF, NULL);
     lv_obj_add_state(widget->obj, LV_STATE_DISABLED);
     if (widget->cooldown == NULL) {
@@ -419,14 +446,14 @@ static void on_slider_released(lv_event_t *event)
     const float value = (float)lv_slider_get_value(widget->slider);
     if (widget->kind == UI_WIDGET_LEVEL) {
         const ha_command_value_t cv = scalar_command(value);
-        (void)display_send_command(&widget->state, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
+        (void)display_send_command(widget->state.entity, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
     } else if (widget->kind == UI_WIDGET_COLOR_TEMP) {
         const ha_command_value_t cv = scalar_command(value);
-        (void)display_send_command(&widget->state, HA_PROPERTY_COLOR_TEMPERATURE, HA_ACTION_SET,
-                                   &cv);
+        (void)display_send_command(widget->state.entity, HA_PROPERTY_COLOR_TEMPERATURE,
+                                   HA_ACTION_SET, &cv);
     } else if (widget->kind == UI_WIDGET_COLOR) {
         const ha_command_value_t cv = scalar_command(value); /* яркость, % */
-        (void)display_send_command(&widget->state, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
+        (void)display_send_command(widget->state.entity, HA_PROPERTY_BRIGHTNESS, HA_ACTION_SET, &cv);
     }
 }
 
@@ -481,8 +508,7 @@ static void build_color_widget(lv_obj_t *parent, ui_widget_t *widget)
     widget->obj = col;
 }
 
-ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent,
-                              const ha_zb_state_key_t *state)
+ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent, const ha_state_key_t *state)
 {
     if (parent == NULL || state == NULL) {
         return NULL;
@@ -495,7 +521,7 @@ ui_widget_t *ui_widget_create(domain_t *domain, lv_obj_t *parent,
     *widget = (ui_widget_t){0};
     widget->domain = domain;
     widget->state = *state;
-    widget->property = semantics_property_from_key(state);
+    widget->property = state->property;
     widget->kind = ui_widget_kind_for(widget->property);
 
     switch (widget->kind) {
@@ -566,12 +592,10 @@ static void apply_absent(ui_widget_t *widget)
 /* Цвет и яркость соседних свойств — через обратный маппинг моста, без ручных ZCL-ключей. */
 static void apply_color(ui_widget_t *widget)
 {
-    ha_zb_state_key_t xk, yk;
     ha_value_t xv, yv;
-    const bool has_xy = semantics_property_key(&widget->state, HA_PROPERTY_COLOR_X, &xk) &&
-                        semantics_property_key(&widget->state, HA_PROPERTY_COLOR_Y, &yk) &&
-                        decode_state(widget->domain, &xk, &xv) &&
-                        decode_state(widget->domain, &yk, &yv);
+    const bool has_xy =
+        read_property(widget->domain, widget->state.entity, HA_PROPERTY_COLOR_X, &xv) &&
+        read_property(widget->domain, widget->state.entity, HA_PROPERTY_COLOR_Y, &yv);
 
     char text[16];
     if (has_xy) {
@@ -596,10 +620,8 @@ static void apply_color(ui_widget_t *widget)
         lv_label_set_text(widget->sat_label, "—");
     }
 
-    ha_zb_state_key_t lk;
     ha_value_t lv;
-    if (semantics_property_key(&widget->state, HA_PROPERTY_BRIGHTNESS, &lk) &&
-        decode_state(widget->domain, &lk, &lv)) {
+    if (read_property(widget->domain, widget->state.entity, HA_PROPERTY_BRIGHTNESS, &lv)) {
         const int pct = (int)(lv.value.f32 + 0.5f);
         lv_slider_set_value(widget->slider, pct, LV_ANIM_OFF);
         snprintf(text, sizeof(text), "%d %%", pct);
@@ -621,13 +643,13 @@ static bool widget_control_pressed(const ui_widget_t *widget)
     return false;
 }
 
-void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bool present)
+void ui_widget_apply(ui_widget_t *widget, const ha_value_t *value, bool present)
 {
     if (widget == NULL || widget->obj == NULL) {
         return;
     }
-    /* Пока палец на слайдере/свиче — не применяем состояние из репорта, иначе
-     * значение скачет между пальцем и последним отчётом. */
+    /* Пока палец на слайдере/свиче — не применяем состояние, иначе значение скачет
+     * между пальцем и последним отчётом. */
     if (widget_control_pressed(widget)) {
         return;
     }
@@ -635,13 +657,7 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
         apply_color(widget);
         return;
     }
-    if (!present || record == NULL) {
-        apply_absent(widget);
-        return;
-    }
-
-    ha_value_t value = {0};
-    if (!semantics_state_value(&widget->state, record, &value)) {
+    if (!present || value == NULL || value->kind == HA_VALUE_NONE) {
         apply_absent(widget);
         return;
     }
@@ -649,11 +665,12 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
     char text[48] = {0};
     switch (widget->kind) {
     case UI_WIDGET_SWITCH: {
-        const bool on = value.value.b;
-        const bool fresh = !widget->has_last || (record->raw != widget->last_raw);
+        const bool on = value->value.b;
+        const uint32_t bits = value_bits(value);
+        const bool fresh = !widget->has_last || (bits != widget->last_bits);
         if (lv_obj_has_state(widget->obj, LV_STATE_DISABLED)) {
             if (!fresh) {
-                break; /* блок держим, пока не придёт новый репорт */
+                break; /* блок держим, пока не придёт новое значение */
             }
             /* Пришло реальное состояние — резко снимаем блок и применяем его. */
             if (widget->cooldown != NULL) {
@@ -666,26 +683,26 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
         } else {
             lv_obj_remove_state(widget->obj, LV_STATE_CHECKED);
         }
-        widget->last_raw = record->raw;
+        widget->last_bits = bits;
         widget->has_last = true;
         break;
     }
     case UI_WIDGET_LEVEL: {
-        const int pct = (int)(value.value.f32 + 0.5f);
+        const int pct = (int)(value->value.f32 + 0.5f);
         lv_slider_set_value(widget->slider, pct, LV_ANIM_OFF);
         snprintf(text, sizeof(text), "%d %%", pct);
         lv_label_set_text(widget->value_label, text);
         break;
     }
     case UI_WIDGET_COLOR_TEMP: {
-        const int kelvin = (int)(value.value.f32 + 0.5f);
+        const int kelvin = (int)(value->value.f32 + 0.5f);
         lv_slider_set_value(widget->slider, kelvin, LV_ANIM_OFF);
         snprintf(text, sizeof(text), "%d K", kelvin);
         lv_label_set_text(widget->value_label, text);
         break;
     }
     case UI_WIDGET_INDICATOR: {
-        const bool active = value.value.b;
+        const bool active = value->value.b;
         const char *label = active ? "Занято" : "Свободно";
         const uint32_t color = active ? UI_COL_OK : UI_COL_CHIP;
         lv_obj_set_style_bg_color(widget->obj, lv_color_hex(color), 0);
@@ -695,7 +712,7 @@ void ui_widget_apply(ui_widget_t *widget, const ha_zb_state_record_t *record, bo
     case UI_WIDGET_VALUE:
     case UI_WIDGET_NONE:
     default:
-        format_property(widget->property, &value, text, sizeof(text));
+        format_property(widget->property, value, text, sizeof(text));
         lv_label_set_text(widget->value_label, text);
         break;
     }

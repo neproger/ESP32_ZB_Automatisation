@@ -11,7 +11,7 @@
 #include "lvgl.h"
 
 #include "domain/domain.h"
-#include "ha_model/ha_entities.h"
+#include "ha_model/ha_state.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,7 +19,7 @@ extern "C" {
 
 typedef struct {
     const char *title;               /* подпись виджета (копируется в label) */
-    const ha_zb_state_key_t *state;  /* какое состояние показывать */
+    const ha_state_key_t *state; /* какое canonical-свойство показывать */
 } ui_page_item_t;
 
 typedef struct ui_page ui_page_t;

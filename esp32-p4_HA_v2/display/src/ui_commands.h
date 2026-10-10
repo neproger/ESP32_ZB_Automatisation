@@ -8,17 +8,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "ha_model/ha_entities.h"
+#include "ha_model/ha_entity.h"
 #include "ha_model/ha_properties.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Семантическая команда: target (device/endpoint) + property + action (+ value).
- * ZCL-кодировку делает мост semantics — UI её не знает. */
-bool display_send_command(const ha_zb_state_key_t *target, ha_property_id_t property,
-                          ha_action_id_t action, const ha_command_value_t *value);
+/* Семантическая команда по entity (Шаг A): entity + property + action (+ value).
+ * Кодировку и адресацию делает adapter — UI транспорта не знает. */
+bool display_send_command(ha_entity_id_t entity, ha_property_id_t property, ha_action_id_t action,
+                          const ha_command_value_t *value);
 
 /* Wi-Fi provisioning (docs/services/WEB.md). */
 bool display_send_wifi_scan(void);
