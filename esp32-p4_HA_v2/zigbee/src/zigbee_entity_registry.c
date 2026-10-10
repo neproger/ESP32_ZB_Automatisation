@@ -20,11 +20,16 @@ sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t 
     zb_entity_initial_name(domain, uid, endpoint, endpoint_total, initial_name,
                            sizeof(initial_name));
 
+    const ha_device_id_t device_id = zb_device_id(uid);
+    if (device_id == HA_DEVICE_ID_NONE) {
+        ESP_LOGW(TAG, "device id derive failed uid=%llx", (unsigned long long)uid);
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
+    }
+
     const size_t before = s_binding_count;
-    const sys_error_t err =
-        zb_entity_ensure_entity(domain, s_bindings, ZB_ENTITY_BINDING_MAX, &s_binding_count, uid,
-                                endpoint, initial_name[0] != '\0' ? initial_name : NULL,
-                                out_entity_id);
+    const sys_error_t err = zb_entity_ensure_entity(
+        domain, s_bindings, ZB_ENTITY_BINDING_MAX, &s_binding_count, uid, endpoint, device_id,
+        initial_name[0] != '\0' ? initial_name : NULL, out_entity_id);
     if (sys_failed(err)) {
         ESP_LOGW(TAG, "entity ensure failed uid=%llx ep=%u err=%u", (unsigned long long)uid,
                  (unsigned)endpoint, (unsigned)err.code);

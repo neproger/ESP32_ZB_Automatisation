@@ -94,6 +94,16 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     return true;
 }
 
+/* Детерминированный Logical Device id из EUI64 (LE(8)), тем же примитивом, что entity_id. */
+ha_device_id_t zb_device_id(ha_device_uid_t uid)
+{
+    uint8_t seed[8];
+    for (int i = 0; i < 8; i++) {
+        seed[i] = (uint8_t)(uid >> (8 * i));
+    }
+    return (ha_device_id_t)ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, seed, sizeof(seed));
+}
+
 void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
                             uint8_t endpoint_total, char *out, size_t out_size)
 {
@@ -114,9 +124,23 @@ void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpo
     }
 }
 
+static void copy_entity_name(char *dst, size_t dst_size, const char *src)
+{
+    if (src == NULL) {
+        return;
+    }
+    size_t length = strlen(src);
+    if (length >= dst_size) {
+        length = dst_size - 1;
+    }
+    memcpy(dst, src, length);
+    dst[length] = '\0';
+}
+
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
-                                    const char *initial_name, ha_entity_id_t *out_entity_id)
+                                    ha_device_id_t device_id, const char *initial_name,
+                                    ha_entity_id_t *out_entity_id)
 {
     if (domain == NULL || list == NULL || count == NULL || out_entity_id == NULL) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
@@ -130,25 +154,31 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
     const ha_entity_key_t key = {.id = id};
 
     /*
-     * Имя — собственность Entity: если оно уже задано, не перетираем. Заполняем только
-     * при создании или если запись существует, но имя пустое (и есть что задать).
+     * Имя и device_id — собственность Entity. Дозаполняем только отсутствующее: пустое имя
+     * (adapter даёт initial name) и незаданный device_id (ownership). Уже заданное не трогаем.
      */
+    ha_entity_record_t record = {0};
+    bool need_put = true;
     ha_entity_record_t existing = {0};
-    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &existing)) &&
-        (existing.name[0] != '\0' || initial_name == NULL)) {
-        *out_entity_id = id;
-        return SYS_OK;
+    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &existing))) {
+        record = existing;
+        need_put = false;
+        if (record.name[0] == '\0' && initial_name != NULL) {
+            copy_entity_name(record.name, sizeof(record.name), initial_name);
+            need_put = true;
+        }
+        if (record.device_id == HA_DEVICE_ID_NONE && device_id != HA_DEVICE_ID_NONE) {
+            record.device_id = device_id;
+            need_put = true;
+        }
+    } else {
+        record.device_id = device_id;
+        copy_entity_name(record.name, sizeof(record.name), initial_name);
     }
 
-    /* Первое создание: adapter даёт initial name; далее владеет Entity. */
-    ha_entity_record_t record = {0};
-    if (initial_name != NULL) {
-        size_t length = strlen(initial_name);
-        if (length >= sizeof(record.name)) {
-            length = sizeof(record.name) - 1;
-        }
-        memcpy(record.name, initial_name, length);
-        record.name[length] = '\0';
+    if (!need_put) {
+        *out_entity_id = id;
+        return SYS_OK;
     }
 
     domain_fact_meta_t meta = {0};

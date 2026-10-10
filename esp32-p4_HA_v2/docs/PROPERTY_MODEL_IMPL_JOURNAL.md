@@ -590,6 +590,14 @@ TLV / самоописание приложения              — запре�
             (ha_entities.h). Поля device_id в ha_entity_record_t НЕ добавлено (это B2).
             host test test_logical_device (sizes/POD-layout/zero-bytes/none/type-distinct).
             Zigbee-зависимостей в ha_model нет. ha_model 5/5, IDF зелёный.
+2026-10-11  Step B, B2 — ownership-связь Device → Entity. ha_entity_record_t += device_id
+            (8 + 32 = 40, offsetof(name)=8); HA_ENTITY_ENTITY — RAM-таблица, поэтому смена ABI
+            без flash-erase (восстанавливается на интервью). Adapter: zb_device_id(uid) =
+            derive(ZIGBEE, LE(EUI64), 8); registry передаёт device_id в zb_entity_ensure_entity
+            (guard device_id != NONE). Ownership host-тест: один device → общий device_id на
+            всех endpoint; другой device → свой; повторный ensure/reboot не меняют device_id;
+            смена endpoint меняет entity_id, не device_id. Domain/ha_model EUI64 не знают.
+            ha_model 5/5, semantics 1/1, automation 1/1, zigbee 9/9, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

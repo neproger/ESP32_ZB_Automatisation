@@ -61,7 +61,11 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
  */
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
-                                    const char *initial_name, ha_entity_id_t *out_entity_id);
+                                    ha_device_id_t device_id, const char *initial_name,
+                                    ha_entity_id_t *out_entity_id);
+
+/* EUI64 → детерминированный Logical Device id (LE(8)); Domain EUI64 не знает. */
+ha_device_id_t zb_device_id(ha_device_uid_t uid);
 
 /*
  * Детерминированное initial-имя Entity: basename — имя DEVICE. Одна Entity у устройства →

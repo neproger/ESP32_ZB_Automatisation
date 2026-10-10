@@ -13,6 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ha_model/ha_logical_device.h" /* ha_device_id_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,21 +81,27 @@ typedef struct {
  * Логическая metadata Entity. Имя — свойство логической сущности, а не транспорта:
  * adapter может задать initial name при первом создании (напр. из имени устройства),
  * но владеет и меняет имя Entity (rename по entity_id). Транспорт/pv-полей здесь нет.
+ *
+ * `device_id` — ownership-связь Device → Entity (Шаг B); НЕ транспорт. Выставляет её adapter
+ * при интервью (domain не знает EUI64). HA_DEVICE_ID_NONE — нет владельца (standalone).
  */
 #define HA_ENTITY_NAME_MAX 32
 
 typedef struct {
+    ha_device_id_t device_id;
     char name[HA_ENTITY_NAME_MAX];
 } ha_entity_record_t;
 
 #ifdef __cplusplus
 static_assert(sizeof(ha_entity_id_t) == 8, "ha_entity_id_t: неожиданный размер");
 static_assert(sizeof(ha_entity_key_t) == 8, "ha_entity_key_t: неожиданный размер");
-static_assert(sizeof(ha_entity_record_t) == HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
+static_assert(sizeof(ha_entity_record_t) == 8 + HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
+static_assert(offsetof(ha_entity_record_t, name) == 8, "ha_entity_record_t: layout");
 #else
 _Static_assert(sizeof(ha_entity_id_t) == 8, "ha_entity_id_t: неожиданный размер");
 _Static_assert(sizeof(ha_entity_key_t) == 8, "ha_entity_key_t: неожиданный размер");
-_Static_assert(sizeof(ha_entity_record_t) == HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
+_Static_assert(sizeof(ha_entity_record_t) == 8 + HA_ENTITY_NAME_MAX, "ha_entity_record_t: размер");
+_Static_assert(offsetof(ha_entity_record_t, name) == 8, "ha_entity_record_t: layout");
 #endif
 
 #ifdef __cplusplus
