@@ -64,17 +64,9 @@ static void zigbee_send(const ha_zb_command_t *command)
     }
 }
 
-static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_t args_size,
-                                  void *ctx)
+/* Проверка и постановка физической команды в очередь отправки. */
+static sys_error_t zigbee_enqueue_command(const ha_zb_command_t *command)
 {
-    (void)type;
-    (void)ctx;
-
-    if (args == NULL || args_size != sizeof(ha_zb_command_t)) {
-        return zigbee_fail(SYS_CODE_INVALID_ARG);
-    }
-
-    const ha_zb_command_t *command = (const ha_zb_command_t *)args;
     const sys_error_t check = zigbee_command_check(s_domain, command);
     if (sys_failed(check)) {
         zigbee_diag_record(ZIGBEE_DIAG_COMMAND, check);
@@ -87,6 +79,47 @@ static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_
         return busy;
     }
     return SYS_OK;
+}
+
+static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_t args_size,
+                                  void *ctx)
+{
+    (void)type;
+    (void)ctx;
+
+    if (args == NULL || args_size != sizeof(ha_zb_command_t)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    return zigbee_enqueue_command((const ha_zb_command_t *)args);
+}
+
+/*
+ * A3.2: семантическая команда по entity. Adapter резолвит entity→(uid, endpoint) по
+ * binding, кодировку физической команды делает мост; потребитель транспорта не знает.
+ */
+static sys_error_t zigbee_property_execute(domain_command_t type, const void *args, size_t args_size,
+                                           void *ctx)
+{
+    (void)type;
+    (void)ctx;
+    if (args == NULL || args_size != sizeof(ha_property_command_t)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    const ha_property_command_t *request = (const ha_property_command_t *)args;
+
+    ha_device_uid_t uid = 0;
+    uint8_t endpoint = 0;
+    if (!zigbee_entity_physical(request->entity, &uid, &endpoint)) {
+        return zigbee_fail(SYS_CODE_NOT_FOUND);
+    }
+
+    const ha_zb_state_key_t target = {.device_uid = uid, .endpoint = endpoint};
+    ha_zb_command_t command = {0};
+    if (!semantics_build_command(&target, request->property, request->action, &request->value,
+                                 &command)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    return zigbee_enqueue_command(&command);
 }
 
 /*
@@ -396,6 +429,7 @@ sys_error_t zigbee_start(domain_t *domain)
     /* Регистрация исполнителя — часть инициализации, а не runtime-механизм. */
     const sys_error_t cluster =
         domain_register_command(domain, HA_CMD_ZIGBEE_CLUSTER, zigbee_execute, NULL);
+    domain_register_command(domain, HA_CMD_PROPERTY, zigbee_property_execute, NULL);
     if (sys_failed(cluster)) {
         return cluster;
     }

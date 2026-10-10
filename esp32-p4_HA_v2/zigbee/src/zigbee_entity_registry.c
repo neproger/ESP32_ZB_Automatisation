@@ -37,3 +37,13 @@ bool zigbee_entity_lookup(ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t 
     return zb_entity_binding_find_entity(s_bindings, s_binding_count, uid, endpoint,
                                          out_entity_id);
 }
+
+bool zigbee_entity_physical(ha_entity_id_t entity_id, ha_device_uid_t *out_uid,
+                            uint8_t *out_endpoint)
+{
+    if (out_uid == NULL || out_endpoint == NULL) {
+        return false;
+    }
+    return zb_entity_binding_find_physical(s_bindings, s_binding_count, entity_id, out_uid,
+                                           out_endpoint);
+}

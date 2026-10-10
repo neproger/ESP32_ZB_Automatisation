@@ -252,7 +252,9 @@ A3  Automation persistent semantic                                              
                 semantics_decode_event не знает источник, adapter ставит source_entity
                 (zigbee_entity_lookup); entity-факт EVENT на HA_ENTITY_ENTITY публикуется
                 параллельно legacy DEVICE-факту; system → ENTITY_SYSTEM (ha_entity_singleton)
-      [ ] A3.2  adapter API «команда по entity» (reverse entity→addr + semantics_build_command)
+      [x] A3.2  adapter command-by-entity: HA_CMD_PROPERTY + ha_property_command_t;
+                zigbee_entity_physical (reverse) + executor резолвит entity→(uid,ep) и
+                кодирует через semantics_build_command. Потребителю транспорт не виден
       [ ] A3.3  engine на ha_rule_t: STATE по canonical, EVENT по entity, action через adapter
       [ ] A3.4  Web хранит ha_rule_t напрямую (без compile/decompile) + erase старых правил
       [ ] A3.5  eval-parity: решение по canonical == решение по raw-проекции

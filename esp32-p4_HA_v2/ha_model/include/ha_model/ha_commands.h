@@ -17,6 +17,8 @@
 
 #include <stdint.h>
 
+#include "ha_model/ha_entity.h"
+#include "ha_model/ha_properties.h"
 #include "ha_model/ha_zigbee.h"
 
 #ifdef __cplusplus
@@ -42,6 +44,13 @@ extern "C" {
 /* Wi-Fi: подключиться к точке (args = ha_wifi_connect_args_t, ha_wifi.h). */
 #define HA_CMD_WIFI_CONNECT 5u
 
+/*
+ * Семантическая команда по entity (args = ha_property_command_t, Шаг A, A3.2). Domain
+ * несёт её как opaque payload; executor транспорта резолвит entity→физический адрес и
+ * кодирует через мост. Потребителю (Automation/Web/Display) не нужны uid/cluster/attr.
+ */
+#define HA_CMD_PROPERTY 6u
+
 /* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
 #define HA_ZB_COMMAND_ARGS_MAX 16u
 
@@ -58,6 +67,23 @@ typedef struct {
     uint8_t args_len;
     uint8_t args[HA_ZB_COMMAND_ARGS_MAX];
 } ha_zb_command_t;
+
+/*
+ * Семантическая команда: цель — (entity_id, property_id), намерение — action + value.
+ * HA_ENTITY_ID_SOURCE/NONE сюда не попадают: вызывающий резолвит источник до постинга.
+ */
+typedef struct {
+    ha_entity_id_t entity;
+    ha_property_id_t property;
+    uint8_t action; /* ha_action_id_t */
+    uint8_t reserved[3];
+    ha_command_value_t value;
+} ha_property_command_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(ha_zb_command_t) == 32, "ha_zb_command_t: неожиданный размер");
+static_assert(sizeof(ha_property_command_t) == 28, "ha_property_command_t: неожиданный размер");
+#endif
 
 #ifdef __cplusplus
 }

@@ -32,6 +32,13 @@ sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t 
  */
 bool zigbee_entity_lookup(ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out_entity_id);
 
+/*
+ * Обратный lookup entity_id → (uid, endpoint) без мутаций Domain. false — привязки нет.
+ * Нужен adapter'у для command-by-entity (A3.2): резолв цели команды.
+ */
+bool zigbee_entity_physical(ha_entity_id_t entity_id, ha_device_uid_t *out_uid,
+                            uint8_t *out_endpoint);
+
 #ifdef __cplusplus
 }
 #endif

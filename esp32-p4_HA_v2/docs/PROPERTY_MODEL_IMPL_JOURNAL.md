@@ -442,6 +442,12 @@ TLV / самоописание приложения              — запре�
             (payload-shim остаётся для старого engine до A3.3). System-события → ENTITY_SYSTEM
             (ha_entity_singleton(SYSTEM)). ha_model 4/4 (test_entity+singleton), semantics 1/1,
             zigbee 8/8 (test_event_entity: stable source/event_id, endpoint-scoped, system) — IDF зелёный
+2026-10-10  шаг A, A3.2 — command-by-entity. HA_CMD_PROPERTY + ha_property_command_t
+            (entity, property, action, value). zigbee_entity_physical (reverse lookup) в
+            registry. Executor zigbee_property_execute резолвит entity→(uid,ep) и строит
+            ha_zb_command_t через semantics_build_command. Потребитель транспорта не видит;
+            физическая проверка/enqueue выделена в zigbee_enqueue_command. zigbee 9/9
+            (test_command_entity: reverse round-trip, build-command из resolved entity) — IDF зелёный
 ```
 
 ## 7. Открытые вопросы
