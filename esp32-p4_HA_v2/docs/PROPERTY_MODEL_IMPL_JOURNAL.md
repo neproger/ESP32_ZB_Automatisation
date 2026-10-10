@@ -157,6 +157,30 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 Итог: **event plane transport-agnostic** — `DOMAIN_FACT_EVENT.value` всегда `HA_EVENT_*`,
 источник (Zigbee/System) в id не зашит. State identity и automation storage — ещё transitional.
 
+### Фаза 5 — Web/UI: семантический слой аддитивно (WS v3 не нужен)
+
+Цель: **после Фазы 5 web-ui не импортирует и не интерпретирует cluster/attr/ZCL command ids в
+обычном HA-потоке.** Raw Zigbee остаётся **внутренним ABI Web↔Domain** до шага A. Делаем
+аддитивно поверх существующего протокола (новые message types / BFF-структуры), WS v3 не
+поднимаем — он нужен только при смене canonical state key на шаге A.
+
+- [x] **5.0 core** в `semantics`: `semantics_cluster_properties()` / `semantics_property_actions()`
+      — capabilities без inference в браузере; host-тесты
+- [ ] **5.0 BFF** проекция state (`property + ha_value_t + descriptor`) и capabilities endpoint
+      в Web (аддитивные структуры/message)
+- [ ] **5.1** semantic state DTO поверх провода; фронт не зовёт `describeAttr()` и не масштабирует `raw`
+- [ ] **5.2** command ingress: браузер шлёт `property + action + value` → `semantics_build_command()`
+      → существующий `HA_CMD_ZIGBEE_CLUSTER`; `web_do_zb_command()` — transitional
+- [ ] **5.3** Automation UI — «компилятор»: semantic trigger/condition/action → текущая 144-байтная
+      запись (один раз, при сохранении)
+- [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
+- [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
+      `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
+      в явном диагностическом экране, если нужен
+
+**Чекпоинт 5.** 5.0 core готов (capabilities + tests). BFF/DTO и миграция фронта — следующие шаги;
+каждый аддитивен и не ломает raw wire.
+
 ### Фаза A (позже, отдельный трек)
 
 Не входит в B. Начинается при появлении второго транспорта.
@@ -205,6 +229,8 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | `DOMAIN_FACT_EVENT.value` всегда `HA_EVENT_*`; источник в id не кодируется | одно пространство event ids; источник есть отдельно (device) |
 | 2026-10-10 | Сырой `ha_zb_event_t` в payload — только временный shim для legacy-правил | не второй публичный контракт; удаляется на шаге A |
 | 2026-10-10 | System-события унифицированы в `ha_event_id_t` (сменились id) | одна семантика событий; цена — правка Automation + web-ui |
+| 2026-10-10 | Фаза 5 — аддитивно поверх raw WS; WS v3 отложен до шага A | raw остаётся внутренним ABI Web↔Domain; не поднимать версию раньше смены key |
+| 2026-10-10 | Capabilities (cluster→properties, property→actions) — в `semantics`, не в браузере | убрать ZCL-inference UI (`capabilities.js`) |
 
 ## 5. От чего отказались
 
@@ -242,6 +268,8 @@ TLV / самоописание приложения              — запре�
             System → ha_event_id_t (ids 4..7, web-ui SYSTEM_EVENTS правлены); Automation по
             event_id (TIME) + legacy raw через payload; tests 1/1, IDF зелёная, прошито на P4.
             Event plane transport-agnostic
+2026-10-10  фаза 5.0 core: semantics_cluster_properties / semantics_property_actions
+            (capabilities без inference в UI); test_semantics 1/1. BFF/DTO/фронт — далее
 ```
 
 ## 7. Открытые вопросы

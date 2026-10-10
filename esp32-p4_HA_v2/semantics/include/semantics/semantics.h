@@ -65,6 +65,14 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
                             ha_event_t *out);
 
 /*
+ * Capabilities для BFF/UI: какие semantic-свойства отдаёт кластер (server) и какие
+ * действия поддерживает свойство. Заменяет inference UI по cluster/attr.
+ * Возвращают число записанных (<= max).
+ */
+size_t semantics_cluster_properties(uint16_t cluster_id, ha_property_id_t *out, size_t max);
+size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out, size_t max);
+
+/*
  * Собрать физическую команду из семантического запроса: target(device/endpoint) +
  * property + action (+ value). Транспортная кодировка (scale, transition, direction,
  * LE, args_len) принадлежит мосту. false — нет такого (property, action) или value

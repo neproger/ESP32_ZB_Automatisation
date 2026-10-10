@@ -517,3 +517,54 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
     }
     return false;
 }
+
+/* --- Capabilities (фаза 5): что кластер/свойство умеет, без inference в UI --- */
+
+size_t semantics_cluster_properties(uint16_t cluster_id, ha_property_id_t *out, size_t max)
+{
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    const size_t count = sizeof(ZB_MAP) / sizeof(ZB_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_MAP[i].cluster_id != cluster_id) {
+            continue;
+        }
+        const ha_property_id_t property = ZB_MAP[i].property;
+        bool duplicate = false;
+        for (size_t j = 0; j < n; j++) {
+            if (out[j] == property) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        if (n < max) {
+            out[n] = property;
+        }
+        n++;
+    }
+    return (n < max) ? n : max;
+}
+
+size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out, size_t max)
+{
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    const size_t count = sizeof(ZB_ACTION_MAP) / sizeof(ZB_ACTION_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_ACTION_MAP[i].property != property) {
+            continue;
+        }
+        if (n < max) {
+            out[n] = ZB_ACTION_MAP[i].action;
+        }
+        n++;
+    }
+    return (n < max) ? n : max;
+}

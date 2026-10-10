@@ -342,6 +342,38 @@ static void test_decode_event(void)
     CHECK(HA_EVENT_MINUTE_TICK == 4);
 }
 
+/* --- Capabilities: cluster→properties, property→actions (5.0) --- */
+static void test_capabilities(void)
+{
+    ha_property_id_t props[8];
+    ha_action_id_t acts[4];
+
+    size_t n = semantics_cluster_properties(HA_ZB_CLUSTER_ON_OFF, props, 8);
+    CHECK(n == 1 && props[0] == HA_PROPERTY_POWER);
+
+    n = semantics_cluster_properties(HA_ZB_CLUSTER_COLOR_CONTROL, props, 8);
+    CHECK(n == 5);
+    bool has_x = false, has_ct = false;
+    for (size_t i = 0; i < n; i++) {
+        if (props[i] == HA_PROPERTY_COLOR_X) has_x = true;
+        if (props[i] == HA_PROPERTY_COLOR_TEMPERATURE) has_ct = true;
+    }
+    CHECK(has_x && has_ct);
+
+    CHECK(semantics_cluster_properties(0x1234, props, 8) == 0);
+    /* max ограничивает выдачу */
+    CHECK(semantics_cluster_properties(HA_ZB_CLUSTER_COLOR_CONTROL, props, 2) == 2);
+
+    n = semantics_property_actions(HA_PROPERTY_POWER, acts, 4);
+    CHECK(n == 3 && acts[0] == HA_ACTION_ON && acts[2] == HA_ACTION_TOGGLE);
+
+    n = semantics_property_actions(HA_PROPERTY_BRIGHTNESS, acts, 4);
+    CHECK(n == 1 && acts[0] == HA_ACTION_SET);
+
+    n = semantics_property_actions(HA_PROPERTY_COLOR, acts, 4);
+    CHECK(n == 1 && acts[0] == HA_ACTION_SET);
+}
+
 int main(void)
 {
     test_parity();
@@ -350,6 +382,7 @@ int main(void)
     test_property_key();
     test_build_command();
     test_decode_event();
+    test_capabilities();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");
