@@ -187,7 +187,12 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 - [x] **5.3.4b** semantic automation DTO: `WEB_MSG_SEMANTIC_AUTOMATION` (0x14) / `_REMOVE` (0x15),
       общий rule-кодек (read=write), snapshot+delta; `representable=0` для legacy/невыразимого;
       browser store `semAutomations` по id; raw `ENTITY AUTOMATION` без изменений
-- [ ] **5.3.4c/d** frontend читает и сохраняет только semantic rule
+- [x] **5.3.4c/d** frontend переведён на semantic rule: `automation.js` — только vocabulary/описания
+      (нет `ACTION_CLUSTERS`/`TRIGGER_CMDS`/`buildActionArgs`/`decodeActionArgs`); `proto.semanticAutomationPut`;
+      `AutomationForm`/`Automations` читают `store.semAutomations`, селекторы — из semantic states/capabilities;
+      `representable=0` → «legacy / непредставимо», без открытия в редакторе
+- [x] **5.3.4-snapfix** профили устройств для reverse-event собираются вне automation-итерации
+      (кэш в snapshot) — snapshot и delta дают одинаковый `representable`
 - [x] **5.3.5** старый `WEB_CMD_AUTOMATION_PUT` оставлен transitional
 - [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
 - [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
@@ -262,7 +267,9 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Симметрия: `semantics_decompile_automation` (physical → semantic) для read-path UI | иначе frontend перестал бы писать ZCL, но продолжал его читать/понимать |
 | 2026-10-10 | Невыразимое правило (неизвестный event/action, transition≠0) → `false`, UI показывает legacy/raw | не выдумывать смысл там, где reverse неоднозначен |
 | 2026-10-10 | Rule-wire — один кодек для PUT и STATE; state DTO = id + representable + rule | read/write формы не разъедутся |
-| 2026-10-10 | В snapshot (внутри `domain_entity_iter`) НЕ звать `domain_entity_get` | локи Domain реентерабельно не берутся: был дедлок web-задачи; профиль устройства резолвим только в delta |
+| 2026-10-10 | В snapshot (внутри `domain_entity_iter`) НЕ звать `domain_entity_get` | локи Domain реентерабельно не берутся: был дедлок web-задачи |
+| 2026-10-10 | Профили устройств для reverse-event — кэш, собранный ОТДЕЛЬНЫМ iter DEVICE перед automation-iter | иначе snapshot (profile=NULL) и delta давали разный `representable` |
+| 2026-10-10 | Automation UI — только `store.semAutomations`; raw `ENTITY AUTOMATION` не используется | иначе ZCL снова протёк бы в форму/описания |
 
 ## 5. От чего отказались
 
@@ -318,6 +325,10 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 5.3.4b: WEB_MSG_SEMANTIC_AUTOMATION/_REMOVE (общий rule-wire кодек),
             snapshot+delta проекция, browser semAutomations. На P4 приходят 5 правил
             (TIME/STATE/EVENT), representable=1. Пофикшен дедлок (domain-лок) в snapshot
+2026-10-10  фаза 5.3.4c/d + snapfix: Automation UI целиком на семантике (automation.js без ZCL,
+            semanticAutomationPut, селекторы из states/capabilities, legacy=read-only);
+            кэш профилей устройств в snapshot (симметрия snapshot/delta). На P4 проверено:
+            PUT STATE temp>25→POWER ON (#200) читается обратно семантически
 ```
 
 ## 7. Открытые вопросы

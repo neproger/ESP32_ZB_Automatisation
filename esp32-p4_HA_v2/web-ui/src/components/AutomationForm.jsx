@@ -1,72 +1,48 @@
 import { useState } from 'react'
+import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { automationPut, zbCommand } from '../proto.js'
-import { uidHex, clusterName, attrName, describeAttr } from '../zcl.js'
+import { semanticAutomationPut } from '../proto.js'
+import { uidHex } from '../zcl.js'
 import {
-  ACTION_CLUSTERS, TRIGGER_CMDS, TRIGGER_KINDS, TRIGGER_OPS, TRIGGER_EDGES, WEEKDAY_LABELS,
-  CONDITION_OPS, buildActionArgs, decodeActionArgs, minutesToHHMM, hhmmToMinutes,
+  TRIGGER_KINDS, TRIGGER_OPS, TRIGGER_EDGES, CONDITION_OPS, WEEKDAY_LABELS,
+  SYSTEM_EVENT_OPTIONS, ACTION_PROPERTIES, minutesToHHMM, hhmmToMinutes,
 } from '../automation.js'
-import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
+import { PROPERTY, ACTION, COMMAND_VALUE, propertyName, actionName } from '../semantics.js'
+import { SYSTEM_DEVICE_UID } from '../system.js'
+import { rgbHexToXy } from '../color.js'
 
 const MAX_CONDITIONS = 4
 
 function nextId(automations) {
   let max = 0n
-  for (const { key } of automations.values()) if (key.id > max) max = key.id
+  for (const a of automations.values()) {
+    const id = a.id ?? a.key?.id
+    if (id > max) max = id
+  }
   return max + 1n
 }
 
-// Атрибуты, по которым у устройства уже есть состояние (ключи Entity Store).
-function statesFor(uid) {
+// Уникальные (ep, property) semantic-состояния устройства.
+function stateOptions(states, uid) {
+  const seen = new Set()
   const out = []
-  if (uid === 0n) return out
-  for (const st of store.states.values()) if (st.key.uid === uid) out.push(st.key)
-  out.sort((a, b) => a.cluster - b.cluster || a.attr - b.attr || a.ep - b.ep)
+  for (const st of states.values()) {
+    if (st.uid !== uid) continue
+    const k = `${st.ep}:${st.property}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push({ ep: st.ep, property: st.property })
+  }
+  out.sort((a, b) => a.property - b.property || a.ep - b.ep)
   return out
 }
 
 export default function AutomationForm({ id, devices, automations, onClose }) {
-  const existing = id != null ? automations.get('auto:' + id)?.record : null
-  const params = existing ? decodeActionArgs(existing.actionCluster, existing.actionCmd, existing.actionArgs) : {}
-
-  const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
-  const [triggerKind, setTriggerKind] = useState(existing ? existing.triggerKind : 0)
-  const [triggerUid, setTriggerUid] = useState(existing ? existing.triggerUid.toString() : '0')
-  const [triggerCmd, setTriggerCmd] = useState(existing ? String(existing.triggerCmd) : '2')
-  const [timeStr, setTimeStr] = useState(minutesToHHMM(existing ? existing.triggerMinutesOfDay : 420))
-  const [weekdayMask, setWeekdayMask] = useState(existing ? existing.triggerWeekdayMask : 0x7f)
-  const isState = (e) => e && e.triggerKind === 2
-  const [stateValue, setStateValue] = useState(isState(existing) ? existing.triggerValue : 0)
-  const [stateEp, setStateEp] = useState(isState(existing) ? existing.triggerEp : 0)
-  const [stateCluster, setStateCluster] = useState(isState(existing) ? existing.triggerCluster : 0)
-  const [stateAttr, setStateAttr] = useState(isState(existing) ? existing.triggerAttr : 0)
-  const [stateOp, setStateOp] = useState(isState(existing) ? existing.triggerOp : 1)
-  const [stateEdge, setStateEdge] = useState(isState(existing) ? existing.triggerEdge : 1)
-  const [actionUid, setActionUid] = useState(existing ? existing.actionUid.toString() : '0')
-  const [actionEp, setActionEp] = useState(existing ? existing.actionEp : 1)
-  const [actionCluster, setActionCluster] = useState(existing ? existing.actionCluster : 0x0006)
-  const [actionCmd, setActionCmd] = useState(existing ? existing.actionCmd : 2)
-  const [level, setLevel] = useState(params.level ?? 128)
-  const [transitionMs, setTransitionMs] = useState(params.transitionMs ?? 0)
-  const [kelvin, setKelvin] = useState(params.kelvin ?? 3000)
-  const [colorHex, setColorHex] = useState(params.colorHex ?? '#ffcc88')
-  const [conditions, setConditions] = useState(existing ? existing.conditions.map((c) => ({ ...c })) : [])
-
-  const clusterDef = ACTION_CLUSTERS.find((c) => c.id === actionCluster) || ACTION_CLUSTERS[0]
-  const params0 = { level, transitionMs, kelvin, colorHex }
-  const args = buildActionArgs(actionCluster, actionCmd, params0)
-
-  // Для системного девайса триггер — его события (тики времени), иначе — ZCL-команды.
-  const isSystemTrigger = triggerUid !== '0' && BigInt(triggerUid) === SYSTEM_DEVICE_UID
-  const triggerOptions = isSystemTrigger
-    ? Object.keys(SYSTEM_EVENTS).map(Number).sort((a, b) => a - b).map((id) => [id, SYSTEM_EVENTS[id]])
-    : TRIGGER_CMDS
-
-  const stateAttrs = statesFor(triggerUid !== '0' ? BigInt(triggerUid) : 0n)
-  const isBoolState = stateCluster === 0x0006 && stateAttr === 0x0000
+  const s = useStore()
+  const existing = id != null ? s.semAutomations.get(String(id))?.rule : null
 
   const devOptions = (anyLabel) => [
-    <option key="0" value="0">{anyLabel}</option>,
+    ...(anyLabel ? [<option key="0" value="0">{anyLabel}</option>] : []),
     ...devices.map((d) => (
       <option key={d.key.uid.toString()} value={d.key.uid.toString()}>
         {d.record.name || d.record.model || uidHex(d.key.uid)}
@@ -74,73 +50,89 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
     )),
   ]
 
-  const pickCluster = (v) => {
-    const c = ACTION_CLUSTERS.find((x) => x.id === Number(v)) || ACTION_CLUSTERS[0]
-    setActionCluster(c.id)
-    setActionCmd(c.cmds[0][0])
+  const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
+  const [triggerKind, setTriggerKind] = useState(existing ? existing.trigger.kind : 1)
+  const [triggerUid, setTriggerUid] = useState(existing?.trigger.deviceUid ? existing.trigger.deviceUid.toString() : '0')
+  const [eventId, setEventId] = useState(existing?.trigger.eventId ?? SYSTEM_EVENT_OPTIONS[0][0])
+  const [timeStr, setTimeStr] = useState(minutesToHHMM(existing?.trigger.minutesOfDay ?? 420))
+  const [weekdayMask, setWeekdayMask] = useState(existing?.trigger.weekdayMask ?? 0x7f)
+  const [stateEp, setStateEp] = useState(existing?.trigger.endpoint ?? 0)
+  const [stateProperty, setStateProperty] = useState(existing?.trigger.property ?? 0)
+  const [stateOp, setStateOp] = useState(existing?.trigger.op ?? 1)
+  const [stateEdge, setStateEdge] = useState(existing?.trigger.edge ?? 1)
+  const [stateValue, setStateValue] = useState(existing?.trigger.value ?? 0)
+
+  const [conditions, setConditions] = useState(
+    existing ? existing.conditions.map((c) => ({ ...c, deviceUid: c.deviceUid.toString() })) : [],
+  )
+
+  const [actionUid, setActionUid] = useState(existing?.action.deviceUid ? existing.action.deviceUid.toString() : '0')
+  const [actionEp, setActionEp] = useState(existing?.action.endpoint ?? 0)
+  const [actionProperty, setActionProperty] = useState(existing?.action.property ?? PROPERTY.POWER)
+  const [actionAction, setActionAction] = useState(existing?.action.action ?? ACTION.ON)
+  const [actionValue, setActionValue] = useState(existing?.action.value ?? 70)
+  const [actionColor, setActionColor] = useState('#ffcc88')
+
+  const isSystemTrigger = triggerUid !== '0' && BigInt(triggerUid) === SYSTEM_DEVICE_UID
+  const trigStateOpts = stateOptions(s.semStates, triggerUid !== '0' ? BigInt(triggerUid) : 0n)
+
+  const propDef = ACTION_PROPERTIES.find((p) => p.id === actionProperty) || ACTION_PROPERTIES[0]
+  const pickProperty = (v) => {
+    const p = ACTION_PROPERTIES.find((x) => x.id === Number(v)) || ACTION_PROPERTIES[0]
+    setActionProperty(p.id)
+    setActionAction(p.actions[0])
   }
 
   const updateCondition = (i, patch) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
   const addCondition = () => {
     if (conditions.length >= MAX_CONDITIONS) return
-    setConditions((cs) => [...cs, { deviceUid: 0n, cluster: 0x0006, attr: 0, ep: 0, op: 1, value: 1, value2: 0 }])
+    setConditions((cs) => [...cs, { deviceUid: '0', endpoint: 0, property: PROPERTY.POWER, op: 1, value: 1, value2: 0 }])
   }
 
   const submit = (e) => {
     e.preventDefault()
     const targetId = id != null ? BigInt(id) : nextId(automations)
+    const trigger =
+      Number(triggerKind) === 1
+        ? { kind: 1, minutesOfDay: hhmmToMinutes(timeStr), weekdayMask }
+        : Number(triggerKind) === 0
+          ? { kind: 0, deviceUid: BigInt(triggerUid), eventId: Number(eventId) }
+          : {
+              kind: 2,
+              deviceUid: BigInt(triggerUid),
+              endpoint: Number(stateEp),
+              property: Number(stateProperty),
+              op: Number(stateOp),
+              edge: Number(stateEdge),
+              value: Number(stateValue) || 0,
+            }
+
+    let action
+    if (actionAction === ACTION.SET && propDef.value === 'color') {
+      const { x, y } = rgbHexToXy(actionColor)
+      action = { deviceUid: BigInt(actionUid), endpoint: Number(actionEp), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.XY, x: x / 65535, y: y / 65535 }
+    } else if (actionAction === ACTION.SET) {
+      action = { deviceUid: BigInt(actionUid), endpoint: Number(actionEp), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.SCALAR, value: Number(actionValue) || 0 }
+    } else {
+      action = { deviceUid: BigInt(actionUid), endpoint: Number(actionEp), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.NONE }
+    }
+
     store.send(
-      automationPut(targetId, {
+      semanticAutomationPut(targetId, {
         enabled,
-        triggerKind,
-        triggerUid: BigInt(triggerUid),
-        triggerCmd: Number(triggerCmd),
-        triggerMinutesOfDay: Number(triggerKind) === 1 ? hhmmToMinutes(timeStr) : 0,
-        triggerWeekdayMask: Number(triggerKind) === 1 ? weekdayMask : 0,
-        triggerValue: Number(triggerKind) === 2 ? (Number(stateValue) || 0) : 0,
-        triggerEp: Number(triggerKind) === 2 ? stateEp : 0,
-        triggerCluster: Number(triggerKind) === 2 ? stateCluster : 0,
-        triggerAttr: Number(triggerKind) === 2 ? stateAttr : 0,
-        triggerOp: Number(triggerKind) === 2 ? stateOp : 0,
-        triggerEdge: Number(triggerKind) === 2 ? stateEdge : 0,
-        actionUid: BigInt(actionUid),
-        actionEp: Number(actionEp),
-        actionCluster,
-        actionCmd,
-        actionArgs: args,
+        trigger,
         conditions: conditions.map((c) => ({
           deviceUid: BigInt(c.deviceUid || 0),
-          cluster: c.cluster,
-          attr: c.attr,
-          ep: c.ep,
-          op: c.op,
+          endpoint: Number(c.endpoint) || 0,
+          property: Number(c.property) || 0,
+          op: Number(c.op) || 1,
           value: Number(c.value) || 0,
           value2: Number(c.value2) || 0,
         })),
+        action,
       }),
     )
     onClose()
-  }
-
-  const test = () => {
-    const uid = BigInt(actionUid) !== 0n ? BigInt(actionUid) : BigInt(triggerUid)
-    if (uid === 0n) return
-    store.send(zbCommand({ uid, ep: Number(actionEp), cluster: actionCluster, command: actionCmd, args }))
-  }
-
-  const condDeviceFor = (c) => {
-    if (c.deviceUid && c.deviceUid !== 0n) return c.deviceUid
-    return triggerUid !== '0' ? BigInt(triggerUid) : 0n
-  }
-  // Тип берём из живого состояния: bool (0x10) показываем как Вкл/Выкл.
-  const zclTypeFor = (c) => {
-    const uid = condDeviceFor(c)
-    if (uid === 0n) return undefined
-    return store.states.get(`st:${uid}:${c.ep}:${c.cluster}:${c.attr}`)?.record.zclType
-  }
-  const isBoolCond = (c) => {
-    const t = zclTypeFor(c)
-    return t != null ? t === 0x10 : c.cluster === 0x0006 && c.attr === 0x0000
   }
 
   return (
@@ -153,17 +145,15 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         </select>
         {Number(triggerKind) === 1 ? (
           <>
-            <span className="time-pick">
-              <select value={Math.floor(hhmmToMinutes(timeStr) / 60)}
-                onChange={(e) => setTimeStr(`${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(timeStr) % 60).padStart(2, '0')}`)}>
-                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
-              </select>
-              <span>:</span>
-              <select value={hhmmToMinutes(timeStr) % 60}
-                onChange={(e) => setTimeStr(`${String(Math.floor(hhmmToMinutes(timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}`)}>
-                {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
-              </select>
-            </span>
+            <select value={Math.floor(hhmmToMinutes(timeStr) / 60)}
+              onChange={(e) => setTimeStr(`${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(timeStr) % 60).padStart(2, '0')}`)}>
+              {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
+            </select>
+            <span>:</span>
+            <select value={hhmmToMinutes(timeStr) % 60}
+              onChange={(e) => setTimeStr(`${String(Math.floor(hhmmToMinutes(timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}`)}>
+              {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+            </select>
             <span className="days">
               {WEEKDAY_LABELS.map((d, i) => (
                 <label key={d} className="day">
@@ -174,80 +164,63 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
               ))}
             </span>
           </>
-        ) : Number(triggerKind) === 2 ? (
+        ) : Number(triggerKind) === 0 ? (
           <>
-            <select value={triggerUid} onChange={(e) => {
-              setTriggerUid(e.target.value)
-              setStateCluster(0); setStateAttr(0); setStateEp(0)
-            }}>
+            <select value={triggerUid} onChange={(e) => setTriggerUid(e.target.value)}>
               <option value="0">выберите устройство</option>
-              {devices.map((d) => (
-                <option key={d.key.uid.toString()} value={d.key.uid.toString()}>
-                  {d.record.name || d.record.model || uidHex(d.key.uid)}
-                </option>
-              ))}
+              {devices.map((d) => <option key={d.key.uid.toString()} value={d.key.uid.toString()}>{d.record.name || d.record.model || uidHex(d.key.uid)}</option>)}
             </select>
-            <select value={stateCluster || stateAttr ? `${stateEp}:${stateCluster}:${stateAttr}` : ''}
-              onChange={(e) => {
-                const [ep, cluster, attr] = e.target.value.split(':').map(Number)
-                setStateEp(ep); setStateCluster(cluster); setStateAttr(attr); setStateValue(1)
-              }}>
-              <option value="">(атрибут)</option>
-              {stateAttrs.map((k) => (
-                <option key={`${k.ep}:${k.cluster}:${k.attr}`} value={`${k.ep}:${k.cluster}:${k.attr}`}>
-                  {clusterName(k.cluster)} · {attrName(k.cluster, k.attr)} (EP{k.ep})
-                </option>
-              ))}
+            {isSystemTrigger ? (
+              <select value={eventId} onChange={(e) => setEventId(Number(e.target.value))}>
+                {SYSTEM_EVENT_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            ) : (
+              <span className="muted">события устройства пока не представимы</span>
+            )}
+          </>
+        ) : (
+          <>
+            <select value={triggerUid} onChange={(e) => { setTriggerUid(e.target.value); setStateEp(0); setStateProperty(0) }}>
+              <option value="0">выберите устройство</option>
+              {devices.map((d) => <option key={d.key.uid.toString()} value={d.key.uid.toString()}>{d.record.name || d.record.model || uidHex(d.key.uid)}</option>)}
+            </select>
+            <select value={stateProperty ? `${stateEp}:${stateProperty}` : ''}
+              onChange={(e) => { const [ep, p] = e.target.value.split(':').map(Number); setStateEp(ep); setStateProperty(p) }}>
+              <option value="">(свойство)</option>
+              {trigStateOpts.map((o) => <option key={`${o.ep}:${o.property}`} value={`${o.ep}:${o.property}`}>{propertyName(o.property)} (EP{o.ep})</option>)}
             </select>
             <select value={stateOp} onChange={(e) => setStateOp(Number(e.target.value))}>
               {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
-            {isBoolState ? (
-              <select value={stateValue ? 1 : 0} onChange={(e) => setStateValue(Number(e.target.value))}>
-                <option value={1}>Вкл</option>
-                <option value={0}>Выкл</option>
-              </select>
-            ) : (
-              <>
-                <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
-                <span className="muted">{describeAttr(stateCluster, stateAttr)?.unit || ''}</span>
-              </>
-            )}
+            <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
             <select value={stateEdge} onChange={(e) => setStateEdge(Number(e.target.value))}>
               {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </>
-        ) : (
-          <>
-            <select value={triggerUid} onChange={(e) => {
-              const u = e.target.value
-              setTriggerUid(u)
-              setTriggerCmd(u !== '0' && BigInt(u) === SYSTEM_DEVICE_UID ? '1' : '2')
-            }}>{devOptions('любое устройство')}</select>
-            <select value={triggerCmd} onChange={(e) => setTriggerCmd(e.target.value)}>{triggerOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-          </>
         )}
       </div>
 
-      <label className="af-line">Действие: <select value={actionUid} onChange={(e) => setActionUid(e.target.value)}>{devOptions('то же, что триггер')}</select>
+      <label className="af-line">Действие:
+        <select value={actionUid} onChange={(e) => setActionUid(e.target.value)}>
+          {Number(triggerKind) !== 1 && <option value="0">то же, что триггер</option>}
+          {devices.map((d) => <option key={d.key.uid.toString()} value={d.key.uid.toString()}>{d.record.name || d.record.model || uidHex(d.key.uid)}</option>)}
+        </select>
         EP <input className="ep" type="number" min="0" max="255" value={actionEp} onChange={(e) => setActionEp(e.target.value)} />
-        <select value={actionCluster} onChange={(e) => pickCluster(e.target.value)}>{ACTION_CLUSTERS.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-        <select value={actionCmd} onChange={(e) => setActionCmd(Number(e.target.value))}>{clusterDef.cmds.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <select value={actionProperty} onChange={(e) => pickProperty(e.target.value)}>
+          {ACTION_PROPERTIES.map((p) => <option key={p.id} value={p.id}>{propertyName(p.id)}</option>)}
+        </select>
+        <select value={actionAction} onChange={(e) => setActionAction(Number(e.target.value))}>
+          {propDef.actions.map((a) => <option key={a} value={a}>{actionName(a)}</option>)}
+        </select>
       </label>
 
-      {actionCluster === 0x0008 && (
-        <label className="af-line">Уровень: <input type="range" min="0" max="254" value={level} onChange={(e) => setLevel(Number(e.target.value))} /> {level}
-          <span className="muted">transition, мс</span><input className="ep" type="number" min="0" value={transitionMs} onChange={(e) => setTransitionMs(Number(e.target.value))} />
-        </label>
+      {actionAction === ACTION.SET && propDef.value === 'color' && (
+        <label className="af-line">Цвет: <input type="color" value={actionColor} onChange={(e) => setActionColor(e.target.value)} /></label>
       )}
-
-      {actionCluster === 0x0300 && actionCmd === 1 && (
-        <label className="af-line">Темп. цвета: <input type="range" min="2000" max="6500" step="100" value={kelvin} onChange={(e) => setKelvin(Number(e.target.value))} /> {kelvin} K
-        </label>
-      )}
-
-      {actionCluster === 0x0300 && actionCmd === 0 && (
-        <label className="af-line">Цвет: <input type="color" value={colorHex} onChange={(e) => setColorHex(e.target.value)} />
+      {actionAction === ACTION.SET && propDef.value && propDef.value !== 'color' && (
+        <label className="af-line">Значение:
+          <input className="ep" type="number" step="any" value={actionValue} onChange={(e) => setActionValue(e.target.value)} />
+          <span className="muted">{propDef.value === 'percent' ? '%' : propDef.value === 'kelvin' ? 'K' : '°'}</span>
         </label>
       )}
 
@@ -258,23 +231,16 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
         </div>
         {conditions.length === 0 && <div className="muted">нет — срабатывает всегда</div>}
         {conditions.map((c, i) => {
-          const opts = statesFor(condDeviceFor(c))
-          const attrValue = c.cluster || c.attr ? `${c.ep}:${c.cluster}:${c.attr}` : ''
+          const opts = stateOptions(s.semStates, c.deviceUid && c.deviceUid !== '0' ? BigInt(c.deviceUid) : (triggerUid !== '0' ? BigInt(triggerUid) : 0n))
           return (
             <div className="af-cond" key={i}>
-              <select value={c.deviceUid.toString()} onChange={(e) => updateCondition(i, { deviceUid: BigInt(e.target.value), cluster: 0, attr: 0, ep: 0 })}>
+              <select value={c.deviceUid} onChange={(e) => updateCondition(i, { deviceUid: e.target.value, endpoint: 0, property: 0 })}>
                 {devOptions('то же, что триггер')}
               </select>
-              <select value={attrValue} onChange={(e) => {
-                const [ep, cluster, attr] = e.target.value.split(':').map(Number)
-                updateCondition(i, { ep, cluster, attr, value: 1 })
-              }}>
-                <option value="">(атрибут)</option>
-                {opts.map((k) => (
-                  <option key={`${k.ep}:${k.cluster}:${k.attr}`} value={`${k.ep}:${k.cluster}:${k.attr}`}>
-                    {clusterName(k.cluster)} · {attrName(k.cluster, k.attr)} (EP{k.ep})
-                  </option>
-                ))}
+              <select value={c.property ? `${c.endpoint}:${c.property}` : ''}
+                onChange={(e) => { const [ep, p] = e.target.value.split(':').map(Number); updateCondition(i, { endpoint: ep, property: p }) }}>
+                <option value="">(свойство)</option>
+                {opts.map((o) => <option key={`${o.ep}:${o.property}`} value={`${o.ep}:${o.property}`}>{propertyName(o.property)} (EP{o.ep})</option>)}
               </select>
               <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
                 {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -284,18 +250,9 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
                   <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
                   <span className="muted">…</span>
                   <input className="ep" type="number" step="any" value={c.value2 ?? 0} onChange={(e) => updateCondition(i, { value2: e.target.value })} />
-                  <span className="muted">{describeAttr(c.cluster, c.attr)?.unit || ''}</span>
                 </>
-              ) : isBoolCond(c) ? (
-                <select value={c.value ? 1 : 0} onChange={(e) => updateCondition(i, { value: Number(e.target.value) })}>
-                  <option value={1}>Вкл</option>
-                  <option value={0}>Выкл</option>
-                </select>
               ) : (
-                <>
-                  <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
-                  <span className="muted">{describeAttr(c.cluster, c.attr)?.unit || ''}</span>
-                </>
+                <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
               )}
               <button type="button" className="ghost danger" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>✕</button>
             </div>
@@ -305,7 +262,6 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
 
       <div className="af-line">
         <button type="submit">Сохранить</button>
-        <button type="button" onClick={test}>Проверить</button>
         <button type="button" onClick={onClose}>Отмена</button>
       </div>
     </form>

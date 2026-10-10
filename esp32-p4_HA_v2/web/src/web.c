@@ -308,10 +308,47 @@ static bool snapshot_count(const void *key, const void *record, void *ctx)
     return true;
 }
 
+/* Профили устройств для reverse event при snapshot: собраны ВНЕ automation-итерации,
+ * т.к. внутри domain_entity_iter нельзя звать domain_entity_get (лок Domain). */
+#define WEB_SNAPSHOT_DEVICES_MAX 32
+typedef struct {
+    ha_device_uid_t uid;
+    char model[HA_DEVICE_MODEL_MAX];
+} web_device_model_t;
+
+typedef struct {
+    web_device_model_t items[WEB_SNAPSHOT_DEVICES_MAX];
+    size_t count;
+} web_device_cache_t;
+
+static bool snapshot_collect_device(const void *key, const void *record, void *ctx)
+{
+    web_device_cache_t *cache = (web_device_cache_t *)ctx;
+    if (cache->count >= WEB_SNAPSHOT_DEVICES_MAX) {
+        return true;
+    }
+    const ha_device_record_t *rec = (const ha_device_record_t *)record;
+    cache->items[cache->count].uid = *(const ha_device_uid_t *)key;
+    memcpy(cache->items[cache->count].model, rec->model, HA_DEVICE_MODEL_MAX);
+    cache->count++;
+    return true;
+}
+
+static const char *device_cache_model(const web_device_cache_t *cache, ha_device_uid_t uid)
+{
+    for (size_t i = 0; i < cache->count; i++) {
+        if (cache->items[i].uid == uid) {
+            return cache->items[i].model;
+        }
+    }
+    return NULL;
+}
+
 typedef struct {
     int fd;
     const web_schema_t *schema;
     uint32_t *count;
+    const web_device_cache_t *devices;
 } snapshot_ctx_t;
 
 static bool snapshot_emit(const void *key, const void *record, void *ctx)
@@ -333,9 +370,18 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
     } else if (s->schema->type == WEB_ENTITY_AUTOMATION) {
         uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
         uint16_t sem_len = 0;
-        /* внутри iter нельзя звать domain_entity_get: профиль недоступен → NULL. */
-        if (semantic_automation_payload((const ha_automation_key_t *)key,
-                                        (const ha_automation_record_t *)record, NULL, sem,
+        const ha_automation_record_t *arec = (const ha_automation_record_t *)record;
+        ha_device_record_t dev = {0};
+        const ha_device_record_t *dev_ptr = NULL;
+        if (s->devices != NULL &&
+            arec->trigger_kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
+            const char *model = device_cache_model(s->devices, arec->trigger_b.event.device_uid);
+            if (model != NULL) {
+                memcpy(dev.model, model, HA_DEVICE_MODEL_MAX);
+                dev_ptr = &dev;
+            }
+        }
+        if (semantic_automation_payload((const ha_automation_key_t *)key, arec, dev_ptr, sem,
                                         &sem_len)) {
             web_send_frame(s->fd, WEB_MSG_SEMANTIC_AUTOMATION, 0, sem, sem_len);
         }
@@ -355,9 +401,14 @@ static void web_send_snapshot(int fd)
     put_u32(word, total);
     web_send_frame(fd, WEB_MSG_SYNC_BEGIN, 0, word, sizeof(word));
 
+    web_device_cache_t devices = {0};
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, snapshot_collect_device,
+                       &devices);
+
     uint32_t sent = 0;
     for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
-        snapshot_ctx_t ctx = {.fd = fd, .schema = &SCHEMA[i], .count = &sent};
+        snapshot_ctx_t ctx = {
+            .fd = fd, .schema = &SCHEMA[i], .count = &sent, .devices = &devices};
         domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_emit, &ctx);
     }
 
