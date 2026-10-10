@@ -300,6 +300,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Шаг A: `entity_id` (opaque u64, derivation из binding) + **Entity/Binding split**; erase несовместимого persistent; новый minimal WS v3; Diagnostics вне v3; system/weather — entities, location/settings — config | §5 `STEP_A_PLAN.md` закрыт; открыт только точный алгоритм derivation (A0.3) |
 | 2026-10-10 | A0.1: Entity — только logical identity (`ha_entity_id_t`+key), без транспорта; record минимален | Domain не знает uid/endpoint/cluster/attr; binding — adapter-owned (A0.2) |
 | 2026-10-10 | A0.1 не задаёт вывод `entity_id` | derivation (seed→id) — A0.3; форма модели не должна зависеть от hash |
+| 2026-10-10 | A0.2 binding — Zigbee-private `{ entity_id, device_uid, endpoint }`, без поля `transport` | таблица Zigbee-specific; transport не тащим в binding |
+| 2026-10-10 | seed для A0.3 — канонические байты `[uid LE(8) | endpoint(1)]`, issuer (не transport) | нельзя `hash(&struct)` (padding/endian); cluster/attr в seed не входят (это Property) |
 
 ## 5. От чего отказались
 
@@ -384,6 +386,10 @@ TLV / самоописание приложения              — запре�
 2026-10-10  шаг A, A0.0–A0.1: `ha_model/ha_entity.h` — `ha_entity_id_t` (u64, 0=none),
             `ha_entity_key_t`, минимальный `ha_entity_record_t`; host-тест `test_entity` 1/1.
             Аддитивно, без canonical state/binding/derivation. IDF зелёный
+2026-10-10  шаг A, A0.2: `zigbee/zigbee_entity_binding.{h,c}` — `zb_entity_binding_t`
+            { entity_id, device_uid, endpoint } (без transport), двусторонний lookup
+            physical↔entity; host-тест `test_entity_binding` (zigbee 5/5). §3.1 STEP_A_PLAN
+            зафиксировал binding/seed. Аддитивно; IDF зелёный
 ```
 
 ## 7. Открытые вопросы

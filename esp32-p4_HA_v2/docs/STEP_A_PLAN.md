@@ -125,6 +125,56 @@ canonical state key: (entity_id, property_id)
 Правило A: **Domain больше не требует cluster/attr для хранения состояния.** Если generic
 Domain API где-то требует cluster/attr — миграция не завершена.
 
+### 3.1. Binding и seed (фиксировано до A0.2/A0.3)
+
+Три понятия **разделены** и не сливаются в одну структуру:
+
+```text
+Entity identity   — ha_entity_id_t (Domain, opaque)
+Binding persistence — adapter-private таблица
+Derivation seed    — временный байтовый набор, не persistent struct
+```
+
+**Zigbee binding (adapter-private).** Таблица Zigbee-specific, поэтому поля `transport` в
+ней нет; ключ — физическая привязка, значение — entity_id:
+
+```c
+typedef struct {
+    ha_entity_id_t  entity_id;
+    ha_device_uid_t device_uid;
+    uint8_t         endpoint;
+} zb_entity_binding_t;
+
+/* key = (device_uid, endpoint); record = { entity_id } */
+```
+
+Двусторонний lookup (нужен bridge и в report, и в command):
+
+```c
+bool zb_entity_binding_find_entity(const zb_entity_binding_t *list, size_t count,
+                                   ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out);
+bool zb_entity_binding_find_physical(const zb_entity_binding_t *list, size_t count,
+                                     ha_entity_id_t entity_id, ha_device_uid_t *uid, uint8_t *endpoint);
+```
+
+**Derivation seed (A0.3).** seed — не persistent struct, а канонический байтовый набор
+(без `hash(&struct)` из-за padding/endian):
+
+```text
+Zigbee seed = [ device_uid (LE, 8) | endpoint (1) ]  — 9 байт
+cluster/attr в seed НЕ входят: они определяют Property, не Entity.
+```
+
+Владелец identity — не «transport», а namespace/issuer (в будущем: ZIGBEE, GPIO, SYSTEM,
+WEATHER, VIRTUAL):
+
+```c
+ha_entity_id_t ha_entity_id_derive(uint32_t issuer, const void *seed, size_t seed_len);
+```
+
+Форма: `Zigbee physical (uid+endpoint) → seed → entity_id`; `cluster+attr → property_id`;
+canonical: `(entity_id, property_id)`. Алгоритм hash и сам API — **A0.3** (не A0.2).
+
 ## 4. Фазы A (без «большого взрыва»)
 
 ```text
@@ -132,7 +182,8 @@ A0  logical entity identity + binding model (canonical state пока не ме�
     [x] A0.0  контракт entity_id и binding (без транспорта; см. §3)
     [x] A0.1  `ha_entity_id_t` + transport-agnostic Entity (`ha_model/ha_entity.h`):
               id+key, минимальный record, host-тест
-    [ ] A0.2  Zigbee binding record { entity_id, transport=ZIGBEE, uid, endpoint }
+    [x] A0.2  Zigbee-private binding `zb_entity_binding_t { entity_id, device_uid, endpoint }`
+              (без поля transport), двусторонний lookup physical↔entity; host-тест
     [ ] A0.3  детерминированная derivation entity_id из binding (алгоритм — §5)
     [ ] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
     [ ] A0.5  tests: reboot / порядок discovery / re-interview → та же identity

@@ -12,7 +12,8 @@ set(ZIGBEE_CORE
     ../src/zigbee_state.c
     ../src/zigbee_command.c
     ../src/zigbee_topology.c
-    ../src/zigbee_interview.c)
+    ../src/zigbee_interview.c
+    ../src/zigbee_entity_binding.c)
 
 set(DOMAIN_CORE
     ../../domain/src/domain_registry.c
@@ -69,3 +70,4 @@ zigbee_add_test(test_state)
 zigbee_add_test(test_command)
 zigbee_add_test(test_topology)
 zigbee_add_test(test_interview)
+zigbee_add_test(test_entity_binding)
