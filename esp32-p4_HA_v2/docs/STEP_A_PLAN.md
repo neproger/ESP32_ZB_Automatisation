@@ -91,19 +91,36 @@ end-to-end (state/command/automation/event/group/capabilities).
 
 ## 3. Целевая модель A
 
+**Identity и binding разделены.** Domain знает только `(entity_id, property_id)`; транспорт
+приходит через binding (adapter-owned metadata).
+
 ```text
 Entity
-  id              (стабильная logical identity, opaque)
-  device/adapter binding:
-      transport = Zigbee
-      uid, endpoint
+  entity_id        (opaque uint64; стабильная logical identity)
+  kind / metadata
+
+Binding
+  entity_id
+  transport          (ZIGBEE | GPIO | MATTER | …)
+  transport_address   — Zigbee: { device_uid, endpoint }
+                        GPIO:   { gpio_num }
+                        Matter: { node_id, endpoint }
+
 Property
-  id = POWER
-Zigbee bridge mapping (private)
-  POWER ↔ cluster 0x0006 / attr 0x0000
+  id = POWER         (транспорт-агностично)
 
 canonical state key: (entity_id, property_id)
 ```
+
+`entity_id`: **opaque `uint64`, детерминированно выводится из persistent binding**
+(например derivation/hash от `transport + transport_address + logical_slot`); наружу
+структура не раскрывается. **Не** `entity_id = uid` и **не** упаковка `uid+endpoint` — иначе
+идентификатор снова становится Zigbee-centric.
+
+**Обязательное правило A0:**
+
+> `entity_id` должен быть восстановим из binding **без зависимости от порядка discovery** и
+> **без отдельного mutable counter**. Иначе после erase/reboot/re-interview ID начнут плавать.
 
 Правило A: **Domain больше не требует cluster/attr для хранения состояния.** Если generic
 Domain API где-то требует cluster/attr — миграция не завершена.
@@ -111,9 +128,13 @@ Domain API где-то требует cluster/attr — миграция не з�
 ## 4. Фазы A (без «большого взрыва»)
 
 ```text
-A0  logical entity identity + binding model
-      Entity entity_id детерминирован (uid+ep) или персистентный id; binding как данные.
-      Zigbee bridge создаёт entity при интервью. Canonical state пока не меняем.
+A0  logical entity identity + binding model (canonical state пока не меняем)
+    A0.0  контракт entity_id и binding
+    A0.1  ha_entity_id_t + transport-agnostic Entity (kind/metadata)
+    A0.2  Zigbee binding record { entity_id, transport=ZIGBEE, uid, endpoint }
+    A0.3  детерминированная derivation entity_id из binding (алгоритм — §5)
+    A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
+    A0.5  tests: reboot / порядок discovery / re-interview → та же identity
 
 A1  canonical state (entity_id, property_id)
       Новый тип canonical state; physical ZCL key уходит в adapter binding.
@@ -147,14 +168,32 @@ A8  удалить transitional Web/Domain paths
 Каждая фаза заканчивается чекпоинтом (сборка + host-тесты + проверка на P4 + коммит).
 До A7 хранение ещё позволяет откат; A7 — точка невозврата.
 
-## 5. Открытые решения (нужны до кода)
+## 5. Решения (приняты) и один открытый пункт
 
-1. **entity_id**: детерминированный хэш `(uid, endpoint)` или монотонный id, персистентно
-   связанный с binding? (влияет на стабильность при re-pair и порядок обнаружения).
-2. **erase vs миграция** на A3/A4: подтвердить разовый erase правил/экранов.
-3. **WS v3**: список финальных message types и судьба raw-канала (нужен ли Diagnostics по
-   проводу вообще, если raw хранится только в firmware — но после A7 raw store может исчезнуть).
-4. **Diagnostics после A7**: чем показывать «сырое», если physical state уйдёт — оставлять
-   adapter-binding (cluster/attr) как metadata для диагностики?
-5. **Entity для system-девайса / виртуальных устройств**: system/weather/location — тоже
-   entities? (их property уже семантические.)
+Принято:
+
+1. **entity_id** — opaque `uint64`, детерминированно из persistent binding
+   (`transport + transport_address + logical_slot`); не `uid` и не packing `uid+endpoint`
+   (§3). Восстановим из binding, без mutable counter, без зависимости от порядка discovery.
+2. **Erase vs migration** — принять **разовый erase** несовместимого persistent state
+   (`automation`/`group`/`state`). Миграция physical→semantic не оправдана. Совместимые
+   `settings`/`location` сохранить, только если их таблицы не меняются; иначе тоже erase
+   (восстановимы).
+3. **WS v3** — **новый минимальный canonical protocol**, не продолжение v2. Frame types:
+   `ENTITY`, `PROPERTY_STATE`, `CAPABILITIES`, `AUTOMATION`, `GROUP_ITEM`, `EVENT`; команды:
+   `PROPERTY_ACTION`, `AUTOMATION_PUT`, `GROUP_ITEM_PUT`/`REMOVE`. Без `cluster`/`attr`/
+   `zcl_type`/raw automation record.
+4. **Diagnostics** — отдельный **transport-specific** diagnostic message/канал, **вне**
+   canonical v3. Возможность видеть cluster/attr сохраняется, основной контракт остаётся чистым.
+5. **System** — обычная logical entity `ENTITY_SYSTEM` со свойствами `SYSTEM_TIME_*`.
+   **Weather** — отдельная entity `ENTITY_WEATHER` с semantic properties. **Location/settings** —
+   отдельные config entities (не live property state), в Property-модель не тащить.
+
+Открыто (решить в **A0.3**, аккуратно и один раз):
+
+- **Точный алгоритм derivation `entity_id`** — конкретная функция от binding. Требования:
+  детерминизм, устойчивость к порядку discovery, отсутствие коллизий, стабильность при re-pair
+  (EUI стабилен). Кандидаты: `hash64(transport, uid, endpoint, logical_slot)` с фиксированным
+  seed; либо персистентный id, выданный один раз и хранимый в binding (но тогда он должен
+  переживать erase/reboot — противоречит «восстановим из binding»). Предпочтение — чистая
+  детерминированная derivation без хранения отдельного id.

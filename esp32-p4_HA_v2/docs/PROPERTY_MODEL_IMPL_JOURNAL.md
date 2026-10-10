@@ -297,6 +297,7 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | raw Zigbee — только на Diagnostics-экране (без нового backend protocol) | raw ENTITY уже приходит; это допустимое применение transitional ABI |
 | 2026-10-10 | Frontend dead paths удалены (zbCommand/automationPut/encodeAutomationRecord/groupItem raw/capabilities.js/commands.js) | обычный UI — клиент semantic/domain API; ZCL только в Diagnostics |
 | 2026-10-10 | Перед шагом A проведён архитектурный аудит ветки (`da30b93`); план — `STEP_A_PLAN.md` | A меняет identity/persistence/wire — необратимо; сначала проверка |
+| 2026-10-10 | Шаг A: `entity_id` (opaque u64, derivation из binding) + **Entity/Binding split**; erase несовместимого persistent; новый minimal WS v3; Diagnostics вне v3; system/weather — entities, location/settings — config | §5 `STEP_A_PLAN.md` закрыт; открыт только точный алгоритм derivation (A0.3) |
 
 ## 5. От чего отказались
 
@@ -375,6 +376,9 @@ TLV / самоописание приложения              — запре�
 2026-10-10  перед шагом A: baseline зафиксирован (`da30b93`), архитектурный аудит по 8
             направлениям → `STEP_A_PLAN.md` (цель, фазы A0–A8, persistence/failure/identity).
             Открытые решения — §5 плана. Код A не начат
+2026-10-10  §5 STEP_A_PLAN закрыт: entity_id + Entity/Binding split, разовый erase,
+            minimal WS v3, Diagnostics вне v3, system/weather → entities. Открыт только
+            алгоритм derivation entity_id (A0.3). Код A пока не начат
 ```
 
 ## 7. Открытые вопросы
