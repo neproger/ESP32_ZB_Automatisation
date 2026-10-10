@@ -557,6 +557,11 @@ TLV / самоописание приложения              — запре�
             production state; grep HA_ENTITY_STATE = 0. ha_model 4/4, semantics 1/1, zigbee 9/9,
             automation 1/1, IDF + web-ui зелёные. Осталось по плану: A7 (erase старого physical
             state ABI), A8 (удаление Dial/weather/location/wifi из raw-классификации при желании).
+2026-10-10  шаг A, A7 — разовый erase старого persistent ABI. app_main::erase_legacy_mstore_once
+            (marker в NVS `ha_boot/stepA_erase`) стирает раздел `mstore` один раз до domain_init;
+            старые physical state/automation/group_item после cold boot не подхватываются, откат
+            не поддерживается. Добавлен docs/STEP_A_FINAL_STATE.md (инварианты, слои, WS v3,
+            diagnostics, не-Entity подсистемы, migration/rollback). IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

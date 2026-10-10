@@ -7,6 +7,8 @@ idf_component_register(
     REQUIRES
         domain
         ha_model
+        nvs_flash
+        esp_partition
         zigbee
         automation
         web

@@ -318,7 +318,10 @@ A6  WS v3                                                                       
                 PROPERTY_STATE(ENTITY_SYSTEM). Обычный frontend не зависит от v2 semantic-каналов
                 (диагностика может читать raw ENTITY-состояние).
 
-A7  erase старого physical state ABI
+A7  erase старого physical state ABI                                                        [x]
+      Реализовано как разовый erase: app_main::erase_legacy_mstore_once стирает раздел
+      `mstore` один раз (marker в NVS) до domain_init. Старый ABI (physical state/automation/
+      group_item) после cold boot не подхватывается; откат не поддерживается.
       Удалить raw state store/таблицы; освободить регионы.
 
 A8  удалить transitional Web/Domain paths

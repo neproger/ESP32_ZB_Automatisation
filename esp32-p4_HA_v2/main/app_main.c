@@ -6,6 +6,7 @@
 #include "display_p4/display_p4.h"
 #include "domain/domain.h"
 #include "esp_log.h"
+#include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_capabilities.h"
@@ -19,6 +20,8 @@
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
 #include "journal_console.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "system/system.h"
 #include "web/web.h"
 #include "wifi/wifi.h"
@@ -311,9 +314,51 @@ static void dispatcher_task(void *arg)
     }
 }
 
+/*
+ * A7: разовый erase старого persistent ABI. До шага A раздел mstore хранил
+ * physical-состояние (uid/ep/cluster/attr), physical-правила и physical-виджеты —
+ * раскладка несовместима с canonical-моделью. Один раз (marker в NVS) стираем
+ * mstore-раздел целиком: старые данные не подхватываются после cold boot. Откат на
+ * старый ABI после этого не поддерживается — это точка невозврата.
+ */
+static void erase_legacy_mstore_once(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        (void)nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "A7: nvs init failed (%s); skip legacy erase", esp_err_to_name(err));
+        return;
+    }
+
+    nvs_handle_t handle = 0;
+    if (nvs_open("ha_boot", NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGW(TAG, "A7: nvs open failed; skip legacy erase");
+        return;
+    }
+    uint8_t erased = 0;
+    if (nvs_get_u8(handle, "stepA_erase", &erased) == ESP_OK && erased == 1) {
+        nvs_close(handle);
+        return;
+    }
+
+    const esp_partition_t *partition =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "mstore");
+    if (partition != NULL) {
+        const esp_err_t e = esp_partition_erase_range(partition, 0, partition->size);
+        ESP_LOGI(TAG, "A7: legacy mstore erased: %s", esp_err_to_name(e));
+    }
+    (void)nvs_set_u8(handle, "stepA_erase", 1);
+    (void)nvs_commit(handle);
+    nvs_close(handle);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "HA on ESP32-P4: bootstrap");
+    erase_legacy_mstore_once();
 
     if (!start_step(domain_init(&s_domain, APP_ENTITY_TYPES, APP_JOURNAL_CAPACITY,
                                 APP_PAYLOAD_CAPACITY, APP_PAYLOAD_MAX_SIZE),
