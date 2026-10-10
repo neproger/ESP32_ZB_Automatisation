@@ -1,137 +1,162 @@
-# Step B — Logical Device Model
+# Step B — Logical Device Model (normalized Device graph)
 
 Недостающий уровень **над** Entity. Step A разрезал physical Zigbee endpoint на независимые
-логические Entity, но потерял **структурную принадлежность**: какие Entity — части одного
-реального устройства. Step B возвращает эту связь, не ломая Step A.
+логические Entity, но потерял структурную принадлежность. Step B возвращает её как
+**нормализованный Device graph**, который adapter предоставляет Domain.
 
-Это не откат от Entity-модели, а слой владения над ней.
+## Принцип
 
-## Две разные связи (не смешивать)
+> **Adapter owns physical representation; Device service owns normalization into the canonical
+> Device graph; Domain only stores that graph.**
+
+И уточнение к Step A: physical **addressing** остаётся adapter-private; stable **external
+identity** может храниться в Domain как opaque `native_id` + `source`.
+
+## Две связи (не смешивать)
 
 ```text
 ownership (Domain, доступна потребителям):
-    Logical Device -> Entity
+    Logical Device -> Entity            (Entity.device_id)
+    Logical Device -> Logical Device    (parent_device_id, дерево)
 
-transport binding (adapter-private, наружу НЕ выходит):
-    Zigbee Device <=> EUI64
-    Entity        <=> EUI64 + endpoint
+physical addressing (adapter-private, наружу НЕ выходит):
+    Entity <=> EUI64 + endpoint          (горячий путь команды)
 ```
 
-Domain знает только `device_id`, `entity_id`, `property_id`. `EUI64`/`endpoint` живут строго
-в adapter binding.
+`native_id` — provenance identity, Domain её **не парсит** (не EUI64/endpoint/ZCL).
 
-## Инварианты
+## Слои
 
 ```text
-Logical Device != transport device record.
-Logical Device — для ownership / lifecycle / UI grouping.
-Entity остаётся единицей properties / actions / events.
-
-Deleting Entity  не означает удаление физического Zigbee-устройства.
-Deleting Logical Device может инициировать adapter-specific device removal (unpair).
+Zigbee adapter
+   ↓ normalized ha_device_desc_t (source, native_id, parent_native_id, name)
+generic Device service (над Domain, транспорт-agnostic)
+   ↓ derive device_id; upsert Logical Device; bind Entity ownership
+Domain
+   { device_id, source, native_id, parent_device_id, name }
+   Entity { entity_id, device_id, name }
 ```
 
-Дополнительно:
-- Domain не знает `EUI64`/`endpoint`/`cluster`/`attr`.
-- `device_id` — opaque `uint64`, детерминирован, Domain его не выводит.
-- Потребители обычного UI работают от `Device -> Entity`, не от Zigbee.
+Domain **не вызывает adapter**. Удаление инициирует UI → Device service → adapter dispatcher.
 
-## Модель (минимальный этап — без дерева)
+## Модель (ha_model — только формы/derivation)
 
 ```c
+typedef enum {
+    HA_SOURCE_NONE   = 0,
+    HA_SOURCE_ZIGBEE = 1,
+    HA_SOURCE_GPIO   = 2,
+} ha_source_id_t;
+
+#define HA_NATIVE_ID_MAX 32
+
 typedef uint64_t ha_device_id_t;
 #define HA_DEVICE_ID_NONE ((ha_device_id_t)0u)
 
-/* Logical Device: ключ — device_id (8). */
-typedef struct { ha_device_id_t id; } ha_device_key_t;
-typedef struct { char name[HA_DEVICE_NAME_MAX]; } ha_logical_device_record_t;
+typedef struct { ha_device_id_t id; } ha_logical_device_key_t;
 
-/* Entity получает логическую связь (Step B): */
 typedef struct {
-    ha_device_id_t device_id; /* HA_DEVICE_ID_NONE — не привязана (edge) */
-    char name[HA_ENTITY_NAME_MAX];
-} ha_entity_record_t;
+    ha_source_id_t  source;
+    ha_device_id_t  parent_device_id;      /* HA_DEVICE_ID_NONE — root */
+    char            native_id[HA_NATIVE_ID_MAX];
+    char            name[HA_DEVICE_NAME_MAX];
+} ha_logical_device_record_t;
+
+/* DTO, который adapter подаёт в Device service (adapter описывает внешний граф). */
+typedef struct {
+    ha_source_id_t source;
+    char           native_id[HA_NATIVE_ID_MAX];        /* канонизирует adapter */
+    char           parent_native_id[HA_NATIVE_ID_MAX]; /* "" == root */
+    char           name[HA_DEVICE_NAME_MAX];
+} ha_device_desc_t;
+
+/* Единственная derivation identity (никаких альтернативных формул в adapter). */
+ha_device_id_t ha_device_id_derive(ha_source_id_t source, const char *native_id);
 ```
 
-`HA_ENTITY_NAME_MAX` — текущий 32. `HA_DEVICE_NAME_MAX` — 32 (совпадает с именем устройства
-адаптера), вынести явно.
+`ha_entity_record_t` (Step A/B2) = `{ ha_device_id_t device_id; char name[...]; }` — без изменений.
 
-## Identity / derivation
-
-`device_id` — детерминированный, из EUI64, тем же примитивом, что и `entity_id` (Step A0.3):
+## Derivation (единая)
 
 ```text
-device_id = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, LE(EUI64), 8)
-entity_id = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, LE(EUI64) || endpoint, 9)
+device_id        = ha_device_id_derive(source, native_id)
+parent_device_id = ha_device_id_derive(source, parent_native_id)   (если parent_native_id != "")
 ```
 
-Разная длина seed (8 vs 9) → `device_id != entity_id` для того же устройства; reboot/order-
-independent; persistence не нужен. Выставляется **только** adapter'ом.
+`ha_device_id_derive` — generic в `ha_model` (SipHash, тот же примитив, что `entity_id`).
+Adapter **не** имеет своей формулы: он канонизирует `native_id` и зовёт эту функцию.
 
-## Владение (ownership) vs binding
+## native_id
 
-- Adapter при интервью: для `EUI64` создаёт/находит Logical Device (`device_id`), задаёт
-  initial name (== имя physical device, как сейчас), затем для каждого endpoint — Entity с
-  `device_id`.
-- Adapter-private registry: `device_id <=> EUI64`, `entity_id <=> EUI64 + endpoint`.
-- Domain: `Logical Device(id, name)` + `Entity(id, device_id, name)`.
+Opaque строка, канонизацией владеет adapter. Требования: стабильна, уникальна в пределах
+`source`, без пробелов. Для Zigbee: lowercase hex EUI64, 16 символов, без `0x`/`:`.
+
+## Device service (generic, над Domain; НЕ в ha_model)
+
+`device_register(domain, desc)`:
+```text
+native_id        → derive → device_id
+parent_native_id → derive → parent_device_id (или NONE)
+ensure Logical Device { source, parent_device_id, native_id, name }   (имя не перетираем)
+```
+`device_bind_entity(domain, device_id, entity_id)` — выставить Entity.device_id (ownership).
+`device_remove` — прочитать Logical Device, вызвать adapter dispatcher по `(source, native_id)`,
+после успеха — снять ownership с Entity и удалить Logical Device.
+
+Domain остаётся storage/runtime; решения о нормализации — в Device service.
+
+## Removal (порядок зависимостей)
+
+```text
+UI -> Device service -> read Logical Device (Domain) -> (source, native_id)
+   -> adapter dispatcher (unpair физического объекта)
+   -> успех -> Device service: снять Entity.device_id (iter+filter) + удалить Logical Device
+```
+
+Поиск Entity конкретного Device — `iter()+filter(device_id)`; mstore не расширяем.
 
 ## Deletion semantics
 
-- **Remove Logical Device** (UI) → adapter получает запрос на unpair физического EUI64; после
-  leave — удаляются связанные Entity (по `device_id`) и сам Logical Device.
-- **Remove Entity** (если такое появится) — удаляет только Entity; физическое устройство НЕ
-  трогается.
-- Поиск Entity конкретного Device — обычный `domain_entity_iter(ENTITY) + filter(device_id)`.
-  **mstore не расширяем** (никаких generic query/index API ради Step B).
+- Remove Entity — только Entity; физическое устройство не трогается.
+- Remove Logical Device — adapter-specific removal (unpair), затем чистка Entity + Device.
 
-## Migration / ABI
+## Non-goals (сейчас)
 
-`ha_entity_record_t` меняет раскладку (добавляется `device_id`) → несовместимый persistent
-ABI. Разовый controlled erase (как A7): Logical Device и `device_id` в Entity восстановимы из
-интервью после cold boot, поэтому миграция не нужна.
+- Искусственная разбивка endpoint → child Device (child только когда adapter реально обнаружит).
+- Device merge/split/reassign.
+- Generic query/index API в mstore (поиск — scan/iter).
 
-## Non-goals (сейчас НЕ делаем)
+## Migration
 
-- `parent_device_id` / дерево устройств.
-- Device merge / reassign / split.
-- Generic device/entity query API в mstore.
-- Возврат физических полей (`EUI64`) в Domain.
-
-## Future (описать, поле сейчас НЕ добавлять)
-
-`parent_device_id` и составные устройства (Device, содержащий Device'ы). Добавляем только
-когда первый реальный adapter покажет device-in-device. До этого поле в структуру не вводим —
-иначе это преждевременный публичный ABI под дерево.
+Logical Device и Entity — **RAM-таблицы** (восстановимы из интервью), поэтому смена ABI записи
+не требует flash-erase. Device-id значения не персистятся.
 
 ## Порядок
 
 ```text
-B0  docs + model contracts (этот документ) + фиксация решений                                   [x]
-B1  ha_device_id_t + модель Logical Device (ha_model, пассивная форма) + тесты                  [x]
-B2  Entity.device_id + ownership (RAM-таблица → без flash-erase) + тесты                        [x]
-B4  интервью: EUI64 → derive device_id → ensure Logical Device → Entity.device_id
-B5  WS v3 + UI: grouping Device -> Entities
-B6  rename Logical Device в Domain (reverse device binding не нужен)
-B7  lifecycle: Remove Logical Device -> Zigbee scan known devices (derive(uid) == device_id)
-    -> unpair -> iter Entity where device_id matches
-B8  переименовать старый uid-keyed HA_ENTITY_DEVICE -> HA_ENTITY_ZB_DIAG_DEVICE
-    (diagnostics-only, по аналогии с ZB_DIAG_STATE) + cleanup комментариев/веба
-B9  review: инварианты, grep (Domain не знает EUI64), тесты, smoke на P4
+B1'  ha_model: source/native_id/parent/name формы + ha_device_id_derive (generic) + тесты
+B2'  Entity.device_id (ownership)                                                  [x] (B2)
+B3'  generic Device service: register / bind_entity / remove primitives
+B4'  Zigbee adapter: интервью строит нормализованный Device graph и подаёт в Device service;
+     entity binding (entity_id ↔ EUI64+endpoint) остаётся private
+B5   WS v3 + UI: Device → Entity grouping (дерево по parent)
+B6   rename Logical Device (в Domain; reverse device binding не нужен)
+B7   removal lifecycle + adapter dispatcher
+B8   старый uid-keyed HA_ENTITY_DEVICE → HA_ENTITY_ZB_DIAG_DEVICE + cleanup
+B9   boundary review + smoke на P4
 ```
 
-B3 (**device-binding registry `device_id ↔ EUI64`**) — **снят с плана как лишняя
-инфраструктура** (решение). Forward `device_id = derive(ZIGBEE, EUI64)` вычисляется всегда;
-reverse (`device_id → EUI64`) нужен только для редкого unpair, и делается scan'ом известных
-Zigbee-устройств (`derive(uid) == device_id`), а не вторым registry. Entity binding
-(`entity_id ↔ EUI64 + endpoint`) остаётся: он на горячем пути каждой команды. Принцип тот же,
-что с Automation/mstore: не строить общий индекс, пока дешёвый scan закрывает редкий случай.
+## Зафиксированные решения
 
-Каждая фаза — чекпоинт (сборка + host-тесты + при необходимости P4 + коммит). Реализацию
-начинать с B1 после подтверждения этого плана.
+1. `parent_device_id` вводим **сейчас** (root = NONE); adapter заполняет NONE для плоских.
+2. Derivation — **одна generic** `ha_device_id_derive` (в `ha_model`), без формул в adapter.
+3. `native_id` — opaque string, канонизация adapter-side, `HA_NATIVE_ID_MAX = 32`.
+4. Формы и derivation — `ha_model`; lifecycle (register/bind/remove) — отдельный generic
+   Device service над Domain.
+5. Domain не вызывает adapter (зависимость: UI → service → Domain; adapter — через service).
 
-## Открытые вопросы
+## Известная коллизия имён
 
-- Имя нового доменного типа: `HA_ENTITY_LOGICAL_DEVICE` (предложение) — ок?
-- Переименование старого `HA_ENTITY_DEVICE` → `HA_ENTITY_ZB_DIAG_DEVICE` делать сразу в B8
-  (после того как Logical Device заработает), чтобы не путать два «device».
+`ha_endpoint_record_t.device_id` / `zigbee_endpoint_desc_t.device_id` — это **ZCL device id**
+(напр. `0x0302`), не `ha_device_id_t`. При работе с Device graph не путать (переименование —
+B8/позже).

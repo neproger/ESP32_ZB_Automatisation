@@ -611,6 +611,16 @@ TLV / самоописание приложения              — запре�
             путь команды). Удалены zigbee_device_binding.{h,c} + тест; CMake восстановлен;
             STEP_B_PLAN обновлён (B3 снят, B4/B7 уточнены). Принцип: не строить общий индекс,
             пока дешёвый scan закрывает редкий сценарий.
+2026-10-11  Step B — пересмотр модели + B1'. Принцип Step B: «adapter owns physical
+            representation, Device service owns normalization into canonical Device graph,
+            Domain only stores that graph». Logical Device record расширен provenance:
+            {parent_device_id, source, native_id[32], name[32]} (80B, без неявного padding);
+            добавлен ha_device_desc_t (DTO от adapter: source, native_id, parent_native_id,
+            name) и единая generic derivation ha_device_id_derive(source, native_id) в ha_model
+            (без альтернативных формул в adapter). zb_device_id теперь канонизирует EUI64 в
+            lowercase hex native_id и зовёт ha_device_id_derive. Незакоммиченный наивный B4
+            (adapter сам писал Domain) откачен. STEP_B_PLAN перезаписан под source/native_id/
+            parent, boundary Device service, порядок B1'..B9. ha_model 5/5, zigbee 9/9, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

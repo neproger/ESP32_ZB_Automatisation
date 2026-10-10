@@ -16,6 +16,7 @@ set(ZIGBEE_CORE
     ../src/zigbee_entity_binding.c
     ../../ha_model/src/ha_entity.c
     ../../ha_model/src/ha_properties.c
+    ../../ha_model/src/ha_logical_device.c
     ../../semantics/src/semantics.c)
 
 set(DOMAIN_CORE

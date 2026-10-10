@@ -94,14 +94,15 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     return true;
 }
 
-/* Детерминированный Logical Device id из EUI64 (LE(8)), тем же примитивом, что entity_id. */
+/*
+ * Детерминированный Logical Device id из EUI64. Канонический native_id: lowercase hex (16),
+ * затем единая generic derivation ha_device_id_derive (источник — adapter, формула — одна).
+ */
 ha_device_id_t zb_device_id(ha_device_uid_t uid)
 {
-    uint8_t seed[8];
-    for (int i = 0; i < 8; i++) {
-        seed[i] = (uint8_t)(uid >> (8 * i));
-    }
-    return (ha_device_id_t)ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, seed, sizeof(seed));
+    char native_id[HA_NATIVE_ID_MAX];
+    snprintf(native_id, sizeof(native_id), "%016llx", (unsigned long long)uid);
+    return ha_device_id_derive(HA_SOURCE_ZIGBEE, native_id);
 }
 
 void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
