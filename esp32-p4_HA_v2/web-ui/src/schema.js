@@ -196,44 +196,4 @@ export function entityId(type, key) {
   }
 }
 
-// Кодирование записи правила (144 байта, layout C с выравниванием; WEB_PROTOCOL §5).
-export function encodeAutomationRecord(r) {
-  const out = new Uint8Array(144)
-  const dv = new DataView(out.buffer)
-  const args = r.actionArgs || []
-  const conds = (r.conditions || []).slice(0, 4)
-  const kind = r.triggerKind || 0
-  dv.setUint8(0, r.enabled ? 1 : 0)
-  dv.setUint8(1, Math.min(args.length, 8))
-  dv.setUint8(2, conds.length)
-  dv.setUint8(3, kind)
-  dv.setBigUint64(8, BigInt(r.triggerUid || 0), true)
-  if (kind === 2) {
-    dv.setFloat32(4, Number(r.triggerValue) || 0, true)
-    dv.setUint8(16, r.triggerEp || 0)
-    dv.setUint16(18, r.triggerCluster || 0, true)
-    dv.setUint16(20, r.triggerAttr || 0, true)
-    dv.setUint8(22, r.triggerOp || 1)
-    dv.setUint8(23, r.triggerEdge || 0)
-  } else {
-    dv.setUint16(4, kind === 1 ? (r.triggerMinutesOfDay || 0) : 0, true)
-    dv.setUint8(6, kind === 1 ? (r.triggerWeekdayMask ?? 0x7f) : 0)
-    dv.setUint16(16, r.triggerCmd || 0, true)
-  }
-  dv.setBigUint64(24, BigInt(r.actionUid || 0), true)
-  dv.setUint8(32, r.actionEp || 0)
-  dv.setUint16(34, r.actionCluster || 0, true)
-  dv.setUint8(36, r.actionCmd || 0)
-  out.set(args.slice(0, 8), 37)
-  conds.forEach((c, i) => {
-    const o = 48 + i * 24
-    dv.setBigUint64(o, BigInt(c.deviceUid || 0), true)
-    dv.setUint16(o + 8, c.cluster || 0, true)
-    dv.setUint16(o + 10, c.attr || 0, true)
-    dv.setUint8(o + 12, c.ep || 0)
-    dv.setUint8(o + 13, c.op || 1)
-    dv.setFloat32(o + 16, Number(c.value) || 0, true)
-    dv.setFloat32(o + 20, Number(c.value2) || 0, true)
-  })
-  return out
-}
+

@@ -279,9 +279,6 @@ export const store = {
   get endpoints() {
     return maps[ENTITY.ENDPOINT]
   },
-  get automations() {
-    return maps[ENTITY.AUTOMATION]
-  },
   get removals() {
     return maps[ENTITY.DEVICE_REMOVE]
   },

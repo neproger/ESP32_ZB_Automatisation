@@ -1,5 +1,5 @@
 // Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
-import { encodeAutomationRecord, SCHEMA, ENTITY } from './schema.js'
+// Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
 import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 
 export const MSG = {
@@ -71,20 +71,6 @@ export function encodeFrame(type, payload) {
   return { seq, bytes: out }
 }
 
-// ZB_COMMAND args = ha_zb_command_t (layout с выравниванием, 32 байта):
-// u64 uid @0, u8 ep @8, u16 cluster @10, u8 cmd @12, u8 args_len @13, u8 args[16] @14.
-export function zbCommand({ uid, ep, cluster, command, args = [] }) {
-  const out = new Uint8Array(32)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, uid, true)
-  dv.setUint8(8, ep)
-  dv.setUint16(10, cluster, true)
-  dv.setUint8(12, command)
-  dv.setUint8(13, Math.min(args.length, 16))
-  out.set(args.slice(0, 16), 14)
-  return encodeCommand(CMD.ZB_COMMAND, out)
-}
-
 // SEMANTIC_COMMAND: стабильный LE DTO — u64 uid @0, u8 ep @8, u16 property @9, u8 action @11,
 // u8 value_kind @12; SCALAR: u8 kind @13 + f32 @14; XY: f32 x @13 + f32 y @17. Без ZCL.
 export function semanticCommand({ uid, ep, property, action, value }) {
@@ -147,14 +133,6 @@ export function permitJoin(seconds = 180) {
   return encodeCommand(CMD.PERMIT_JOIN, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
 }
 
-// AUTOMATION_PUT args = u64 id | ha_automation_record_t (SCHEMA.recSize).
-export function automationPut(id, rule) {
-  const args = new Uint8Array(8 + SCHEMA[ENTITY.AUTOMATION].recSize)
-  new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
-  args.set(encodeAutomationRecord(rule), 8)
-  return encodeCommand(CMD.AUTOMATION_PUT, args)
-}
-
 // AUTOMATION_REMOVE args = u64 id.
 export function automationRemove(id) {
   const args = new Uint8Array(8)
@@ -195,20 +173,6 @@ export function groupRemove(id) {
   return encodeCommand(CMD.GROUP_REMOVE, out)
 }
 
-// GROUP_ITEM_PUT args = key{ u64 group_id; u64 uid; u16 cluster; u16 attr; u8 ep } (24) | record{ u16 order; u8 rsv[2]; char title[32] } (36).
-export function groupItemPut(groupId, state, record) {
-  const out = new Uint8Array(24 + 36)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, BigInt(groupId), true)
-  dv.setBigUint64(8, BigInt(state.uid), true)
-  dv.setUint16(16, state.cluster, true)
-  dv.setUint16(18, state.attr, true)
-  dv.setUint8(20, state.ep)
-  dv.setUint16(24, record.order || 0, true)
-  putText(out, 28, record.title, 32)
-  return encodeCommand(CMD.GROUP_ITEM_PUT, out)
-}
-
 // Semantic group item → raw делает backend. PUT (53): group_id,u64;uid,u64;ep,u8;property,u16;order,u16;title[32].
 export function semanticGroupItemPut(groupId, item) {
   const out = new Uint8Array(53)
@@ -230,18 +194,6 @@ export function semanticGroupItemRemove(groupId, uid, ep, property) {
   dv.setUint8(16, ep)
   dv.setUint16(17, property, true)
   return encodeCommand(CMD.SEMANTIC_GROUP_ITEM_REMOVE, out)
-}
-
-// GROUP_ITEM_REMOVE args = key (24).
-export function groupItemRemove(groupId, state) {
-  const out = new Uint8Array(24)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, BigInt(groupId), true)
-  dv.setBigUint64(8, BigInt(state.uid), true)
-  dv.setUint16(16, state.cluster, true)
-  dv.setUint16(18, state.attr, true)
-  dv.setUint8(20, state.ep)
-  return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
 }
 
 // LOCATION_PUT args = u64 uid | ha_location_record_t (60).

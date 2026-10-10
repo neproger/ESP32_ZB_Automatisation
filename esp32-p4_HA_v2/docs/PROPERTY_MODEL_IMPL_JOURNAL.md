@@ -210,10 +210,13 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       обычные страницы не читают raw state map/cluster
 - [x] **5.5.4** raw Zigbee (cluster/attr/zcl_type/raw, endpoint profile) → отдельный
       `Diagnostics`-экран (читает существующий raw store, без нового backend protocol)
-- [ ] **5.5.5** удалить мёртвое: `zbCommand`, `automationPut`, `encodeAutomationRecord`, raw
-      automation decode, `store.automations`, `capabilities.js` (мёртв), `commands.js`
-- [ ] **5.5.6** `zcl.js` → diagnostics-only (или удалить)
-- [ ] **5.5.7** grep-чек: ZCL только в diagnostics + transitional Web↔Domain ABI
+- [x] **5.5.5** удалено мёртвое: `zbCommand`, `automationPut`, `encodeAutomationRecord`,
+      raw `groupItemPut`/`groupItemRemove` (front), `store.automations`, `capabilities.js`,
+      `commands.js`, raw `SYS_ATTR`/`CLUSTER_SYSTEM` в `system.js`
+- [x] **5.5.6** `zcl.js` — только `uidHex`/`hex16` (общие) + ZCL-хелперы для Diagnostics;
+      обычные страницы их не используют
+- [x] **5.5.7** grep-чек: в обычных pages/components ZCL отсутствует; ZCL — только
+      `Diagnostics.jsx`, `StateAttr.jsx`, `schema.js` (transport decoder), `zcl.js`
 
 **Чекпоинт 5.** 5.0 (core+BFF), 5.1, 5.2 готовы. Проверено на P4: semantic command ingress
 (POWER/BRIGHTNESS/COLOR_TEMP/COLOR доходят, toggle переключает) и read-path — `WEB_MSG_SEMANTIC_STATE`
@@ -292,6 +295,7 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | `group_item` хранится raw до A, но consumer-контракт — semantic (facade) | не мигрировать storage зря; consumer уже semantic |
 | 2026-10-10 | Group item с UNKNOWN property не публикуется в semantic stream | UI всё равно нечего с ним делать; raw остаётся в Diagnostics |
 | 2026-10-10 | raw Zigbee — только на Diagnostics-экране (без нового backend protocol) | raw ENTITY уже приходит; это допустимое применение transitional ABI |
+| 2026-10-10 | Frontend dead paths удалены (zbCommand/automationPut/encodeAutomationRecord/groupItem raw/capabilities.js/commands.js) | обычный UI — клиент semantic/domain API; ZCL только в Diagnostics |
 
 ## 5. От чего отказались
 
@@ -362,6 +366,11 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 5.5.3–5.5.4: обычные страницы (SystemStatus/DeviceCard/DeviceDetail) только на
             semStates; raw Zigbee вынесен в Diagnostics-экран. grep обычных страниц: ZCL нет
             (кроме CSS-класса). IDF + web-ui зелёные, прошито на P4
+2026-10-10  фаза 5.5.5–5.5.7: удалён мёртвый frontend-код (zbCommand/automationPut/
+            encodeAutomationRecord/raw groupItem/capabilities.js/commands.js); zcl.js — только
+            uidHex/hex16 + Diagnostics. Греп-чек: обычные страницы без ZCL. Прошито на P4
+    → **Фаза 5 закрыта**: обычный web-ui не интерпретирует cluster/attr/ZCL;
+      ZCL остался только в Diagnostics + transitional Web↔Domain raw ABI (до шага A)
 ```
 
 ## 7. Открытые вопросы
