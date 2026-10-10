@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/domain"
     "${CMAKE_CURRENT_LIST_DIR}/ha_model"
+    "${CMAKE_CURRENT_LIST_DIR}/semantics"
     "${CMAKE_CURRENT_LIST_DIR}/mstore"
     "${CMAKE_CURRENT_LIST_DIR}/sys"
     "${CMAKE_CURRENT_LIST_DIR}/zigbee"

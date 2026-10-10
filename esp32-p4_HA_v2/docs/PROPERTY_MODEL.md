@@ -115,13 +115,21 @@ typedef struct {
 `ha_model` (иначе Zigbee протечёт обратно) и не размазан по потребителям:
 
 ```c
+typedef enum {
+    ZB_DECODE_IDENTITY = 0,     /* raw как есть */
+    ZB_DECODE_SCALE,            /* raw * scale + offset */
+    ZB_DECODE_ILLUMINANCE,      /* ZCL measured value → lux */
+    ZB_DECODE_MIREDS_TO_KELVIN, /* 1e6 / mired */
+    ZB_DECODE_BITMAP_BOOL,      /* bitmap → bool */
+} zb_decode_kind_t;
+
 typedef struct {
     uint16_t         cluster_id;
     uint16_t         attr_id;
     ha_property_id_t property;
-    uint8_t          expected_type; /* optional: только validation/diagnostics */
-    uint8_t          reserved;
-    float            scale;         /* ZCL-encoding: 0.01 °C и т.п. */
+    uint8_t          expected_type; /* optional: validation/diagnostics */
+    uint8_t          decode_kind;   /* zb_decode_kind_t */
+    float            scale;         /* только для ZB_DECODE_SCALE */
     float            offset;
 } zb_property_map_t;
 ```
@@ -130,6 +138,11 @@ typedef struct {
 `ha_zb_state_record_t`): знак и ширину задаёт ZCL-тип, а не таблица. `expected_type` — лишь
 для валидации/диагностики: устройство вправе прислать другой допустимый тип, и он не должен
 быть прочитан ложно. Отдельный `signedness` не нужен.
+
+`scale`/`offset` — лишь **частный случай** (`ZB_DECODE_SCALE`): транспортное представление не
+всегда линейно (illuminance, mired→Kelvin, bitmap→bool). Поэтому стратегия декодирования
+задана **явно** (`decode_kind`), а не зашита как `raw*scale+offset`. Это `enum`, а не
+callback: специализированных преобразований немного, они предсказуемы и дешевле для embedded.
 
 Плюс таблицы для действий и событий, но с оговорками:
 
