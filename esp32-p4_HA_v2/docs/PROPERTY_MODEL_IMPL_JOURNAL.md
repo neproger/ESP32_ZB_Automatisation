@@ -641,6 +641,13 @@ TLV / самоописание приложения              — запре�
             device_bind_entity отклоняет reassign (уже привязана к другому Device → INVALID_STATE).
             Тесты: device 1/1 (+reassign), zigbee 9/9 (ownership убран из adapter; ensure не
             выставляет device_id), IDF зелёный.
+2026-10-11  Step B, B4' hardware smoke — PASS. На P4 реальное интервью устройства
+            (ESP32C6-DISPLAY, uid=9888e0fffe6c1554, 4 endpoint): Logical Device создан один раз
+            (id=71b213ac527a6357, native=9888e0fffe6c1554, source=ZIGBEE); каждый endpoint →
+            Entity с device_id == Logical Device (bind ok=1). device_id сверен с hand-computed
+            derivation (MATCH). После reboot device_id тот же (детерминирован), ownership
+            восстановлен (device_register идемпотентен); второе устройство (uid=20a716…,
+            1 endpoint) → свой id. Добавлены info-логи zigbee: device:/entity->device.
 ```
 
 ## 7. Открытые вопросы

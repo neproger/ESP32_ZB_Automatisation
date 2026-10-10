@@ -354,6 +354,10 @@ static void zigbee_task(void *arg)
                                                    &device_id))) {
                         ESP_LOGW(TAG, "device register failed uid=%llx",
                                  (unsigned long long)result.uid);
+                    } else {
+                        ESP_LOGI(TAG, "device: uid=%llx id=%llx native=%s",
+                                 (unsigned long long)result.uid, (unsigned long long)device_id,
+                                 desc.native_id);
                     }
 
                     /* A0.4/A6.1b/B4': endpoint → логическая Entity + ownership + capabilities. */
@@ -363,9 +367,12 @@ static void zigbee_task(void *arg)
                         if (sys_ok(zigbee_entity_ensure(s_domain, result.uid, endpoint,
                                                         result.endpoint_count, &entity_id))) {
                             if (device_id != HA_DEVICE_ID_NONE) {
-                                (void)device_bind_entity(s_domain,
-                                                         (uint8_t)DOMAIN_SOURCE_ZIGBEE, device_id,
-                                                         entity_id);
+                                const sys_error_t bind = device_bind_entity(
+                                    s_domain, (uint8_t)DOMAIN_SOURCE_ZIGBEE, device_id, entity_id);
+                                ESP_LOGI(TAG, "entity->device: uid=%llx ep=%u entity=%llx device=%llx ok=%d",
+                                         (unsigned long long)result.uid, (unsigned)endpoint,
+                                         (unsigned long long)entity_id,
+                                         (unsigned long long)device_id, (int)sys_ok(bind));
                             }
                             zigbee_publish_capabilities(result.uid, endpoint, entity_id);
                         }
