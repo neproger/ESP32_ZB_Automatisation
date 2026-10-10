@@ -73,6 +73,9 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
 size_t semantics_cluster_properties(uint16_t cluster_id, ha_property_id_t *out, size_t max);
 size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out, size_t max);
 
+/* Semantic capabilities server-кластера: свойство + его действия. Для BFF endpoint-capabilities. */
+size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out, size_t max);
+
 /*
  * Reverse: семантическое событие → legacy command_id по профилю устройства. false —
  * событие неоднозначно/невыразимо (напр. SINGLE_PRESS от общего профиля = ON/OFF/TOGGLE).

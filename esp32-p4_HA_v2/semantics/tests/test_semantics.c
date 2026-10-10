@@ -585,6 +585,33 @@ static void test_decompile_automation(void)
     CHECK(!semantics_decompile_automation(&unk, NULL, &back));
 }
 
+/* --- Capabilities сервер-кластера (5.5) --- */
+static void test_cluster_capabilities(void)
+{
+    ha_capability_t caps[8];
+
+    size_t n = semantics_cluster_capabilities(HA_ZB_CLUSTER_ON_OFF, caps, 8);
+    CHECK(n == 1 && caps[0].property == HA_PROPERTY_POWER && caps[0].action_count == 3);
+    CHECK(caps[0].actions[0] == HA_ACTION_ON && caps[0].actions[2] == HA_ACTION_TOGGLE);
+
+    n = semantics_cluster_capabilities(HA_ZB_CLUSTER_COLOR_CONTROL, caps, 8);
+    CHECK(n == 2);
+    bool has_color = false, has_ct = false;
+    for (size_t i = 0; i < n; i++) {
+        if (caps[i].property == HA_PROPERTY_COLOR) has_color = true;
+        if (caps[i].property == HA_PROPERTY_COLOR_TEMPERATURE) has_ct = true;
+        CHECK(caps[i].action_count == 1 && caps[i].actions[0] == HA_ACTION_SET);
+    }
+    CHECK(has_color && has_ct);
+
+    n = semantics_cluster_capabilities(HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT, caps, 8);
+    CHECK(n == 1 && caps[0].property == HA_PROPERTY_TEMPERATURE && caps[0].action_count == 0);
+
+    n = semantics_cluster_capabilities(HA_ZB_CLUSTER_POWER_CONFIG, caps, 8);
+    CHECK(n == 2); /* battery percent + voltage */
+    CHECK(semantics_cluster_capabilities(0x1234, caps, 8) == 0);
+}
+
 int main(void)
 {
     test_parity();
@@ -596,6 +623,7 @@ int main(void)
     test_capabilities();
     test_compile_automation();
     test_decompile_automation();
+    test_cluster_capabilities();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");

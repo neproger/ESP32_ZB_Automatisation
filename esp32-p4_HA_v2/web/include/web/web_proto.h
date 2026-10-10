@@ -57,6 +57,14 @@ typedef enum {
      *           u8 value_kind @11, u32 value_bits @12.
      */
     WEB_MSG_EVENT = 0x16,
+    /*
+     * Semantic capabilities endpoint'а (Фаза 5.5.0): identity (uid, ep) + список свойств
+     * и их действий. DTO: u64 uid @0, u8 ep @8, u8 property_count @9,
+     *   properties[]{ u16 property_id, u8 action_count, u8 actions[action_count] }.
+     * REMOVE: ключ endpoint (uid+ep).
+     */
+    WEB_MSG_SEMANTIC_CAPABILITIES = 0x17,
+    WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE = 0x18,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 

@@ -62,3 +62,25 @@ export const EVENT_NAMES = {
 export const propertyName = (id) => PROPERTY_NAMES[id] || `свойство ${id}`
 export const actionName = (id) => ACTION_NAMES[id] || `действие ${id}`
 export const eventName = (id) => EVENT_NAMES[id] || `событие ${id}`
+
+// Форма виджета по свойству (UI-представление vocabulary, не ZCL).
+export function propertyWidget(property) {
+  switch (property) {
+    case PROPERTY.POWER: return 'switch'
+    case PROPERTY.BRIGHTNESS: return 'level'
+    case PROPERTY.COLOR_TEMPERATURE: return 'color_temp'
+    case PROPERTY.COLOR: return 'color'
+    case PROPERTY.OCCUPANCY: return 'indicator'
+    default: return 'value'
+  }
+}
+export function propertyUnit(property) {
+  switch (property) {
+    case PROPERTY.TEMPERATURE: return '°C'
+    case PROPERTY.HUMIDITY: return '%'
+    case PROPERTY.ILLUMINANCE: return 'lx'
+    case PROPERTY.BATTERY_VOLTAGE: return 'V'
+    case PROPERTY.BATTERY_PERCENT: return '%'
+    default: return ''
+  }
+}

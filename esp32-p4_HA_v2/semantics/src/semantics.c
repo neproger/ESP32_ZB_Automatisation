@@ -569,6 +569,45 @@ size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out
     return (n < max) ? n : max;
 }
 
+/* --- Capabilities сервер-кластера (фаза 5.5): свойство + действия --------- */
+
+typedef struct {
+    uint16_t cluster_id;
+    ha_capability_t cap;
+} zb_capability_t;
+
+static const zb_capability_t ZB_CAPABILITY_MAP[] = {
+    {HA_ZB_CLUSTER_ON_OFF, {HA_PROPERTY_POWER, 3, {HA_ACTION_ON, HA_ACTION_OFF, HA_ACTION_TOGGLE}}},
+    {HA_ZB_CLUSTER_LEVEL_CONTROL, {HA_PROPERTY_BRIGHTNESS, 1, {HA_ACTION_SET}}},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, {HA_PROPERTY_COLOR, 1, {HA_ACTION_SET}}},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, {HA_PROPERTY_COLOR_TEMPERATURE, 1, {HA_ACTION_SET}}},
+    {HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT, {HA_PROPERTY_TEMPERATURE, 0, {0}}},
+    {HA_ZB_CLUSTER_RELATIVE_HUMIDITY, {HA_PROPERTY_HUMIDITY, 0, {0}}},
+    {HA_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT, {HA_PROPERTY_ILLUMINANCE, 0, {0}}},
+    {HA_ZB_CLUSTER_OCCUPANCY_SENSING, {HA_PROPERTY_OCCUPANCY, 0, {0}}},
+    {HA_ZB_CLUSTER_POWER_CONFIG, {HA_PROPERTY_BATTERY_PERCENT, 0, {0}}},
+    {HA_ZB_CLUSTER_POWER_CONFIG, {HA_PROPERTY_BATTERY_VOLTAGE, 0, {0}}},
+};
+
+size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out, size_t max)
+{
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    const size_t count = sizeof(ZB_CAPABILITY_MAP) / sizeof(ZB_CAPABILITY_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_CAPABILITY_MAP[i].cluster_id != cluster_id) {
+            continue;
+        }
+        if (n < max) {
+            out[n] = ZB_CAPABILITY_MAP[i].cap;
+        }
+        n++;
+    }
+    return (n < max) ? n : max;
+}
+
 /* --- Компилятор semantic-правила (фаза 5.3) ----------------------------- */
 
 bool semantics_event_to_physical(const ha_device_record_t *device, ha_event_id_t event,

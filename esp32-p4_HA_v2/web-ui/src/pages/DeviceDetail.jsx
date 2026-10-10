@@ -73,7 +73,7 @@ export default function DeviceDetail({ uid }) {
                   </span>
                 ))}
               </div>
-              <EndpointWidgets uid={target} ep={e.key.ep} record={e.record} />
+              <EndpointWidgets uid={target} ep={e.key.ep} />
             </div>
           ))
         )}

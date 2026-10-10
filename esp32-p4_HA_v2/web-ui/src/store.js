@@ -23,6 +23,8 @@ const maps = {
 const semStates = new Map()
 // Семантические правила: ключ — id. { id, representable, rule|null }.
 const semAutomations = new Map()
+// Семантические capabilities endpoint'а: ключ "uid:ep" → [{ property, actions }].
+const semCapabilities = new Map()
 
 // Декод rule-wire (зеркало web.c:web_encode_sem_rule). Без ZCL.
 function decodeSemRule(dv, base) {
@@ -117,10 +119,33 @@ function onFrame(buf) {
     for (const k in maps) maps[k].clear()
     semStates.clear()
     semAutomations.clear()
+    semCapabilities.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
     syncing = false
+    emit()
+    return
+  }
+  if (frame.type === MSG.SEMANTIC_CAPABILITIES || frame.type === MSG.SEMANTIC_CAPABILITIES_REMOVE) {
+    const uid = payload.getBigUint64(0, true)
+    const ep = payload.getUint8(8)
+    const key = `${uid}:${ep}`
+    if (frame.type === MSG.SEMANTIC_CAPABILITIES_REMOVE) {
+      semCapabilities.delete(key)
+    } else {
+      const count = payload.getUint8(9)
+      let o = 10
+      const caps = []
+      for (let i = 0; i < count; i++) {
+        const property = payload.getUint16(o, true); o += 2
+        const ac = payload.getUint8(o); o += 1
+        const actions = []
+        for (let j = 0; j < ac; j++) actions.push(payload.getUint8(o++))
+        caps.push({ property, actions })
+      }
+      semCapabilities.set(key, caps)
+    }
     emit()
     return
   }
@@ -263,6 +288,12 @@ export const store = {
   },
   get semAutomations() {
     return semAutomations
+  },
+  get semCapabilities() {
+    return semCapabilities
+  },
+  endpointCapabilities(uid, ep) {
+    return semCapabilities.get(`${uid}:${ep}`) || []
   },
   // Семантическое состояние по (uid, ep, property): { uid, ep, property, kind, value } | undefined.
   semState(uid, ep, property) {

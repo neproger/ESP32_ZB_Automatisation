@@ -197,9 +197,19 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 - [x] **5.4** Events: `WEB_MSG_EVENT` (0x16, стабильный LE: source_kind/source_uid/endpoint/
       event_id/value); Web сериализует уже семантический `DOMAIN_FACT_EVENT` (raw `ha_zb_event_t`
       наружу не отдаётся); Events-страница на `eventName()`, без cluster/command_id/`SYSTEM_EVENTS`
-- [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
-      `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
-      в явном диагностическом экране, если нужен
+- [x] **5.5.0** endpoint semantic capabilities BFF: `WEB_MSG_SEMANTIC_CAPABILITIES` (0x17)/`_REMOVE`
+      (0x18), DTO (uid,ep,properties[{property,actions}]) из `semantics_cluster_capabilities`
+      (server-кластеры); snapshot+delta
+- [x] **5.5.1** `EndpointWidgets` строится из capabilities (property+actions), а не из
+      `endpoint.clusters`+`commands.js`
+- [ ] **5.5.2** semantic Group Item facade: persistent `group_item` остаётся raw, BFF проецирует
+      raw↔property; `Groups.jsx` — только property + semState
+- [ ] **5.5.3** SystemStatus/DeviceCard/StateAttr → semantic states (без raw key/cluster)
+- [ ] **5.5.4** raw Zigbee/state/endpoint → отдельный Diagnostics-экран
+- [ ] **5.5.5** удалить мёртвое: `zbCommand`, `automationPut`, `encodeAutomationRecord`, raw
+      automation decode, `store.automations`, `capabilities.js` (мёртв), `commands.js`
+- [ ] **5.5.6** `zcl.js` → diagnostics-only (или удалить)
+- [ ] **5.5.7** grep-чек: ZCL только в diagnostics + transitional Web↔Domain ABI
 
 **Чекпоинт 5.** 5.0 (core+BFF), 5.1, 5.2 готовы. Проверено на P4: semantic command ingress
 (POWER/BRIGHTNESS/COLOR_TEMP/COLOR доходят, toggle переключает) и read-path — `WEB_MSG_SEMANTIC_STATE`
@@ -274,6 +284,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Automation UI — только `store.semAutomations`; raw `ENTITY AUTOMATION` не используется | иначе ZCL снова протёк бы в форму/описания |
 | 2026-10-10 | Web сериализует уже семантический EVENT (не вызывает `semantics_decode_event` повторно) | иначе второй decoder; raw `ha_zb_event_t` — private transitional |
 | 2026-10-10 | Events UI: единый `eventName()`; `SYSTEM_EVENTS` удалён | одно пространство event ids |
+| 2026-10-10 | Capabilities endpoint'а — отдельный аддитивный message (0x17/0x18); без строк/units | UI строит контролы из семантики, не из clusters; имена/units — vocabulary UI |
+| 2026-10-10 | `group_item` хранится raw до A, но consumer-контракт — semantic (facade) | не мигрировать storage зря; consumer уже semantic |
 
 ## 5. От чего отказались
 
@@ -335,6 +347,9 @@ TLV / самоописание приложения              — запре�
             PUT STATE temp>25→POWER ON (#200) читается обратно семантически
 2026-10-10  фаза 5.4: WEB_MSG_EVENT (0x16), Web сериализует уже HA_EVENT_*; Events UI на
             eventName(), SYSTEM_EVENTS удалён. На P4 приходит system MINUTE_TICK (source_kind=4)
+2026-10-10  фаза 5.5.0–5.5.1: semantics_cluster_capabilities; WEB_MSG_SEMANTIC_CAPABILITIES/
+            _REMOVE; EndpointWidgets из capabilities. На P4: лампа EP2 → COLOR/COLOR_TEMP/
+            BRIGHTNESS/POWER(ON,OFF,TOGGLE); датчик → BATT%,BATT_V,TEMP (ro)
 ```
 
 ## 7. Открытые вопросы

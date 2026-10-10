@@ -157,6 +157,17 @@ typedef struct {
     ha_value_t value; /* HA_VALUE_NONE, если payload нет */
 } ha_event_t;
 
+/*
+ * Semantic capability: свойство и доступные над ним действия. Для BFF/UI — что умеет
+ * endpoint, без inference по cluster. `action_count == 0` — только чтение.
+ */
+#define HA_CAPABILITY_ACTIONS_MAX 4
+typedef struct {
+    ha_property_id_t property;
+    uint8_t action_count;
+    ha_action_id_t actions[HA_CAPABILITY_ACTIONS_MAX];
+} ha_capability_t;
+
 /* Описание свойства: смысл, а не кодировка. Диапазон — семантический. */
 typedef struct {
     ha_property_id_t id;

@@ -298,6 +298,42 @@ static bool semantic_automation_payload(const ha_automation_key_t *key,
     return true;
 }
 
+/*
+ * Endpoint → semantic capabilities: server-кластеры → properties + actions.
+ */
+static bool capability_payload(const ha_endpoint_key_t *key, const ha_endpoint_record_t *record,
+                               uint8_t *out, uint16_t *out_len)
+{
+    put_u64(out, key->device_uid);
+    out[8] = key->endpoint;
+    size_t o = 9;
+    const size_t count_off = o++;
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < record->cluster_count && i < HA_ENDPOINT_CLUSTERS_MAX; i++) {
+        if (record->clusters[i].role != HA_ZB_ROLE_SERVER) {
+            continue;
+        }
+        ha_capability_t caps[8];
+        const size_t n = semantics_cluster_capabilities(record->clusters[i].cluster_id, caps, 8);
+        for (size_t j = 0; j < n; j++) {
+            if (o + 3 + HA_CAPABILITY_ACTIONS_MAX > WEB_PROTO_MAX_PAYLOAD) {
+                goto done;
+            }
+            out[o++] = (uint8_t)(caps[j].property & 0xff);
+            out[o++] = (uint8_t)(caps[j].property >> 8);
+            out[o++] = caps[j].action_count;
+            for (uint8_t k = 0; k < caps[j].action_count && k < HA_CAPABILITY_ACTIONS_MAX; k++) {
+                out[o++] = (uint8_t)caps[j].actions[k];
+            }
+            count++;
+        }
+    }
+done:
+    out[count_off] = count;
+    *out_len = (uint16_t)o;
+    return true;
+}
+
 /* --- snapshot ----------------------------------------------------------- */
 
 static bool snapshot_count(const void *key, const void *record, void *ctx)
@@ -384,6 +420,13 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
         if (semantic_automation_payload((const ha_automation_key_t *)key, arec, dev_ptr, sem,
                                         &sem_len)) {
             web_send_frame(s->fd, WEB_MSG_SEMANTIC_AUTOMATION, 0, sem, sem_len);
+        }
+    } else if (s->schema->type == WEB_ENTITY_ENDPOINT) {
+        uint8_t cap[WEB_PROTO_MAX_PAYLOAD];
+        uint16_t cap_len = 0;
+        if (capability_payload((const ha_endpoint_key_t *)key,
+                               (const ha_endpoint_record_t *)record, cap, &cap_len)) {
+            web_send_frame(s->fd, WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
         }
     }
     (*s->count)++;
@@ -486,6 +529,14 @@ static void web_send_fact(const domain_event_t *event)
                                             sem, &sem_len)) {
                 web_broadcast(WEB_MSG_SEMANTIC_AUTOMATION, 0, sem, sem_len);
             }
+        } else if (schema->type == WEB_ENTITY_ENDPOINT &&
+                   event->key_size == sizeof(ha_endpoint_key_t)) {
+            uint8_t cap[WEB_PROTO_MAX_PAYLOAD];
+            uint16_t cap_len = 0;
+            if (capability_payload((const ha_endpoint_key_t *)event->key,
+                                   (const ha_endpoint_record_t *)record, cap, &cap_len)) {
+                web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
+            }
         }
     } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
         web_broadcast(WEB_MSG_ENTITY_REMOVE, 0, payload, (uint16_t)(1 + schema->key_size));
@@ -500,6 +551,10 @@ static void web_send_fact(const domain_event_t *event)
                    event->key_size == sizeof(ha_automation_key_t)) {
             web_broadcast(WEB_MSG_SEMANTIC_AUTOMATION_REMOVE, 0, event->key,
                           (uint16_t)sizeof(ha_automation_key_t));
+        } else if (schema->type == WEB_ENTITY_ENDPOINT &&
+                   event->key_size == sizeof(ha_endpoint_key_t)) {
+            web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE, 0, event->key,
+                          (uint16_t)sizeof(ha_endpoint_key_t));
         }
     }
 }
