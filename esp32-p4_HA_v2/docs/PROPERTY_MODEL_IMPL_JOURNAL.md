@@ -598,6 +598,12 @@ TLV / самоописание приложения              — запре�
             всех endpoint; другой device → свой; повторный ensure/reboot не меняют device_id;
             смена endpoint меняет entity_id, не device_id. Domain/ha_model EUI64 не знают.
             ha_model 5/5, semantics 1/1, automation 1/1, zigbee 9/9, IDF зелёный.
+2026-10-11  Step B, B3 — adapter-private device binding (device_id ↔ EUI64). Отдельный модуль
+            zigbee_device_binding.{h,c}: find_device_id/find_uid/add/remove. Инварианты:
+            device_id != NONE; биекция uid↔device_id; идемпотентный add; конфликт/NONE/нет
+            места → false; RAM-only. Не смешан с entity binding (entity_id ↔ EUI64+endpoint).
+            host test test_device_binding. Нужен для B7 (device_id → EUI64 → unpair). zigbee
+            10/10, IDF зелёный. Дальше B4: interview создаёт Logical Device + связывает Entity.
 ```
 
 ## 7. Открытые вопросы
