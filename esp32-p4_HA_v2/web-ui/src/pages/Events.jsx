@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { ENTITY } from '../schema.js'
-import { uidHex, clusterName, attrName, formatAttrValue } from '../zcl.js'
+import { uidHex } from '../zcl.js'
+import { eventName } from '../semantics.js'
 
-// Журнал изменений: собирается из WS-дельт (см. store.logEvent). Snapshot не логируется.
+// Журнал: семантические события (HA_EVENT_*) + изменения сущностей. Snapshot не логируется.
 
 function deviceLabel(devices, uid) {
   for (const { key, record } of devices.values()) {
@@ -13,6 +14,9 @@ function deviceLabel(devices, uid) {
 }
 
 function describe(ev, s) {
+  if (ev.kind === 'event') {
+    return `${deviceLabel(s.devices, ev.sourceUid)}: ${eventName(ev.eventId)}`
+  }
   const { entityType, key, record, action } = ev
   switch (entityType) {
     case ENTITY.DEVICE:
@@ -20,7 +24,7 @@ function describe(ev, s) {
         ? `устройство ${deviceLabel(s.devices, key.uid)} удалено`
         : `устройство ${record.name || record.model || uidHex(key.uid)}`
     case ENTITY.STATE:
-      return `${deviceLabel(s.devices, key.uid)} · EP${key.ep} · ${clusterName(key.cluster)} ${attrName(key.cluster, key.attr)} = ${formatAttrValue(key.cluster, key.attr, record.zclType, record.raw)}`
+      return `${deviceLabel(s.devices, key.uid)} · состояние изменилось`
     case ENTITY.ENDPOINT:
       return `топология ${deviceLabel(s.devices, key.uid)} · EP${key.ep}`
     case ENTITY.AUTOMATION:

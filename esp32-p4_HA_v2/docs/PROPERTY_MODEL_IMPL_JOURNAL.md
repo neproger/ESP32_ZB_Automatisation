@@ -194,7 +194,9 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 - [x] **5.3.4-snapfix** профили устройств для reverse-event собираются вне automation-итерации
       (кэш в snapshot) — snapshot и delta дают одинаковый `representable`
 - [x] **5.3.5** старый `WEB_CMD_AUTOMATION_PUT` оставлен transitional
-- [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
+- [x] **5.4** Events: `WEB_MSG_EVENT` (0x16, стабильный LE: source_kind/source_uid/endpoint/
+      event_id/value); Web сериализует уже семантический `DOMAIN_FACT_EVENT` (raw `ha_zb_event_t`
+      наружу не отдаётся); Events-страница на `eventName()`, без cluster/command_id/`SYSTEM_EVENTS`
 - [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
       `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
       в явном диагностическом экране, если нужен
@@ -270,6 +272,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | В snapshot (внутри `domain_entity_iter`) НЕ звать `domain_entity_get` | локи Domain реентерабельно не берутся: был дедлок web-задачи |
 | 2026-10-10 | Профили устройств для reverse-event — кэш, собранный ОТДЕЛЬНЫМ iter DEVICE перед automation-iter | иначе snapshot (profile=NULL) и delta давали разный `representable` |
 | 2026-10-10 | Automation UI — только `store.semAutomations`; raw `ENTITY AUTOMATION` не используется | иначе ZCL снова протёк бы в форму/описания |
+| 2026-10-10 | Web сериализует уже семантический EVENT (не вызывает `semantics_decode_event` повторно) | иначе второй decoder; raw `ha_zb_event_t` — private transitional |
+| 2026-10-10 | Events UI: единый `eventName()`; `SYSTEM_EVENTS` удалён | одно пространство event ids |
 
 ## 5. От чего отказались
 
@@ -329,6 +333,8 @@ TLV / самоописание приложения              — запре�
             semanticAutomationPut, селекторы из states/capabilities, legacy=read-only);
             кэш профилей устройств в snapshot (симметрия snapshot/delta). На P4 проверено:
             PUT STATE temp>25→POWER ON (#200) читается обратно семантически
+2026-10-10  фаза 5.4: WEB_MSG_EVENT (0x16), Web сериализует уже HA_EVENT_*; Events UI на
+            eventName(), SYSTEM_EVENTS удалён. На P4 приходит system MINUTE_TICK (source_kind=4)
 ```
 
 ## 7. Открытые вопросы

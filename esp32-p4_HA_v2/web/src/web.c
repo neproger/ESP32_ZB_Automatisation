@@ -418,8 +418,33 @@ static void web_send_snapshot(int fd)
 
 /* --- delta -------------------------------------------------------------- */
 
+/*
+ * semantic EVENT → WEB_MSG_EVENT (уже HA_EVENT_* от источника). Raw ha_zb_event_t
+ * (transient payload) наружу НЕ отдаём — он нужен только legacy-shim Automation в прошивке.
+ * DTO: u8 source_kind @0, u64 source_uid @1, u8 endpoint @9, u8 event_id @10,
+ *      u8 value_kind @11, u32 value_bits @12 (16).
+ */
+static void web_send_semantic_event(const domain_event_t *event)
+{
+    if (event->key_size != sizeof(ha_device_uid_t)) {
+        return;
+    }
+    uint8_t out[16] = {0};
+    out[0] = event->source;
+    uint64_t uid = 0;
+    memcpy(&uid, event->key, sizeof(uid));
+    put_u64(out + 1, uid);
+    out[10] = (event->value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (uint8_t)event->value.v.u32
+                                                                : (uint8_t)HA_EVENT_NONE;
+    web_broadcast(WEB_MSG_EVENT, 0, out, sizeof(out));
+}
+
 static void web_send_fact(const domain_event_t *event)
 {
+    if (event->kind == (uint8_t)DOMAIN_FACT_EVENT) {
+        web_send_semantic_event(event);
+        return;
+    }
     const web_schema_t *schema = schema_for((uint8_t)event->entity);
     if (schema == NULL || event->key_size != schema->key_size) {
         return;
@@ -1253,8 +1278,9 @@ static sys_error_t web_subscribe(void)
     }
 
     domain_subscription_desc_t desc = {0};
-    desc.kind_mask =
-        (1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED) | (1u << (uint32_t)DOMAIN_FACT_ENTITY_REMOVED);
+    desc.kind_mask = (1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED) |
+                     (1u << (uint32_t)DOMAIN_FACT_ENTITY_REMOVED) |
+                     (1u << (uint32_t)DOMAIN_FACT_EVENT);
     desc.source_mask = 0; /* любые источники */
     desc.entity = 0;      /* любые типы */
     desc.try_push = web_accept;

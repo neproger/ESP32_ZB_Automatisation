@@ -14,14 +14,6 @@ export const SYS_ATTR = {
 
 export const WEEKDAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
-// Общий semantic event vocabulary (ha_model/ha_properties.h): системные тики.
-export const SYSTEM_EVENTS = {
-  4: 'каждую минуту',
-  5: 'каждые 30 мин',
-  6: 'каждый час',
-  7: 'начало суток',
-}
-
 // id состояния системного девайса в сторе (см. schema.js entityId).
 export function systemStateId(attr) {
   return `st:${SYSTEM_DEVICE_UID}:${SYSTEM_ENDPOINT}:${CLUSTER_SYSTEM}:${attr}`

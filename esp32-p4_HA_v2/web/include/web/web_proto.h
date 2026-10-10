@@ -51,6 +51,12 @@ typedef enum {
      */
     WEB_MSG_SEMANTIC_AUTOMATION = 0x14,
     WEB_MSG_SEMANTIC_AUTOMATION_REMOVE = 0x15,
+    /*
+     * Семантическое событие (Фаза 5.4): уже HA_EVENT_* от источника, raw payload не отдаём.
+     * DTO (16): u8 source_kind @0, u64 source_uid @1, u8 endpoint @9, u8 event_id @10,
+     *           u8 value_kind @11, u32 value_bits @12.
+     */
+    WEB_MSG_EVENT = 0x16,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 

@@ -124,6 +124,19 @@ function onFrame(buf) {
     emit()
     return
   }
+  if (frame.type === MSG.EVENT) {
+    events.push({
+      seq: ++eventSeq,
+      ts: Date.now(),
+      kind: 'event',
+      sourceUid: payload.getBigUint64(1, true),
+      endpoint: payload.getUint8(9),
+      eventId: payload.getUint8(10),
+    })
+    if (events.length > EVENT_LOG_MAX) events.splice(0, events.length - EVENT_LOG_MAX)
+    emit()
+    return
+  }
   if (frame.type === MSG.SEMANTIC_AUTOMATION || frame.type === MSG.SEMANTIC_AUTOMATION_REMOVE) {
     const id = payload.getBigUint64(0, true)
     const key = id.toString()
