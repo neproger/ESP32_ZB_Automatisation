@@ -138,7 +138,10 @@ B1'  ha_model: source/native_id/parent/name формы + ha_device_id_derive (ge
 B2'  Entity.device_id (ownership)                                                  [x] (B2)
 B3'  generic Device service: register / bind_entity / remove primitives
 B4'  Zigbee adapter: интервью строит нормализованный Device graph и подаёт в Device service;
-     entity binding (entity_id ↔ EUI64+endpoint) остаётся private
+     entity binding (entity_id ↔ EUI64+endpoint) остаётся private                        [x]
+     (root: native_id=hex(EUI64), parent=""; device_register → device_id; для endpoint —
+     ensure Entity (только имя) → device_bind_entity. zb_entity_ensure_entity ownership не
+     пишет.)
 B5   WS v3 + UI: Device → Entity grouping (дерево по parent)
 B6   rename Logical Device (в Domain; reverse device binding не нужен)
 B7   removal lifecycle + adapter dispatcher

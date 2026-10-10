@@ -61,10 +61,12 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
  */
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
-                                    ha_device_id_t device_id, const char *initial_name,
-                                    ha_entity_id_t *out_entity_id);
+                                    const char *initial_name, ha_entity_id_t *out_entity_id);
 
-/* EUI64 → детерминированный Logical Device id (LE(8)); Domain EUI64 не знает. */
+/* EUI64 → канонический native_id Zigbee-устройства (lowercase hex, 16). */
+bool zb_device_native_id(ha_device_uid_t uid, char *out, size_t out_size);
+
+/* EUI64 → детерминированный Logical Device id; Domain EUI64 не знает. */
 ha_device_id_t zb_device_id(ha_device_uid_t uid);
 
 /*

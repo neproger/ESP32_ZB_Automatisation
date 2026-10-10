@@ -8,8 +8,11 @@
 #include "freertos/task.h"
 #include "zigbee/zigbee_command.h"
 #include "zigbee/zigbee_diag.h"
+#include "device/device_service.h"
 #include "ha_model/ha_capabilities.h"
+#include "ha_model/ha_entities.h"
 #include "ha_model/ha_state.h"
+#include "zigbee/zigbee_entity_binding.h"
 #include "zigbee/zigbee_entity_registry.h"
 #include "zigbee/zigbee_radio.h"
 #include "zigbee/zigbee_state.h"
@@ -328,12 +331,42 @@ static void zigbee_task(void *arg)
                 } else {
                     ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u",
                              (unsigned long long)result.uid, (unsigned)result.endpoint_count);
-                    /* A0.4/A6.1b: endpoint → логическая Entity + её canonical capabilities. */
+
+                    /*
+                     * B4': Zigbee описывает нормализованный Device (root) и подаёт его в Device
+                     * service; ownership Entity задаёт Device service, не adapter. Пока —
+                     * плоский root без child Device.
+                     */
+                    ha_device_id_t device_id = HA_DEVICE_ID_NONE;
+                    ha_device_desc_t desc = {0};
+                    desc.source = HA_SOURCE_ZIGBEE;
+                    (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
+                    ha_device_record_t device = {0};
+                    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE,
+                                                 &result.uid, &device))) {
+                        size_t n = strlen(device.name);
+                        if (n >= sizeof(desc.name)) {
+                            n = sizeof(desc.name) - 1;
+                        }
+                        memcpy(desc.name, device.name, n);
+                    }
+                    if (sys_failed(device_register(s_domain, (uint8_t)DOMAIN_SOURCE_ZIGBEE, &desc,
+                                                   &device_id))) {
+                        ESP_LOGW(TAG, "device register failed uid=%llx",
+                                 (unsigned long long)result.uid);
+                    }
+
+                    /* A0.4/A6.1b/B4': endpoint → логическая Entity + ownership + capabilities. */
                     for (uint8_t i = 0; i < result.endpoint_count; i++) {
                         ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
                         const uint8_t endpoint = result.endpoints[i].endpoint;
                         if (sys_ok(zigbee_entity_ensure(s_domain, result.uid, endpoint,
                                                         result.endpoint_count, &entity_id))) {
+                            if (device_id != HA_DEVICE_ID_NONE) {
+                                (void)device_bind_entity(s_domain,
+                                                         (uint8_t)DOMAIN_SOURCE_ZIGBEE, device_id,
+                                                         entity_id);
+                            }
                             zigbee_publish_capabilities(result.uid, endpoint, entity_id);
                         }
                     }

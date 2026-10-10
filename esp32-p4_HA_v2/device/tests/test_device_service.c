@@ -148,6 +148,11 @@ static void test_parent_and_bind(void)
     CHECK(get_entity_device(&d, e1, &got) && got == root_id);
     CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e1))); /* idempotent */
 
+    /* Reassign уже привязанной Entity к другому Device — отклоняется. */
+    const sys_error_t reassign = device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, child_id, e1);
+    CHECK(sys_is(reassign, SYS_CODE_INVALID_STATE));
+    CHECK(get_entity_device(&d, e1, &got) && got == root_id);
+
     /* отсутствующая Entity → NOT_FOUND. */
     const sys_error_t missing =
         device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e2);

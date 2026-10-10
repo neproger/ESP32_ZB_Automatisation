@@ -94,14 +94,26 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     return true;
 }
 
+/* Канонический native_id Zigbee-устройства: lowercase hex EUI64 (16), без 0x/: */
+bool zb_device_native_id(ha_device_uid_t uid, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return false;
+    }
+    const int written = snprintf(out, out_size, "%016llx", (unsigned long long)uid);
+    return written > 0 && (size_t)written < out_size;
+}
+
 /*
- * Детерминированный Logical Device id из EUI64. Канонический native_id: lowercase hex (16),
- * затем единая generic derivation ha_device_id_derive (источник — adapter, формула — одна).
+ * Детерминированный Logical Device id из EUI64: канонический native_id → единая generic
+ * derivation ha_device_id_derive (источник — adapter, формула — одна).
  */
 ha_device_id_t zb_device_id(ha_device_uid_t uid)
 {
     char native_id[HA_NATIVE_ID_MAX];
-    snprintf(native_id, sizeof(native_id), "%016llx", (unsigned long long)uid);
+    if (!zb_device_native_id(uid, native_id, sizeof(native_id))) {
+        return HA_DEVICE_ID_NONE;
+    }
     return ha_device_id_derive(HA_SOURCE_ZIGBEE, native_id);
 }
 
@@ -140,8 +152,7 @@ static void copy_entity_name(char *dst, size_t dst_size, const char *src)
 
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
-                                    ha_device_id_t device_id, const char *initial_name,
-                                    ha_entity_id_t *out_entity_id)
+                                    const char *initial_name, ha_entity_id_t *out_entity_id)
 {
     if (domain == NULL || list == NULL || count == NULL || out_entity_id == NULL) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
@@ -155,8 +166,9 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
     const ha_entity_key_t key = {.id = id};
 
     /*
-     * Имя и device_id — собственность Entity. Дозаполняем только отсутствующее: пустое имя
-     * (adapter даёт initial name) и незаданный device_id (ownership). Уже заданное не трогаем.
+     * Adapter отвечает только за identity/существование Entity и initial name; ownership
+     * (device_id) пишет Device service, поэтому здесь не трогается. Дозаполняем лишь пустое
+     * имя; уже заданное не перетираем.
      */
     ha_entity_record_t record = {0};
     bool need_put = true;
@@ -168,12 +180,7 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
             copy_entity_name(record.name, sizeof(record.name), initial_name);
             need_put = true;
         }
-        if (record.device_id == HA_DEVICE_ID_NONE && device_id != HA_DEVICE_ID_NONE) {
-            record.device_id = device_id;
-            need_put = true;
-        }
     } else {
-        record.device_id = device_id;
         copy_entity_name(record.name, sizeof(record.name), initial_name);
     }
 

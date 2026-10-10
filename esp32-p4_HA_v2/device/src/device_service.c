@@ -84,6 +84,9 @@ sys_error_t device_bind_entity(domain_t *domain, uint8_t origin, ha_device_id_t 
     if (record.device_id == device_id) {
         return SYS_OK; /* идемпотентно */
     }
+    if (record.device_id != HA_DEVICE_ID_NONE) {
+        return device_fail(SYS_CODE_INVALID_STATE); /* reassign пока не поддержан */
+    }
 
     record.device_id = device_id;
     domain_fact_meta_t meta = {0};

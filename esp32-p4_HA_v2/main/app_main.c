@@ -14,6 +14,7 @@
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_logical_device.h"
 #include "ha_model/ha_rule.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_state.h"
@@ -34,7 +35,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 16
+#define APP_ENTITY_TYPES 17
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -55,6 +56,7 @@
 #define APP_WIFI_STATUS_CAPACITY 1
 #define APP_SETTINGS_CAPACITY 1
 #define APP_ENTITY_CAPACITY 32
+#define APP_LOGICAL_DEVICE_CAPACITY 32
 
 #define DISPATCHER_TASK_STACK 4096
 #define DISPATCHER_TASK_PRIORITY 6
@@ -210,6 +212,16 @@ static const domain_entity_desc_t entity_desc = {
     .key_size = sizeof(ha_entity_key_t),
     .payload_size = sizeof(ha_entity_record_t),
     .capacity = APP_ENTITY_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
+/* Logical Device (Шаг B): владелец Entity; пишет Device service. RAM (восстановимо). */
+static const domain_entity_desc_t logical_device_desc = {
+    .type = (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE,
+    .key_size = sizeof(ha_logical_device_key_t),
+    .payload_size = sizeof(ha_logical_device_record_t),
+    .capacity = APP_LOGICAL_DEVICE_CAPACITY,
     .backing = DOMAIN_BACKING_RAM,
     .persist_key = NULL,
 };
@@ -405,6 +417,10 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &entity_desc), "register entity")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &logical_device_desc),
+                    "register logical-device")) {
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &property_state_desc),

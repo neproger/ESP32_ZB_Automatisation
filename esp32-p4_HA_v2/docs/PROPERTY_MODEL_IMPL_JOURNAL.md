@@ -631,6 +631,16 @@ TLV / самоописание приложения              — запре�
             Добавлен SYS_LAYER_DEVICE. Корневой CMake: EXTRA_COMPONENT_DIRS += device.
             host test test_device_service (register/idempotent/parent/bind/remove). IDF зелёный.
             Дальше B4': Zigbee интервью строит нормализованный Device graph и зовёт Device service.
+2026-10-11  Step B, B4' — Zigbee подаёт нормализованный Device graph в Device service.
+            Ownership-запись убрана из adapter: zb_entity_ensure_entity больше НЕ пишет
+            Entity.device_id (только identity/имя); device_id-параметр удалён. zigbee.c при
+            interview: zb_device_native_id(uid)→desc{source=ZIGBEE, native_id, name=DEVICE.name}
+            → device_register(root) → device_id; для каждого endpoint ensure Entity →
+            device_bind_entity(device_id, entity_id) + capabilities. app_main регистрирует
+            HA_ENTITY_LOGICAL_DEVICE (RAM), APP_ENTITY_TYPES 17; zigbee REQUIRES device.
+            device_bind_entity отклоняет reassign (уже привязана к другому Device → INVALID_STATE).
+            Тесты: device 1/1 (+reassign), zigbee 9/9 (ownership убран из adapter; ensure не
+            выставляет device_id), IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

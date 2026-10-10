@@ -15,6 +15,7 @@ idf_component_register(
     REQUIRES
         domain
         ha_model
+        device
         semantics
         sys
         nvs_flash

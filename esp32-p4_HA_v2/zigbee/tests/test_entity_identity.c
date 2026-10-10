@@ -92,8 +92,7 @@ static bool domain_has(ctx_t *c, ha_entity_id_t id)
 static ha_entity_id_t ensure(ctx_t *c, uint64_t uid, uint8_t ep, sys_error_t *err)
 {
     ha_entity_id_t id = HA_ENTITY_ID_NONE;
-    *err = zb_entity_ensure_entity(&c->d, c->reg, REG_CAP, &c->n, uid, ep, zb_device_id(uid), NULL,
-                                   &id);
+    *err = zb_entity_ensure_entity(&c->d, c->reg, REG_CAP, &c->n, uid, ep, NULL, &id);
     return id;
 }
 
@@ -182,8 +181,7 @@ static void test_name_initialized_and_not_clobbered(void)
     ctx_init(&c, 4);
     ha_entity_id_t id = HA_ENTITY_ID_NONE;
 
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, zb_device_id(A),
-                                         "Kitchen", &id)));
+    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, "Kitchen", &id)));
 
     const ha_entity_key_t key = {.id = id};
     ha_entity_record_t record = {0};
@@ -192,8 +190,7 @@ static void test_name_initialized_and_not_clobbered(void)
 
     /* Повторное ensure с другим initial name — пользовательское имя сохраняется. */
     ha_entity_id_t again = HA_ENTITY_ID_NONE;
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, zb_device_id(A),
-                                         "Other", &again)));
+    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, "Other", &again)));
     CHECK(again == id);
     memset(&record, 0, sizeof(record));
     CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record)));
@@ -225,66 +222,24 @@ static void test_initial_name(void)
     domain_deinit(&c.d);
 }
 
-/* B2 ownership: Entity несёт device_id; один device → один device_id на всех endpoint. */
-static bool entity_device_id(ctx_t *c, ha_entity_id_t id, ha_device_id_t *out)
-{
-    const ha_entity_key_t key = {.id = id};
-    ha_entity_record_t record = {0};
-    if (sys_failed(domain_entity_get(&c->d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &record))) {
-        return false;
-    }
-    *out = record.device_id;
-    return true;
-}
-
-static void test_ownership(void)
+/*
+ * B4': adapter отвечает только за identity Entity; ownership (Entity.device_id) пишет Device
+ * service. Проверяем, что ensure сам device_id НЕ выставляет.
+ */
+static void test_ensure_sets_no_ownership(void)
 {
     ctx_t c;
-    ctx_init(&c, 8);
+    ctx_init(&c, 4);
 
-    const ha_device_id_t d1 = zb_device_id(A);
-    const ha_device_id_t d2 = zb_device_id(Y);
-    CHECK(d1 != HA_DEVICE_ID_NONE);
-    CHECK(d2 != HA_DEVICE_ID_NONE);
-    CHECK(d1 != d2);
+    ha_entity_id_t id = HA_ENTITY_ID_NONE;
+    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, "x", &id)));
 
-    ha_entity_id_t a1 = HA_ENTITY_ID_NONE;
-    ha_entity_id_t a2 = HA_ENTITY_ID_NONE;
-    ha_entity_id_t c1 = HA_ENTITY_ID_NONE;
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, d1, NULL, &a1)));
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 2, d1, NULL, &a2)));
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, Y, 1, d2, NULL, &c1)));
-
-    /* ep1/ep2 одного device → общий device_id; другой device → свой. */
-    ha_device_id_t got = HA_DEVICE_ID_NONE;
-    CHECK(entity_device_id(&c, a1, &got) && got == d1);
-    CHECK(entity_device_id(&c, a2, &got) && got == d1);
-    CHECK(entity_device_id(&c, c1, &got) && got == d2);
-    CHECK(a1 != a2 && a1 != c1);
-
-    /* Повторный ensure не меняет device_id/entity_id. */
-    ha_entity_id_t again = HA_ENTITY_ID_NONE;
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 1, d1, NULL, &again)));
-    CHECK(again == a1);
-    CHECK(entity_device_id(&c, a1, &got) && got == d1);
-
-    /* Смена endpoint: другой entity_id, тот же device_id. */
-    ha_entity_id_t a3 = HA_ENTITY_ID_NONE;
-    CHECK(sys_ok(zb_entity_ensure_entity(&c.d, c.reg, REG_CAP, &c.n, A, 3, d1, NULL, &a3)));
-    CHECK(a3 != a1);
-    CHECK(entity_device_id(&c, a3, &got) && got == d1);
-
-    /* Reboot (пустой registry + новый Domain): тот же entity_id и device_id. */
-    ctx_t c2;
-    ctx_init(&c2, 8);
-    ha_entity_id_t a1b = HA_ENTITY_ID_NONE;
-    CHECK(sys_ok(zb_entity_ensure_entity(&c2.d, c2.reg, REG_CAP, &c2.n, A, 1, d1, NULL, &a1b)));
-    CHECK(a1b == a1);
-    CHECK(entity_device_id(&c2, a1b, &got) && got == d1);
-    CHECK(zb_device_id(A) == d1); /* device_id детерминирован */
+    const ha_entity_key_t key = {.id = id};
+    ha_entity_record_t rec = {0};
+    CHECK(sys_ok(domain_entity_get(&c.d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &rec)));
+    CHECK(rec.device_id == HA_DEVICE_ID_NONE);
 
     domain_deinit(&c.d);
-    domain_deinit(&c2.d);
 }
 
 int main(void)
@@ -300,7 +255,7 @@ int main(void)
     test_atomicity();
     test_name_initialized_and_not_clobbered();
     test_initial_name();
-    test_ownership();
+    test_ensure_sets_no_ownership();
 
     mstore_platform_flash_set_device(NULL);
     mstore_nor_sim_destroy(sim);
