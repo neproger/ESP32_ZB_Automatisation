@@ -448,6 +448,15 @@ TLV / самоописание приложения              — запре�
             ha_zb_command_t через semantics_build_command. Потребитель транспорта не видит;
             физическая проверка/enqueue выделена в zigbee_enqueue_command. zigbee 9/9
             (test_command_entity: reverse round-trip, build-command из resolved entity) — IDF зелёный
+2026-10-10  шаг A, ревизия порядка №2 (решение): A3.3/A3.4 требуют entity-identity на
+            клиентской границе (Automation — одна Domain-таблица с фиксированным payload;
+            web читает ту же таблицу, а UI адресует по uid/ep). Без reverse-map в BFF это
+            значит: вынести минимальный фундамент A6.0/A6.1 (canonical v3 + frontend identity
+            = entity_id), затем вернуться к A3.3–A3.5. Новый порядок:
+            A6.0→A6.1→A3.3→A3.4→A3.5→A4→A6.2+→A6.x→A1.4→A1.5.
+2026-10-10  шаг A, A6.0 — canonical v3 message set (фонд): WEB_MSG3_ENTITY/PROPERTY_STATE/
+            CAPABILITIES (+REMOVE) в web_proto.h и web-ui/proto.js. Обычный v3 без
+            uid/endpoint/cluster/attr; identity = entity_id. Живёт рядом с v2 (кадр тот же).
 ```
 
 ## 7. Открытые вопросы

@@ -117,6 +117,34 @@ typedef enum {
     WEB_CMD_SEMANTIC_GROUP_ITEM_REMOVE = 17,
 } web_cmd_t;
 
+/*
+ * Web transport v3 (Шаг A, A6.0): canonical-контракт для клиента. Обычный v3 НЕ несёт
+ * uid/endpoint/cluster/attr/zcl_type — identity это entity_id. Живёт рядом с v2
+ * (transitional) до A6.x: кадр тот же, v3 отличается набором типов. Здесь только
+ * read-сущности идентичности; команды/остальное — на A6.2+.
+ *
+ * Раскладки (LE, без C enum/union на проводе):
+ *   ENTITY (8):                 u64 entity_id @0
+ *   ENTITY_REMOVE (8):          u64 entity_id @0
+ *   PROPERTY_STATE (15):        u64 entity_id @0, u16 property @8, u8 value_kind @10, u32 bits @11
+ *   PROPERTY_STATE_REMOVE (10): u64 entity_id @0, u16 property @8
+ *   CAPABILITIES (перем.):      u64 entity_id @0, u8 count @8,
+ *                               props[]{ u16 property, u8 action_count, u8 actions[] }
+ *   CAPABILITIES_REMOVE (8):    u64 entity_id @0
+ */
+typedef enum {
+    WEB_MSG3_ENTITY = 0x30,
+    WEB_MSG3_ENTITY_REMOVE = 0x31,
+    WEB_MSG3_PROPERTY_STATE = 0x32,
+    WEB_MSG3_PROPERTY_STATE_REMOVE = 0x33,
+    WEB_MSG3_CAPABILITIES = 0x34,
+    WEB_MSG3_CAPABILITIES_REMOVE = 0x35,
+} web_msg3_t;
+
+#define WEB_MSG3_ENTITY_SIZE 8u
+#define WEB_MSG3_PROPERTY_STATE_SIZE 15u
+#define WEB_MSG3_PROPERTY_STATE_REMOVE_SIZE 10u
+
 typedef struct __attribute__((packed)) {
     uint8_t ver;
     uint8_t type;

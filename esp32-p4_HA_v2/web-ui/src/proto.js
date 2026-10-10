@@ -39,6 +39,17 @@ export const CMD = {
   SEMANTIC_GROUP_ITEM_REMOVE: 17,
 }
 
+// v3 canonical (Шаг A, A6.0): identity = entity_id, без uid/endpoint/cluster/attr.
+// Кадр тот же, что у v2; v3 отличается набором типов. Живут рядом до A6.x.
+export const MSG3 = {
+  ENTITY: 0x30,
+  ENTITY_REMOVE: 0x31,
+  PROPERTY_STATE: 0x32,
+  PROPERTY_STATE_REMOVE: 0x33,
+  CAPABILITIES: 0x34,
+  CAPABILITIES_REMOVE: 0x35,
+}
+
 export const HDR = 8
 export const VER = 2
 
