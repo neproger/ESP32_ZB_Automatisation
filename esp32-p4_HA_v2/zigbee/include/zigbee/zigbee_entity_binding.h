@@ -66,6 +66,12 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
 /* EUI64 → канонический native_id Zigbee-устройства (lowercase hex, 16). */
 bool zb_device_native_id(ha_device_uid_t uid, char *out, size_t out_size);
 
+/* Канонический native_id (hex) → EUI64. false — невалидный/пустой. */
+bool zb_uid_from_native_id(const char *native_id, ha_device_uid_t *out);
+
+/* Удалить все привязки устройства из списка (device ушёл). true — что-то удалено. */
+bool zb_entity_binding_remove_uid(zb_entity_binding_t *list, size_t *count, ha_device_uid_t uid);
+
 /* EUI64 → детерминированный Logical Device id; Domain EUI64 не знает. */
 ha_device_id_t zb_device_id(ha_device_uid_t uid);
 

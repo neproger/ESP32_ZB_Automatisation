@@ -54,3 +54,10 @@ bool zigbee_entity_physical(ha_entity_id_t entity_id, ha_device_uid_t *out_uid,
     return zb_entity_binding_find_physical(s_bindings, s_binding_count, entity_id, out_uid,
                                            out_endpoint);
 }
+
+void zigbee_entity_forget(ha_device_uid_t uid)
+{
+    if (zb_entity_binding_remove_uid(s_bindings, &s_binding_count, uid)) {
+        ESP_LOGI(TAG, "entity bindings forgotten uid=%llx", (unsigned long long)uid);
+    }
+}

@@ -3,6 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ha_model/ha_automation.h"
+#include "ha_model/ha_capabilities.h"
+#include "ha_model/ha_groups.h"
+#include "ha_model/ha_rule.h"
+#include "ha_model/ha_state.h"
+
 /*
  * B3' (docs/STEP_B_PLAN.md): generic Device service над Domain. Нормализованный desc →
  * canonical identity; ownership Entity; удаление Device. Транспорта не знает (source/native_id
@@ -56,7 +62,7 @@ static bool get_entity_device(domain_t *d, ha_entity_id_t id, ha_device_id_t *ou
 
 static void ctx_init(domain_t *d)
 {
-    domain_init(d, 4, 16, 8, 64);
+    domain_init(d, 8, 16, 8, 64);
     const domain_entity_desc_t entity_desc = {
         .type = (domain_entity_t)HA_ENTITY_ENTITY,
         .key_size = sizeof(ha_entity_key_t),
@@ -75,6 +81,43 @@ static void ctx_init(domain_t *d)
     };
     domain_register_entity(d, &entity_desc);
     domain_register_entity(d, &device_desc);
+
+    const domain_entity_desc_t ps_desc = {
+        .type = (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
+        .key_size = sizeof(ha_state_key_t),
+        .payload_size = sizeof(ha_state_record_t),
+        .capacity = 16,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    const domain_entity_desc_t caps_desc = {
+        .type = (domain_entity_t)HA_ENTITY_CAPABILITIES,
+        .key_size = sizeof(ha_entity_key_t),
+        .payload_size = sizeof(ha_entity_capabilities_record_t),
+        .capacity = 16,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    const domain_entity_desc_t gi_desc = {
+        .type = (domain_entity_t)HA_ENTITY_GROUP_ITEM,
+        .key_size = sizeof(ha_group_item_key_t),
+        .payload_size = sizeof(ha_group_item_record_t),
+        .capacity = 16,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    const domain_entity_desc_t auto_desc = {
+        .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
+        .key_size = sizeof(ha_automation_key_t),
+        .payload_size = sizeof(ha_rule_t),
+        .capacity = 8,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    domain_register_entity(d, &ps_desc);
+    domain_register_entity(d, &caps_desc);
+    domain_register_entity(d, &gi_desc);
+    domain_register_entity(d, &auto_desc);
 }
 
 static void test_register_and_idempotent(void)
@@ -161,11 +204,24 @@ static void test_parent_and_bind(void)
     CHECK(sys_ok(domain_deinit(&d)));
 }
 
-static void test_remove_unbinds_and_deletes(void)
+static char g_removed_native[HA_NATIVE_ID_MAX];
+static int g_removed_count;
+static sys_error_t test_remover(const char *native_id, void *ctx)
+{
+    (void)ctx;
+    g_removed_count++;
+    snprintf(g_removed_native, sizeof(g_removed_native), "%s", native_id != NULL ? native_id : "");
+    return SYS_OK;
+}
+
+/* B7: transport remove (remover по source) → cascade Entity/state/caps/group_item; automation
+ * сохраняется (broken-ссылка), сам Device удаляется. */
+static void test_remove_cascade(void)
 {
     domain_t d;
     memset(&d, 0, sizeof(d));
     ctx_init(&d);
+    CHECK(sys_ok(device_register_remover(HA_SOURCE_ZIGBEE, test_remover, NULL)));
 
     const ha_device_desc_t root = {.source = HA_SOURCE_ZIGBEE,
                                    .native_id = ROOT_NATIVE,
@@ -178,12 +234,54 @@ static void test_remove_unbinds_and_deletes(void)
     put_entity(&d, e1, "клавиша 1");
     CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, id, e1)));
 
-    CHECK(sys_ok(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id)));
+    /* canonical-следы Entity */
+    const ha_state_key_t ps_key = {.entity = e1, .property = HA_PROPERTY_POWER};
+    const ha_state_record_t ps_rec = {.value = {.kind = HA_VALUE_BOOL}};
+    domain_fact_meta_t meta = {0};
+    bool changed = false;
+    CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &ps_key, &ps_rec,
+                                   &meta, &changed)));
+    const ha_entity_key_t ekey = {.id = e1};
+    const ha_entity_capabilities_record_t caps = {0};
+    CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_CAPABILITIES, &ekey, &caps, &meta,
+                                   &changed)));
+    ha_group_item_key_t gi_key = {0};
+    gi_key.group_id = 1;
+    gi_key.state.entity = e1;
+    gi_key.state.property = HA_PROPERTY_POWER;
+    const ha_group_item_record_t gi_rec = {0};
+    CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &gi_key, &gi_rec,
+                                   &meta, &changed)));
+    /* automation, ссылающаяся на Entity — должна сохраниться */
+    const ha_automation_key_t akey = {.id = 1};
+    ha_rule_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger.kind = HA_TRIGGER_STATE;
+    rule.trigger.entity = e1;
+    rule.action_ref.entity = e1;
+    rule.action = HA_ACTION_ON;
+    CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_AUTOMATION, &akey, &rule, &meta,
+                                   &changed)));
 
-    ha_device_id_t got = 0;
-    CHECK(get_entity_device(&d, e1, &got) && got == HA_DEVICE_ID_NONE); /* ownership снят */
-    ha_logical_device_record_t rec = {0};
-    CHECK(!get_device(&d, id, &rec)); /* Device удалён */
+    g_removed_count = 0;
+    CHECK(sys_ok(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id)));
+    CHECK(g_removed_count == 1 && strcmp(g_removed_native, ROOT_NATIVE) == 0);
+
+    ha_entity_record_t er = {0};
+    ha_state_record_t psr = {0};
+    ha_entity_capabilities_record_t cr = {0};
+    ha_group_item_record_t gir = {0};
+    ha_logical_device_record_t lr = {0};
+    CHECK(!sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_ENTITY, &ekey, &er)));
+    CHECK(!sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &ps_key, &psr)));
+    CHECK(!sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_CAPABILITIES, &ekey, &cr)));
+    CHECK(!sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &gi_key, &gir)));
+    CHECK(!get_device(&d, id, &lr));
+    ha_rule_t kept = {0};
+    CHECK(sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_AUTOMATION, &akey, &kept)));
+
+    /* повторное удаление — Device уже нет → NOT_FOUND */
+    CHECK(sys_is(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id), SYS_CODE_NOT_FOUND));
 
     CHECK(sys_ok(domain_deinit(&d)));
 }
@@ -237,7 +335,7 @@ int main(void)
 {
     test_register_and_idempotent();
     test_parent_and_bind();
-    test_remove_unbinds_and_deletes();
+    test_remove_cascade();
     test_rename_and_initial_name();
 
     if (g_failures == 0) {

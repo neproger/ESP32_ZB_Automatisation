@@ -39,6 +39,10 @@ bool zigbee_entity_lookup(ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t 
 bool zigbee_entity_physical(ha_entity_id_t entity_id, ha_device_uid_t *out_uid,
                             uint8_t *out_endpoint);
 
+/* Устройство ушло (leave): забыть его entity-привязки (entity_id детерминированы, перепривязка
+ * при повторном появлении даст те же id). */
+void zigbee_entity_forget(ha_device_uid_t uid);
+
 #ifdef __cplusplus
 }
 #endif

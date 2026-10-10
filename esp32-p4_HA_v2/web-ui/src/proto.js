@@ -27,6 +27,7 @@ export const CMD = {
   ENTITY_RENAME: 18,
   PROPERTY_COMMAND: 19,
   DEVICE_RENAME: 20,
+  LOGICAL_DEVICE_REMOVE: 21,
 }
 
 // Diagnostics raw Zigbee (A1.5): transport-specific, вне web v3. Здесь допустимы uid/ep/cluster/raw.
@@ -217,6 +218,13 @@ export function deviceRename(deviceId, name) {
   new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
   out.set(new TextEncoder().encode(name || '').subarray(0, 31), 8)
   return encodeCommand(CMD.DEVICE_RENAME, out)
+}
+
+// LOGICAL_DEVICE_REMOVE args = u64 device_id (Шаг B, B7). Adapter remove + cascade.
+export function deviceRemove(deviceId) {
+  const out = new Uint8Array(8)
+  new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
+  return encodeCommand(CMD.LOGICAL_DEVICE_REMOVE, out)
 }
 
 // ENTITY_RENAME args = u64 entity_id | char name[32] (Шаг A, A6.1c). Имя принадлежит Entity.

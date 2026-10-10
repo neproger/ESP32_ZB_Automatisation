@@ -75,6 +75,8 @@ typedef enum {
     WEB_CMD_PROPERTY_COMMAND = 19,
     /* Rename Logical Device (Шаг B, B6): u64 device_id @0, char name[32] @8. */
     WEB_CMD_DEVICE_RENAME = 20,
+    /* Remove Logical Device (Шаг B, B7): u64 device_id; транспортный remove + cascade. */
+    WEB_CMD_LOGICAL_DEVICE_REMOVE = 21,
 } web_cmd_t;
 
 /*

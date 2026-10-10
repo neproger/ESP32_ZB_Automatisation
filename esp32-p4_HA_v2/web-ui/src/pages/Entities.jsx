@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { permitJoin, deviceRename } from '../proto.js'
+import { permitJoin, deviceRename, deviceRemove } from '../proto.js'
 import EntityCard from '../components/EntityCard.jsx'
 
 const JOIN_SECONDS = 180
@@ -27,6 +27,8 @@ function DeviceGroup({ device, devices, s }) {
           onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
         />
         <span className="uid">{device.id.toString().slice(-8)}</span>
+        <span className="spacer" />
+        <button className="ghost danger" onClick={() => store.send(deviceRemove(device.id))}>Удалить</button>
       </div>
       {entities.map((e) => <EntityCard key={e.id.toString()} ent={e} />)}
       {children.map((c) => (

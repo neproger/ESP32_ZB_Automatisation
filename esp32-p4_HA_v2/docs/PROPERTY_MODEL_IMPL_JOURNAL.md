@@ -662,6 +662,16 @@ TLV / самоописание приложения              — запре�
             (u64 device_id + name[32]) → device_rename (UI origin); web REQUIRES device. UI:
             редактируемое имя Device в группе. Проверено на P4: device 71b213ac527a6357
             "" → "Кухня" (наблюдалось в snapshot). device 1/1, IDF + web-ui зелёные.
+2026-10-11  Step B, B7 — removal lifecycle + adapter dispatcher. Device service: registry
+            remover'ов по source (device_register_remover); device_remove(device_id) читает
+            Device {source, native_id} → remover(source) (Zigbee: zb_uid_from_native_id → пометка
+            DEVICE_REMOVE + leave best-effort, без ожидания физ. устройства) → при успехе cascade:
+            Entity + PROPERTY_STATE + CAPABILITIES + GROUP_ITEM refs удаляются, automation refs
+            СОХРАНЯЮТСЯ (broken/unresolved), adapter entity bindings забываются
+            (zigbee_entity_forget), Logical Device удаляется. Ошибка remover → canonical не
+            трогаем. UI: LOGICAL_DEVICE_REMOVE(device_id) + кнопка «Удалить». host test device
+            (cascade + remover + повторное удаление → NOT_FOUND). device 1/1, IDF + web-ui зелёные.
+            (Hardware-removal smoke не триггерился — разспарит реальное устройство.)
 ```
 
 ## 7. Открытые вопросы

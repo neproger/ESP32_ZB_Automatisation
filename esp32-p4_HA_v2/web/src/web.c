@@ -851,6 +851,18 @@ static uint16_t web_do_device_rename(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* Remove Logical Device (B7): adapter remove + canonical cascade — через Device service. */
+static uint16_t web_do_logical_device_remove(const uint8_t *args, size_t len)
+{
+    if (len != sizeof(ha_device_id_t)) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_device_id_t device_id = 0;
+    memcpy(&device_id, args, sizeof(device_id));
+    const sys_error_t err = device_remove(s_domain, (uint8_t)DOMAIN_SOURCE_UI, device_id);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 /* Rename логической Entity по entity_id (A6.1): adapter не участвует. */
 static uint16_t web_do_entity_rename(const uint8_t *args, size_t len)
 {
@@ -1291,6 +1303,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_DEVICE_RENAME:
         status = web_do_device_rename(args, len);
+        break;
+    case WEB_CMD_LOGICAL_DEVICE_REMOVE:
+        status = web_do_logical_device_remove(args, len);
         break;
     case WEB_CMD_PROPERTY_COMMAND:
         status = web_do_property_command(args, len);

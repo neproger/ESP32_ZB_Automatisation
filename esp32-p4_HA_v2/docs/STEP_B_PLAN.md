@@ -148,7 +148,12 @@ B5   WS v3 + UI: Device → Entity grouping (дерево по parent)          
 B6   rename Logical Device (в Domain; reverse device binding не нужен)                     [x]
      (device_rename меняет только name; initial name из adapter — только если пусто;
      WEB_CMD_DEVICE_RENAME v3; UI — редактируемое имя Device.)
-B7   removal lifecycle + adapter dispatcher
+B7   removal lifecycle + adapter dispatcher                                                     [x]
+     (UI LOGICAL_DEVICE_REMOVE(device_id) → Device service: read {source,native_id} → registered
+     remover(source) [Zigbee: hex→EUI64, remove из локального state, leave best-effort] →
+     успех → cascade: Entity/PROPERTY_STATE/CAPABILITIES/GROUP_ITEM delete (automation refs —
+     keep); забыть adapter entity bindings; удалить Logical Device. Ошибка remover → cleanup не
+     выполняется. Дерево (parent) — каскад детей в будущем.)
 B8   старый uid-keyed HA_ENTITY_DEVICE → HA_ENTITY_ZB_DIAG_DEVICE + cleanup
 B9   boundary review + smoke на P4
 ```

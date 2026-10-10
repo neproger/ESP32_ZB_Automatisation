@@ -127,19 +127,12 @@ static sys_error_t zigbee_property_execute(domain_command_t type, const void *ar
 }
 
 /*
- * Удаление устройства: помечаем его в Domain (persistent список) и просим leave прямо
- * сейчас. Если устройства нет в сети, пометка остаётся — leave уйдёт при announce.
+ * Удаление из локального Zigbee state: пометка (переживёт reboot; при отсутствии в сети
+ * leave уйдёт на announce) + leave-запрос немедленно. Успех = «удалено из состояния
+ * адаптера/сети», без ожидания подтверждения от физического устройства.
  */
-static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args, size_t args_size,
-                                         void *ctx)
+static sys_error_t zigbee_request_remove(ha_device_uid_t uid)
 {
-    (void)type;
-    (void)ctx;
-    if (args == NULL || args_size != sizeof(ha_device_uid_t)) {
-        return zigbee_fail(SYS_CODE_INVALID_ARG);
-    }
-
-    const ha_device_uid_t uid = *(const ha_device_uid_t *)args;
     const ha_device_remove_record_t record = {.requested = 1};
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;
@@ -149,11 +142,32 @@ static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args
     if (sys_failed(put)) {
         return put;
     }
-
     if (s_remove_requests == NULL || xQueueSend(s_remove_requests, &uid, 0) != pdTRUE) {
         return zigbee_fail(SYS_CODE_BUSY);
     }
     return SYS_OK;
+}
+
+static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args, size_t args_size,
+                                         void *ctx)
+{
+    (void)type;
+    (void)ctx;
+    if (args == NULL || args_size != sizeof(ha_device_uid_t)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    return zigbee_request_remove(*(const ha_device_uid_t *)args);
+}
+
+/* Adapter remover (Шаг B, B7): native_id (hex EUI64) → uid → удалить из локального Zigbee state. */
+static sys_error_t zigbee_device_remover(const char *native_id, void *ctx)
+{
+    (void)ctx;
+    ha_device_uid_t uid = 0;
+    if (!zb_uid_from_native_id(native_id, &uid)) {
+        return zigbee_fail(SYS_CODE_INVALID_ARG);
+    }
+    return zigbee_request_remove(uid);
 }
 
 /* Открыть сеть для подключения новых устройств (по кнопке в UI). */
@@ -400,6 +414,7 @@ static void zigbee_task(void *arg)
                     zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
                 } else {
                     ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
+                    zigbee_entity_forget(uid); /* adapter-private bindings больше не нужны */
                     /* Устройство ушло — снимаем и пометку на удаление. */
                     domain_fact_meta_t meta = {0};
                     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
@@ -481,6 +496,7 @@ sys_error_t zigbee_start(domain_t *domain)
     }
     const sys_error_t remove =
         domain_register_command(domain, HA_CMD_DEVICE_REMOVE, zigbee_remove_execute, NULL);
+    (void)device_register_remover(HA_SOURCE_ZIGBEE, zigbee_device_remover, NULL);
     if (sys_failed(remove)) {
         return remove;
     }

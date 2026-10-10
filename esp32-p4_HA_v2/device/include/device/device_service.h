@@ -44,6 +44,16 @@ sys_error_t device_bind_entity(domain_t *domain, uint8_t origin, ha_device_id_t 
 sys_error_t device_remove(domain_t *domain, uint8_t origin, ha_device_id_t device_id);
 
 /*
+ * Adapter-specific remover: adapter регистрирует его по своему source. Device service зовёт
+ * remover при удалении Logical Device; adapter forget/remove native-объект (для Zigbee —
+ * leave в сеть «best effort», без ожидания подтверждения от физического устройства).
+ * Возврат ошибки → canonical cleanup НЕ выполняется.
+ */
+typedef sys_error_t (*device_remover_fn)(const char *native_id, void *ctx);
+
+sys_error_t device_register_remover(ha_source_id_t source, device_remover_fn fn, void *ctx);
+
+/*
  * Переименовать Logical Device (только name; native_id/source/parent и Entity.name не трогает).
  * Device должна существовать → иначе NOT_FOUND.
  */

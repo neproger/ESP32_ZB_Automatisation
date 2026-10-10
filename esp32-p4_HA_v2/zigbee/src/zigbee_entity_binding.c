@@ -104,6 +104,48 @@ bool zb_device_native_id(ha_device_uid_t uid, char *out, size_t out_size)
     return written > 0 && (size_t)written < out_size;
 }
 
+bool zb_uid_from_native_id(const char *native_id, ha_device_uid_t *out)
+{
+    if (native_id == NULL || out == NULL || native_id[0] == '\0') {
+        return false;
+    }
+    ha_device_uid_t value = 0;
+    for (const char *p = native_id; *p != '\0'; p++) {
+        int digit;
+        if (*p >= '0' && *p <= '9') {
+            digit = *p - '0';
+        } else if (*p >= 'a' && *p <= 'f') {
+            digit = *p - 'a' + 10;
+        } else if (*p >= 'A' && *p <= 'F') {
+            digit = *p - 'A' + 10;
+        } else {
+            return false;
+        }
+        value = (value << 4) | (ha_device_uid_t)digit;
+    }
+    *out = value;
+    return true;
+}
+
+bool zb_entity_binding_remove_uid(zb_entity_binding_t *list, size_t *count, ha_device_uid_t uid)
+{
+    if (list == NULL || count == NULL) {
+        return false;
+    }
+    bool removed = false;
+    size_t i = 0;
+    while (i < *count) {
+        if (list[i].device_uid == uid) {
+            list[i] = list[*count - 1];
+            (*count)--;
+            removed = true;
+        } else {
+            i++;
+        }
+    }
+    return removed;
+}
+
 /*
  * Детерминированный Logical Device id из EUI64: канонический native_id → единая generic
  * derivation ha_device_id_derive (источник — adapter, формула — одна).
