@@ -14,15 +14,11 @@ static zb_entity_binding_t s_bindings[ZB_ENTITY_BINDING_MAX];
 static size_t s_binding_count;
 
 sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
-                                 ha_entity_id_t *out_entity_id)
+                                 uint8_t endpoint_total, ha_entity_id_t *out_entity_id)
 {
-    /* Initial name: зигби может предложить имя устройства; имя Entity ему не принадлежит. */
     char initial_name[sizeof(((ha_entity_record_t *)0)->name)] = {0};
-    ha_device_record_t device = {0};
-    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &device))) {
-        memcpy(initial_name, device.name, sizeof(initial_name));
-        initial_name[sizeof(initial_name) - 1] = '\0';
-    }
+    zb_entity_initial_name(domain, uid, endpoint, endpoint_total, initial_name,
+                           sizeof(initial_name));
 
     const size_t before = s_binding_count;
     const sys_error_t err =

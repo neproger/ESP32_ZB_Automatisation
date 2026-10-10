@@ -24,7 +24,7 @@ extern "C" {
  * в Domain. Идемпотентно; порядок discovery не влияет. Ошибка — явная (не создаём ложную Entity).
  */
 sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
-                                 ha_entity_id_t *out_entity_id);
+                                 uint8_t endpoint_total, ha_entity_id_t *out_entity_id);
 
 /*
  * Чистый lookup (uid, endpoint) → entity_id без создания и без записи в Domain. false —

@@ -63,6 +63,14 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
                                     const char *initial_name, ha_entity_id_t *out_entity_id);
 
+/*
+ * Детерминированное initial-имя Entity: basename — имя DEVICE. Одна Entity у устройства →
+ * basename; несколько → "<basename> - <endpoint>". basename пустой → пустая строка (имя не
+ * задаётся). Endpoint (не порядок discovery) делает имя reboot/order-stable.
+ */
+void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
+                            uint8_t endpoint_total, char *out, size_t out_size);
+
 #ifdef __cplusplus
 }
 #endif

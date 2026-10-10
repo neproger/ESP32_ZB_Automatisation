@@ -1,5 +1,6 @@
 #include "zigbee/zigbee_entity_binding.h"
 
+#include <stdio.h>
 #include <string.h>
 
 bool zb_entity_binding_find_entity(const zb_entity_binding_t *list, size_t count,
@@ -93,6 +94,26 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     return true;
 }
 
+void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
+                            uint8_t endpoint_total, char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    ha_device_record_t device = {0};
+    if (domain == NULL ||
+        sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &device)) ||
+        device.name[0] == '\0') {
+        return;
+    }
+    if (endpoint_total <= 1) {
+        snprintf(out, out_size, "%s", device.name);
+    } else {
+        snprintf(out, out_size, "%s - %u", device.name, (unsigned)endpoint);
+    }
+}
+
 sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
                                     size_t *count, ha_device_uid_t uid, uint8_t endpoint,
                                     const char *initial_name, ha_entity_id_t *out_entity_id)
@@ -108,9 +129,13 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
 
     const ha_entity_key_t key = {.id = id};
 
-    /* Entity уже есть: пользовательское имя — его собственность, не перетираем. */
+    /*
+     * Имя — собственность Entity: если оно уже задано, не перетираем. Заполняем только
+     * при создании или если запись существует, но имя пустое (и есть что задать).
+     */
     ha_entity_record_t existing = {0};
-    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &existing))) {
+    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key, &existing)) &&
+        (existing.name[0] != '\0' || initial_name == NULL)) {
         *out_entity_id = id;
         return SYS_OK;
     }

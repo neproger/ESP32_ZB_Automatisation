@@ -48,7 +48,7 @@ static void ctx_init(ctx_t *c, size_t entity_cap)
 {
     memset(c, 0, sizeof(*c)); /* domain_t._state обязан быть NULL до init */
     domain_init(&c->d, 4, 16, 8, 64);
-    const domain_entity_desc_t desc = {
+    const domain_entity_desc_t entity_desc = {
         .type = (domain_entity_t)HA_ENTITY_ENTITY,
         .key_size = sizeof(ha_entity_key_t),
         .payload_size = sizeof(ha_entity_record_t),
@@ -56,8 +56,30 @@ static void ctx_init(ctx_t *c, size_t entity_cap)
         .backing = DOMAIN_BACKING_RAM,
         .persist_key = NULL,
     };
-    domain_register_entity(&c->d, &desc);
+    domain_register_entity(&c->d, &entity_desc);
+    const domain_entity_desc_t device_desc = {
+        .type = (domain_entity_t)HA_ENTITY_DEVICE,
+        .key_size = sizeof(ha_device_uid_t),
+        .payload_size = sizeof(ha_device_record_t),
+        .capacity = 4,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    domain_register_entity(&c->d, &device_desc);
     c->n = 0;
+}
+
+static void put_device(ctx_t *c, ha_device_uid_t uid, const char *name)
+{
+    ha_device_record_t rec = {0};
+    size_t n = strlen(name);
+    if (n >= sizeof(rec.name)) {
+        n = sizeof(rec.name) - 1;
+    }
+    memcpy(rec.name, name, n);
+    domain_fact_meta_t meta = {0};
+    bool changed = false;
+    domain_entity_put(&c->d, (domain_entity_t)HA_ENTITY_DEVICE, &uid, &rec, &meta, &changed);
 }
 
 static bool domain_has(ctx_t *c, ha_entity_id_t id)
@@ -177,6 +199,29 @@ static void test_name_initialized_and_not_clobbered(void)
     domain_deinit(&c.d);
 }
 
+/* Initial-имя Entity: одна → имя device; несколько → "<device> - <endpoint>". */
+static void test_initial_name(void)
+{
+    ctx_t c;
+    ctx_init(&c, 4);
+    put_device(&c, A, "Лампа");
+
+    char out[HA_ENTITY_NAME_MAX];
+    zb_entity_initial_name(&c.d, A, 1, 1, out, sizeof(out));
+    CHECK(strcmp(out, "Лампа") == 0);
+    zb_entity_initial_name(&c.d, A, 2, 3, out, sizeof(out));
+    CHECK(strcmp(out, "Лампа - 2") == 0);
+    zb_entity_initial_name(&c.d, A, 10, 12, out, sizeof(out));
+    CHECK(strcmp(out, "Лампа - 10") == 0);
+
+    /* basename пустой → имя не задаётся */
+    put_device(&c, Y, "");
+    zb_entity_initial_name(&c.d, Y, 1, 1, out, sizeof(out));
+    CHECK(out[0] == '\0');
+
+    domain_deinit(&c.d);
+}
+
 int main(void)
 {
     mstore_nor_sim_t *sim = NULL;
@@ -189,6 +234,7 @@ int main(void)
     test_endpoint_change();
     test_atomicity();
     test_name_initialized_and_not_clobbered();
+    test_initial_name();
 
     mstore_platform_flash_set_device(NULL);
     mstore_nor_sim_destroy(sim);

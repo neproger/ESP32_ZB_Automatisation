@@ -333,7 +333,7 @@ static void zigbee_task(void *arg)
                         ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
                         const uint8_t endpoint = result.endpoints[i].endpoint;
                         if (sys_ok(zigbee_entity_ensure(s_domain, result.uid, endpoint,
-                                                        &entity_id))) {
+                                                        result.endpoint_count, &entity_id))) {
                             zigbee_publish_capabilities(result.uid, endpoint, entity_id);
                         }
                     }

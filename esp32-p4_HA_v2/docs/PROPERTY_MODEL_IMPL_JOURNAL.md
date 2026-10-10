@@ -579,6 +579,11 @@ TLV / самоописание приложения              — запре�
             подходящие правила и evaluate. Source of truth — только HA_ENTITY_AUTOMATION;
             индекс не persistится, восстанавливается из правил; mstore/Domain не менялись.
             ha_model 4/4, semantics 1/1, zigbee 9/9, automation 1/1, IDF зелёный.
+2026-10-11  шаг A+: детерминированное initial-имя Entity в Zigbee adapter. Одна Entity у
+            устройства → имя DEVICE; несколько → "<device> - <endpoint>" (endpoint, не порядок
+            discovery). Задаётся только если Entity.name пусто (создание или запись без имени);
+            после rename не перетирается. Правило вынесено в host-testable
+            zb_entity_initial_name (zigbee_entity_binding) + тест. zigbee 9/9, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы
