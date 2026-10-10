@@ -90,3 +90,33 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     }
     return true;
 }
+
+sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
+                                    size_t *count, ha_device_uid_t uid, uint8_t endpoint,
+                                    ha_entity_id_t *out_entity_id)
+{
+    if (domain == NULL || list == NULL || count == NULL || out_entity_id == NULL) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
+    }
+    ha_entity_id_t id = HA_ENTITY_ID_NONE;
+    bool created = false;
+    if (!zb_entity_resolve(list, capacity, count, uid, endpoint, &id, &created)) {
+        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+    }
+
+    const ha_entity_key_t key = {.id = id};
+    const ha_entity_record_t record = {0};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key,
+                                              &record, &meta, &changed);
+    if (sys_failed(err)) {
+        if (created) {
+            (*count)--; /* откат: привязка без Entity не остаётся */
+        }
+        return err;
+    }
+    *out_entity_id = id;
+    return SYS_OK;
+}

@@ -305,6 +305,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Derivation: `SipHash-2-4(fixed project key, LE32(issuer)||LE32(len)||seed)`, `0→1` | стабильный u64 из короткого seed; fixed key → reboot-stable; не CRC/packing/random |
 | 2026-10-10 | A0.4 registry — in-RAM, без NVS | derivation детерминирована → после reboot та же identity, persistence не нужна |
 | 2026-10-10 | Entity ensure — только при успешном resolve; ошибка → явная, ложной Entity нет | принцип «не публиковать ложное» |
+| 2026-10-10 | `zb_entity_ensure_entity`: rollback binding при падении `domain_entity_put` | атомарность: не оставлять привязку без Entity (идемпотентно переприменится) |
+| 2026-10-10 | **A0 завершён**: identity доказана reboot/order/re-interview independent; registry RAM-only; persistent mutable id не нужен | следующий — A1 canonical state (entity_id, property_id) |
 
 ## 5. От чего отказались
 
@@ -401,6 +403,11 @@ TLV / самоописание приложения              — запре�
             → Domain `HA_ENTITY_ENTITY` (RAM, зарегистрирован в bootstrap). Bridge ensure-ит Entity
             после интервью. Тесты binding: first/repeat/2-ep/order/reboot/re-pair/endpoint-change/
             capacity (zigbee 5/5). Boot P4 чистый; canonical state пока raw. IDF зелёный
+2026-10-10  шаг A, A0.5 — A0 завершён: `zb_entity_ensure_entity` (resolve+ensure, atomic
+            rollback при падении Domain) + интеграционный `test_entity_identity` в реальном
+            in-memory Domain (first/repeat/order/reboot/re-pair/endpoint-change/atomicity).
+            Identity доказана reboot/order/re-interview independent; registry RAM-only намеренно;
+            persistent mutable id не нужен. zigbee 6/6, IDF зелёный. Canonical state всё ещё raw
 ```
 
 ## 7. Открытые вопросы

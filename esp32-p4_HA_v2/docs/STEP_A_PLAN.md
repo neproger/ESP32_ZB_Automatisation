@@ -205,10 +205,16 @@ A0  logical entity identity + binding model (canonical state пока не ме�
     [x] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью: `zb_entity_resolve`
               (find→derive→add) + `zigbee_entity_ensure` → Domain `HA_ENTITY_ENTITY`; in-RAM
               binding (identity детерминирована → reboot-stable без persistence)
-    [ ] A0.5  tests: reboot / порядок discovery / re-interview → та же identity
+    [x] A0.5  интеграционный тест identity (resolve+ensure в реальном in-memory Domain):
+              reboot / порядок discovery / re-interview / re-pair / endpoint-change /
+              cluster-independence / atomicity
 
 > A0.1 **намеренно не определяет**, как выводится `entity_id`. Derivation — adapter-seed
 > based, реализуется в A0.3. Здесь зафиксирован только логический контракт Entity.
+
+**A0 завершён.** Logical Entity + Zigbee binding + детерминированная identity доказаны
+(reboot/order/re-interview independent; registry RAM-only намеренно; persistent mutable
+entity-id mapping не требуется). Canonical state пока raw — **A1 следующий**.
 
 A1  canonical state (entity_id, property_id)
       Новый тип canonical state; physical ZCL key уходит в adapter binding.

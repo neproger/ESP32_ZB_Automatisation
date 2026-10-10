@@ -12,8 +12,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "domain/domain.h"
+#include "ha_model/ha_entities.h" /* HA_ENTITY_ENTITY */
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_zigbee.h" /* ha_device_uid_t */
+#include "sys/sys_error.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +53,15 @@ bool zb_entity_binding_add(zb_entity_binding_t *list, size_t capacity, size_t *c
 bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count,
                        ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out_entity_id,
                        bool *out_created);
+
+/*
+ * Полный flow A0.4 (host-testable): resolve (find/derive/add binding) → ensure Entity в Domain.
+ * Атомарность: если разрешение создало привязку, а `domain_entity_put` упал — привязка
+ * откатывается (не остаётся привязка без Entity). Идемпотентно.
+ */
+sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list, size_t capacity,
+                                    size_t *count, ha_device_uid_t uid, uint8_t endpoint,
+                                    ha_entity_id_t *out_entity_id);
 
 #ifdef __cplusplus
 }
