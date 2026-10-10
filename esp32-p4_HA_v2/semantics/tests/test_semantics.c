@@ -3,7 +3,9 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "ha_model/ha_automation.h"
 #include "ha_model/ha_properties.h"
+#include "ha_model/ha_system.h"
 #include "ha_model/ha_zigbee.h"
 
 /*
@@ -338,8 +340,8 @@ static void test_decode_event(void)
 
     CHECK(!semantics_decode_event(NULL, &device, &ev));
 
-    /* общий event vocabulary включает системный тик */
-    CHECK(HA_EVENT_MINUTE_TICK == 4);
+    /* общий event vocabulary включает системный тик (проверка на этапе компиляции) */
+    _Static_assert(HA_EVENT_MINUTE_TICK == 4, "event id ABI");
 }
 
 /* --- Capabilities: cluster→properties, property→actions (5.0) --- */
@@ -374,6 +376,121 @@ static void test_capabilities(void)
     CHECK(n == 1 && acts[0] == HA_ACTION_SET);
 }
 
+/* --- Компилятор semantic-правила → physical record (5.3.6) --- */
+static void test_compile_automation(void)
+{
+    const ha_device_uid_t DEV = 0x00124B000A1B2C3Dull;
+    ha_automation_record_t rec = {0};
+
+    /* temperature > 25 → POWER ON */
+    ha_sem_rule_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger.kind = HA_TRIGGER_STATE;
+    rule.trigger.device_uid = DEV;
+    rule.trigger.endpoint = 2;
+    rule.trigger.property = HA_PROPERTY_TEMPERATURE;
+    rule.trigger.op = HA_CONDITION_OP_GT;
+    rule.trigger.edge = HA_TRIGGER_EDGE_ANY;
+    rule.trigger.value = 25.0f;
+    rule.action.target.device_uid = 0; /* то же устройство */
+    rule.action.target.endpoint = 2;
+    rule.action.target.property = HA_PROPERTY_POWER;
+    rule.action.action = HA_ACTION_ON;
+    rule.action.value_kind = HA_COMMAND_VALUE_NONE;
+    CHECK(semantics_compile_automation(&rule, NULL, &rec));
+    CHECK(rec.enabled == 1 && rec.trigger_kind == HA_TRIGGER_STATE);
+    CHECK(rec.trigger_b.state.device_uid == DEV && rec.trigger_b.state.endpoint == 2);
+    CHECK(rec.trigger_b.state.cluster_id == HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT);
+    CHECK(rec.trigger_b.state.attr_id == HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE);
+    CHECK(rec.trigger_a.state_value == 25.0f);
+    CHECK(rec.action_device_uid == 0 && rec.action_endpoint == 2);
+    CHECK(rec.action_cluster_id == HA_ZB_CLUSTER_ON_OFF && rec.action_command_id == HA_ZB_CMD_ON_OFF_ON);
+    CHECK(rec.action_args_len == 0);
+
+    /* POWER == true AND temperature > 25 → BRIGHTNESS 70% */
+    rule.trigger.property = HA_PROPERTY_POWER;
+    rule.trigger.op = HA_CONDITION_OP_EQ;
+    rule.trigger.value = 1.0f;
+    rule.conditions_count = 1;
+    rule.conditions[0].ref.device_uid = DEV;
+    rule.conditions[0].ref.endpoint = 2;
+    rule.conditions[0].ref.property = HA_PROPERTY_TEMPERATURE;
+    rule.conditions[0].op = HA_CONDITION_OP_GT;
+    rule.conditions[0].value = 25.0f;
+    rule.action.target.property = HA_PROPERTY_BRIGHTNESS;
+    rule.action.action = HA_ACTION_SET;
+    rule.action.value_kind = HA_COMMAND_VALUE_SCALAR;
+    rule.action.value.kind = HA_VALUE_FLOAT;
+    rule.action.value.value.f32 = 70.0f;
+    CHECK(semantics_compile_automation(&rule, NULL, &rec));
+    CHECK(rec.trigger_b.state.cluster_id == HA_ZB_CLUSTER_ON_OFF);
+    CHECK(rec.conditions_count == 1);
+    CHECK(rec.conditions[0].cluster_id == HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT);
+    CHECK(rec.conditions[0].op == HA_CONDITION_OP_GT && rec.conditions[0].value == 25.0f);
+    CHECK(rec.action_cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL &&
+          rec.action_command_id == HA_ZB_CMD_LEVEL_MOVE_TO_LEVEL);
+    CHECK(rec.action_args_len == 3 && rec.action_args[0] == 178);
+
+    /* TIME 07:30 → POWER ON */
+    ha_sem_rule_t t = {0};
+    t.enabled = 1;
+    t.trigger.kind = HA_TRIGGER_TIME;
+    t.trigger.minutes_of_day = 7 * 60 + 30;
+    t.trigger.weekday_mask = 0x7f;
+    t.action.target.device_uid = DEV;
+    t.action.target.endpoint = 2;
+    t.action.target.property = HA_PROPERTY_POWER;
+    t.action.action = HA_ACTION_ON;
+    CHECK(semantics_compile_automation(&t, NULL, &rec));
+    CHECK(rec.trigger_kind == HA_TRIGGER_TIME);
+    CHECK(rec.trigger_a.time.minutes_of_day == 450 && rec.trigger_a.time.weekday_mask == 0x7f);
+
+    /* system MINUTE_TICK → POWER ON (event id адресуется напрямую) */
+    ha_sem_rule_t sysr = {0};
+    sysr.enabled = 1;
+    sysr.trigger.kind = HA_TRIGGER_DEVICE_EVENT;
+    sysr.trigger.device_uid = HA_SYSTEM_DEVICE_UID;
+    sysr.trigger.event_id = HA_EVENT_MINUTE_TICK;
+    sysr.action.target.device_uid = DEV;
+    sysr.action.target.endpoint = 2;
+    sysr.action.target.property = HA_PROPERTY_POWER;
+    sysr.action.action = HA_ACTION_ON;
+    CHECK(semantics_compile_automation(&sysr, NULL, &rec));
+    CHECK(rec.trigger_b.event.device_uid == HA_SYSTEM_DEVICE_UID);
+    CHECK(rec.trigger_b.event.command_id == HA_EVENT_MINUTE_TICK);
+
+    ha_device_record_t dev = {0};
+
+    /* кнопка SINGLE_PRESS → TOGGLE: общий профиль неоднозначен → отказ */
+    ha_sem_rule_t btn = {0};
+    btn.enabled = 1;
+    btn.trigger.kind = HA_TRIGGER_DEVICE_EVENT;
+    btn.trigger.device_uid = DEV;
+    btn.trigger.event_id = HA_EVENT_SINGLE_PRESS;
+    btn.action.target.device_uid = DEV;
+    btn.action.target.endpoint = 2;
+    btn.action.target.property = HA_PROPERTY_POWER;
+    btn.action.action = HA_ACTION_TOGGLE;
+    CHECK(!semantics_compile_automation(&btn, &dev, &rec));
+
+    /* BETWEEN на STATE-триггере → отказ (нет второго порога в legacy) */
+    ha_sem_rule_t btw = {0};
+    btw.enabled = 1;
+    btw.trigger.kind = HA_TRIGGER_STATE;
+    btw.trigger.device_uid = DEV;
+    btw.trigger.endpoint = 2;
+    btw.trigger.property = HA_PROPERTY_TEMPERATURE;
+    btw.trigger.op = HA_CONDITION_OP_BETWEEN;
+    btw.trigger.value = 10.0f;
+    btw.trigger.value2 = 15.0f;
+    btw.action.target.property = HA_PROPERTY_POWER;
+    btw.action.action = HA_ACTION_ON;
+    CHECK(!semantics_compile_automation(&btw, NULL, &rec));
+
+    uint16_t cmd = 0;
+    CHECK(!semantics_event_to_physical(&dev, HA_EVENT_SINGLE_PRESS, &cmd));
+}
+
 int main(void)
 {
     test_parity();
@@ -383,6 +500,7 @@ int main(void)
     test_build_command();
     test_decode_event();
     test_capabilities();
+    test_compile_automation();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");

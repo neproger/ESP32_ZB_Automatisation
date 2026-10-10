@@ -73,6 +73,16 @@ typedef enum {
      *   value: NONE — нет; SCALAR @13 u8 kind + @14 u32 bits; XY @13 f32 x + @17 f32 y
      */
     WEB_CMD_SEMANTIC_COMMAND = 14,
+    /*
+     * Semantic-правило (аддитивно): браузер шлёт логическую модель, Web компилирует её в
+     * physical 144-байтную запись. LE, переменной длины:
+     *   u64 id, u8 enabled, u8 trigger_kind
+     *   trigger: EVENT{u64 device_uid,u8 event_id} | TIME{u16 minutes,u8 mask} |
+     *            STATE{u64 device_uid,u8 ep,u16 property,u8 op,u8 edge,f32 value,f32 value2}
+     *   u8 conditions_count; conditions[]{u64 uid,u8 ep,u16 property,u8 op,f32 value,f32 value2}
+     *   action{u64 uid,u8 ep,u16 property,u8 action,u8 value_kind[,value]}
+     */
+    WEB_CMD_SEMANTIC_AUTOMATION_PUT = 15,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

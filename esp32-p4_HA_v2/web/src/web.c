@@ -514,6 +514,141 @@ static uint16_t web_do_automation_put(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/*
+ * Semantic-правило → physical record: браузер не знает offsets/args/cluster/command id.
+ * Компилирует мост; невыразимое правило (неоднозначный event, BETWEEN-триггер) отвергается.
+ */
+static uint16_t web_do_semantic_automation_put(const uint8_t *a, size_t len)
+{
+    size_t o = 0;
+#define NEED(n)                         \
+    do {                                \
+        if (o + (size_t)(n) > len) {    \
+            return SYS_CODE_INVALID_SIZE; \
+        }                               \
+    } while (0)
+
+    NEED(10);
+    const uint64_t id = get_u64(a + o);
+    o += 8;
+    ha_sem_rule_t rule = {0};
+    rule.enabled = a[o++];
+    rule.trigger.kind = a[o++];
+
+    switch (rule.trigger.kind) {
+    case (uint8_t)HA_TRIGGER_DEVICE_EVENT:
+        NEED(9);
+        rule.trigger.device_uid = get_u64(a + o);
+        o += 8;
+        rule.trigger.event_id = (ha_event_id_t)a[o++];
+        break;
+    case (uint8_t)HA_TRIGGER_TIME:
+        NEED(3);
+        rule.trigger.minutes_of_day = get_u16(a + o);
+        o += 2;
+        rule.trigger.weekday_mask = a[o++];
+        break;
+    case (uint8_t)HA_TRIGGER_STATE: {
+        NEED(21);
+        rule.trigger.device_uid = get_u64(a + o);
+        o += 8;
+        rule.trigger.endpoint = a[o++];
+        rule.trigger.property = (ha_property_id_t)get_u16(a + o);
+        o += 2;
+        rule.trigger.op = a[o++];
+        rule.trigger.edge = a[o++];
+        const uint32_t bv = get_u32(a + o);
+        o += 4;
+        const uint32_t b2 = get_u32(a + o);
+        o += 4;
+        memcpy(&rule.trigger.value, &bv, sizeof(bv));
+        memcpy(&rule.trigger.value2, &b2, sizeof(b2));
+        break;
+    }
+    default:
+        return SYS_CODE_INVALID_ARG;
+    }
+
+    NEED(1);
+    rule.conditions_count = a[o++];
+    if (rule.conditions_count > HA_AUTOMATION_CONDITIONS_MAX) {
+        return SYS_CODE_INVALID_ARG;
+    }
+    for (uint8_t i = 0; i < rule.conditions_count; i++) {
+        NEED(20);
+        ha_sem_condition_t *c = &rule.conditions[i];
+        c->ref.device_uid = get_u64(a + o);
+        o += 8;
+        c->ref.endpoint = a[o++];
+        c->ref.property = (ha_property_id_t)get_u16(a + o);
+        o += 2;
+        c->op = a[o++];
+        const uint32_t bv = get_u32(a + o);
+        o += 4;
+        const uint32_t b2 = get_u32(a + o);
+        o += 4;
+        memcpy(&c->value, &bv, sizeof(bv));
+        memcpy(&c->value2, &b2, sizeof(b2));
+    }
+
+    NEED(13);
+    ha_sem_action_t *act = &rule.action;
+    act->target.device_uid = get_u64(a + o);
+    o += 8;
+    act->target.endpoint = a[o++];
+    act->target.property = (ha_property_id_t)get_u16(a + o);
+    o += 2;
+    act->action = (ha_action_id_t)a[o++];
+    act->value_kind = a[o++];
+    if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
+        NEED(5);
+        const ha_value_kind_t kind = (ha_value_kind_t)a[o++];
+        const uint32_t bits = get_u32(a + o);
+        o += 4;
+        if (!bits_to_value(kind, bits, &act->value)) {
+            return SYS_CODE_INVALID_ARG;
+        }
+    } else if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
+        NEED(8);
+        const uint32_t bx = get_u32(a + o);
+        o += 4;
+        const uint32_t by = get_u32(a + o);
+        o += 4;
+        memcpy(&act->x, &bx, sizeof(bx));
+        memcpy(&act->y, &by, sizeof(by));
+        if (!isfinite(act->x) || !isfinite(act->y)) {
+            return SYS_CODE_INVALID_ARG;
+        }
+    } else if (act->value_kind != (uint8_t)HA_COMMAND_VALUE_NONE) {
+        return SYS_CODE_INVALID_ARG;
+    }
+    if (o != len) { /* strict: без хвостовых байтов */
+        return SYS_CODE_INVALID_SIZE;
+    }
+#undef NEED
+
+    ha_device_record_t device = {0};
+    const ha_device_record_t *device_ptr = NULL;
+    if (rule.trigger.device_uid != 0 &&
+        sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE,
+                                 &rule.trigger.device_uid, &device))) {
+        device_ptr = &device;
+    }
+
+    ha_automation_record_t record = {0};
+    if (!semantics_compile_automation(&rule, device_ptr, &record)) {
+        return SYS_CODE_INVALID_ARG;
+    }
+
+    const ha_automation_key_t key = {.id = id};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
+                                              &record, &meta, &changed);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
 {
     if (len != sizeof(ha_device_uid_t)) {
@@ -719,6 +854,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_SEMANTIC_COMMAND:
         status = web_do_semantic_command(args, len);
+        break;
+    case WEB_CMD_SEMANTIC_AUTOMATION_PUT:
+        status = web_do_semantic_automation_put(args, len);
         break;
     case WEB_CMD_DEVICE_RENAME:
         status = web_do_device_rename(args, len);

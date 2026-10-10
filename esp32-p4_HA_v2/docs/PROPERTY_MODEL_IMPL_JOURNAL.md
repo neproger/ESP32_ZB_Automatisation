@@ -176,8 +176,14 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       Web декодирует, валидирует (размер/форма/NaN-Inf) → `semantics_build_command()` →
       `HA_CMD_ZIGBEE_CLUSTER`. `web_do_zb_command()` оставлен transitional. Живые контролы
       (`EndpointWidgets`, `StateAttr`) отправляют семантику; `commands.js` больше не кодирует ZCL
-- [ ] **5.3** Automation UI — «компилятор»: semantic trigger/condition/action → текущая 144-байтная
-      запись (один раз, при сохранении)
+- [x] **5.3.0–5.3.3** semantic-правило: модель `ha_sem_rule_t` (`ha_automation.h`); компилятор в
+      `semantics` (`semantics_compile_automation`) + reverse `semantics_event_to_physical`;
+      `WEB_CMD_SEMANTIC_AUTOMATION_PUT` (LE DTO) → сначала в 144-байтную запись, потом в Domain
+- [x] **5.3.6** host-тест: semantic rule → точная физическая запись (temp>25→POWER ON; POWER==1
+      +temp>25→BRIGHTNESS 70%; TIME 07:30→POWER ON; system MINUTE_TICK→cmd=event id); невыразимое
+      (неоднозначный event, BETWEEN на STATE-триггере) → отказ
+- [ ] **5.3.4** Automation UI полностью semantic (шлёт `ha_sem_rule_t` DTO, не offsets/args)
+- [x] **5.3.5** старый `WEB_CMD_AUTOMATION_PUT` оставлен transitional
 - [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
 - [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
       `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
@@ -245,6 +251,9 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Identity semantic state в store — `(uid, ep, property)`, не raw key | уже сейчас совпадает с будущей canonical identity шага A |
 | 2026-10-10 | unit/range/name не дублируем в каждом state-кадре | descriptor — отдельно (`semantics.js`/vocabulary), в кадре только address+property+typed value |
 | 2026-10-10 | Общий codec semantic-value (kind+bits) для command и state | одна реализация, без дублей |
+| 2026-10-10 | Компиляция semantic-правила в 144-байтную запись — в мосте (`semantics_compile_automation`), не в JS | frontend не знает offsets/args/cluster/command id; host-testable |
+| 2026-10-10 | EVENT компилируется только если reverse однозначен (`semantics_event_to_physical`); иначе отказ | не сохранять неверное правило; system-события — напрямую event id |
+| 2026-10-10 | BETWEEN на STATE-триггере → отказ компиляции | в legacy-записи триггера нет второго порога |
 
 ## 5. От чего отказались
 
@@ -292,6 +301,9 @@ TLV / самоописание приложения              — запре�
             WEB_MSG_SEMANTIC_STATE/_REMOVE (аддитивно, snapshot+delta, UNKNOWN не шлём); store по
             (uid,ep,property); EndpointWidgets читает семантику. Строгие размеры DTO в 5.2.
             Проверено на P4: 0x12-состояния корректны (system time, POWER, BRIGHTNESS, COLOR, TEMP)
+2026-10-10  фаза 5.3.0–5.3.3/5.3.6: ha_sem_rule_t + semantics_compile_automation +
+            semantics_event_to_physical; WEB_CMD_SEMANTIC_AUTOMATION_PUT (LE DTO). Host-тест
+            компилятора; на P4 проверено (TIME→POWER ON → запись #100). 5.3.4 (UI) — далее
 ```
 
 ## 7. Открытые вопросы

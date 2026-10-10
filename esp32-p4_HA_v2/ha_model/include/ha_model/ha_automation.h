@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ha_model/ha_properties.h"
 #include "ha_model/ha_zigbee.h"
 
 #ifdef __cplusplus
@@ -126,6 +127,58 @@ typedef struct {
     /* Условия (AND); первые conditions_count значимы. */
     ha_automation_condition_t conditions[HA_AUTOMATION_CONDITIONS_MAX];
 } ha_automation_record_t;
+
+/*
+ * Семантическая форма правила (фаза 5.3): то, чем оперирует UI/BFF. Компилируется
+ * один раз в physical `ha_automation_record_t` (transitional ABI). Здесь нет cluster/
+ * attr/command id — только property/action/value; physical-координаты даёт мост.
+ */
+typedef struct {
+    ha_device_uid_t device_uid; /* 0 — устройство-источник (в условии/действии) */
+    uint8_t endpoint;           /* 0 — любой */
+    ha_property_id_t property;
+} ha_sem_ref_t;
+
+typedef struct {
+    uint8_t kind; /* ha_automation_trigger_kind_t */
+    /* EVENT */
+    ha_device_uid_t device_uid;
+    ha_event_id_t event_id;
+    /* TIME */
+    uint16_t minutes_of_day;
+    uint8_t weekday_mask;
+    /* STATE */
+    uint8_t endpoint;
+    ha_property_id_t property;
+    uint8_t op;    /* ha_condition_op_t */
+    uint8_t edge;  /* ha_automation_trigger_edge_t */
+    float value;   /* STATE-порог (нижняя граница для BETWEEN) */
+    float value2;  /* BETWEEN: верхняя граница */
+} ha_sem_trigger_t;
+
+typedef struct {
+    ha_sem_ref_t ref;
+    uint8_t op; /* ha_condition_op_t */
+    float value;
+    float value2;
+} ha_sem_condition_t;
+
+typedef struct {
+    ha_sem_ref_t target;
+    ha_action_id_t action;
+    uint8_t value_kind; /* HA_COMMAND_VALUE_* */
+    ha_value_t value;   /* SCALAR */
+    float x;            /* XY */
+    float y;
+} ha_sem_action_t;
+
+typedef struct {
+    uint8_t enabled;
+    ha_sem_trigger_t trigger;
+    uint8_t conditions_count;
+    ha_sem_condition_t conditions[HA_AUTOMATION_CONDITIONS_MAX];
+    ha_sem_action_t action;
+} ha_sem_rule_t;
 
 #ifdef __cplusplus
 static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
