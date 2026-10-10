@@ -910,6 +910,57 @@ static uint16_t web_do_device_rename(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* Canonical команда по entity (A6.1c): строим ha_property_command_t и постим HA_CMD_PROPERTY. */
+static uint16_t web_do_property_command(const uint8_t *args, size_t len)
+{
+    if (len < 12) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    ha_property_command_t request = {0};
+    request.entity = get_u64(args + 0);
+    request.property = (ha_property_id_t)get_u16(args + 8);
+    request.action = args[10];
+    const uint8_t value_kind = args[11];
+
+    if (value_kind == (uint8_t)HA_COMMAND_VALUE_NONE) {
+        if (len != 12) {
+            return SYS_CODE_INVALID_SIZE;
+        }
+    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
+        if (len != 17) {
+            return SYS_CODE_INVALID_SIZE;
+        }
+        request.value.kind = HA_COMMAND_VALUE_SCALAR;
+        if (!bits_to_value((ha_value_kind_t)args[12], get_u32(args + 13), &request.value.value.scalar)) {
+            return SYS_CODE_INVALID_ARG;
+        }
+    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
+        if (len != 20) {
+            return SYS_CODE_INVALID_SIZE;
+        }
+        uint32_t xb = get_u32(args + 12);
+        uint32_t yb = get_u32(args + 16);
+        float x = 0.0f;
+        float y = 0.0f;
+        memcpy(&x, &xb, sizeof(x));
+        memcpy(&y, &yb, sizeof(y));
+        if (!isfinite(x) || !isfinite(y)) {
+            return SYS_CODE_INVALID_ARG;
+        }
+        request.value.kind = HA_COMMAND_VALUE_XY;
+        request.value.value.xy.x = x;
+        request.value.value.xy.y = y;
+    } else {
+        return SYS_CODE_INVALID_ARG;
+    }
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    const sys_error_t err =
+        domain_post(s_domain, HA_CMD_PROPERTY, &request, sizeof(request), NULL, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
 /* Rename логической Entity по entity_id (A6.1): adapter не участвует. */
 static uint16_t web_do_entity_rename(const uint8_t *args, size_t len)
 {
@@ -1454,6 +1505,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_ENTITY_RENAME:
         status = web_do_entity_rename(args, len);
+        break;
+    case WEB_CMD_PROPERTY_COMMAND:
+        status = web_do_property_command(args, len);
         break;
     case WEB_CMD_AUTOMATION_PUT:
         status = web_do_automation_put(args, len);

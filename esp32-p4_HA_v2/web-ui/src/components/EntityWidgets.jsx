@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { store } from '../store.js'
-import { semanticCommand } from '../proto.js'
+import { propertyCommand } from '../proto.js'
 import { rgbHexToXy, xyToRgbHex } from '../color.js'
 import { PROPERTY, ACTION, propertyName, propertyWidget, propertyUnit } from '../semantics.js'
 
-/* Текущее семантическое значение свойства (в человеческих единицах). */
-function sem(uid, ep, property) {
-  return store.semState(uid, ep, property)?.value
+// Контролы Entity по её capability: свойство + действия. Identity — entity_id, без uid/ep.
+
+function sem(entity, property) {
+  return store.semState(entity, property)?.value
 }
 
 function SliderRow({ label, unit, min, max, step, current, send }) {
@@ -22,12 +23,12 @@ function SliderRow({ label, unit, min, max, step, current, send }) {
   )
 }
 
-function ColorControl({ uid, ep, current }) {
+function ColorControl({ entity, current }) {
   const [color, setColor] = useState(current)
   useEffect(() => setColor(current), [current])
   const send = (hex) => {
     const { x, y } = rgbHexToXy(hex)
-    store.send(semanticCommand({ uid, ep, property: PROPERTY.COLOR, action: ACTION.SET, value: { xy: { x: x / 65535, y: y / 65535 } } }))
+    store.send(propertyCommand({ entity, property: PROPERTY.COLOR, action: ACTION.SET, value: { xy: { x: x / 65535, y: y / 65535 } } }))
   }
   return (
     <div className="wcol">
@@ -37,55 +38,54 @@ function ColorControl({ uid, ep, current }) {
   )
 }
 
-/* Контрол по semantic capability: свойство + действия. Без cluster/commands.js. */
-function Capability({ uid, ep, cap }) {
+function Capability({ entity, cap }) {
   const widget = propertyWidget(cap.property)
   const has = (a) => cap.actions.includes(a)
+  const set = (property, action, value) => store.send(propertyCommand({ entity, property, action, value }))
 
   if (widget === 'switch') {
-    const onoff = sem(uid, ep, PROPERTY.POWER) === true
-    const set = (action) => store.send(semanticCommand({ uid, ep, property: PROPERTY.POWER, action }))
+    const onoff = sem(entity, PROPERTY.POWER) === true
     return (
       <div className="wrow">
         <label className="wlabel">
           <input type="checkbox" checked={onoff}
-            onChange={(e) => (e.target.checked ? has(ACTION.ON) && set(ACTION.ON) : has(ACTION.OFF) && set(ACTION.OFF))} />
+            onChange={(e) => (e.target.checked ? has(ACTION.ON) && set(PROPERTY.POWER, ACTION.ON) : has(ACTION.OFF) && set(PROPERTY.POWER, ACTION.OFF))} />
           Вкл
         </label>
-        {has(ACTION.TOGGLE) && <button onClick={() => set(ACTION.TOGGLE)}>Toggle</button>}
+        {has(ACTION.TOGGLE) && <button onClick={() => set(PROPERTY.POWER, ACTION.TOGGLE)}>Toggle</button>}
       </div>
     )
   }
   if (widget === 'level') {
-    const v = sem(uid, ep, PROPERTY.BRIGHTNESS)
+    const v = sem(entity, PROPERTY.BRIGHTNESS)
     return <SliderRow label="Уровень" unit="%" min={0} max={100} current={v != null ? Math.round(v) : 0}
-      send={(val) => store.send(semanticCommand({ uid, ep, property: PROPERTY.BRIGHTNESS, action: ACTION.SET, value: val }))} />
+      send={(val) => set(PROPERTY.BRIGHTNESS, ACTION.SET, val)} />
   }
   if (widget === 'color_temp') {
-    const v = sem(uid, ep, PROPERTY.COLOR_TEMPERATURE)
+    const v = sem(entity, PROPERTY.COLOR_TEMPERATURE)
     return <SliderRow label="Темп. цвета" unit=" K" min={2000} max={6500} step={100} current={v != null ? Math.round(v) : 3000}
-      send={(val) => store.send(semanticCommand({ uid, ep, property: PROPERTY.COLOR_TEMPERATURE, action: ACTION.SET, value: val }))} />
+      send={(val) => set(PROPERTY.COLOR_TEMPERATURE, ACTION.SET, val)} />
   }
   if (widget === 'color') {
-    const x = sem(uid, ep, PROPERTY.COLOR_X)
-    const y = sem(uid, ep, PROPERTY.COLOR_Y)
-    return <ColorControl uid={uid} ep={ep} current={x != null && y != null ? xyToRgbHex(x * 65535, y * 65535) : '#ffffff'} />
+    const x = sem(entity, PROPERTY.COLOR_X)
+    const y = sem(entity, PROPERTY.COLOR_Y)
+    return <ColorControl entity={entity} current={x != null && y != null ? xyToRgbHex(x * 65535, y * 65535) : '#ffffff'} />
   }
   if (widget === 'indicator') {
-    const v = sem(uid, ep, cap.property)
+    const v = sem(entity, cap.property)
     return <div className="wrow"><span className="sensor">{propertyName(cap.property)}: <b>{v == null ? '—' : v ? 'да' : 'нет'}</b></span></div>
   }
-  const v = sem(uid, ep, cap.property)
+  const v = sem(entity, cap.property)
   const unit = propertyUnit(cap.property)
   return <div className="wrow"><span className="sensor">{propertyName(cap.property)}: <b>{v == null ? '—' : `${Number(v).toFixed(1)} ${unit}`}</b></span></div>
 }
 
-export default function EndpointWidgets({ uid, ep }) {
-  const caps = store.endpointCapabilities(uid, ep)
+export default function EntityWidgets({ entity }) {
+  const caps = store.capabilities(entity)
   if (caps.length === 0) return null
   return (
     <div className="widgets">
-      {caps.map((c) => <Capability key={c.property} uid={uid} ep={ep} cap={c} />)}
+      {caps.map((c) => <Capability key={c.property} entity={entity} cap={c} />)}
     </div>
   )
 }

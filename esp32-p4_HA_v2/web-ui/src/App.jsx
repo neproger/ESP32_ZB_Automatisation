@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from './useStore.js'
-import Devices from './pages/Devices.jsx'
-import DeviceDetail from './pages/DeviceDetail.jsx'
+import Entities from './pages/Entities.jsx'
+import EntityDetail from './pages/EntityDetail.jsx'
 import Automations from './pages/Automations.jsx'
 import Events from './pages/Events.jsx'
 import Groups from './pages/Groups.jsx'
@@ -11,9 +11,9 @@ import SystemStatus from './components/SystemStatus.jsx'
 
 // Ручной роутинг поверх hash: сервер отдаёт один документ, навигация — на клиенте.
 function useHash() {
-  const [hash, setHash] = useState(() => location.hash || '#/devices')
+  const [hash, setHash] = useState(() => location.hash || '#/entities')
   useEffect(() => {
-    const on = () => setHash(location.hash || '#/devices')
+    const on = () => setHash(location.hash || '#/entities')
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
@@ -24,7 +24,7 @@ export default function App() {
   const store = useStore()
   const hash = useHash()
   const [page, arg] = hash.replace(/^#\/?/, '').split('/')
-  const current = page || 'devices'
+  const current = page || 'entities'
   const online = store.status === 'online'
 
   return (
@@ -32,8 +32,8 @@ export default function App() {
       <header>
         <h1>ESP32-P4 HA</h1>
         <nav>
-          <a href="#/devices" className={current === 'devices' || current === 'device' ? 'active' : ''}>
-            Устройства
+          <a href="#/entities" className={current === 'entities' || current === 'entity' ? 'active' : ''}>
+            Сущности
           </a>
           <a href="#/groups" className={current === 'groups' ? 'active' : ''}>
             Экраны
@@ -65,10 +65,10 @@ export default function App() {
           <Diagnostics />
         ) : current === 'events' ? (
           <Events />
-        ) : current === 'device' ? (
-          <DeviceDetail uid={arg} />
+        ) : current === 'entity' ? (
+          <EntityDetail id={arg} />
         ) : (
-          <Devices />
+          <Entities />
         )}
       </main>
     </>

@@ -1,4 +1,4 @@
-import { MSG, decodeFrame, snapshot } from './proto.js'
+import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
 import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
 import { VALUE_KIND } from './semantics.js'
 
@@ -23,10 +23,19 @@ const maps = {
 const semStates = new Map()
 // Семантические правила: ключ — id. { id, representable, rule|null }.
 const semAutomations = new Map()
-// Семантические capabilities endpoint'а: ключ "uid:ep" → [{ property, actions }].
-const semCapabilities = new Map()
 // Semantic group items: ключ "group:uid:ep:property" → { groupId, uid, ep, property, order, title }.
 const semGroupItems = new Map()
+
+// Canonical v3 (Шаг A, A6.1c): identity = entity_id. Это карты обычного UI.
+const semEntities = new Map()      // entityStr → { id, name }
+const propStates = new Map()       // `${entity}:${property}` → { entity, property, kind, value }
+const propCapabilities = new Map() // entityStr → [{ property, actions }]
+const dec = new TextDecoder()
+const textAt = (payload, off, len) => {
+  const tb = new Uint8Array(payload.buffer, payload.byteOffset + off, len)
+  const end = tb.indexOf(0)
+  return dec.decode(end === -1 ? tb : tb.subarray(0, end))
+}
 
 // Декод rule-wire (зеркало web.c:web_encode_sem_rule). Без ZCL.
 function decodeSemRule(dv, base) {
@@ -121,34 +130,14 @@ function onFrame(buf) {
     for (const k in maps) maps[k].clear()
     semStates.clear()
     semAutomations.clear()
-    semCapabilities.clear()
     semGroupItems.clear()
+    semEntities.clear()
+    propStates.clear()
+    propCapabilities.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
     syncing = false
-    emit()
-    return
-  }
-  if (frame.type === MSG.SEMANTIC_CAPABILITIES || frame.type === MSG.SEMANTIC_CAPABILITIES_REMOVE) {
-    const uid = payload.getBigUint64(0, true)
-    const ep = payload.getUint8(8)
-    const key = `${uid}:${ep}`
-    if (frame.type === MSG.SEMANTIC_CAPABILITIES_REMOVE) {
-      semCapabilities.delete(key)
-    } else {
-      const count = payload.getUint8(9)
-      let o = 10
-      const caps = []
-      for (let i = 0; i < count; i++) {
-        const property = payload.getUint16(o, true); o += 2
-        const ac = payload.getUint8(o); o += 1
-        const actions = []
-        for (let j = 0; j < ac; j++) actions.push(payload.getUint8(o++))
-        caps.push({ property, actions })
-      }
-      semCapabilities.set(key, caps)
-    }
     emit()
     return
   }
@@ -216,6 +205,59 @@ function onFrame(buf) {
         default: value = null
       }
       semStates.set(key, { uid, ep, property, kind, value })
+    }
+    emit()
+    return
+  }
+  if (frame.type === MSG3.ENTITY || frame.type === MSG3.ENTITY_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = id.toString()
+    if (frame.type === MSG3.ENTITY_REMOVE) {
+      semEntities.delete(key)
+    } else {
+      semEntities.set(key, { id, name: textAt(payload, 8, 32) })
+    }
+    emit()
+    return
+  }
+  if (frame.type === MSG3.PROPERTY_STATE || frame.type === MSG3.PROPERTY_STATE_REMOVE) {
+    const entity = payload.getBigUint64(0, true)
+    const property = payload.getUint16(8, true)
+    const key = `${entity}:${property}`
+    if (frame.type === MSG3.PROPERTY_STATE_REMOVE) {
+      propStates.delete(key)
+    } else {
+      const kind = payload.getUint8(10)
+      let value = null
+      switch (kind) {
+        case VALUE_KIND.BOOL: value = payload.getUint32(11, true) !== 0; break
+        case VALUE_KIND.I32: value = payload.getInt32(11, true); break
+        case VALUE_KIND.U32:
+        case VALUE_KIND.ENUM: value = payload.getUint32(11, true); break
+        case VALUE_KIND.FLOAT: value = payload.getFloat32(11, true); break
+        default: value = null
+      }
+      propStates.set(key, { entity, property, kind, value })
+    }
+    emit()
+    return
+  }
+  if (frame.type === MSG3.CAPABILITIES || frame.type === MSG3.CAPABILITIES_REMOVE) {
+    const key = payload.getBigUint64(0, true).toString()
+    if (frame.type === MSG3.CAPABILITIES_REMOVE) {
+      propCapabilities.delete(key)
+    } else {
+      const count = payload.getUint8(8)
+      let o = 9
+      const caps = []
+      for (let i = 0; i < count; i++) {
+        const property = payload.getUint16(o, true); o += 2
+        const ac = payload.getUint8(o); o += 1
+        const actions = []
+        for (let j = 0; j < ac; j++) actions.push(payload.getUint8(o++))
+        caps.push({ property, actions })
+      }
+      propCapabilities.set(key, caps)
     }
     emit()
     return
@@ -309,18 +351,35 @@ export const store = {
   get semAutomations() {
     return semAutomations
   },
-  get semCapabilities() {
-    return semCapabilities
-  },
   get semGroupItems() {
     return semGroupItems
   },
-  endpointCapabilities(uid, ep) {
-    return semCapabilities.get(`${uid}:${ep}`) || []
-  },
-  // Семантическое состояние по (uid, ep, property): { uid, ep, property, kind, value } | undefined.
-  semState(uid, ep, property) {
+  // v2 (transitional, до A4/A6.2): состояние по (uid, ep, property).
+  semStateLegacy(uid, ep, property) {
     return semStates.get(`${uid}:${ep}:${property}`)
+  },
+
+  // --- canonical v3 (A6.1c): обычный UI работает только с entity_id -------------
+  get semEntities() {
+    return semEntities
+  },
+  entityName(entity) {
+    return semEntities.get(entity.toString())?.name ?? ''
+  },
+  // Свойства Entity (с известным значением): [{ entity, property, kind, value }].
+  entityProperties(entity) {
+    const prefix = `${entity}:`
+    const out = []
+    for (const [key, st] of propStates) if (key.startsWith(prefix)) out.push(st)
+    out.sort((a, b) => a.property - b.property)
+    return out
+  },
+  // { entity, property, kind, value } | undefined.
+  semState(entity, property) {
+    return propStates.get(`${entity}:${property}`)
+  },
+  capabilities(entity) {
+    return propCapabilities.get(entity.toString()) || []
   },
   isMarkedForRemoval(uid) {
     return maps[ENTITY.DEVICE_REMOVE].has(`rm:${uid}`)

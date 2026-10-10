@@ -33,7 +33,7 @@ function devicesWithStates(s) {
 }
 
 function stateValue(s, uid, ep, property) {
-  const v = s.semState(uid, ep, property)?.value
+  const v = s.semStateLegacy(uid, ep, property)?.value
   if (v == null) return '—'
   if (typeof v === 'boolean') return v ? 'да' : 'нет'
   return `${Number(v).toFixed(1)} ${propertyUnit(property)}`

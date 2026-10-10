@@ -6,7 +6,7 @@ import { WEATHER_DEVICE_UID, weatherConditionName } from '../weather.js'
 // Время/локация/погода: только semantic-состояния системного девайса (без cluster/raw).
 export default function SystemStatus() {
   const s = useStore()
-  const sem = (p) => s.semState(SYSTEM_DEVICE_UID, SYSTEM_ENDPOINT, p)?.value
+  const sem = (p) => s.semStateLegacy(SYSTEM_DEVICE_UID, SYSTEM_ENDPOINT, p)?.value
   const hour = sem(PROPERTY.SYSTEM_HOUR)
   const minute = sem(PROPERTY.SYSTEM_MINUTE)
   const mask = sem(PROPERTY.SYSTEM_WEEKDAY_MASK)

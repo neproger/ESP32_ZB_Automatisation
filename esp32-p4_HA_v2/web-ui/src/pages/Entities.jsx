@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { permitJoin } from '../proto.js'
-import DeviceCard from '../components/DeviceCard.jsx'
+import EntityCard from '../components/EntityCard.jsx'
 
 const JOIN_SECONDS = 180
 
-export default function Devices() {
+// Список логических сущностей (identity = entity_id, с именами). Без uid/endpoint.
+export default function Entities() {
   const s = useStore()
   const [status, setStatus] = useState('')
-  const devices = [...s.devices.values()]
+  const list = [...s.semEntities.values()]
+  list.sort((a, b) => (a.name || '').localeCompare(b.name || '') || (a.id < b.id ? -1 : 1))
 
   const openNetwork = () => {
     store.send(permitJoin(JOIN_SECONDS))
@@ -19,14 +21,14 @@ export default function Devices() {
   return (
     <section>
       <h2>
-        Устройства
+        Сущности
         <button onClick={openNetwork}>Подключить устройства</button>
       </h2>
       {status && <p className="muted pad">{status}</p>}
-      {devices.length === 0 ? (
-        <p className="muted pad">Устройств пока нет</p>
+      {list.length === 0 ? (
+        <p className="muted pad">Сущностей пока нет</p>
       ) : (
-        devices.map((d) => <DeviceCard key={d.key.uid.toString()} dev={d} />)
+        list.map((e) => <EntityCard key={e.id.toString()} ent={e} />)
       )}
     </section>
   )

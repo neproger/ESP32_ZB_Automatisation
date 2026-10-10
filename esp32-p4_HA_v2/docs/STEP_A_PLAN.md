@@ -280,7 +280,12 @@ A6  WS v3                                                                       
                 [x] canonical CAPABILITIES: HA_ENTITY_CAPABILITIES (ключ entity_id, форма
                     ha_capabilities.h); adapter при интервью пишет через
                     semantics_endpoint_capabilities; web отдаёт v3 CAPABILITIES snapshot+delta
-                [ ] frontend identity = entity_id (semState(entity,property)/capabilities(entity))
+                [x] frontend identity = entity_id: обычный UI (Entities/EntityDetail/EntityCard/
+                    EntityWidgets) читает v3 ENTITY/PROPERTY_STATE/CAPABILITIES; rename → ENTITY_RENAME;
+                    control → WEB_CMD_PROPERTY_COMMAND (уже готовый HA_CMD_PROPERTY). Удалены
+                    DeviceCard/DeviceDetail/EndpointWidgets/Devices; device-remove → Diagnostics.
+                    v2 semStates (semStateLegacy) остаются только в Groups/SystemStatus (A4/A6.2).
+                    <b>A6.1 завершён.</b>
       Далее возврат к A3.3–A3.5, затем A4, затем A6.2+ (AUTOMATION/GROUP_ITEM/EVENT/commands)
       и A6.x (удаление v2 semantic transitional wire).
 

@@ -37,6 +37,8 @@ export const CMD = {
   SEMANTIC_AUTOMATION_PUT: 15,
   SEMANTIC_GROUP_ITEM_PUT: 16,
   SEMANTIC_GROUP_ITEM_REMOVE: 17,
+  ENTITY_RENAME: 18,
+  PROPERTY_COMMAND: 19,
 }
 
 // v3 canonical (Шаг A, A6.0): identity = entity_id, без uid/endpoint/cluster/attr.
@@ -229,12 +231,34 @@ export function locationPut(uid, r) {
   return encodeCommand(CMD.LOCATION_PUT, out)
 }
 
-// DEVICE_RENAME args = u64 uid | char name[32].
-export function renameDevice(uid, name) {
+// ENTITY_RENAME args = u64 entity_id | char name[32] (Шаг A, A6.1c). Имя принадлежит Entity.
+export function entityRename(entityId, name) {
   const out = new Uint8Array(8 + 32)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, uid, true)
-  const bytes = new TextEncoder().encode(name).subarray(0, 31)
+  new DataView(out.buffer).setBigUint64(0, BigInt(entityId), true)
+  const bytes = new TextEncoder().encode(name || '').subarray(0, 31)
   out.set(bytes, 8)
-  return encodeCommand(CMD.DEVICE_RENAME, out)
+  return encodeCommand(CMD.ENTITY_RENAME, out)
 }
+
+// PROPERTY_COMMAND (Шаг A, A6.1c): u64 entity @0, u16 property @8, u8 action @10, u8 kind @11;
+// SCALAR @12 u8 scalar_kind + f32 @13; XY @12 f32 x + f32 y. Без uid/ep/cluster/attr.
+export function propertyCommand({ entity, property, action, value }) {
+  const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
+  const size = 12 + (kind === COMMAND_VALUE.SCALAR ? 5 : kind === COMMAND_VALUE.XY ? 8 : 0)
+  const out = new Uint8Array(size)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(entity), true)
+  dv.setUint16(8, property, true)
+  dv.setUint8(10, action)
+  dv.setUint8(11, kind)
+  if (kind === COMMAND_VALUE.SCALAR) {
+    dv.setUint8(12, VALUE_KIND.FLOAT)
+    dv.setFloat32(13, Number(value), true)
+  } else if (kind === COMMAND_VALUE.XY) {
+    dv.setFloat32(12, Number(value.xy.x), true)
+    dv.setFloat32(16, Number(value.xy.y), true)
+  }
+  return encodeCommand(CMD.PROPERTY_COMMAND, out)
+}
+
+// DEVICE_RENAME (v2) не используется обычным UI: rename идёт по entity_id (entityRename).

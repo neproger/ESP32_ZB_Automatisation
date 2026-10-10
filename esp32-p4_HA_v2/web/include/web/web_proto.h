@@ -118,6 +118,12 @@ typedef enum {
     /* Переименование Entity (Шаг A, A6.1): u64 entity_id @0, char name[32] @8. Adapter не
      * участвует — имя принадлежит Entity. */
     WEB_CMD_ENTITY_RENAME = 18,
+    /*
+     * Canonical команда по entity (Шаг A, A6.1c): u64 entity_id @0, u16 property @8, u8 action
+     * @10, u8 value_kind @11; SCALAR @12 u8 kind + u32 bits; XY @12 f32 x + f32 y. Backend →
+     * HA_CMD_PROPERTY (adapter резолвит entity→addr, мост кодирует). Без uid/ep/cluster/attr.
+     */
+    WEB_CMD_PROPERTY_COMMAND = 19,
 } web_cmd_t;
 
 /*

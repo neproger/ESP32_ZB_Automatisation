@@ -479,6 +479,16 @@ TLV / самоописание приложения              — запре�
             Все три canonical read-сущности v3 готовы (ENTITY/PROPERTY_STATE/CAPABILITIES);
             источника uid/ep нет. semantics 1/1, ha_model 4/4, zigbee 9/9, IDF зелёный.
             Осталось: frontend identity = entity_id (A6.1c).
+2026-10-10  шаг A, A6.1c — frontend identity = entity_id (A6.1 завершён). store: canonical
+            v3 maps semEntities/propStates/propCapabilities; semState(entity,property),
+            capabilities(entity), entityName, entityProperties; v2 semState → semStateLegacy.
+            Обычный UI: Entities/EntityDetail/EntityCard/EntityWidgets на entity; rename →
+            entityRename → WEB_CMD_ENTITY_RENAME → HA_CMD_ENTITY_RENAME; control →
+            propertyCommand → WEB_CMD_PROPERTY_COMMAND → HA_CMD_PROPERTY (A3.2). Удалены
+            DeviceCard/DeviceDetail/EndpointWidgets/Devices и endpointCapabilities/renameDevice;
+            device-remove перенесён в Diagnostics. uid/ep остаются только в Diagnostics (raw),
+            Groups/Automation/SystemStatus (transitional A4/A6.2). web-ui + IDF зелёные.
+            Дальше: возврат к A3.3 (engine на ha_rule_t) → A3.4 → A3.5.
 ```
 
 ## 7. Открытые вопросы
