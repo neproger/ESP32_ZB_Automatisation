@@ -58,6 +58,13 @@ typedef enum {
 ha_entity_id_t ha_entity_id_derive(uint32_t issuer, const void *seed, size_t seed_len);
 
 /*
+ * Детерминированный id singleton-сущности namespace (системное устройство, погода):
+ * derive(issuer, пустой seed). Один issuer → один стабильный id, отличный от NONE/SOURCE
+ * и от Zigbee-сущностей (у них seed непустой). Для сущностей без физической привязки.
+ */
+ha_entity_id_t ha_entity_singleton(uint32_t issuer);
+
+/*
  * SipHash-2-4 (reference). Экспортируется как чистый стабильный примитив (используется
  * derivation; проверяется на официальном тест-векторе). key — 16 байт.
  */

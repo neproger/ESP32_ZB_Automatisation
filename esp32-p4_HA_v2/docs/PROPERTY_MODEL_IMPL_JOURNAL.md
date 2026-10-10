@@ -435,6 +435,13 @@ TLV / самоописание приложения              — запре�
 2026-10-10  шаг A, A3.0 — хранимая entity-адресованная форма правила `ha_rule_t`
             (ha_model/ha_rule.h): refs (entity,property), entity-событие, action по entity,
             сентинел HA_ENTITY_ID_SOURCE; детерминированный POD 192B. ha_model 4/4. A3.1+ — дальше
+2026-10-10  шаг A, A3.1 — событие entity-тегировано. `ha_event_t` = {id, source_entity, value}
+            (source_entity вместо device_uid+endpoint). `semantics_decode_event` источник не
+            знает (только event_id) — source_entity ставит adapter через zigbee_entity_lookup.
+            Entity-факт EVENT (HA_ENTITY_ENTITY) публикуется параллельно legacy DEVICE-факту
+            (payload-shim остаётся для старого engine до A3.3). System-события → ENTITY_SYSTEM
+            (ha_entity_singleton(SYSTEM)). ha_model 4/4 (test_entity+singleton), semantics 1/1,
+            zigbee 8/8 (test_event_entity: stable source/event_id, endpoint-scoped, system) — IDF зелёный
 ```
 
 ## 7. Открытые вопросы

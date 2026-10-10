@@ -508,8 +508,7 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
             entry->command_id == physical->command_id && model_matches(model, entry->model_match)) {
             ha_event_t event = {0};
             event.id = entry->event;
-            event.device_uid = physical->device_uid;
-            event.endpoint = physical->endpoint;
+            event.source_entity = HA_ENTITY_ID_NONE; /* источник задаёт adapter (binding) */
             event.value.kind = HA_VALUE_NONE;
             *out = event;
             return true;

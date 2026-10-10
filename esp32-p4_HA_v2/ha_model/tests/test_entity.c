@@ -74,11 +74,27 @@ static void test_derive(void)
     CHECK(a == 0xdf803cbaf588876dull);
 }
 
+/* Singleton-id (A3.1): стабилен, не NONE/SOURCE, отличается по issuer и от Zigbee-seed. */
+static void test_singleton(void)
+{
+    const ha_entity_id_t sys = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
+    const ha_entity_id_t weather = ha_entity_singleton(HA_ENTITY_ISSUER_WEATHER);
+
+    CHECK(sys != HA_ENTITY_ID_NONE);
+    CHECK(sys != HA_ENTITY_ID_SOURCE);
+    CHECK(sys != weather);
+    CHECK(sys == ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM)); /* детерминизм */
+
+    uint8_t zig[9] = {0};
+    CHECK(sys != ha_entity_id_derive(HA_ENTITY_ISSUER_SYSTEM, zig, sizeof(zig)));
+}
+
 int main(void)
 {
     test_key();
     test_siphash_vector();
     test_derive();
+    test_singleton();
 
     if (g_failures == 0) {
         printf("all entity tests passed\n");

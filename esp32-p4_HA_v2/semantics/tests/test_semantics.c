@@ -319,8 +319,7 @@ static void test_decode_event(void)
     ha_event_t ev = {0};
     CHECK(semantics_decode_event(&phys, &device, &ev));
     CHECK(ev.id == HA_EVENT_SINGLE_PRESS);
-    CHECK(ev.device_uid == phys.device_uid);
-    CHECK(ev.endpoint == 1);
+    CHECK(ev.source_entity == HA_ENTITY_ID_NONE); /* источник задаёт adapter (binding) */
     CHECK(ev.value.kind == HA_VALUE_NONE);
 
     /* ON/OFF от контроллера — тоже нажатие кнопки. */

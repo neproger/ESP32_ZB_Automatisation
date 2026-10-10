@@ -16,6 +16,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ha_model/ha_entity.h" /* ha_entity_id_t (источник события) */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -152,9 +154,8 @@ typedef struct {
  */
 typedef struct {
     ha_event_id_t id;
-    uint64_t device_uid;
-    uint8_t endpoint;
-    ha_value_t value; /* HA_VALUE_NONE, если payload нет */
+    ha_entity_id_t source_entity; /* кто вызвал; HA_ENTITY_ID_NONE — неизвестен */
+    ha_value_t value;             /* HA_VALUE_NONE, если payload нет */
 } ha_event_t;
 
 /*

@@ -248,7 +248,10 @@ A3  Automation persistent semantic                                              
       entities/группы правил — erase/migrate.
       [x] A3.0  хранимая форма `ha_rule_t` (entity-адресованная, entity-событие, action по
                 entity; детерминированный POD 192; сентинел HA_ENTITY_ID_SOURCE) + test_rule
-      [ ] A3.1  событие entity-тегировано (ha_event_t / event payload несёт entity_id)
+      [x] A3.1  событие entity-тегировано: ha_event_t = {id, source_entity, value};
+                semantics_decode_event не знает источник, adapter ставит source_entity
+                (zigbee_entity_lookup); entity-факт EVENT на HA_ENTITY_ENTITY публикуется
+                параллельно legacy DEVICE-факту; system → ENTITY_SYSTEM (ha_entity_singleton)
       [ ] A3.2  adapter API «команда по entity» (reverse entity→addr + semantics_build_command)
       [ ] A3.3  engine на ha_rule_t: STATE по canonical, EVENT по entity, action через adapter
       [ ] A3.4  Web хранит ha_rule_t напрямую (без compile/decompile) + erase старых правил

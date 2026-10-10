@@ -103,3 +103,8 @@ ha_entity_id_t ha_entity_id_derive(uint32_t issuer, const void *seed, size_t see
     const uint64_t id = ha_siphash24(HA_ENTITY_SIPHASH_KEY, buf, 8 + seed_len);
     return (id == HA_ENTITY_ID_NONE) ? (ha_entity_id_t)1 : (ha_entity_id_t)id;
 }
+
+ha_entity_id_t ha_entity_singleton(uint32_t issuer)
+{
+    return ha_entity_id_derive(issuer, NULL, 0);
+}

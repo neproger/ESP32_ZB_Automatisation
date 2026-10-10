@@ -140,6 +140,29 @@ static sys_error_t zigbee_permit_execute(domain_command_t type, const void *args
  * ha_zb_event_t. Payload — ВРЕМЕННЫЙ compatibility shim для legacy-правил DEVICE_EVENT
  * (удалить на шаге A, когда запись правила получит semantic event id).
  */
+/*
+ * A3.1: semantic event адресуется источником-Entity, а не (uid, endpoint). Публикуется
+ * отдельным фактом на HA_ENTITY_ENTITY, чтобы новый engine (A3.3) матчил (source, event_id)
+ * без device_uid/raw. Параллельно живёт legacy DEVICE-факт до A3.3.
+ */
+static void zigbee_publish_entity_event(ha_entity_id_t source_entity, ha_event_id_t event_id)
+{
+    if (source_entity == HA_ENTITY_ID_NONE) {
+        return;
+    }
+    const domain_fact_target_t target = {
+        .entity = (domain_entity_t)HA_ENTITY_ENTITY,
+        .key = &source_entity,
+    };
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
+    meta.value.v.u32 = (uint32_t)event_id;
+    const uint8_t payload = (uint8_t)event_id;
+    domain_payload_ref_t ref = 0;
+    (void)domain_payload_put(s_domain, &target, &meta, &payload, sizeof(payload), &ref);
+}
+
 static void zigbee_event_publish(const zigbee_event_t *event)
 {
     ha_zb_event_t physical = {0};
@@ -155,6 +178,10 @@ static void zigbee_event_publish(const zigbee_event_t *event)
         s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &event->device_uid, &device));
     ha_event_t semantic = {0};
     const bool mapped = semantics_decode_event(&physical, has_device ? &device : NULL, &semantic);
+
+    ha_entity_id_t source_entity = HA_ENTITY_ID_NONE;
+    (void)zigbee_entity_lookup(event->device_uid, event->endpoint, &source_entity);
+    semantic.source_entity = source_entity;
 
     const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,
@@ -179,6 +206,11 @@ static void zigbee_event_publish(const zigbee_event_t *event)
              (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
              (unsigned)event->command_id, (unsigned)event->endpoint,
              (unsigned)(mapped ? semantic.id : HA_EVENT_NONE));
+
+    /* A3.1: параллельный entity-адресованный факт (источник = Entity устройства-endpoint). */
+    if (mapped) {
+        zigbee_publish_entity_event(source_entity, semantic.id);
+    }
 }
 
 /*

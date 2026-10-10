@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_entity.h"
 #include "ha_model/ha_properties.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
@@ -131,9 +132,14 @@ static void put_location(const char *name, double lat, double lon, int32_t tz_of
     put_location_record(&rec);
 }
 
-/* Событие системного девайса: факт EVENT, value.enum = event_id (payload не используется). */
+/*
+ * Событие системного девайса. A3.1: semantic event адресуется источником-Entity
+ * (ENTITY_SYSTEM), а не физическим uid. Legacy DEVICE-факт публикуется параллельно до A3.3.
+ */
 static void publish_event(uint8_t event_id)
 {
+    const uint8_t payload = event_id;
+
     const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
     const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,
@@ -143,10 +149,20 @@ static void publish_event(uint8_t event_id)
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
     meta.value.v.u32 = event_id;
-
     domain_payload_ref_t ref = 0;
-    const uint8_t payload = event_id;
     (void)domain_payload_put(s_domain, &target, &meta, &payload, sizeof(payload), &ref);
+
+    const ha_entity_id_t source = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
+    const domain_fact_target_t etarget = {
+        .entity = (domain_entity_t)HA_ENTITY_ENTITY,
+        .key = &source,
+    };
+    domain_fact_meta_t emeta = {0};
+    emeta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    emeta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
+    emeta.value.v.u32 = event_id;
+    domain_payload_ref_t eref = 0;
+    (void)domain_payload_put(s_domain, &etarget, &emeta, &payload, sizeof(payload), &eref);
 }
 
 /* --- сеть / время ------------------------------------------------------- */
