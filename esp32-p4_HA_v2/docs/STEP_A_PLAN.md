@@ -202,7 +202,9 @@ A0  logical entity identity + binding model (canonical state пока не ме�
               (без поля transport), двусторонний lookup physical↔entity; host-тест
     [x] A0.3  derivation `entity_id`: `ha_entity_id_derive` + `ha_siphash24` (fixed key,
               LE32(issuer)||LE32(len)||seed, 0→1); golden/вектор-тесты
-    [ ] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
+    [x] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью: `zb_entity_resolve`
+              (find→derive→add) + `zigbee_entity_ensure` → Domain `HA_ENTITY_ENTITY`; in-RAM
+              binding (identity детерминирована → reboot-stable без persistence)
     [ ] A0.5  tests: reboot / порядок discovery / re-interview → та же identity
 
 > A0.1 **намеренно не определяет**, как выводится `entity_id`. Derivation — adapter-seed

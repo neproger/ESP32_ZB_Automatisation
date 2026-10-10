@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
@@ -26,7 +27,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 13
+#define APP_ENTITY_TYPES 14
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -44,6 +45,7 @@
 #define APP_WIFI_KNOWN_CAPACITY 8
 #define APP_WIFI_STATUS_CAPACITY 1
 #define APP_SETTINGS_CAPACITY 1
+#define APP_ENTITY_CAPACITY 32
 
 #define DISPATCHER_TASK_STACK 4096
 #define DISPATCHER_TASK_PRIORITY 6
@@ -193,6 +195,16 @@ static const domain_entity_desc_t settings_desc = {
     .persist_key = "settings",
 };
 
+/* Логическая сущность (Шаг A): identity детерминирована в adapter'е, record минимален (RAM). */
+static const domain_entity_desc_t entity_desc = {
+    .type = (domain_entity_t)HA_ENTITY_ENTITY,
+    .key_size = sizeof(ha_entity_key_t),
+    .payload_size = sizeof(ha_entity_record_t),
+    .capacity = APP_ENTITY_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
 /* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
 static const domain_entity_desc_t automation_desc = {
     .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
@@ -306,6 +318,9 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &settings_desc), "register settings")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &entity_desc), "register entity")) {
         return;
     }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {

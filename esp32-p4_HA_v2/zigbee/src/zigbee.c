@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "zigbee/zigbee_command.h"
 #include "zigbee/zigbee_diag.h"
+#include "zigbee/zigbee_entity_registry.h"
 #include "zigbee/zigbee_radio.h"
 #include "zigbee/zigbee_state.h"
 #include "semantics/semantics.h"
@@ -225,6 +226,12 @@ static void zigbee_task(void *arg)
                 } else {
                     ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u",
                              (unsigned long long)result.uid, (unsigned)result.endpoint_count);
+                    /* A0.4: каждый endpoint — логическая Entity (identity детерминирована). */
+                    for (uint8_t i = 0; i < result.endpoint_count; i++) {
+                        ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
+                        (void)zigbee_entity_ensure(s_domain, result.uid, result.endpoints[i].endpoint,
+                                                   &entity_id);
+                    }
                 }
             }
             continue;

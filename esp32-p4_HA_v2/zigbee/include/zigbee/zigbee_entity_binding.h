@@ -34,6 +34,23 @@ bool zb_entity_binding_find_entity(const zb_entity_binding_t *list, size_t count
 bool zb_entity_binding_find_physical(const zb_entity_binding_t *list, size_t count,
                                      ha_entity_id_t entity_id, ha_device_uid_t *uid, uint8_t *endpoint);
 
+/* Канонический Zigbee seed: [device_uid LE(8) | endpoint(1)] (9 байт), без memcpy(struct). */
+bool zb_entity_seed(ha_device_uid_t uid, uint8_t endpoint, uint8_t out[9]);
+
+/* Добавить привязку в fixed-capacity список. false — нет места/NULL. */
+bool zb_entity_binding_add(zb_entity_binding_t *list, size_t capacity, size_t *count,
+                           ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t entity_id);
+
+/*
+ * Resolve-or-create (A0.4): (uid, endpoint) → entity_id. Есть привязка — вернуть её;
+ * нет — построить seed, вывести `ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, ...)` и
+ * добавить привязку. Идемпотентно; порядок discovery не влияет. `out_created` — создана ли
+ * новая привязка. false — не удалось (нет места); ложная identity НЕ создаётся.
+ */
+bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count,
+                       ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out_entity_id,
+                       bool *out_created);
+
 #ifdef __cplusplus
 }
 #endif

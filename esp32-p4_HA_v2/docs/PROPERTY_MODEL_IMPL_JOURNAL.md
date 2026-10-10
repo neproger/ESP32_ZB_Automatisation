@@ -303,6 +303,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | A0.2 binding — Zigbee-private `{ entity_id, device_uid, endpoint }`, без поля `transport` | таблица Zigbee-specific; transport не тащим в binding |
 | 2026-10-10 | seed для A0.3 — канонические байты `[uid LE(8) | endpoint(1)]`, issuer (не transport) | нельзя `hash(&struct)` (padding/endian); cluster/attr в seed не входят (это Property) |
 | 2026-10-10 | Derivation: `SipHash-2-4(fixed project key, LE32(issuer)||LE32(len)||seed)`, `0→1` | стабильный u64 из короткого seed; fixed key → reboot-stable; не CRC/packing/random |
+| 2026-10-10 | A0.4 registry — in-RAM, без NVS | derivation детерминирована → после reboot та же identity, persistence не нужна |
+| 2026-10-10 | Entity ensure — только при успешном resolve; ошибка → явная, ложной Entity нет | принцип «не публиковать ложное» |
 
 ## 5. От чего отказались
 
@@ -394,6 +396,11 @@ TLV / самоописание приложения              — запре�
 2026-10-10  шаг A, A0.3: `ha_entity_id_derive` + `ha_siphash24` (fixed key,
             LE32(issuer)||LE32(len)||seed, 0→1); `ha_entity_issuer_t`. Golden + официальный
             SipHash-вектор в `test_entity`. §5 закрыт (algorithm fixed). IDF зелёный
+2026-10-10  шаг A, A0.4: `zb_entity_seed`/`zb_entity_resolve` (find→derive→add, идемпотентно,
+            order-independent); `zigbee_entity_ensure` (NVS не нужен — derivation детерминирована)
+            → Domain `HA_ENTITY_ENTITY` (RAM, зарегистрирован в bootstrap). Bridge ensure-ит Entity
+            после интервью. Тесты binding: first/repeat/2-ep/order/reboot/re-pair/endpoint-change/
+            capacity (zigbee 5/5). Boot P4 чистый; canonical state пока raw. IDF зелёный
 ```
 
 ## 7. Открытые вопросы

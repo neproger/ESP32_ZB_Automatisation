@@ -53,6 +53,8 @@ typedef enum {
     HA_ENTITY_WIFI_STATUS = 12,
     /* Настройки приложения (docs/services/SETTINGS.md). Форма — ha_model/ha_settings.h. */
     HA_ENTITY_SETTINGS = 13,
+    /* Логическая сущность (Шаг A): transport-agnostic identity. Форма — ha_model/ha_entity.h. */
+    HA_ENTITY_ENTITY = 14,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32
