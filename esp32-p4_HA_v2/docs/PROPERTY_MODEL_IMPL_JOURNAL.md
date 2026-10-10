@@ -296,6 +296,7 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Group item с UNKNOWN property не публикуется в semantic stream | UI всё равно нечего с ним делать; raw остаётся в Diagnostics |
 | 2026-10-10 | raw Zigbee — только на Diagnostics-экране (без нового backend protocol) | raw ENTITY уже приходит; это допустимое применение transitional ABI |
 | 2026-10-10 | Frontend dead paths удалены (zbCommand/automationPut/encodeAutomationRecord/groupItem raw/capabilities.js/commands.js) | обычный UI — клиент semantic/domain API; ZCL только в Diagnostics |
+| 2026-10-10 | Перед шагом A проведён архитектурный аудит ветки (`da30b93`); план — `STEP_A_PLAN.md` | A меняет identity/persistence/wire — необратимо; сначала проверка |
 
 ## 5. От чего отказались
 
@@ -371,6 +372,9 @@ TLV / самоописание приложения              — запре�
             uidHex/hex16 + Diagnostics. Греп-чек: обычные страницы без ZCL. Прошито на P4
     → **Фаза 5 закрыта**: обычный web-ui не интерпретирует cluster/attr/ZCL;
       ZCL остался только в Diagnostics + transitional Web↔Domain raw ABI (до шага A)
+2026-10-10  перед шагом A: baseline зафиксирован (`da30b93`), архитектурный аудит по 8
+            направлениям → `STEP_A_PLAN.md` (цель, фазы A0–A8, persistence/failure/identity).
+            Открытые решения — §5 плана. Код A не начат
 ```
 
 ## 7. Открытые вопросы
