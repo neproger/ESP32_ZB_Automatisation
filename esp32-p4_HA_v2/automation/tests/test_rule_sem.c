@@ -43,6 +43,8 @@ static void test_event(void)
     /* SOURCE: любое событие этого id от источника-триггера. */
     rule.trigger.entity = HA_ENTITY_ID_SOURCE;
     CHECK(automation_rule_sem_event_matches(&rule, F, HA_EVENT_SINGLE_PRESS));
+    /* источник неизвестен → SOURCE не резолвится, матча нет */
+    CHECK(!automation_rule_sem_event_matches(&rule, HA_ENTITY_ID_NONE, HA_EVENT_SINGLE_PRESS));
 
     rule.enabled = 0;
     CHECK(!automation_rule_sem_event_matches(&rule, F, HA_EVENT_SINGLE_PRESS));
@@ -74,6 +76,8 @@ static void test_state_and_edge(void)
     /* SOURCE резолвится в источник */
     rule.trigger.entity = HA_ENTITY_ID_SOURCE;
     CHECK(automation_rule_sem_state_matches(&rule, F, F, HA_PROPERTY_POWER, 1.0, true, 0.0));
+    /* у изменения нет адреса → ветка не наша */
+    CHECK(!automation_rule_sem_state_matches(&rule, F, HA_ENTITY_ID_NONE, HA_PROPERTY_POWER, 1.0, true, 0.0));
 
     /* FALLING */
     rule.trigger.entity = E;

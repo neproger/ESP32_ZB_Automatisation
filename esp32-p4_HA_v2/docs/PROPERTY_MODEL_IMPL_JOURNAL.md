@@ -516,6 +516,15 @@ TLV / самоописание приложения              — запре�
             • Behavior parity test (TIME→ON, TEMP>25→ON, EVENT→TOGGLE, cond+SET, SOURCE).
             automation 1/1, semantics 1/1, ha_model 4/4, zigbee 9/9, IDF + web-ui зелёные.
             A3 реально закончена. Дальше: A4 (group_item semantic), затем A6.2+ остаток, A1.4/A1.5.
+2026-10-10  шаг A, ревью A3-цепочки — границы EVENT→ha_rule_t→engine→HA_CMD_PROPERTY→adapter:
+            uid/endpoint/cluster/attr в rule-model/engine/wire отсутствуют (только в комментариях);
+            storage — только ha_rule_t (без physical shadow); transitional (compile/decompile,
+            ha_automation_record_t, ha_sem_rule_t, SEMANTIC_AUTOMATION) остались только в
+            комментариях. Failure-семантика: нет entity/property/значения → условие false или
+            триггер пропускается; unmapped action/нерезолвимая цель → команда не постится (лог).
+            Найдено/исправлено: правило с HA_ENTITY_ID_SOURCE могло совпасть при source_entity==NONE
+            (resolve давал NONE==NONE). Добавлены guard'ы (source/entity NONE → no match) +
+            тесты. automation 1/1, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

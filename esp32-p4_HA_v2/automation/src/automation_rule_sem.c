@@ -56,6 +56,9 @@ bool automation_rule_sem_event_matches(const ha_rule_t *rule, ha_entity_id_t sou
         rule->trigger.kind != (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
         return false;
     }
+    if (source_entity == HA_ENTITY_ID_NONE) {
+        return false; /* источник неизвестен — правило не приписываем */
+    }
     if (automation_rule_sem_resolve(rule->trigger.entity, source_entity) != source_entity) {
         return false;
     }
@@ -80,6 +83,9 @@ bool automation_rule_sem_state_matches(const ha_rule_t *rule, ha_entity_id_t sou
 {
     if (rule == NULL || rule->enabled == 0 || rule->trigger.kind != (uint8_t)HA_TRIGGER_STATE) {
         return false;
+    }
+    if (entity == HA_ENTITY_ID_NONE) {
+        return false; /* у изменения нет адреса — ветка не наша */
     }
     if (automation_rule_sem_resolve(rule->trigger.entity, source_entity) != entity) {
         return false;
