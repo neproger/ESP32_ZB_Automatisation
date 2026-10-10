@@ -3,9 +3,10 @@ idf_component_register(
         "src/system.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        domain
-        ha_model
+REQUIRES
+    domain
+    ha_model
+    semantics
         sys
     PRIV_REQUIRES
         esp_netif

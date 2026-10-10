@@ -15,9 +15,11 @@
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_properties.h"
+#include "ha_model/ha_state.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_zigbee.h"
+#include "semantics/semantics.h"
 
 /*
  * Сервис времени (docs/services/SYSTEM.md). Пока только время: SNTP даёт UTC, GeoIP —
@@ -101,6 +103,27 @@ static void put_state(uint16_t cluster_id, uint16_t attr_id, uint32_t raw, uint8
     bool changed = false;
     (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_STATE, &key, &rec, &meta,
                             &changed);
+
+    /*
+     * Canonical property state (Шаг A): Automation читает время как семантику
+     * (ENTITY_SYSTEM, property), а не как cluster/attr. Смысл даёт мост.
+     */
+    const ha_property_id_t property = semantics_property_from_key(&key);
+    if (property == HA_PROPERTY_UNKNOWN) {
+        return;
+    }
+    ha_value_t value = {0};
+    if (!semantics_state_value(&key, &rec, &value)) {
+        return;
+    }
+    const ha_state_key_t property_key = {
+        .entity = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM),
+        .property = property,
+    };
+    const ha_state_record_t property_rec = {.value = value};
+    bool property_changed = false;
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &property_key,
+                            &property_rec, &meta, &property_changed);
 }
 
 static bool get_location(ha_location_record_t *out)

@@ -497,6 +497,12 @@ TLV / самоописание приложения              — запре�
             IDF зелёный. Подключение к Domain (engine читает HA_ENTITY_AUTOMATION=ha_rule_t,
             PROPERTY_STATE, HA_CMD_PROPERTY) неотделимо от A3.4: таблица automation должна
             стать ha_rule_t, а web читает/пишет ту же таблицу → нужен Automation v3 wire (A6.2).
+2026-10-10  шаг A, A3 блок (шаг 0) — canonical System properties (prereq для TIME).
+            system.c put_state параллельно пишет HA_ENTITY_PROPERTY_STATE (ENTITY_SYSTEM,
+            property) через мост — Automation/TIME читают время как семантику, не cluster/attr.
+            system REQUIRES semantics. IDF зелёный. Далее: A6.2 Automation v3 wire → A3.4
+            storage cutover (ha_rule_t) → A3.3 wiring engine → Web/UI cutover → удаление
+            compile/decompile physical automation → A3.5 behaviour parity.
 ```
 
 ## 7. Открытые вопросы
