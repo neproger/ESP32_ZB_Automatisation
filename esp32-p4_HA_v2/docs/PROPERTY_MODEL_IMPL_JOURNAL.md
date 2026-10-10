@@ -182,7 +182,10 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 - [x] **5.3.6** host-тест: semantic rule → точная физическая запись (temp>25→POWER ON; POWER==1
       +temp>25→BRIGHTNESS 70%; TIME 07:30→POWER ON; system MINUTE_TICK→cmd=event id); невыразимое
       (неоднозначный event, BETWEEN на STATE-триггере) → отказ
-- [ ] **5.3.4** Automation UI полностью semantic (шлёт `ha_sem_rule_t` DTO, не offsets/args)
+- [x] **5.3.4a** обратная проекция `semantics_decompile_automation` (physical → semantic) + host-тест;
+      невыразимое правило → `false` (Web/UI покажет как legacy/raw, не выдумывая смысл)
+- [ ] **5.3.4b** semantic automation DTO в Web (аддитивно, рядом с raw `ENTITY AUTOMATION`)
+- [ ] **5.3.4c/d** frontend читает и сохраняет только semantic rule
 - [x] **5.3.5** старый `WEB_CMD_AUTOMATION_PUT` оставлен transitional
 - [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
 - [ ] **5.5** удалить ZCL-семантику из фронта (`describeAttr`, `formatAttrValue`, `widgetKind`,
@@ -254,6 +257,8 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Компиляция semantic-правила в 144-байтную запись — в мосте (`semantics_compile_automation`), не в JS | frontend не знает offsets/args/cluster/command id; host-testable |
 | 2026-10-10 | EVENT компилируется только если reverse однозначен (`semantics_event_to_physical`); иначе отказ | не сохранять неверное правило; system-события — напрямую event id |
 | 2026-10-10 | BETWEEN на STATE-триггере → отказ компиляции | в legacy-записи триггера нет второго порога |
+| 2026-10-10 | Симметрия: `semantics_decompile_automation` (physical → semantic) для read-path UI | иначе frontend перестал бы писать ZCL, но продолжал его читать/понимать |
+| 2026-10-10 | Невыразимое правило (неизвестный event/action, transition≠0) → `false`, UI показывает legacy/raw | не выдумывать смысл там, где reverse неоднозначен |
 
 ## 5. От чего отказались
 
@@ -304,6 +309,8 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 5.3.0–5.3.3/5.3.6: ha_sem_rule_t + semantics_compile_automation +
             semantics_event_to_physical; WEB_CMD_SEMANTIC_AUTOMATION_PUT (LE DTO). Host-тест
             компилятора; на P4 проверено (TIME→POWER ON → запись #100). 5.3.4 (UI) — далее
+2026-10-10  фаза 5.3.4a: semantics_decompile_automation (physical→semantic) + round-trip и
+            отказы в host-тесте. Читающая сторона Automation готова к semantic UI
 ```
 
 ## 7. Открытые вопросы

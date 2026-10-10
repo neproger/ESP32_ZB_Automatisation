@@ -685,3 +685,165 @@ bool semantics_compile_automation(const ha_sem_rule_t *rule, const ha_device_rec
     *out = record;
     return true;
 }
+
+/* --- Обратная проекция physical → semantic (фаза 5.3.4a) --- */
+
+static bool physical_to_event(const ha_device_record_t *device, uint16_t command_id,
+                              ha_event_id_t *out)
+{
+    const char *model = (device != NULL) ? device->model : NULL;
+    const size_t count = sizeof(ZB_EVENT_MAP) / sizeof(ZB_EVENT_MAP[0]);
+    const zb_event_map_t *found = NULL;
+    size_t matches = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_EVENT_MAP[i].command_id == command_id &&
+            model_matches(model, ZB_EVENT_MAP[i].model_match)) {
+            found = &ZB_EVENT_MAP[i];
+            matches++;
+        }
+    }
+    if (matches != 1) {
+        return false;
+    }
+    *out = found->event;
+    return true;
+}
+
+/* ZCL-команда → semantic action. false — нет пары, args не формы, ненулевой transition. */
+static bool decompile_action(const ha_zb_command_t *cmd, ha_sem_action_t *out)
+{
+    const size_t count = sizeof(ZB_ACTION_MAP) / sizeof(ZB_ACTION_MAP[0]);
+    const zb_action_map_t *entry = NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_ACTION_MAP[i].cluster_id == cmd->cluster_id &&
+            ZB_ACTION_MAP[i].command_id == cmd->command_id) {
+            entry = &ZB_ACTION_MAP[i];
+            break;
+        }
+    }
+    if (entry == NULL) {
+        return false;
+    }
+    const uint8_t *a = cmd->args;
+    out->target.property = entry->property;
+    out->action = entry->action;
+    switch ((zb_cmd_encode_t)entry->encode) {
+    case ZB_CMD_NONE:
+        out->value_kind = HA_COMMAND_VALUE_NONE;
+        return true;
+    case ZB_CMD_LEVEL_PERCENT:
+    case ZB_CMD_SAT_PERCENT:
+        if (cmd->args_len != 3 || a[1] != 0 || a[2] != 0) {
+            return false; /* transition != 0 — невыразимо */
+        }
+        out->value_kind = HA_COMMAND_VALUE_SCALAR;
+        out->value.kind = HA_VALUE_FLOAT;
+        out->value.value.f32 = (float)(a[0] * 100.0 / 254.0);
+        return true;
+    case ZB_CMD_HUE_DEG:
+        if (cmd->args_len != 4 || a[1] != 0 || a[2] != 0 || a[3] != 0) {
+            return false;
+        }
+        out->value_kind = HA_COMMAND_VALUE_SCALAR;
+        out->value.kind = HA_VALUE_FLOAT;
+        out->value.value.f32 = (float)(a[0] * 360.0 / 254.0);
+        return true;
+    case ZB_CMD_MIREDS_FROM_K: {
+        if (cmd->args_len != 4 || a[2] != 0 || a[3] != 0) {
+            return false;
+        }
+        const uint16_t mired = (uint16_t)(a[0] | (a[1] << 8));
+        if (mired == 0) {
+            return false;
+        }
+        out->value_kind = HA_COMMAND_VALUE_SCALAR;
+        out->value.kind = HA_VALUE_FLOAT;
+        out->value.value.f32 = (float)(1000000.0 / mired);
+        return true;
+    }
+    case ZB_CMD_XY:
+        if (cmd->args_len != 6 || a[4] != 0 || a[5] != 0) {
+            return false;
+        }
+        out->value_kind = HA_COMMAND_VALUE_XY;
+        out->x = (float)(uint16_t)(a[0] | (a[1] << 8)) / 65535.0f;
+        out->y = (float)(uint16_t)(a[2] | (a[3] << 8)) / 65535.0f;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool semantics_decompile_automation(const ha_automation_record_t *record,
+                                    const ha_device_record_t *trigger_device, ha_sem_rule_t *out)
+{
+    if (record == NULL || out == NULL || record->conditions_count > HA_AUTOMATION_CONDITIONS_MAX) {
+        return false;
+    }
+    ha_sem_rule_t rule = {0};
+    rule.enabled = record->enabled;
+    rule.trigger.kind = record->trigger_kind;
+
+    switch ((ha_automation_trigger_kind_t)record->trigger_kind) {
+    case HA_TRIGGER_DEVICE_EVENT: {
+        rule.trigger.device_uid = record->trigger_b.event.device_uid;
+        if (record->trigger_b.event.device_uid == HA_SYSTEM_DEVICE_UID) {
+            rule.trigger.event_id = (ha_event_id_t)record->trigger_b.event.command_id;
+        } else if (!physical_to_event(trigger_device, record->trigger_b.event.command_id,
+                                      &rule.trigger.event_id)) {
+            return false; /* неоднозначно/неизвестно → legacy */
+        }
+        break;
+    }
+    case HA_TRIGGER_TIME:
+        rule.trigger.minutes_of_day = record->trigger_a.time.minutes_of_day;
+        rule.trigger.weekday_mask = record->trigger_a.time.weekday_mask;
+        break;
+    case HA_TRIGGER_STATE: {
+        const ha_zb_state_key_t key = {.cluster_id = record->trigger_b.state.cluster_id,
+                                       .attr_id = record->trigger_b.state.attr_id};
+        rule.trigger.device_uid = record->trigger_b.state.device_uid;
+        rule.trigger.endpoint = record->trigger_b.state.endpoint;
+        rule.trigger.property = semantics_property_from_key(&key);
+        if (rule.trigger.property == HA_PROPERTY_UNKNOWN) {
+            return false;
+        }
+        rule.trigger.op = record->trigger_b.state.op;
+        rule.trigger.edge = record->trigger_b.state.edge;
+        rule.trigger.value = record->trigger_a.state_value;
+        break;
+    }
+    default:
+        return false;
+    }
+
+    rule.conditions_count = record->conditions_count;
+    for (uint8_t i = 0; i < record->conditions_count; i++) {
+        const ha_zb_state_key_t key = {.cluster_id = record->conditions[i].cluster_id,
+                                       .attr_id = record->conditions[i].attr_id};
+        ha_sem_condition_t *c = &rule.conditions[i];
+        c->ref.property = semantics_property_from_key(&key);
+        if (c->ref.property == HA_PROPERTY_UNKNOWN) {
+            return false;
+        }
+        c->ref.device_uid = record->conditions[i].device_uid;
+        c->ref.endpoint = record->conditions[i].endpoint;
+        c->op = record->conditions[i].op;
+        c->value = record->conditions[i].value;
+        c->value2 = record->conditions[i].value2;
+    }
+
+    ha_zb_command_t cmd = {0};
+    cmd.cluster_id = record->action_cluster_id;
+    cmd.command_id = record->action_command_id;
+    cmd.args_len = record->action_args_len;
+    memcpy(cmd.args, record->action_args, record->action_args_len);
+    if (!decompile_action(&cmd, &rule.action)) {
+        return false;
+    }
+    rule.action.target.device_uid = record->action_device_uid;
+    rule.action.target.endpoint = record->action_endpoint;
+
+    *out = rule;
+    return true;
+}

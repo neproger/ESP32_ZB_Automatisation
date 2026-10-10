@@ -491,6 +491,100 @@ static void test_compile_automation(void)
     CHECK(!semantics_event_to_physical(&dev, HA_EVENT_SINGLE_PRESS, &cmd));
 }
 
+/* --- Обратная проекция physical → semantic (5.3.4a) --- */
+static void test_decompile_automation(void)
+{
+    const ha_device_uid_t DEV = 0x00124B000A1B2C3Dull;
+    ha_sem_rule_t rule = {0};
+    rule.enabled = 1;
+    rule.trigger.kind = HA_TRIGGER_STATE;
+    rule.trigger.device_uid = DEV;
+    rule.trigger.endpoint = 2;
+    rule.trigger.property = HA_PROPERTY_TEMPERATURE;
+    rule.trigger.op = HA_CONDITION_OP_GT;
+    rule.trigger.edge = HA_TRIGGER_EDGE_RISING;
+    rule.trigger.value = 25.0f;
+    rule.conditions_count = 1;
+    rule.conditions[0].ref.device_uid = 0;
+    rule.conditions[0].ref.endpoint = 2;
+    rule.conditions[0].ref.property = HA_PROPERTY_TEMPERATURE;
+    rule.conditions[0].op = HA_CONDITION_OP_LT;
+    rule.conditions[0].value = 30.0f;
+    rule.action.target.device_uid = DEV;
+    rule.action.target.endpoint = 2;
+    rule.action.target.property = HA_PROPERTY_BRIGHTNESS;
+    rule.action.action = HA_ACTION_SET;
+    rule.action.value_kind = HA_COMMAND_VALUE_SCALAR;
+    rule.action.value.kind = HA_VALUE_FLOAT;
+    rule.action.value.value.f32 = 70.0f;
+
+    ha_automation_record_t rec = {0};
+    ha_sem_rule_t back = {0};
+    CHECK(semantics_compile_automation(&rule, NULL, &rec));
+    CHECK(semantics_decompile_automation(&rec, NULL, &back));
+    CHECK(back.enabled == 1 && back.trigger.kind == HA_TRIGGER_STATE);
+    CHECK(back.trigger.device_uid == DEV && back.trigger.endpoint == 2);
+    CHECK(back.trigger.property == HA_PROPERTY_TEMPERATURE);
+    CHECK(back.trigger.op == HA_CONDITION_OP_GT && back.trigger.edge == HA_TRIGGER_EDGE_RISING);
+    CHECK(back.trigger.value == 25.0f);
+    CHECK(back.conditions_count == 1 && back.conditions[0].ref.property == HA_PROPERTY_TEMPERATURE);
+    CHECK(back.conditions[0].op == HA_CONDITION_OP_LT && back.conditions[0].value == 30.0f);
+    CHECK(back.action.target.property == HA_PROPERTY_BRIGHTNESS &&
+          back.action.action == HA_ACTION_SET);
+    CHECK(back.action.value_kind == HA_COMMAND_VALUE_SCALAR);
+    CHECK_NEAR(back.action.value.value.f32, 70.0f, 0.2f);
+
+    /* TIME round-trip */
+    ha_sem_rule_t t = {0};
+    t.enabled = 1;
+    t.trigger.kind = HA_TRIGGER_TIME;
+    t.trigger.minutes_of_day = 450;
+    t.trigger.weekday_mask = 0x1f;
+    t.action.target.property = HA_PROPERTY_POWER;
+    t.action.action = HA_ACTION_ON;
+    CHECK(semantics_compile_automation(&t, NULL, &rec));
+    CHECK(semantics_decompile_automation(&rec, NULL, &back));
+    CHECK(back.trigger.kind == HA_TRIGGER_TIME && back.trigger.minutes_of_day == 450 &&
+          back.trigger.weekday_mask == 0x1f);
+
+    /* system MINUTE_TICK round-trip */
+    ha_sem_rule_t sysr = {0};
+    sysr.enabled = 1;
+    sysr.trigger.kind = HA_TRIGGER_DEVICE_EVENT;
+    sysr.trigger.device_uid = HA_SYSTEM_DEVICE_UID;
+    sysr.trigger.event_id = HA_EVENT_MINUTE_TICK;
+    sysr.action.target.property = HA_PROPERTY_POWER;
+    sysr.action.action = HA_ACTION_ON;
+    CHECK(semantics_compile_automation(&sysr, NULL, &rec));
+    CHECK(semantics_decompile_automation(&rec, NULL, &back));
+    CHECK(back.trigger.kind == HA_TRIGGER_DEVICE_EVENT &&
+          back.trigger.event_id == HA_EVENT_MINUTE_TICK);
+
+    /* zigbee event по command_id однозначен: Toggle(0x02) → SINGLE_PRESS */
+    ha_automation_record_t evrec = {0};
+    evrec.enabled = 1;
+    evrec.trigger_kind = HA_TRIGGER_DEVICE_EVENT;
+    evrec.trigger_b.event.device_uid = DEV;
+    evrec.trigger_b.event.command_id = 0x02;
+    evrec.action_cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    evrec.action_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
+    ha_device_record_t dev = {0};
+    CHECK(semantics_decompile_automation(&evrec, &dev, &back));
+    CHECK(back.trigger.kind == HA_TRIGGER_DEVICE_EVENT &&
+          back.trigger.event_id == HA_EVENT_SINGLE_PRESS);
+
+    /* неизвестная команда события → невыразимо */
+    ha_automation_record_t unkev = evrec;
+    unkev.trigger_b.event.command_id = 0x42;
+    CHECK(!semantics_decompile_automation(&unkev, &dev, &back));
+
+    /* неизвестный action → невыразимо */
+    ha_automation_record_t unk = evrec;
+    unk.trigger_kind = HA_TRIGGER_TIME;
+    unk.action_cluster_id = 0x1234;
+    CHECK(!semantics_decompile_automation(&unk, NULL, &back));
+}
+
 int main(void)
 {
     test_parity();
@@ -501,6 +595,7 @@ int main(void)
     test_decode_event();
     test_capabilities();
     test_compile_automation();
+    test_decompile_automation();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");

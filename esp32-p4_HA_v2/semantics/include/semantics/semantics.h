@@ -90,6 +90,14 @@ bool semantics_compile_automation(const ha_sem_rule_t *rule, const ha_device_rec
                                   ha_automation_record_t *out);
 
 /*
+ * Обратная проекция: physical record → semantic rule (для read-path UI). false — правило
+ * невыразимо семантически (legacy: неоднозначный event, неизвестная пара, неподъёмный
+ * action args). Тогда Web/UI показывает его как legacy/raw, не выдумывая смысл.
+ */
+bool semantics_decompile_automation(const ha_automation_record_t *record,
+                                    const ha_device_record_t *trigger_device, ha_sem_rule_t *out);
+
+/*
  * Собрать физическую команду из семантического запроса: target(device/endpoint) +
  * property + action (+ value). Транспортная кодировка (scale, transition, direction,
  * LE, args_len) принадлежит мосту. false — нет такого (property, action) или value
