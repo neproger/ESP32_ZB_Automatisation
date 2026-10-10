@@ -10,7 +10,7 @@
 | Компонент | `ha_model` (словарь) + модуль-мост (ZCL ↔ семантика) |
 | Контракт | `PROPERTY_MODEL.md` |
 | Стратегия | вариант B: семантика без смены canonical identity и storage geometry |
-| Реализовано | фаза 0: словарь + `ha_value_t` + `ha_property_desc()`; фаза 1: мост `semantics` (`decode_kind`, `property_key`, `value_to_double`); фаза 2.0–2.2: обратный маппинг + свойств больше + Automation на мост |
+| Реализовано | фаза 0–2: словарь + мост `semantics`; Automation и Display (`ui_widgets`, `ui_status_bar`) работают через семантику |
 | Миграция данных | **не требуется** до шага A |
 | Проверено на P4 | — (поведение не менялось; IDF-сборка зелёная) |
 
@@ -75,11 +75,17 @@
       STATE-триггер декодируют через `semantics_state_value()`; `ha_zigbee.h` убран из чистой
       логики правила. Сравнение `rule.cluster/attr == key.cluster/attr` в matching осталось —
       это сравнение **opaque identity**, не семантика. Host-тесты переведены на реальные пары
-- [ ] **2.3** Display: выбор виджета и формат → `Property` + `ha_value_t`
-- [ ] **2.4** Display: соседние состояния (`apply_color`: X/Y/яркость) → `semantics_property_key()`
-- [ ] **2.5** IAS: выяснить, какой именно IAS-атрибут шлют устройства и соответствует ли
-      текущий UI (`ZONE_STATE` → «Тревога») семантике; **не** вводить `HA_PROPERTY_ALARM`
-      только ради сохранения `switch`
+- [x] **2.3** Display: `ui_widget_kind_for(property)`; формат по `ha_value_t` + единице
+      дескриптора; switch/indicator — по булеву значению; слайдеры в семантике (level/яркость
+      — %, цветовая температура — K); ZCL-аргументы команды конвертируются на границе отправки
+- [x] **2.4** Display: `apply_color` берёт X/Y/яркость через `semantics_property_key()` +
+      `semantics_state_value()`; `ui_status_bar` (часы) читает system-свойства через мост —
+      ручных ZCL-ключей в UI не осталось
+- [x] **2.5** IAS: **вывод исследования.** `ZONE_STATE` (0x0500/0x0000) — это enum статуса
+      enrollment (0/1), **не** тревога; тревога — битовое `ZoneStatus` (0x0002, bit0=Alarm1…).
+      Прежний маппинг `ZONE_STATE → «Тревога»` был семантически неверен. `HA_PROPERTY_ALARM`
+      пока **не вводим**: сначала решить семантику (enrollment vs alarm1/2 + tamper/battery)
+      под реальное устройство. IAS-виджеты сейчас рендерятся как `VALUE` (нет маппинга)
 
 **Чекпоинт 2.** Host-тесты зелёные; на P4: правило срабатывает, виджет рисуется. Откат —
 revert. Риск: неполный маппинг — `UNKNOWN` деградирует явно, без ложной семантики.
@@ -161,6 +167,9 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | Level→`BRIGHTNESS` (процент 0..100), ZCL hue→градусы, xy→0..1, color temp→Kelvin | семантические значения, а не raw; Display примет их в 2.3 |
 | 2026-10-10 | System-свойства добавлены в mapping (нужны `HAS_BITS` по `WEEKDAY_MASK` и system-условия) | «по факту необходимости» наступил на 2.2 |
 | 2026-10-10 | Условие на пару без маппинга → false | честная деградация; UI должен предлагать только замапленные свойства |
+| 2026-10-10 | Display: форма виджета и формат — по свойству/единице; слайдеры в семантике (level %, цветовая температура K) | UI перестаёт знать ZCL; ZCL-аргументы команды конвертируются на границе (command-path — фаза 3) |
+| 2026-10-10 | Display: соседние состояния (`apply_color`, часы) — через `semantics_property_key()` | потребитель не конструирует ZCL-ключи; ручных `cluster/attr` в UI нет |
+| 2026-10-10 | IAS: `ZONE_STATE` — enrollment, тревога — `ZoneStatus`; `HA_PROPERTY_ALARM` не введён | не тащить неверную семантику; решать под реальное устройство |
 
 ## 5. От чего отказались
 
@@ -184,6 +193,9 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 2.0–2.2: semantics_property_key + value_to_double; расширен mapping
             (level/hue/sat/xy/color temp + system); Automation декодирует через мост,
             attr_scale и ha_zigbee.h убраны из чистой логики; host test_rule 1/1, IDF зелёная
+2026-10-10  фаза 2.3–2.5: Display (ui_widgets: kind/format/apply_color + слайдеры в семантике;
+            ui_status_bar: часы через мост) — UI больше не знает ZCL; IAS-вывод (ZONE_STATE ≠
+            тревога); IDF зелёная, прошито на P4
 ```
 
 ## 7. Открытые вопросы

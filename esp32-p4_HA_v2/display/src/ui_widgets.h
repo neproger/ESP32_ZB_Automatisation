@@ -2,11 +2,11 @@
 
 /*
  * Виджет одного состояния: group_item ссылается на состояние ключом Domain, а UI
- * выбирает форму виджета по (cluster_id, attr_id) и показывает значение из записи
- * состояния. Форма — проекция, а не хранимая сущность (docs/clients/DISPLAY.md §4).
+ * выбирает форму по семантике свойства (мост `semantics`) и показывает значение в
+ * человеческих единицах. Форма — проекция, а не хранимая сущность (docs/clients/DISPLAY.md §4).
  *
- * Цвет — составной (hue + saturation), поэтому его виджету нужен доступ к Domain,
- * чтобы прочитать соседние атрибуты кластера Color.
+ * Цвету нужны соседние свойства (X/Y/яркость) — берутся через `semantics_property_key()`
+ * в том же объекте, без ручных ZCL-ключей.
  */
 
 #include <stdbool.h>
@@ -16,6 +16,7 @@
 
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_properties.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,7 +32,7 @@ typedef enum {
     UI_WIDGET_VALUE,      /* числовое значение с единицей (датчик/батарея) */
 } ui_widget_kind_t;
 
-ui_widget_kind_t ui_widget_kind_for(uint16_t cluster_id, uint16_t attr_id);
+ui_widget_kind_t ui_widget_kind_for(ha_property_id_t property);
 
 /* Слайдер в общем стиле UI (тонкая дорожка + круглый маркер). */
 lv_obj_t *ui_slider_create_styled(lv_obj_t *parent, int min, int max);

@@ -4,8 +4,10 @@
 #include <string.h>
 
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_properties.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
+#include "semantics/semantics.h"
 #include "ui_compat.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
@@ -104,19 +106,26 @@ void ui_status_bar_create(domain_t *domain)
     lv_obj_center(burger_icon);
 }
 
-static bool read_u8(uint16_t attr_id, uint8_t *out)
+/* Системное свойство (время) — по семантике, без ручного ZCL-ключа. */
+static bool read_system_byte(ha_property_id_t property, uint8_t *out)
 {
-    const ha_zb_state_key_t key = {
-        .device_uid = HA_SYSTEM_DEVICE_UID,
-        .cluster_id = HA_CLUSTER_SYSTEM,
-        .attr_id = attr_id,
-        .endpoint = HA_SYSTEM_ENDPOINT,
-    };
+    const ha_zb_state_key_t context = {.device_uid = HA_SYSTEM_DEVICE_UID,
+                                       .endpoint = HA_SYSTEM_ENDPOINT};
+    ha_zb_state_key_t key = {0};
+    if (!semantics_property_key(&context, property, &key)) {
+        return false;
+    }
     ha_zb_state_record_t record = {0};
     if (!sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, &key, &record))) {
         return false;
     }
-    *out = (uint8_t)(record.raw & 0xFFu);
+    ha_value_t value = {0};
+    double number = 0.0;
+    if (!semantics_state_value(&key, &record, &value) ||
+        !semantics_value_to_double(&value, &number)) {
+        return false;
+    }
+    *out = (uint8_t)number;
     return true;
 }
 
@@ -125,7 +134,8 @@ static void apply_time_location(void)
     char time_text[8] = "--:--";
     uint8_t hour = 0;
     uint8_t minute = 0;
-    if (read_u8(HA_SYS_ATTR_HOUR, &hour) && read_u8(HA_SYS_ATTR_MINUTE, &minute)) {
+    if (read_system_byte(HA_PROPERTY_SYSTEM_HOUR, &hour) &&
+        read_system_byte(HA_PROPERTY_SYSTEM_MINUTE, &minute)) {
         snprintf(time_text, sizeof(time_text), "%02u:%02u", (unsigned)hour, (unsigned)minute);
     }
     if (strcmp(time_text, s_last_time) != 0) {
