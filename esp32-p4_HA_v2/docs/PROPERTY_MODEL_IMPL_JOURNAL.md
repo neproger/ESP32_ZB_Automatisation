@@ -169,8 +169,10 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 - [ ] **5.0 BFF** проекция state (`property + ha_value_t + descriptor`) и capabilities endpoint
       в Web (аддитивные структуры/message)
 - [ ] **5.1** semantic state DTO поверх провода; фронт не зовёт `describeAttr()` и не масштабирует `raw`
-- [ ] **5.2** command ingress: браузер шлёт `property + action + value` → `semantics_build_command()`
-      → существующий `HA_CMD_ZIGBEE_CLUSTER`; `web_do_zb_command()` — transitional
+- [x] **5.2** command ingress: `WEB_CMD_SEMANTIC_COMMAND` (стабильный LE DTO, без C enum/union);
+      Web декодирует, валидирует (размер/форма/NaN-Inf) → `semantics_build_command()` →
+      `HA_CMD_ZIGBEE_CLUSTER`. `web_do_zb_command()` оставлен transitional. Живые контролы
+      (`EndpointWidgets`, `StateAttr`) отправляют семантику; `commands.js` больше не кодирует ZCL
 - [ ] **5.3** Automation UI — «компилятор»: semantic trigger/condition/action → текущая 144-байтная
       запись (один раз, при сохранении)
 - [ ] **5.4** Events: Web пересылает `DOMAIN_FACT_EVENT` как `HA_EVENT_*`; Events-страница без raw
@@ -178,8 +180,9 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
       в явном диагностическом экране, если нужен
 
-**Чекпоинт 5.** 5.0 core готов (capabilities + tests). BFF/DTO и миграция фронта — следующие шаги;
-каждый аддитивен и не ломает raw wire.
+**Чекпоинт 5.** 5.0 core и 5.2 готовы (capabilities + тесты; semantic command ingress end-to-end —
+POWER/BRIGHTNESS/COLOR_TEMP/COLOR xy доходят до устройства, состояние переключается). 5.0 BFF
+(state DTO), 5.1, 5.3–5.5 — далее; каждый аддитивен и не ломает raw wire.
 
 ### Фаза A (позже, отдельный трек)
 
@@ -231,6 +234,8 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | System-события унифицированы в `ha_event_id_t` (сменились id) | одна семантика событий; цена — правка Automation + web-ui |
 | 2026-10-10 | Фаза 5 — аддитивно поверх raw WS; WS v3 отложен до шага A | raw остаётся внутренним ABI Web↔Domain; не поднимать версию раньше смены key |
 | 2026-10-10 | Capabilities (cluster→properties, property→actions) — в `semantics`, не в браузере | убрать ZCL-inference UI (`capabilities.js`) |
+| 2026-10-10 | Semantic command DTO — стабильный LE (без C enum/union/`memcpy`), NaN/Inf reject на границе WS | wire не зависит от ABI компилятора; WS — trust boundary |
+| 2026-10-10 | Transition policy (0) остаётся в мосте, не в DTO | нет потребности в configurable transition; ZCL-параметр не тащим наверх |
 
 ## 5. От чего отказались
 
@@ -270,6 +275,10 @@ TLV / самоописание приложения              — запре�
             Event plane transport-agnostic
 2026-10-10  фаза 5.0 core: semantics_cluster_properties / semantics_property_actions
             (capabilities без inference в UI); test_semantics 1/1. BFF/DTO/фронт — далее
+2026-10-10  фаза 5.2: WEB_CMD_SEMANTIC_COMMAND (stable LE DTO) → semantics_build_command;
+            web-ui: semantics.js + semanticCommand; EndpointWidgets/StateAttr шлют семантику
+            (commands.js без ZCL). Проверено на P4: POWER/BRIGHTNESS/COLOR_TEMP/COLOR доходят,
+            toggle переключает состояние. IDF+web-ui зелёные
 ```
 
 ## 7. Открытые вопросы

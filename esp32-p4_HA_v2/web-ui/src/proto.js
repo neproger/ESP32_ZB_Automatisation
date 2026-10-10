@@ -1,5 +1,6 @@
 // Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
 import { encodeAutomationRecord, SCHEMA, ENTITY } from './schema.js'
+import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 
 export const MSG = {
   SYNC_BEGIN: 0x01,
@@ -23,6 +24,7 @@ export const CMD = {
   GROUP_ITEM_PUT: 11,
   GROUP_ITEM_REMOVE: 12,
   LOCATION_PUT: 13,
+  SEMANTIC_COMMAND: 14,
 }
 
 export const HDR = 8
@@ -69,6 +71,28 @@ export function zbCommand({ uid, ep, cluster, command, args = [] }) {
   dv.setUint8(13, Math.min(args.length, 16))
   out.set(args.slice(0, 16), 14)
   return encodeCommand(CMD.ZB_COMMAND, out)
+}
+
+// SEMANTIC_COMMAND: стабильный LE DTO — u64 uid @0, u8 ep @8, u16 property @9, u8 action @11,
+// u8 value_kind @12; SCALAR: u8 kind @13 + f32 @14; XY: f32 x @13 + f32 y @17. Без ZCL.
+export function semanticCommand({ uid, ep, property, action, value }) {
+  const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
+  const size = 13 + (kind === COMMAND_VALUE.SCALAR ? 5 : kind === COMMAND_VALUE.XY ? 8 : 0)
+  const out = new Uint8Array(size)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(uid), true)
+  dv.setUint8(8, ep)
+  dv.setUint16(9, property, true)
+  dv.setUint8(11, action)
+  dv.setUint8(12, kind)
+  if (kind === COMMAND_VALUE.SCALAR) {
+    dv.setUint8(13, VALUE_KIND.FLOAT)
+    dv.setFloat32(14, Number(value), true)
+  } else if (kind === COMMAND_VALUE.XY) {
+    dv.setFloat32(13, Number(value.xy.x), true)
+    dv.setFloat32(17, Number(value.xy.y), true)
+  }
+  return encodeCommand(CMD.SEMANTIC_COMMAND, out)
 }
 
 export function snapshot() {

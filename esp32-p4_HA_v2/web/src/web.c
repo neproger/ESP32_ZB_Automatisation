@@ -1,5 +1,6 @@
 #include "web/web.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "esp_http_server.h"
@@ -14,6 +15,7 @@
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
+#include "semantics/semantics.h"
 #include "web/web_proto.h"
 
 /*
@@ -121,6 +123,21 @@ static void put_u32(uint8_t *out, uint32_t value)
     out[1] = (uint8_t)((value >> 8) & 0xffu);
     out[2] = (uint8_t)((value >> 16) & 0xffu);
     out[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+static uint16_t get_u16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static uint32_t get_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t get_u64(const uint8_t *p)
+{
+    return (uint64_t)get_u32(p) | ((uint64_t)get_u32(p + 4) << 32);
 }
 
 static void web_send_frame(int fd, uint8_t type, uint16_t seq, const void *payload, uint16_t len)
@@ -253,6 +270,97 @@ static uint16_t web_do_zb_command(const uint8_t *args, size_t len)
 
     const sys_error_t err =
         domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &target, &meta);
+    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+}
+
+/*
+ * Семантическая команда: браузер шлёт property/action/value, ZCL-кодировку делает мост.
+ * Граница доверия (WS): валидируем размер, форму значения и конечность чисел.
+ */
+static uint16_t web_do_semantic_command(const uint8_t *args, size_t len)
+{
+    if (len < 13) {
+        return SYS_CODE_INVALID_SIZE;
+    }
+    const uint64_t device_uid = get_u64(args + 0);
+    const uint8_t endpoint = args[8];
+    const uint16_t property_id = get_u16(args + 9);
+    const uint8_t action_id = args[11];
+    const uint8_t value_kind = args[12];
+
+    ha_command_value_t value = {0};
+    if (value_kind == (uint8_t)HA_COMMAND_VALUE_NONE) {
+        value.kind = HA_COMMAND_VALUE_NONE;
+    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
+        if (len < 18) {
+            return SYS_CODE_INVALID_SIZE;
+        }
+        const ha_value_kind_t scalar_kind = (ha_value_kind_t)args[13];
+        const uint32_t bits = get_u32(args + 14);
+        value.kind = HA_COMMAND_VALUE_SCALAR;
+        value.value.scalar.kind = scalar_kind;
+        switch (scalar_kind) {
+        case HA_VALUE_BOOL:
+            value.value.scalar.value.b = bits != 0;
+            break;
+        case HA_VALUE_I32:
+            value.value.scalar.value.i32 = (int32_t)bits;
+            break;
+        case HA_VALUE_U32:
+            value.value.scalar.value.u32 = bits;
+            break;
+        case HA_VALUE_ENUM:
+            value.value.scalar.value.enum_value = bits;
+            break;
+        case HA_VALUE_FLOAT: {
+            float f = 0.0f;
+            memcpy(&f, &bits, sizeof(f));
+            if (!isfinite(f)) { /* NaN/Inf отсекаем на границе */
+                return SYS_CODE_INVALID_ARG;
+            }
+            value.value.scalar.value.f32 = f;
+            break;
+        }
+        default:
+            return SYS_CODE_INVALID_ARG;
+        }
+    } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
+        if (len < 21) {
+            return SYS_CODE_INVALID_SIZE;
+        }
+        const uint32_t xb = get_u32(args + 13);
+        const uint32_t yb = get_u32(args + 17);
+        float x = 0.0f;
+        float y = 0.0f;
+        memcpy(&x, &xb, sizeof(x));
+        memcpy(&y, &yb, sizeof(y));
+        if (!isfinite(x) || !isfinite(y)) {
+            return SYS_CODE_INVALID_ARG;
+        }
+        value.kind = HA_COMMAND_VALUE_XY;
+        value.value.xy.x = x;
+        value.value.xy.y = y;
+    } else {
+        return SYS_CODE_INVALID_ARG;
+    }
+
+    const ha_zb_state_key_t target = {.device_uid = device_uid, .endpoint = endpoint};
+    ha_zb_command_t command = {0};
+    if (!semantics_build_command(&target, (ha_property_id_t)property_id, (ha_action_id_t)action_id,
+                                 &value, &command)) {
+        return SYS_CODE_INVALID_ARG; /* unknown property/action или неверная форма значения */
+    }
+
+    const domain_fact_target_t fact = {
+        .entity = (domain_entity_t)HA_ENTITY_DEVICE,
+        .key = &command.device_uid,
+    };
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
+    meta.value.v.u32 = command.command_id;
+    const sys_error_t err =
+        domain_post(s_domain, HA_CMD_ZIGBEE_CLUSTER, &command, sizeof(command), &fact, &meta);
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
@@ -505,6 +613,9 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
     switch (cmd) {
     case WEB_CMD_ZB_COMMAND:
         status = web_do_zb_command(args, len);
+        break;
+    case WEB_CMD_SEMANTIC_COMMAND:
+        status = web_do_semantic_command(args, len);
         break;
     case WEB_CMD_DEVICE_RENAME:
         status = web_do_device_rename(args, len);

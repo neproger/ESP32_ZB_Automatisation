@@ -55,6 +55,17 @@ typedef enum {
     WEB_CMD_GROUP_ITEM_PUT = 11,
     WEB_CMD_GROUP_ITEM_REMOVE = 12,
     WEB_CMD_LOCATION_PUT = 13,
+    /*
+     * Семантическая команда (аддитивно, без WS v3): браузер шлёт property+action+value,
+     * ZCL-кодировку делает Web через semantics. Стабильный LE DTO (без C enum/union):
+     *   @0  u64 device_uid
+     *   @8  u8  endpoint
+     *   @9  u16 property_id  (ha_property_id_t)
+     *   @11 u8  action_id    (ha_action_id_t)
+     *   @12 u8  value_kind    (HA_COMMAND_VALUE_*)
+     *   value: NONE — нет; SCALAR @13 u8 kind + @14 u32 bits; XY @13 f32 x + @17 f32 y
+     */
+    WEB_CMD_SEMANTIC_COMMAND = 14,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

@@ -17,6 +17,7 @@ idf_component_register(
         domain
         sys
         ha_model
+        semantics
     PRIV_REQUIRES
         esp_http_server
         nvs_flash
