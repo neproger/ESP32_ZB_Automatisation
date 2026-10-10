@@ -31,8 +31,13 @@ bool automation_rule_time_matches(const ha_automation_record_t *rule, uint16_t m
 bool automation_rule_state_matches(const ha_automation_record_t *rule, const ha_zb_state_key_t *key,
                                    double value, bool prev_known, double prev_value);
 
-/* Декодировать ZCL-значение состояния в число (общее для условий и STATE-триггера). */
-bool automation_rule_state_value(const ha_zb_state_record_t *state, double *out);
+/*
+ * Декодировать ZCL-значение состояния в число в человеческих единицах (общее для условий
+ * и STATE-триггера): температура — в °C (raw 0.01 °C), влажность — в %, батарея — в %/V и т.д.
+ * cluster/attr нужны для выбора масштаба.
+ */
+bool automation_rule_state_value(uint16_t cluster_id, uint16_t attr_id,
+                                 const ha_zb_state_record_t *state, double *out);
 
 /*
  * Собрать Zigbee-команду действия. trigger_uid подставляется, когда у правила

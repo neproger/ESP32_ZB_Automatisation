@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { store } from '../store.js'
 import { automationPut, zbCommand } from '../proto.js'
-import { uidHex, clusterName, attrName } from '../zcl.js'
+import { uidHex, clusterName, attrName, describeAttr } from '../zcl.js'
 import {
   ACTION_CLUSTERS, TRIGGER_CMDS, TRIGGER_KINDS, TRIGGER_OPS, TRIGGER_EDGES, WEEKDAY_LABELS,
   CONDITION_OPS, buildActionArgs, decodeActionArgs, minutesToHHMM, hhmmToMinutes,
@@ -207,7 +207,10 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
                 <option value={0}>Выкл</option>
               </select>
             ) : (
-              <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
+              <>
+                <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
+                <span className="muted">{describeAttr(stateCluster, stateAttr)?.unit || ''}</span>
+              </>
             )}
             <select value={stateEdge} onChange={(e) => setStateEdge(Number(e.target.value))}>
               {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -281,7 +284,10 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
                   <option value={0}>Выкл</option>
                 </select>
               ) : (
-                <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
+                <>
+                  <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
+                  <span className="muted">{describeAttr(c.cluster, c.attr)?.unit || ''}</span>
+                </>
               )}
               <button type="button" className="ghost danger" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>✕</button>
             </div>

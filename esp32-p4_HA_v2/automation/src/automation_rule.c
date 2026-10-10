@@ -35,12 +35,28 @@ static bool op_holds(uint8_t op, double actual, double expected)
     }
 }
 
+/* Коэффициент перевода raw ZCL → человеческие единицы (1.0 — без масштаба). */
+static double attr_scale(uint16_t cluster_id, uint16_t attr_id)
+{
+    switch (cluster_id) {
+    case HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT:
+        return 0.01; /* 0.01 °C */
+    case HA_ZB_CLUSTER_RELATIVE_HUMIDITY:
+        return 0.01; /* 0.01 % */
+    case HA_ZB_CLUSTER_POWER_CONFIG:
+        return (attr_id == HA_ZB_ATTR_POWER_CONFIG_BATTERY_VOLTAGE) ? 0.1 /* 0.1 V */ : 0.5 /* 0.5 % */;
+    default:
+        return 1.0;
+    }
+}
+
 /*
- * ZCL-значение состояния → число. `raw` хранится по фактической ширине типа
- * (zigbee_radio.c:report_value): знаковые расширены по знаку, single float — биты.
+ * ZCL-значение состояния → число в человеческих единицах. `raw` хранится по фактической
+ * ширине типа (zigbee_radio.c:report_value): знаковые расширены по знаку, single float — биты.
  * Тип вне словаря скаляров не вычислить.
  */
-bool automation_rule_state_value(const ha_zb_state_record_t *state, double *out)
+bool automation_rule_state_value(uint16_t cluster_id, uint16_t attr_id,
+                                 const ha_zb_state_record_t *state, double *out)
 {
     if (state == NULL || out == NULL) {
         return false;
@@ -52,32 +68,34 @@ bool automation_rule_state_value(const ha_zb_state_record_t *state, double *out)
     case HA_ZB_TYPE_UINT8:
     case HA_ZB_TYPE_ENUM8:
         *out = (double)(raw & 0xffu);
-        return true;
+        break;
     case HA_ZB_TYPE_INT8:
         *out = (double)(int8_t)(raw & 0xffu);
-        return true;
+        break;
     case HA_ZB_TYPE_UINT16:
     case HA_ZB_TYPE_ENUM16:
         *out = (double)(raw & 0xffffu);
-        return true;
+        break;
     case HA_ZB_TYPE_INT16:
         *out = (double)(int16_t)(raw & 0xffffu);
-        return true;
+        break;
     case HA_ZB_TYPE_UINT32:
         *out = (double)raw;
-        return true;
+        break;
     case HA_ZB_TYPE_INT32:
         *out = (double)(int32_t)raw;
-        return true;
+        break;
     case HA_ZB_TYPE_SINGLE_FLOAT: {
         float f = 0.0f;
         memcpy(&f, &raw, sizeof(f));
         *out = (double)f;
-        return true;
+        break;
     }
     default:
         return false;
     }
+    *out *= attr_scale(cluster_id, attr_id);
+    return true;
 }
 
 bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
@@ -87,7 +105,7 @@ bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
         return false;
     }
     double actual = 0.0;
-    if (!automation_rule_state_value(state, &actual)) {
+    if (!automation_rule_state_value(condition->cluster_id, condition->attr_id, state, &actual)) {
         return false;
     }
     return op_holds(condition->op, actual, (double)condition->value);

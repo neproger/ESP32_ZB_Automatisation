@@ -100,6 +100,15 @@ static void test_condition(void)
     cond.value = -10;
     CHECK(!automation_rule_condition_ok(&cond, &temp));
 
+    /* Температура в °C: raw 2150 = 21.5 °C (масштаб 0.01). */
+    const ha_zb_state_record_t t2 = {.raw = 2150, .zcl_type = HA_ZB_TYPE_INT16};
+    cond = (ha_automation_condition_t){.cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT,
+                                       .op = HA_CONDITION_OP_GT,
+                                       .value = 20.0f};
+    CHECK(automation_rule_condition_ok(&cond, &t2));
+    cond.value = 22.0f;
+    CHECK(!automation_rule_condition_ok(&cond, &t2));
+
     float f = 21.5f;
     uint32_t bits = 0;
     memcpy(&bits, &f, sizeof(bits));

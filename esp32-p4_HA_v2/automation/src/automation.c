@@ -270,7 +270,7 @@ static void automation_state_trigger(const ha_zb_state_key_t *key)
         return;
     }
     double value = 0.0;
-    if (!automation_rule_state_value(&record, &value)) {
+    if (!automation_rule_state_value(key->cluster_id, key->attr_id, &record, &value)) {
         return; /* тип вне словаря скаляров: триггерить нечем */
     }
 
