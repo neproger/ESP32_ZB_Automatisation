@@ -21,8 +21,11 @@
  *
  * A3: правила хранятся как ha_rule_t (entity-адресованные). Триггеры: EVENT (машина
  * событий HA_ENTITY_ENTITY), STATE (canonical HA_ENTITY_PROPERTY_STATE), TIME (canonical
- * SYSTEM-свойства). Действие — semantic-команда HA_CMD_PROPERTY. uid/endpoint/cluster/attr
- * здесь неизвестны.
+ * SYSTEM-свойства). Действие — semantic-команда HA_CMD_PROPERTY.
+ *
+ * Runtime Index (производный, RAM-only): компактный список ключей триггеров, чтобы на
+ * каждый факт не перечитывать все правила. Source of truth — только HA_ENTITY_AUTOMATION;
+ * индекс не persistится и всегда восстанавливается из правил (rebuild на изменение).
  */
 
 #define AUTOMATION_INBOX_LENGTH 32
@@ -34,86 +37,69 @@ static const char *TAG = "automation";
 static domain_t *s_domain;
 static QueueHandle_t s_inbox;
 
-static bool automation_accept(const domain_event_t *event, void *ctx)
-{
-    (void)ctx;
-    if (s_inbox == NULL) {
-        return false;
-    }
-    return xQueueSend(s_inbox, event, 0) == pdTRUE;
-}
+/* --- runtime index ------------------------------------------------------- */
 
-/* Одному факту может соответствовать несколько правил; собираем совпадения до условий. */
-#define AUTOMATION_FIRE_MAX 8
+#define AUTOMATION_INDEX_MAX 128
 
 typedef struct {
     uint64_t rule_id;
-    ha_rule_t rule;
-} automation_match_t;
-
-typedef struct {
-    ha_entity_id_t source_entity; /* источник триггера (для резолва SOURCE) */
-
-    bool is_event;
+    uint8_t trigger_kind; /* ha_automation_trigger_kind_t */
+    ha_entity_id_t entity;  /* EVENT/STATE; HA_ENTITY_ID_SOURCE = источник */
+    ha_property_id_t property;
     ha_event_id_t event_id;
+} automation_index_entry_t;
 
-    bool is_time;
-    uint16_t minutes_of_day;
-    uint8_t weekday_mask;
+static automation_index_entry_t s_index[AUTOMATION_INDEX_MAX];
+static size_t s_index_count;
 
-    bool is_state;
-    ha_entity_id_t state_entity;
-    ha_property_id_t state_property;
-    double state_value;
-    bool state_prev_known;
-    double state_prev_value;
-
-    automation_match_t matches[AUTOMATION_FIRE_MAX];
-    size_t count;
-} automation_scan_t;
-
-/* Кэш последних значений свойств — нужен, чтобы отличать «стало истинно/ложно». */
-#define AUTOMATION_STATE_CACHE 64
-
-typedef struct {
-    bool used;
-    ha_state_key_t key;
-    double value;
-} state_cache_slot_t;
-
-static state_cache_slot_t s_state_cache[AUTOMATION_STATE_CACHE];
-
-static bool state_cache_take(const ha_state_key_t *key, bool *known, double *prev)
+static bool automation_index_add(const void *key, const void *record, void *ctx)
 {
-    for (size_t i = 0; i < AUTOMATION_STATE_CACHE; i++) {
-        if (s_state_cache[i].used && memcmp(&s_state_cache[i].key, key, sizeof(*key)) == 0) {
-            *known = true;
-            *prev = s_state_cache[i].value;
-            return true;
-        }
+    (void)ctx;
+    const ha_rule_t *rule = (const ha_rule_t *)record;
+    if (rule->enabled == 0) {
+        return true; /* выключенные правила в индексе не нужны */
     }
-    *known = false;
-    return false; /* не найдено — не ошибка, просто первое наблюдение */
+    if (s_index_count >= AUTOMATION_INDEX_MAX) {
+        ESP_LOGW(TAG, "index full (%d); extra rules not indexed", AUTOMATION_INDEX_MAX);
+        return true;
+    }
+    automation_index_entry_t *entry = &s_index[s_index_count++];
+    entry->rule_id = ((const ha_automation_key_t *)key)->id;
+    entry->trigger_kind = rule->trigger.kind;
+    entry->entity = HA_ENTITY_ID_NONE;
+    entry->property = HA_PROPERTY_UNKNOWN;
+    entry->event_id = HA_EVENT_NONE;
+    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT ||
+        rule->trigger.kind == (uint8_t)HA_TRIGGER_STATE) {
+        entry->entity = rule->trigger.entity;
+    }
+    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_STATE) {
+        entry->property = rule->trigger.property;
+    }
+    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
+        entry->event_id = rule->trigger.event_id;
+    }
+    return true;
 }
 
-static void state_cache_put(const ha_state_key_t *key, double value)
+/* Полная перестройка из правил. Вызывается на старте и на любое изменение правила. */
+static void automation_index_rebuild(void)
 {
-    size_t free_slot = AUTOMATION_STATE_CACHE;
-    for (size_t i = 0; i < AUTOMATION_STATE_CACHE; i++) {
-        if (s_state_cache[i].used && memcmp(&s_state_cache[i].key, key, sizeof(*key)) == 0) {
-            s_state_cache[i].value = value;
-            return;
-        }
-        if (!s_state_cache[i].used && free_slot == AUTOMATION_STATE_CACHE) {
-            free_slot = i;
-        }
+    s_index_count = 0;
+    if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
+                                      automation_index_add, NULL))) {
+        s_index_count = 0; /* индекс не строится — совпадений не будет (persisted data цел) */
     }
-    if (free_slot == AUTOMATION_STATE_CACHE) {
-        free_slot = 0; /* кэш полон — вытесняем слот 0 (значение перечитается) */
-    }
-    s_state_cache[free_slot].used = true;
-    s_state_cache[free_slot].key = *key;
-    s_state_cache[free_slot].value = value;
+    ESP_LOGD(TAG, "runtime index rebuilt: %u entries", (unsigned)s_index_count);
+}
+
+/* --- правило и действие -------------------------------------------------- */
+
+static bool automation_rule_get(uint64_t rule_id, ha_rule_t *out)
+{
+    const ha_automation_key_t key = {.id = rule_id};
+    return sys_ok(
+        domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key, out));
 }
 
 /* Значение canonical-свойства как число. false — свойства нет или значение невычислимо. */
@@ -128,7 +114,6 @@ static bool read_property_value(ha_entity_id_t entity, ha_property_id_t property
     return semantics_value_to_double(&record.value, out);
 }
 
-/* Локальное время системного девайса из canonical-свойств ENTITY_SYSTEM. */
 static bool read_system_time(uint16_t *minutes_of_day, uint8_t *weekday_mask)
 {
     const ha_entity_id_t system = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
@@ -140,35 +125,6 @@ static bool read_system_time(uint16_t *minutes_of_day, uint8_t *weekday_mask)
     }
     *minutes_of_day = (uint16_t)minutes;
     *weekday_mask = (uint8_t)mask;
-    return true;
-}
-
-static bool automation_collect(const void *key, const void *record, void *ctx)
-{
-    automation_scan_t *scan = (automation_scan_t *)ctx;
-    const ha_rule_t *rule = (const ha_rule_t *)record;
-
-    bool matched = false;
-    if (scan->is_time) {
-        matched = automation_rule_sem_time_matches(rule, scan->minutes_of_day, scan->weekday_mask);
-    } else if (scan->is_state) {
-        matched = automation_rule_sem_state_matches(rule, scan->source_entity, scan->state_entity,
-                                                    scan->state_property, scan->state_value,
-                                                    scan->state_prev_known, scan->state_prev_value);
-    } else if (scan->is_event) {
-        matched = automation_rule_sem_event_matches(rule, scan->source_entity, scan->event_id);
-    }
-    if (!matched) {
-        return true;
-    }
-
-    if (scan->count >= AUTOMATION_FIRE_MAX) {
-        ESP_LOGW(TAG, "more than %d matching rules; extra dropped", AUTOMATION_FIRE_MAX);
-        return true;
-    }
-    scan->matches[scan->count].rule_id = ((const ha_automation_key_t *)key)->id;
-    scan->matches[scan->count].rule = *rule;
-    scan->count++;
     return true;
 }
 
@@ -194,16 +150,19 @@ static bool automation_conditions_pass(ha_entity_id_t source_entity, const ha_ru
     return true;
 }
 
-static void automation_fire(const automation_match_t *match, ha_entity_id_t source_entity)
+static void automation_fire(uint64_t rule_id, ha_entity_id_t source_entity)
 {
-    if (!automation_conditions_pass(source_entity, &match->rule)) {
-        ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)match->rule_id);
+    ha_rule_t rule = {0};
+    if (!automation_rule_get(rule_id, &rule)) {
+        return; /* правило исчезло между индексом и сейчас */
+    }
+    if (!automation_conditions_pass(source_entity, &rule)) {
+        ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)rule_id);
         return;
     }
-
     ha_property_command_t command = {0};
-    if (!automation_rule_sem_action(&match->rule, source_entity, &command)) {
-        ESP_LOGW(TAG, "rule %llu action not resolvable", (unsigned long long)match->rule_id);
+    if (!automation_rule_sem_action(&rule, source_entity, &command)) {
+        ESP_LOGW(TAG, "rule %llu action not resolvable", (unsigned long long)rule_id);
         return;
     }
 
@@ -211,47 +170,103 @@ static void automation_fire(const automation_match_t *match, ha_entity_id_t sour
     meta.source = (uint8_t)DOMAIN_SOURCE_AUTOMATION;
     meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
     meta.value.v.u32 = command.action;
-
     const sys_error_t err =
         domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, &meta);
     if (sys_failed(err)) {
         ESP_LOGW(TAG, "rule %llu command not posted: entity=%llx err=%u",
-                 (unsigned long long)match->rule_id, (unsigned long long)command.entity,
+                 (unsigned long long)rule_id, (unsigned long long)command.entity,
                  (unsigned)err.code);
         return;
     }
     ESP_LOGI(TAG, "rule %llu fired: entity=%llx property=%u action=%u",
-             (unsigned long long)match->rule_id, (unsigned long long)command.entity,
+             (unsigned long long)rule_id, (unsigned long long)command.entity,
              (unsigned)command.property, (unsigned)command.action);
 }
 
-static void automation_fire_matches(automation_scan_t *scan)
+/* --- кэш предыдущих значений (для edge) ---------------------------------- */
+
+#define AUTOMATION_STATE_CACHE 64
+
+typedef struct {
+    bool used;
+    ha_state_key_t key;
+    double value;
+} state_cache_slot_t;
+
+static state_cache_slot_t s_state_cache[AUTOMATION_STATE_CACHE];
+
+static bool state_cache_take(const ha_state_key_t *key, bool *known, double *prev)
 {
-    for (size_t i = 0; i < scan->count; i++) {
-        automation_fire(&scan->matches[i], scan->source_entity);
+    for (size_t i = 0; i < AUTOMATION_STATE_CACHE; i++) {
+        if (s_state_cache[i].used && memcmp(&s_state_cache[i].key, key, sizeof(*key)) == 0) {
+            *known = true;
+            *prev = s_state_cache[i].value;
+            return true;
+        }
     }
+    *known = false;
+    return false;
 }
 
-static void automation_run_scan(automation_scan_t *scan)
+static void state_cache_put(const ha_state_key_t *key, double value)
 {
-    if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
-                                      automation_collect, scan))) {
-        return;
+    size_t free_slot = AUTOMATION_STATE_CACHE;
+    for (size_t i = 0; i < AUTOMATION_STATE_CACHE; i++) {
+        if (s_state_cache[i].used && memcmp(&s_state_cache[i].key, key, sizeof(*key)) == 0) {
+            s_state_cache[i].value = value;
+            return;
+        }
+        if (!s_state_cache[i].used && free_slot == AUTOMATION_STATE_CACHE) {
+            free_slot = i;
+        }
     }
-    automation_fire_matches(scan);
+    if (free_slot == AUTOMATION_STATE_CACHE) {
+        free_slot = 0;
+    }
+    s_state_cache[free_slot].used = true;
+    s_state_cache[free_slot].key = *key;
+    s_state_cache[free_slot].value = value;
+}
+
+/* --- триггеры ------------------------------------------------------------ */
+
+/* Совпадение адреса триггера (в индексе) с фактическим: SOURCE подходит любому. */
+static bool index_address_matches(ha_entity_id_t index_entity, ha_entity_id_t actual)
+{
+    return index_entity == HA_ENTITY_ID_SOURCE || index_entity == actual;
 }
 
 static void automation_event_trigger(ha_entity_id_t source_entity, ha_event_id_t event_id)
 {
-    automation_scan_t scan = {.source_entity = source_entity, .is_event = true, .event_id = event_id};
     if (event_id == HA_EVENT_MINUTE_TICK) {
-        scan.is_event = false;
-        scan.is_time = read_system_time(&scan.minutes_of_day, &scan.weekday_mask);
-        if (!scan.is_time) {
+        uint16_t minutes = 0;
+        uint8_t mask = 0;
+        if (!read_system_time(&minutes, &mask)) {
             return;
         }
+        for (size_t i = 0; i < s_index_count; i++) {
+            if (s_index[i].trigger_kind != (uint8_t)HA_TRIGGER_TIME) {
+                continue;
+            }
+            ha_rule_t rule = {0};
+            if (!automation_rule_get(s_index[i].rule_id, &rule)) {
+                continue;
+            }
+            if (automation_rule_sem_time_matches(&rule, minutes, mask)) {
+                automation_fire(s_index[i].rule_id, source_entity);
+            }
+        }
+        return;
     }
-    automation_run_scan(&scan);
+
+    for (size_t i = 0; i < s_index_count; i++) {
+        if (s_index[i].trigger_kind != (uint8_t)HA_TRIGGER_DEVICE_EVENT ||
+            s_index[i].event_id != event_id ||
+            !index_address_matches(s_index[i].entity, source_entity)) {
+            continue;
+        }
+        automation_fire(s_index[i].rule_id, source_entity);
+    }
 }
 
 static void automation_state_trigger(const ha_state_key_t *key)
@@ -263,7 +278,7 @@ static void automation_state_trigger(const ha_state_key_t *key)
     }
     double value = 0.0;
     if (!semantics_value_to_double(&record.value, &value)) {
-        return; /* значение невычислимо: триггерить нечем */
+        return;
     }
 
     bool prev_known = false;
@@ -271,16 +286,32 @@ static void automation_state_trigger(const ha_state_key_t *key)
     (void)state_cache_take(key, &prev_known, &prev);
     state_cache_put(key, value);
 
-    automation_scan_t scan = {
-        .source_entity = key->entity,
-        .is_state = true,
-        .state_entity = key->entity,
-        .state_property = key->property,
-        .state_value = value,
-        .state_prev_known = prev_known,
-        .state_prev_value = prev,
-    };
-    automation_run_scan(&scan);
+    for (size_t i = 0; i < s_index_count; i++) {
+        if (s_index[i].trigger_kind != (uint8_t)HA_TRIGGER_STATE ||
+            s_index[i].property != key->property ||
+            !index_address_matches(s_index[i].entity, key->entity)) {
+            continue;
+        }
+        ha_rule_t rule = {0};
+        if (!automation_rule_get(s_index[i].rule_id, &rule)) {
+            continue;
+        }
+        if (automation_rule_sem_state_matches(&rule, key->entity, key->entity, key->property, value,
+                                              prev_known, prev)) {
+            automation_fire(s_index[i].rule_id, key->entity);
+        }
+    }
+}
+
+/* --- задача -------------------------------------------------------------- */
+
+static bool automation_accept(const domain_event_t *event, void *ctx)
+{
+    (void)ctx;
+    if (s_inbox == NULL) {
+        return false;
+    }
+    return xQueueSend(s_inbox, event, 0) == pdTRUE;
 }
 
 static void automation_task(void *arg)
@@ -294,7 +325,6 @@ static void automation_task(void *arg)
         }
 
         if (event.kind == (uint8_t)DOMAIN_FACT_EVENT) {
-            /* A3.1: semantic event адресован источником-Entity (ключ = entity_id). */
             if (event.entity != (uint32_t)HA_ENTITY_ENTITY ||
                 event.key_size != sizeof(ha_entity_id_t)) {
                 continue;
@@ -311,19 +341,24 @@ static void automation_task(void *arg)
             ha_state_key_t key = {0};
             memcpy(&key, event.key, sizeof(key));
             automation_state_trigger(&key);
+        } else if (event.entity == (uint32_t)HA_ENTITY_AUTOMATION &&
+                   (event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED ||
+                    event.kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED)) {
+            /* Правило создано/изменено/удалено — перестраиваем производный индекс. */
+            automation_index_rebuild();
         }
     }
 }
 
-static sys_error_t subscribe(domain_t *domain, uint32_t kind_mask, domain_entity_t entity)
+static sys_error_t subscribe(domain_t *domain, uint32_t kind_mask, uint32_t source_mask,
+                             domain_entity_t entity)
 {
     domain_subscription_desc_t desc = {0};
     desc.kind_mask = kind_mask;
-    desc.source_mask = (1u << (uint32_t)DOMAIN_SOURCE_ZIGBEE) |
-                       (1u << (uint32_t)DOMAIN_SOURCE_SYSTEM);
+    desc.source_mask = source_mask;
     desc.entity = entity;
     desc.try_push = automation_accept;
-    desc.wake = NULL; /* задача спит на очереди, отдельный сигнал не нужен */
+    desc.wake = NULL;
     desc.ctx = NULL;
 
     domain_subscription_t *sub = NULL;
@@ -343,18 +378,31 @@ sys_error_t automation_start(domain_t *domain)
         return sys_error_make(SYS_LAYER_AUTOMATION, SYS_CODE_NO_MEM);
     }
 
+    const uint32_t env_sources =
+        (1u << (uint32_t)DOMAIN_SOURCE_ZIGBEE) | (1u << (uint32_t)DOMAIN_SOURCE_SYSTEM);
+
     /* Семантические события (entity-адресованные) — триггеры EVENT/TIME. */
-    sys_error_t err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_EVENT,
+    sys_error_t err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_EVENT, env_sources,
                                 (domain_entity_t)HA_ENTITY_ENTITY);
     if (sys_failed(err)) {
         return err;
     }
     /* Canonical property state — триггер STATE и источники условий. */
-    err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED,
+    err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED, env_sources,
                     (domain_entity_t)HA_ENTITY_PROPERTY_STATE);
     if (sys_failed(err)) {
         return err;
     }
+    /* Изменения правил (создаёт UI) — перестройка индекса. Любой источник. */
+    err = subscribe(domain,
+                    1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED |
+                        1u << (uint32_t)DOMAIN_FACT_ENTITY_REMOVED,
+                    0u, (domain_entity_t)HA_ENTITY_AUTOMATION);
+    if (sys_failed(err)) {
+        return err;
+    }
+
+    automation_index_rebuild();
 
     if (xTaskCreate(automation_task, "automation", AUTOMATION_TASK_STACK, NULL,
                     AUTOMATION_TASK_PRIORITY, NULL) != pdPASS) {

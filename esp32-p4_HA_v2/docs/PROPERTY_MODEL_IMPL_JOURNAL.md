@@ -571,6 +571,14 @@ TLV / самоописание приложения              — запре�
             устаревшие комментарии. Weather/Location/WiFi оставлены отдельными config/status
             подсистемами. grep: удалённые символы = 0. ha_model 4/4, semantics 1/1, zigbee 9/9,
             automation 1/1, IDF + web-ui зелёные. Шаг A полностью завершён.
+2026-10-10  пост-Step-A: Automation Runtime Index (производный RAM-индекс триггеров).
+            automation.c держит компактный массив ключей {rule_id, kind, entity, property,
+            event_id}; на старте и на любое upsert/remove правила (подписка на
+            HA_ENTITY_AUTOMATION, любой источник) — полная перестройка. На EVENT/STATE/TIME
+            ищем кандидатов по индексу (SOURCE матчит любой адрес), затем читаем только
+            подходящие правила и evaluate. Source of truth — только HA_ENTITY_AUTOMATION;
+            индекс не persistится, восстанавливается из правил; mstore/Domain не менялись.
+            ha_model 4/4, semantics 1/1, zigbee 9/9, automation 1/1, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы
