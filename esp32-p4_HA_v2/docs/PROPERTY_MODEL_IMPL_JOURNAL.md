@@ -584,6 +584,12 @@ TLV / самоописание приложения              — запре�
             discovery). Задаётся только если Entity.name пусто (создание или запись без имени);
             после rename не перетирается. Правило вынесено в host-testable
             zb_entity_initial_name (zigbee_entity_binding) + тест. zigbee 9/9, IDF зелёный.
+2026-10-11  Step B, B1 — пассивная модель Logical Device. ha_model/ha_logical_device.h:
+            ha_device_id_t (uint64), HA_DEVICE_ID_NONE, ha_logical_device_key_t (id),
+            ha_logical_device_record_t {name[32]}. Новый тип HA_ENTITY_LOGICAL_DEVICE=17
+            (ha_entities.h). Поля device_id в ha_entity_record_t НЕ добавлено (это B2).
+            host test test_logical_device (sizes/POD-layout/zero-bytes/none/type-distinct).
+            Zigbee-зависимостей в ha_model нет. ha_model 5/5, IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

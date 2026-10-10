@@ -63,6 +63,9 @@ typedef enum {
     HA_ENTITY_PROPERTY_STATE = 15,
     /* Canonical capabilities (Шаг A): что Entity умеет. Форма — ha_model/ha_capabilities.h. */
     HA_ENTITY_CAPABILITIES = 16,
+    /* Logical Device (Шаг B): логический узел/вещь, которой принадлежат Entity. Форма —
+     * ha_model/ha_logical_device.h. Transport-agnostic, Domain не знает EUI64. */
+    HA_ENTITY_LOGICAL_DEVICE = 17,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32
