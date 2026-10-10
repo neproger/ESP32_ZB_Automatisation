@@ -503,6 +503,19 @@ TLV / самоописание приложения              — запре�
             system REQUIRES semantics. IDF зелёный. Далее: A6.2 Automation v3 wire → A3.4
             storage cutover (ha_rule_t) → A3.3 wiring engine → Web/UI cutover → удаление
             compile/decompile physical automation → A3.5 behaviour parity.
+2026-10-10  шаг A, A3 block целиком (A6.2 Automation + A3.4 storage + A3.3 wiring + удаление):
+            • HA_ENTITY_AUTOMATION payload = ha_rule_t (persist_key automation_v2 → erase).
+            • engine (automation.c) на entity: EVENT(HA_ENTITY_ENTITY), STATE/conditions
+              (PROPERTY_STATE), TIME (canonical SYSTEM), action HA_CMD_PROPERTY. uid/ep/cluster/
+              attr/command_id engine не знает. SOURCE → source триггера (TIME → ENTITY_SYSTEM).
+            • web v3 AUTOMATION (0x36/0x37) + WEB_CMD_AUTOMATION_PUT(entity rule) — без compile.
+            • UI AutomationForm/Automations entity-native (entity_id/property/event/action).
+            • Удалено: automation_rule.{c,h}, ha_automation_record_t/condition, ha_sem_rule_t,
+              semantics_compile/decompile_automation, semantics_event_to_physical, v2 semantic
+              automation message/command, physical rule codec frontend.
+            • Behavior parity test (TIME→ON, TEMP>25→ON, EVENT→TOGGLE, cond+SET, SOURCE).
+            automation 1/1, semantics 1/1, ha_model 4/4, zigbee 9/9, IDF + web-ui зелёные.
+            A3 реально закончена. Дальше: A4 (group_item semantic), затем A6.2+ остаток, A1.4/A1.5.
 ```
 
 ## 7. Открытые вопросы

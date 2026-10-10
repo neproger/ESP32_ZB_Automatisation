@@ -55,28 +55,30 @@ export function maskToDays(mask) {
   return WEEKDAY_LABELS.filter((_, i) => ((Number(mask) || 0) >> i) & 1).join(', ')
 }
 
-const nameOfOr = (uid, nameOf) => (uid && BigInt(uid) !== 0n ? nameOf(uid) : 'триггер')
+// HA_ENTITY_ID_SOURCE: «то же, что источник триггера».
+export const ENTITY_SOURCE = 0xFFFFFFFFFFFFFFFFn
+const isSource = (entity) => entity == null || BigInt(entity) === ENTITY_SOURCE
+const nameOfOr = (entity, nameOf) => (isSource(entity) ? 'источник' : nameOf(entity))
 
 export function describeTrigger(t, nameOf) {
   if (t.kind === 1) {
     return `Время ${minutesToHHMM(t.minutesOfDay)} · ${maskToDays(t.weekdayMask) || '—'}`
   }
+  const who = isSource(t.entity) ? 'источник' : nameOf(t.entity)
   if (t.kind === 0) {
-    const dev = t.deviceUid && BigInt(t.deviceUid) !== 0n ? nameOf(t.deviceUid) : '—'
-    return `${dev} · ${eventName(t.eventId)}`
+    return `${who} · ${eventName(t.eventId)}`
   }
-  const dev = t.deviceUid && BigInt(t.deviceUid) !== 0n ? nameOf(t.deviceUid) : '—'
-  return `${dev}: ${propertyName(t.property)} ${label(TRIGGER_OPS, t.op)} ${t.value} (${label(TRIGGER_EDGES, t.edge)})`
+  return `${who}: ${propertyName(t.property)} ${label(TRIGGER_OPS, t.op)} ${t.value} (${label(TRIGGER_EDGES, t.edge)})`
 }
 
 export function describeCondition(c, nameOf) {
   const op = label(CONDITION_OPS, c.op)
   const val = c.op === 8 ? `${c.value}…${c.value2}` : c.value
-  return `${nameOfOr(c.deviceUid, nameOf)}: ${propertyName(c.property)} ${op} ${val}`
+  return `${nameOfOr(c.entity, nameOf)}: ${propertyName(c.property)} ${op} ${val}`
 }
 
 export function describeAction(a, nameOf) {
   const suffix =
     a.valueKind === 1 ? ` ${a.value}` : a.valueKind === 2 ? ` xy ${Number(a.x).toFixed(2)},${Number(a.y).toFixed(2)}` : ''
-  return `${nameOfOr(a.deviceUid, nameOf)}: ${propertyName(a.property)} · ${actionName(a.action)}${suffix}`
+  return `${nameOfOr(a.entity, nameOf)}: ${propertyName(a.property)} · ${actionName(a.action)}${suffix}`
 }

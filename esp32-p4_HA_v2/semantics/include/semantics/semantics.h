@@ -12,7 +12,6 @@
 
 #include <stdbool.h>
 
-#include "ha_model/ha_automation.h"     /* ha_sem_rule_t, ha_automation_record_t */
 #include "ha_model/ha_capabilities.h"   /* ha_entity_capabilities_record_t */
 #include "ha_model/ha_commands.h"       /* ha_zb_command_t */
 #include "ha_model/ha_entities.h"       /* ha_zb_state_key_t, ha_zb_state_record_t */
@@ -83,30 +82,6 @@ size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out,
  */
 bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
                                      ha_entity_capabilities_record_t *out);
-
-/*
- * Reverse: семантическое событие → legacy command_id по профилю устройства. false —
- * событие неоднозначно/невыразимо (напр. SINGLE_PRESS от общего профиля = ON/OFF/TOGGLE).
- */
-bool semantics_event_to_physical(const ha_device_record_t *device, ha_event_id_t event,
-                                 uint16_t *out_command_id);
-
-/*
- * Скомпилировать semantic-правило в physical record (один раз, при сохранении из UI).
- * trigger_device — профиль устройства-источника (для reverse event; может быть NULL).
- * false — правило невыразимо в legacy ABI (неоднозначный event, BETWEEN на STATE-триггере,
- * неизвестный property/action). Вызывающий сообщает понятную ошибку, а не сохраняет неверное.
- */
-bool semantics_compile_automation(const ha_sem_rule_t *rule, const ha_device_record_t *trigger_device,
-                                  ha_automation_record_t *out);
-
-/*
- * Обратная проекция: physical record → semantic rule (для read-path UI). false — правило
- * невыразимо семантически (legacy: неоднозначный event, неизвестная пара, неподъёмный
- * action args). Тогда Web/UI показывает его как legacy/raw, не выдумывая смысл.
- */
-bool semantics_decompile_automation(const ha_automation_record_t *record,
-                                    const ha_device_record_t *trigger_device, ha_sem_rule_t *out);
 
 /*
  * Собрать физическую команду из семантического запроса: target(device/endpoint) +

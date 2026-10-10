@@ -34,7 +34,6 @@ export const CMD = {
   GROUP_ITEM_REMOVE: 12,
   LOCATION_PUT: 13,
   SEMANTIC_COMMAND: 14,
-  SEMANTIC_AUTOMATION_PUT: 15,
   SEMANTIC_GROUP_ITEM_PUT: 16,
   SEMANTIC_GROUP_ITEM_REMOVE: 17,
   ENTITY_RENAME: 18,
@@ -50,6 +49,8 @@ export const MSG3 = {
   PROPERTY_STATE_REMOVE: 0x33,
   CAPABILITIES: 0x34,
   CAPABILITIES_REMOVE: 0x35,
+  AUTOMATION: 0x36,
+  AUTOMATION_REMOVE: 0x37,
 }
 
 export const HDR = 8
@@ -114,27 +115,29 @@ function bF32(v) {
   const dv = new DataView(new ArrayBuffer(4)); dv.setFloat32(0, Number(v) || 0, true)
   return [dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)]
 }
-function encodeSemRule(r) {
+// Entity-native правило (Шаг A, A6.2): identity = entity_id, без uid/ep/cluster/attr.
+export const ENTITY_SOURCE = 0xFFFFFFFFFFFFFFFFn // HA_ENTITY_ID_SOURCE
+
+function encodeRule(r) {
   const b = []
   const t = r.trigger
   b.push(r.enabled ? 1 : 0, t.kind)
-  if (t.kind === 0) b.push(...bU64(t.deviceUid || 0), t.eventId & 0xff)
+  if (t.kind === 0) b.push(...bU64(t.entity ?? ENTITY_SOURCE), t.eventId & 0xff)
   else if (t.kind === 1) b.push(...bU16(t.minutesOfDay || 0), (t.weekdayMask ?? 0) & 0xff)
-  else b.push(...bU64(t.deviceUid || 0), t.endpoint || 0, ...bU16(t.property || 0), t.op || 1, t.edge || 0, ...bF32(t.value || 0), ...bF32(t.value2 || 0))
+  else b.push(...bU64(t.entity ?? ENTITY_SOURCE), ...bU16(t.property || 0), t.op || 1, t.edge || 0, ...bF32(t.value || 0), ...bF32(t.value2 || 0))
   const conds = (r.conditions || []).slice(0, 4)
   b.push(conds.length)
-  for (const c of conds) b.push(...bU64(c.deviceUid || 0), c.endpoint || 0, ...bU16(c.property || 0), c.op || 1, ...bF32(c.value || 0), ...bF32(c.value2 || 0))
+  for (const c of conds) b.push(...bU64(c.entity ?? ENTITY_SOURCE), ...bU16(c.property || 0), c.op || 1, ...bF32(c.value || 0), ...bF32(c.value2 || 0))
   const a = r.action
-  b.push(...bU64(a.deviceUid || 0), a.endpoint || 0, ...bU16(a.property || 0), a.action || 0)
+  b.push(...bU64(a.entity ?? ENTITY_SOURCE), ...bU16(a.property || 0), a.action || 0)
   const vk = a.valueKind ?? (a.value == null ? COMMAND_VALUE.NONE : a.x != null ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR)
   b.push(vk)
   if (vk === COMMAND_VALUE.SCALAR) b.push(VALUE_KIND.FLOAT, ...bF32(a.value || 0))
   else if (vk === COMMAND_VALUE.XY) b.push(...bF32(a.x || 0), ...bF32(a.y || 0))
   return b
 }
-export function semanticAutomationPut(id, rule) {
-  const body = new Uint8Array([...bU64(id), ...encodeSemRule(rule)])
-  return encodeCommand(CMD.SEMANTIC_AUTOMATION_PUT, body)
+export function automationPut(id, rule) {
+  return encodeCommand(CMD.AUTOMATION_PUT, new Uint8Array([...bU64(id), ...encodeRule(rule)]))
 }
 
 export function snapshot() {

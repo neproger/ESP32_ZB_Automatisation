@@ -157,6 +157,67 @@ static void test_action(void)
     CHECK(!automation_rule_sem_action(&rule, E, &command));
 }
 
+/* A3.5: поведенческий parity — типовые правила на entity-модели. */
+static void test_behaviour_parity(void)
+{
+    ha_property_command_t cmd = {0};
+    const ha_entity_id_t SYSTEM = 0xABCDEF0123456789ull;
+
+    /* TIME -> POWER ON (источник TIME-тика = ENTITY_SYSTEM). */
+    ha_rule_t r = {0};
+    r.enabled = 1;
+    r.trigger.kind = HA_TRIGGER_TIME;
+    r.trigger.minutes_of_day = 7 * 60 + 30;
+    r.trigger.weekday_mask = 0x7f;
+    r.action_ref.entity = E;
+    r.action_ref.property = HA_PROPERTY_POWER;
+    r.action = HA_ACTION_ON;
+    CHECK(automation_rule_sem_time_matches(&r, 450, 0x01));
+    CHECK(automation_rule_sem_action(&r, SYSTEM, &cmd));
+    CHECK(cmd.entity == E && cmd.property == HA_PROPERTY_POWER && cmd.action == HA_ACTION_ON);
+
+    /* TEMP > 25 -> POWER ON (STATE-триггер). */
+    r.trigger.kind = HA_TRIGGER_STATE;
+    r.trigger.entity = E;
+    r.trigger.property = HA_PROPERTY_TEMPERATURE;
+    r.trigger.op = HA_CONDITION_OP_GT;
+    r.trigger.edge = HA_TRIGGER_EDGE_ANY;
+    r.trigger.value = 25.0f;
+    CHECK(automation_rule_sem_state_matches(&r, E, E, HA_PROPERTY_TEMPERATURE, 26.0, true, 24.0));
+    CHECK(!automation_rule_sem_state_matches(&r, E, E, HA_PROPERTY_TEMPERATURE, 24.0, true, 26.0));
+
+    /* EVENT SINGLE_PRESS -> TOGGLE (источник — сама кнопка). */
+    r.trigger.kind = HA_TRIGGER_DEVICE_EVENT;
+    r.trigger.entity = HA_ENTITY_ID_SOURCE;
+    r.trigger.event_id = HA_EVENT_SINGLE_PRESS;
+    r.action_ref.entity = HA_ENTITY_ID_SOURCE; /* действие — на источник события */
+    r.action_ref.property = HA_PROPERTY_POWER;
+    r.action = HA_ACTION_TOGGLE;
+    CHECK(automation_rule_sem_event_matches(&r, F, HA_EVENT_SINGLE_PRESS));
+    CHECK(automation_rule_sem_action(&r, F, &cmd));
+    CHECK(cmd.entity == F && cmd.action == HA_ACTION_TOGGLE);
+
+    /* POWER=true + TEMP>25 -> BRIGHTNESS 70 (условие + действие). */
+    r.trigger.kind = HA_TRIGGER_DEVICE_EVENT;
+    r.conditions_count = 1;
+    r.conditions[0].ref.entity = E;
+    r.conditions[0].ref.property = HA_PROPERTY_POWER;
+    r.conditions[0].cmp.op = HA_CONDITION_OP_EQ;
+    r.conditions[0].cmp.value = 1.0f;
+    CHECK(automation_rule_sem_condition_ok(&r.conditions[0], 1.0));
+    CHECK(!automation_rule_sem_condition_ok(&r.conditions[0], 0.0));
+
+    r.action_ref.entity = E;
+    r.action_ref.property = HA_PROPERTY_BRIGHTNESS;
+    r.action = HA_ACTION_SET;
+    r.action_value.kind = HA_COMMAND_VALUE_SCALAR;
+    r.action_value.value.scalar.kind = HA_VALUE_U32;
+    r.action_value.value.scalar.value.u32 = 70;
+    CHECK(automation_rule_sem_action(&r, F, &cmd));
+    CHECK(cmd.entity == E && cmd.property == HA_PROPERTY_BRIGHTNESS);
+    CHECK(cmd.value.value.scalar.value.u32 == 70);
+}
+
 int main(void)
 {
     test_resolve();
@@ -166,6 +227,7 @@ int main(void)
     test_compare();
     test_condition();
     test_action();
+    test_behaviour_parity();
 
     if (g_failures == 0) {
         printf("all semantic-rule tests passed\n");

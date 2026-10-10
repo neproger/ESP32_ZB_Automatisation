@@ -255,14 +255,19 @@ A3  Automation persistent semantic                                              
       [x] A3.2  adapter command-by-entity: HA_CMD_PROPERTY + ha_property_command_t;
                 zigbee_entity_physical (reverse) + executor резолвит entity→(uid,ep) и
                 кодирует через semantics_build_command. Потребителю транспорт не виден
-      [~] A3.3  engine на ha_rule_t. Чистое ядро готово: automation_rule_sem (match
-                EVENT по (source_entity,event_id), STATE по (entity,property) с edge/BETWEEN,
-                TIME, операторы, резолв HA_ENTITY_ID_SOURCE, сборка ha_property_command_t).
-                automation 2/2. Осталось подключить к Domain (HA_ENTITY_AUTOMATION как
-                ha_rule_t + PROPERTY_STATE + HA_CMD_PROPERTY) — это неотделимо от A3.4
-                (таблица = ha_rule_t), т.к. web читает ту же таблицу и пишет правило
-      [ ] A3.4  Web хранит ha_rule_t напрямую (без compile/decompile) + erase старых правил
-      [ ] A3.5  eval-parity: решение по canonical == решение по raw-проекции
+      [x] A3.3  engine на ha_rule_t (entity-адресованный): EVENT по (source_entity,event_id),
+                STATE/conditions по canonical PROPERTY_STATE, TIME по canonical SYSTEM-свойствам,
+                action → HA_CMD_PROPERTY. Чистое ядро automation_rule_sem + wiring в
+                automation.c. uid/endpoint/cluster/attr engine не знает.
+      [x] A3.4  HA_ENTITY_AUTOMATION payload = ha_rule_t; Web хранит/отдаёт правило напрямую
+                (без compile/decompile) через v3 AUTOMATION + WEB_CMD_AUTOMATION_PUT; UI формы
+                entity-native; erase старого ABI (persist_key automation_v2)
+      [x] A3.5  behaviour parity (test_rule_sem: TIME→ON, TEMP>25→ON, EVENT→TOGGLE,
+                condition+SET, SOURCE→источник)
+      Удалено (A3 block): physical engine automation_rule.{c,h}, ha_automation_record_t/condition,
+      ha_sem_rule_t, semantics_compile/decompile_automation, semantics_event_to_physical,
+      WEB_MSG_SEMANTIC_AUTOMATION(+REMOVE), WEB_CMD_SEMANTIC_AUTOMATION_PUT, physical rule codec.
+      Prereq: canonical System properties (system пишет PROPERTY_STATE). **A3 завершён.**
 
 A4  Group Item persistent semantic
       Ключ (group, entity, property) вместо raw (uid,ep,cluster,attr).

@@ -13,6 +13,7 @@
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_rule.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
@@ -58,7 +59,7 @@ _Static_assert(WEB_ENTITY_SETTINGS == (uint32_t)HA_ENTITY_SETTINGS, "entity id: 
 
 /* Фиксируем layout провода: эти размеры зеркалит web-ui/src/schema.js. */
 _Static_assert(sizeof(ha_zb_command_t) == 32, "zb command layout: update web-ui");
-_Static_assert(sizeof(ha_automation_record_t) == 144, "automation record layout: update web-ui");
+
 
 /* Схема записи: браузер знает те же размеры (web-ui/src/schema.js). */
 typedef struct {
@@ -77,7 +78,6 @@ typedef struct {
     X(WEB_ENTITY_DEVICE, sizeof(ha_device_uid_t), sizeof(ha_device_record_t))               \
     X(WEB_ENTITY_STATE, sizeof(ha_zb_state_key_t), sizeof(ha_zb_state_record_t))            \
     X(WEB_ENTITY_ENDPOINT, sizeof(ha_endpoint_key_t), sizeof(ha_endpoint_record_t))         \
-    X(WEB_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_automation_record_t))   \
     X(WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)) \
     X(WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t))           \
     X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
@@ -207,12 +207,11 @@ static uint32_t value_to_bits(const ha_value_t *value)
     }
 }
 
-/* Общий wire-кодек semantic-правила и проекция (определены ниже). */
-static size_t web_encode_sem_rule(const ha_sem_rule_t *rule, uint8_t *out);
-static bool semantic_automation_payload(const ha_automation_key_t *key,
-                                        const ha_automation_record_t *record,
-                                        const ha_device_record_t *device_ptr, uint8_t *out,
-                                        uint16_t *out_len);
+/* Общий wire-кодек entity-правила (определены ниже). */
+static uint16_t web_rule_encode(const ha_automation_key_t *key, const ha_rule_t *rule, uint8_t *out,
+                                uint16_t *out_len);
+static uint16_t web_rule_decode(const uint8_t *a, size_t len, ha_automation_key_t *key,
+                                ha_rule_t *out, size_t *used);
 
 static void web_send_frame(int fd, uint8_t type, uint16_t seq, const void *payload, uint16_t len)
 {
@@ -341,26 +340,11 @@ static bool web3_capabilities_payload(ha_entity_id_t entity_id,
     return true;
 }
 
-/*
- * raw AUTOMATION → semantic DTO: u64 id + u8 representable (+ rule). Legacy/невыразимое
- * шлём как representable=0 — UI покажет «неподдерживаемое», не выдумывая смысл.
- */
-static bool semantic_automation_payload(const ha_automation_key_t *key,
-                                        const ha_automation_record_t *record,
-                                        const ha_device_record_t *device_ptr, uint8_t *out,
-                                        uint16_t *out_len)
+/* ha_rule_t (уже семантическая, entity-native) → wire DTO. Без compile/decompile. */
+static bool semantic_automation_payload(const ha_automation_key_t *key, const ha_rule_t *rule,
+                                        uint8_t *out, uint16_t *out_len)
 {
-    put_u64(out, key->id);
-    ha_sem_rule_t rule = {0};
-    if (!semantics_decompile_automation(record, device_ptr, &rule)) {
-        out[8] = 0; /* representable = 0 */
-        *out_len = 9;
-        return true;
-    }
-    out[8] = 1;
-    const size_t n = web_encode_sem_rule(&rule, out + 9);
-    *out_len = (uint16_t)(9 + n);
-    return true;
+    return web_rule_encode(key, rule, out, out_len) == (uint16_t)SYS_CODE_OK;
 }
 
 /*
@@ -443,47 +427,10 @@ static bool snapshot_count(const void *key, const void *record, void *ctx)
     return true;
 }
 
-/* Профили устройств для reverse event при snapshot: собраны ВНЕ automation-итерации,
- * т.к. внутри domain_entity_iter нельзя звать domain_entity_get (лок Domain). */
-#define WEB_SNAPSHOT_DEVICES_MAX 32
-typedef struct {
-    ha_device_uid_t uid;
-    char model[HA_DEVICE_MODEL_MAX];
-} web_device_model_t;
-
-typedef struct {
-    web_device_model_t items[WEB_SNAPSHOT_DEVICES_MAX];
-    size_t count;
-} web_device_cache_t;
-
-static bool snapshot_collect_device(const void *key, const void *record, void *ctx)
-{
-    web_device_cache_t *cache = (web_device_cache_t *)ctx;
-    if (cache->count >= WEB_SNAPSHOT_DEVICES_MAX) {
-        return true;
-    }
-    const ha_device_record_t *rec = (const ha_device_record_t *)record;
-    cache->items[cache->count].uid = *(const ha_device_uid_t *)key;
-    memcpy(cache->items[cache->count].model, rec->model, HA_DEVICE_MODEL_MAX);
-    cache->count++;
-    return true;
-}
-
-static const char *device_cache_model(const web_device_cache_t *cache, ha_device_uid_t uid)
-{
-    for (size_t i = 0; i < cache->count; i++) {
-        if (cache->items[i].uid == uid) {
-            return cache->items[i].model;
-        }
-    }
-    return NULL;
-}
-
 typedef struct {
     int fd;
     const web_schema_t *schema;
     uint32_t *count;
-    const web_device_cache_t *devices;
 } snapshot_ctx_t;
 
 static bool snapshot_emit(const void *key, const void *record, void *ctx)
@@ -501,24 +448,6 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
         if (semantic_state_payload((const ha_zb_state_key_t *)key,
                                    (const ha_zb_state_record_t *)record, sem, &sem_len)) {
             web_send_frame(s->fd, WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
-        }
-    } else if (s->schema->type == WEB_ENTITY_AUTOMATION) {
-        uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
-        uint16_t sem_len = 0;
-        const ha_automation_record_t *arec = (const ha_automation_record_t *)record;
-        ha_device_record_t dev = {0};
-        const ha_device_record_t *dev_ptr = NULL;
-        if (s->devices != NULL &&
-            arec->trigger_kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
-            const char *model = device_cache_model(s->devices, arec->trigger_b.event.device_uid);
-            if (model != NULL) {
-                memcpy(dev.model, model, HA_DEVICE_MODEL_MAX);
-                dev_ptr = &dev;
-            }
-        }
-        if (semantic_automation_payload((const ha_automation_key_t *)key, arec, dev_ptr, sem,
-                                        &sem_len)) {
-            web_send_frame(s->fd, WEB_MSG_SEMANTIC_AUTOMATION, 0, sem, sem_len);
         }
     } else if (s->schema->type == WEB_ENTITY_ENDPOINT) {
         uint8_t cap[WEB_PROTO_MAX_PAYLOAD];
@@ -580,38 +509,49 @@ static bool snapshot_emit_capabilities3(const void *key, const void *record, voi
     return true;
 }
 
+static bool snapshot_emit_automation3(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    uint16_t len = 0;
+    if (web_rule_encode((const ha_automation_key_t *)key, (const ha_rule_t *)record, out, &len) ==
+        (uint16_t)SYS_CODE_OK) {
+        web_send_frame(s->fd, WEB_MSG3_AUTOMATION, 0, out, len);
+    }
+    (*s->count)++;
+    return true;
+}
+
 static void web_send_snapshot(int fd)
 {
     uint32_t total = 0;
     for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
         domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_count, &total);
     }
-    /* canonical v3 (A6.1) */
+    /* canonical v3 */
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
     web_send_frame(fd, WEB_MSG_SYNC_BEGIN, 0, word, sizeof(word));
 
-    web_device_cache_t devices = {0};
-    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_DEVICE, snapshot_collect_device,
-                       &devices);
-
     uint32_t sent = 0;
     for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
-        snapshot_ctx_t ctx = {
-            .fd = fd, .schema = &SCHEMA[i], .count = &sent, .devices = &devices};
+        snapshot_ctx_t ctx = {.fd = fd, .schema = &SCHEMA[i], .count = &sent};
         domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_emit, &ctx);
     }
 
-    snapshot_ctx_t v3 = {.fd = fd, .schema = NULL, .count = &sent, .devices = NULL};
+    snapshot_ctx_t v3 = {.fd = fd, .schema = NULL, .count = &sent};
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_emit_entity3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
                        snapshot_emit_property3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES,
                        snapshot_emit_capabilities3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
+                       snapshot_emit_automation3, &v3);
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -700,6 +640,24 @@ static void web_send_fact(const domain_event_t *event)
         }
         return;
     }
+    if (event->entity == (uint32_t)HA_ENTITY_AUTOMATION &&
+        event->key_size == sizeof(ha_automation_key_t)) {
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_rule_t rule = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &rule))) {
+                uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+                uint16_t len = 0;
+                if (web_rule_encode((const ha_automation_key_t *)event->key, &rule, out, &len) ==
+                    (uint16_t)SYS_CODE_OK) {
+                    web_broadcast(WEB_MSG3_AUTOMATION, 0, out, len);
+                }
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            web_broadcast(WEB_MSG3_AUTOMATION_REMOVE, 0, event->key,
+                          (uint16_t)sizeof(ha_automation_key_t));
+        }
+        return;
+    }
 
     const web_schema_t *schema = schema_for((uint8_t)event->entity);
     if (schema == NULL || event->key_size != schema->key_size) {
@@ -724,23 +682,6 @@ static void web_send_fact(const domain_event_t *event)
             if (semantic_state_payload((const ha_zb_state_key_t *)event->key,
                                        (const ha_zb_state_record_t *)record, sem, &sem_len)) {
                 web_broadcast(WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
-            }
-        } else if (schema->type == WEB_ENTITY_AUTOMATION &&
-                   event->key_size == sizeof(ha_automation_key_t)) {
-            const ha_automation_record_t *rec = (const ha_automation_record_t *)record;
-            ha_device_record_t dev = {0};
-            const ha_device_record_t *dev_ptr = NULL;
-            if (rec->trigger_kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT &&
-                rec->trigger_b.event.device_uid != 0 &&
-                sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE,
-                                         &rec->trigger_b.event.device_uid, &dev))) {
-                dev_ptr = &dev;
-            }
-            uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t sem_len = 0;
-            if (semantic_automation_payload((const ha_automation_key_t *)event->key, rec, dev_ptr,
-                                            sem, &sem_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_AUTOMATION, 0, sem, sem_len);
             }
         } else if (schema->type == WEB_ENTITY_ENDPOINT &&
                    event->key_size == sizeof(ha_endpoint_key_t)) {
@@ -768,10 +709,6 @@ static void web_send_fact(const domain_event_t *event)
                                               &sem_len)) {
                 web_broadcast(WEB_MSG_SEMANTIC_STATE_REMOVE, 0, sem, sem_len);
             }
-        } else if (schema->type == WEB_ENTITY_AUTOMATION &&
-                   event->key_size == sizeof(ha_automation_key_t)) {
-            web_broadcast(WEB_MSG_SEMANTIC_AUTOMATION_REMOVE, 0, event->key,
-                          (uint16_t)sizeof(ha_automation_key_t));
         } else if (schema->type == WEB_ENTITY_ENDPOINT &&
                    event->key_size == sizeof(ha_endpoint_key_t)) {
             web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE, 0, event->key,
@@ -978,34 +915,45 @@ static uint16_t web_do_entity_rename(const uint8_t *args, size_t len)
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* Canonical Automation PUT: entity-native правило (ha_rule_t) — без compile. */
 static uint16_t web_do_automation_put(const uint8_t *args, size_t len)
 {
-    if (len != sizeof(ha_automation_key_t) + sizeof(ha_automation_record_t)) {
-        return SYS_CODE_INVALID_SIZE;
+    ha_automation_key_t key = {0};
+    ha_rule_t rule = {0};
+    size_t used = 0;
+    const uint16_t rc = web_rule_decode(args, len, &key, &rule, &used);
+    if (rc != (uint16_t)SYS_CODE_OK) {
+        return rc;
     }
-    ha_automation_key_t key;
-    ha_automation_record_t record;
-    memcpy(&key, args, sizeof(key));
-    memcpy(&record, args + sizeof(key), sizeof(record));
-
-    if (record.conditions_count > HA_AUTOMATION_CONDITIONS_MAX ||
-        record.action_args_len > HA_AUTOMATION_ARGS_MAX) {
-        return SYS_CODE_INVALID_ARG;
+    if (used != len) { /* strict: без хвостовых байтов */
+        return SYS_CODE_INVALID_SIZE;
     }
 
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;
     bool changed = false;
     const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
-                                              &record, &meta, &changed);
+                                              &rule, &meta, &changed);
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
+/* f32 ↔ bits (LE-копия). */
+static uint32_t web_float_bits(float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
 /*
- * Общий wire-кодек semantic-правила (read=write): PUT декодирует, snapshot/delta
- * кодируют. Стабильный LE, без C enum/union/memcpy целых структур.
+ * Entity-native Automation wire (A6.2): u64 id, u8 enabled, u8 kind; trigger по виду
+ * (EVENT{u64 entity,u8 event_id} | TIME{u16 minutes,u8 mask} | STATE{u64 entity,u16 property,
+ * u8 op,u8 edge,f32 value,f32 value2}); u8 conditions_count; conditions[]{u64 entity,
+ * u16 property,u8 op,f32 value,f32 value2}; action{u64 entity,u16 property,u8 action,
+ * u8 value_kind[, scalar u8 kind+u32 | xy f32+f32]}. Без uid/endpoint/cluster/attr.
  */
-static uint16_t web_decode_sem_rule(const uint8_t *a, size_t len, size_t *used, ha_sem_rule_t *out)
+static uint16_t web_rule_decode(const uint8_t *a, size_t len, ha_automation_key_t *key,
+                                ha_rule_t *out, size_t *used)
 {
     size_t o = 0;
 #define NEED(n)                          \
@@ -1015,27 +963,28 @@ static uint16_t web_decode_sem_rule(const uint8_t *a, size_t len, size_t *used, 
         }                                \
     } while (0)
 
-    NEED(2);
+    NEED(10);
+    key->id = get_u64(a + o);
+    o += 8;
     out->enabled = a[o++];
     out->trigger.kind = a[o++];
-    switch (out->trigger.kind) {
-    case (uint8_t)HA_TRIGGER_DEVICE_EVENT:
+    switch ((ha_automation_trigger_kind_t)out->trigger.kind) {
+    case HA_TRIGGER_DEVICE_EVENT:
         NEED(9);
-        out->trigger.device_uid = get_u64(a + o);
+        out->trigger.entity = get_u64(a + o);
         o += 8;
         out->trigger.event_id = (ha_event_id_t)a[o++];
         break;
-    case (uint8_t)HA_TRIGGER_TIME:
+    case HA_TRIGGER_TIME:
         NEED(3);
         out->trigger.minutes_of_day = get_u16(a + o);
         o += 2;
         out->trigger.weekday_mask = a[o++];
         break;
-    case (uint8_t)HA_TRIGGER_STATE: {
-        NEED(21);
-        out->trigger.device_uid = get_u64(a + o);
+    case HA_TRIGGER_STATE: {
+        NEED(18);
+        out->trigger.entity = get_u64(a + o);
         o += 8;
-        out->trigger.endpoint = a[o++];
         out->trigger.property = (ha_property_id_t)get_u16(a + o);
         o += 2;
         out->trigger.op = a[o++];
@@ -1054,55 +1003,56 @@ static uint16_t web_decode_sem_rule(const uint8_t *a, size_t len, size_t *used, 
 
     NEED(1);
     out->conditions_count = a[o++];
-    if (out->conditions_count > HA_AUTOMATION_CONDITIONS_MAX) {
+    if (out->conditions_count > HA_RULE_CONDITIONS_MAX) {
         return SYS_CODE_INVALID_ARG;
     }
     for (uint8_t i = 0; i < out->conditions_count; i++) {
-        NEED(20);
-        ha_sem_condition_t *c = &out->conditions[i];
-        c->ref.device_uid = get_u64(a + o);
+        NEED(19);
+        ha_rule_condition_t *c = &out->conditions[i];
+        c->ref.entity = get_u64(a + o);
         o += 8;
-        c->ref.endpoint = a[o++];
         c->ref.property = (ha_property_id_t)get_u16(a + o);
         o += 2;
-        c->op = a[o++];
+        c->cmp.op = a[o++];
         const uint32_t bv = get_u32(a + o);
         o += 4;
         const uint32_t b2 = get_u32(a + o);
         o += 4;
-        memcpy(&c->value, &bv, sizeof(bv));
-        memcpy(&c->value2, &b2, sizeof(b2));
+        memcpy(&c->cmp.value, &bv, sizeof(bv));
+        memcpy(&c->cmp.value2, &b2, sizeof(b2));
     }
 
     NEED(13);
-    ha_sem_action_t *act = &out->action;
-    act->target.device_uid = get_u64(a + o);
+    out->action_ref.entity = get_u64(a + o);
     o += 8;
-    act->target.endpoint = a[o++];
-    act->target.property = (ha_property_id_t)get_u16(a + o);
+    out->action_ref.property = (ha_property_id_t)get_u16(a + o);
     o += 2;
-    act->action = (ha_action_id_t)a[o++];
-    act->value_kind = a[o++];
-    if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
+    out->action = a[o++];
+    out->action_value.kind = (ha_command_value_kind_t)a[o++];
+    if (out->action_value.kind == HA_COMMAND_VALUE_SCALAR) {
         NEED(5);
         const ha_value_kind_t kind = (ha_value_kind_t)a[o++];
         const uint32_t bits = get_u32(a + o);
         o += 4;
-        if (!bits_to_value(kind, bits, &act->value)) {
+        if (!bits_to_value(kind, bits, &out->action_value.value.scalar)) {
             return SYS_CODE_INVALID_ARG;
         }
-    } else if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
+    } else if (out->action_value.kind == HA_COMMAND_VALUE_XY) {
         NEED(8);
         const uint32_t bx = get_u32(a + o);
         o += 4;
         const uint32_t by = get_u32(a + o);
         o += 4;
-        memcpy(&act->x, &bx, sizeof(bx));
-        memcpy(&act->y, &by, sizeof(by));
-        if (!isfinite(act->x) || !isfinite(act->y)) {
+        float x = 0.0f;
+        float y = 0.0f;
+        memcpy(&x, &bx, sizeof(x));
+        memcpy(&y, &by, sizeof(y));
+        if (!isfinite(x) || !isfinite(y)) {
             return SYS_CODE_INVALID_ARG;
         }
-    } else if (act->value_kind != (uint8_t)HA_COMMAND_VALUE_NONE) {
+        out->action_value.value.xy.x = x;
+        out->action_value.value.xy.y = y;
+    } else if (out->action_value.kind != HA_COMMAND_VALUE_NONE) {
         return SYS_CODE_INVALID_ARG;
     }
     *used = o;
@@ -1110,126 +1060,71 @@ static uint16_t web_decode_sem_rule(const uint8_t *a, size_t len, size_t *used, 
 #undef NEED
 }
 
-static size_t web_encode_sem_rule(const ha_sem_rule_t *rule, uint8_t *out)
+static uint16_t web_rule_encode(const ha_automation_key_t *key, const ha_rule_t *rule, uint8_t *out,
+                                uint16_t *out_len)
 {
     size_t o = 0;
+    put_u64(out + o, key->id);
+    o += 8;
     out[o++] = rule->enabled;
     out[o++] = rule->trigger.kind;
     switch ((ha_automation_trigger_kind_t)rule->trigger.kind) {
     case HA_TRIGGER_DEVICE_EVENT:
-        put_u64(out + o, rule->trigger.device_uid);
+        put_u64(out + o, rule->trigger.entity);
         o += 8;
         out[o++] = (uint8_t)rule->trigger.event_id;
         break;
     case HA_TRIGGER_TIME:
-        out[o++] = (uint8_t)(rule->trigger.minutes_of_day & 0xff);
-        out[o++] = (uint8_t)(rule->trigger.minutes_of_day >> 8);
+        put_u16(out + o, rule->trigger.minutes_of_day);
+        o += 2;
         out[o++] = rule->trigger.weekday_mask;
         break;
-    case HA_TRIGGER_STATE: {
-        put_u64(out + o, rule->trigger.device_uid);
+    case HA_TRIGGER_STATE:
+        put_u64(out + o, rule->trigger.entity);
         o += 8;
-        out[o++] = rule->trigger.endpoint;
-        out[o++] = (uint8_t)(rule->trigger.property & 0xff);
-        out[o++] = (uint8_t)(rule->trigger.property >> 8);
+        put_u16(out + o, (uint16_t)rule->trigger.property);
+        o += 2;
         out[o++] = rule->trigger.op;
         out[o++] = rule->trigger.edge;
-        uint32_t bv = 0;
-        uint32_t b2 = 0;
-        memcpy(&bv, &rule->trigger.value, sizeof(bv));
-        memcpy(&b2, &rule->trigger.value2, sizeof(b2));
-        put_u32(out + o, bv);
+        put_u32(out + o, web_float_bits(rule->trigger.value));
         o += 4;
-        put_u32(out + o, b2);
+        put_u32(out + o, web_float_bits(rule->trigger.value2));
         o += 4;
         break;
-    }
     default:
-        return 0;
-    }
-    out[o++] = rule->conditions_count;
-    for (uint8_t i = 0; i < rule->conditions_count; i++) {
-        const ha_sem_condition_t *c = &rule->conditions[i];
-        put_u64(out + o, c->ref.device_uid);
-        o += 8;
-        out[o++] = c->ref.endpoint;
-        out[o++] = (uint8_t)(c->ref.property & 0xff);
-        out[o++] = (uint8_t)(c->ref.property >> 8);
-        out[o++] = c->op;
-        uint32_t bv = 0;
-        uint32_t b2 = 0;
-        memcpy(&bv, &c->value, sizeof(bv));
-        memcpy(&b2, &c->value2, sizeof(b2));
-        put_u32(out + o, bv);
-        o += 4;
-        put_u32(out + o, b2);
-        o += 4;
-    }
-    const ha_sem_action_t *act = &rule->action;
-    put_u64(out + o, act->target.device_uid);
-    o += 8;
-    out[o++] = act->target.endpoint;
-    out[o++] = (uint8_t)(act->target.property & 0xff);
-    out[o++] = (uint8_t)(act->target.property >> 8);
-    out[o++] = (uint8_t)act->action;
-    out[o++] = act->value_kind;
-    if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
-        out[o++] = (uint8_t)act->value.kind;
-        put_u32(out + o, value_to_bits(&act->value));
-        o += 4;
-    } else if (act->value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
-        uint32_t bx = 0;
-        uint32_t by = 0;
-        memcpy(&bx, &act->x, sizeof(bx));
-        memcpy(&by, &act->y, sizeof(by));
-        put_u32(out + o, bx);
-        o += 4;
-        put_u32(out + o, by);
-        o += 4;
-    }
-    return o;
-}
-
-/*
- * Semantic-правило → physical record: браузер не знает offsets/args/cluster/command id.
- * Компилирует мост; невыразимое правило (неоднозначный event, BETWEEN-триггер) отвергается.
- */
-static uint16_t web_do_semantic_automation_put(const uint8_t *a, size_t len)
-{
-    if (len < 8) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    const uint64_t id = get_u64(a);
-    ha_sem_rule_t rule = {0};
-    size_t used = 0;
-    const uint16_t rc = web_decode_sem_rule(a + 8, len - 8, &used, &rule);
-    if (rc != (uint16_t)SYS_CODE_OK) {
-        return rc;
-    }
-    if (8 + used != len) { /* strict: без хвостовых байтов */
-        return SYS_CODE_INVALID_SIZE;
-    }
-
-    ha_device_record_t device = {0};
-    const ha_device_record_t *device_ptr = NULL;
-    if (rule.trigger.device_uid != 0 &&
-        sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_DEVICE,
-                                 &rule.trigger.device_uid, &device))) {
-        device_ptr = &device;
-    }
-
-    ha_automation_record_t record = {0};
-    if (!semantics_compile_automation(&rule, device_ptr, &record)) {
         return SYS_CODE_INVALID_ARG;
     }
-
-    const ha_automation_key_t key = {.id = id};
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    bool changed = false;
-    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
-                                              &record, &meta, &changed);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
+    out[o++] = rule->conditions_count;
+    for (uint8_t i = 0; i < rule->conditions_count && i < HA_RULE_CONDITIONS_MAX; i++) {
+        const ha_rule_condition_t *c = &rule->conditions[i];
+        put_u64(out + o, c->ref.entity);
+        o += 8;
+        put_u16(out + o, (uint16_t)c->ref.property);
+        o += 2;
+        out[o++] = c->cmp.op;
+        put_u32(out + o, web_float_bits(c->cmp.value));
+        o += 4;
+        put_u32(out + o, web_float_bits(c->cmp.value2));
+        o += 4;
+    }
+    put_u64(out + o, rule->action_ref.entity);
+    o += 8;
+    put_u16(out + o, (uint16_t)rule->action_ref.property);
+    o += 2;
+    out[o++] = rule->action;
+    out[o++] = (uint8_t)rule->action_value.kind;
+    if (rule->action_value.kind == HA_COMMAND_VALUE_SCALAR) {
+        out[o++] = (uint8_t)rule->action_value.value.scalar.kind;
+        put_u32(out + o, value_to_bits(&rule->action_value.value.scalar));
+        o += 4;
+    } else if (rule->action_value.kind == HA_COMMAND_VALUE_XY) {
+        put_u32(out + o, web_float_bits(rule->action_value.value.xy.x));
+        o += 4;
+        put_u32(out + o, web_float_bits(rule->action_value.value.xy.y));
+        o += 4;
+    }
+    *out_len = (uint16_t)o;
+    return SYS_CODE_OK;
 }
 
 static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
@@ -1496,9 +1391,6 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_SEMANTIC_COMMAND:
         status = web_do_semantic_command(args, len);
-        break;
-    case WEB_CMD_SEMANTIC_AUTOMATION_PUT:
-        status = web_do_semantic_automation_put(args, len);
         break;
     case WEB_CMD_DEVICE_RENAME:
         status = web_do_device_rename(args, len);

@@ -45,13 +45,6 @@ typedef enum {
     WEB_MSG_SEMANTIC_STATE = 0x12,
     WEB_MSG_SEMANTIC_STATE_REMOVE = 0x13,
     /*
-     * Аддитивно (Фаза 5.3.4b): семантическое правило рядом с raw ENTITY AUTOMATION.
-     * STATE (переменной длины): u64 id @0, u8 representable @8, [semantic rule @9 если 1].
-     * REMOVE: u64 id @0. Rule-wire совпадает с WEB_CMD_SEMANTIC_AUTOMATION_PUT (без id).
-     */
-    WEB_MSG_SEMANTIC_AUTOMATION = 0x14,
-    WEB_MSG_SEMANTIC_AUTOMATION_REMOVE = 0x15,
-    /*
      * Семантическое событие (Фаза 5.4): уже HA_EVENT_* от источника, raw payload не отдаём.
      * DTO (16): u8 source_kind @0, u64 source_uid @1, u8 endpoint @9, u8 event_id @10,
      *           u8 value_kind @11, u32 value_bits @12.
@@ -101,16 +94,6 @@ typedef enum {
      *   value: NONE — нет; SCALAR @13 u8 kind + @14 u32 bits; XY @13 f32 x + @17 f32 y
      */
     WEB_CMD_SEMANTIC_COMMAND = 14,
-    /*
-     * Semantic-правило (аддитивно): браузер шлёт логическую модель, Web компилирует её в
-     * physical 144-байтную запись. LE, переменной длины:
-     *   u64 id, u8 enabled, u8 trigger_kind
-     *   trigger: EVENT{u64 device_uid,u8 event_id} | TIME{u16 minutes,u8 mask} |
-     *            STATE{u64 device_uid,u8 ep,u16 property,u8 op,u8 edge,f32 value,f32 value2}
-     *   u8 conditions_count; conditions[]{u64 uid,u8 ep,u16 property,u8 op,f32 value,f32 value2}
-     *   action{u64 uid,u8 ep,u16 property,u8 action,u8 value_kind[,value]}
-     */
-    WEB_CMD_SEMANTIC_AUTOMATION_PUT = 15,
     /* Semantic group item: PUT (53): group_id,uid,ep,property,order,title[32];
      * REMOVE (19): group_id,uid,ep,property. Backend → raw key через semantics_property_key. */
     WEB_CMD_SEMANTIC_GROUP_ITEM_PUT = 16,
@@ -148,6 +131,16 @@ typedef enum {
     WEB_MSG3_PROPERTY_STATE_REMOVE = 0x33,
     WEB_MSG3_CAPABILITIES = 0x34,
     WEB_MSG3_CAPABILITIES_REMOVE = 0x35,
+    /*
+     * Canonical Automation (A6.2): entity-native правило (ha_rule_t). Переменная длина:
+     *   u64 id, u8 enabled, u8 kind; trigger{EVENT u64 entity+u8 event_id | TIME u16 min+u8
+     *   mask | STATE u64 entity+u16 property+u8 op+u8 edge+f32+f32}; u8 cond_count;
+     *   conditions[]{u64 entity,u16 property,u8 op,f32,f32}; action{u64 entity,u16 property,
+     *   u8 action,u8 value_kind[,scalar u8 kind+u32 | xy f32+f32]}. REMOVE: u64 id.
+     * Совпадает с WEB_CMD_AUTOMATION_PUT.
+     */
+    WEB_MSG3_AUTOMATION = 0x36,
+    WEB_MSG3_AUTOMATION_REMOVE = 0x37,
 } web_msg3_t;
 
 #define WEB_MSG3_ENTITY_SIZE 40u /* u64 entity_id + char name[HA_ENTITY_NAME_MAX=32] */

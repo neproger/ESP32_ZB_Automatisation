@@ -8,12 +8,12 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "ha_model/ha_automation.h"
 #include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
+#include "ha_model/ha_rule.h"
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
@@ -236,45 +236,18 @@ static const domain_entity_desc_t capabilities_desc = {
     .persist_key = NULL,
 };
 
-/* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
+/*
+ * Правила живут как сущности: создаёт их UI/Web, читает Automation. Запись — ha_rule_t
+ * (entity-адресованная, Шаг A A3.4): persistent ABI старых physical-правил несовместим.
+ */
 static const domain_entity_desc_t automation_desc = {
     .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
     .key_size = sizeof(ha_automation_key_t),
-    .payload_size = sizeof(ha_automation_record_t),
+    .payload_size = sizeof(ha_rule_t),
     .capacity = APP_AUTOMATION_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "automation",
+    .persist_key = "automation_v2", /* новая раскладка: старый ключ не читаем */
 };
-
-/*
- * Bring-up: правило «нажатие кнопки устройства → toggle его реле (EP2)». Нужно, чтобы
- * проверить сквозной путь команды, пока правила не создаются из UI/Web. Идемпотентно.
- */
-static void seed_demo_automation(domain_t *domain)
-{
-    const ha_automation_key_t key = {.id = 1};
-    ha_automation_record_t existing = {0};
-    if (sys_ok(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key, &existing))) {
-        return;
-    }
-
-    ha_automation_record_t rule = {0};
-    rule.enabled = 1;
-    rule.trigger_b.event.command_id = HA_ZB_CMD_ON_OFF_TOGGLE; /* кнопка */
-    rule.action_endpoint = 2;                          /* реле/лампа устройства */
-    rule.action_cluster_id = HA_ZB_CLUSTER_ON_OFF;
-    rule.action_command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
-
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    bool changed = false;
-    const sys_error_t err = domain_entity_put(domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
-                                              &rule, &meta, &changed);
-    if (sys_failed(err)) {
-        ESP_LOGW(TAG, "demo automation not seeded: layer=%u code=%u", (unsigned)err.layer,
-                 (unsigned)err.code);
-    }
-}
 
 /*
  * Rename логической Entity (HA_CMD_ENTITY_RENAME): меняет Entity.name напрямую. Имя
@@ -421,7 +394,6 @@ void app_main(void)
     if (!start_step(automation_start(&s_domain), "automation start")) {
         return;
     }
-    seed_demo_automation(&s_domain);
 
     /* Wi-Fi — свой сервис: владеет радио на C3, автоподключение по известным. */
     if (!start_step(wifi_start(&s_domain), "wifi start")) {

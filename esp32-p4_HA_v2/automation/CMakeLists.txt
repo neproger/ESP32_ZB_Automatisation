@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "src/automation.c"
-        "src/automation_rule.c"
         "src/automation_rule_sem.c"
     INCLUDE_DIRS
         "include"

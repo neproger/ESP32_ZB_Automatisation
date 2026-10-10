@@ -37,21 +37,20 @@ const textAt = (payload, off, len) => {
   return dec.decode(end === -1 ? tb : tb.subarray(0, end))
 }
 
-// Декод rule-wire (зеркало web.c:web_encode_sem_rule). Без ZCL.
-function decodeSemRule(dv, base) {
+// Декод entity-native rule-wire (зеркало web.c:web_rule_encode). Без ZCL.
+function decodeRule(dv, base) {
   let o = base
   const enabled = dv.getUint8(o); o += 1
   const triggerKind = dv.getUint8(o); o += 1
   const trigger = { kind: triggerKind }
   if (triggerKind === 0) {
-    trigger.deviceUid = dv.getBigUint64(o, true); o += 8
+    trigger.entity = dv.getBigUint64(o, true); o += 8
     trigger.eventId = dv.getUint8(o); o += 1
   } else if (triggerKind === 1) {
     trigger.minutesOfDay = dv.getUint16(o, true); o += 2
     trigger.weekdayMask = dv.getUint8(o); o += 1
   } else if (triggerKind === 2) {
-    trigger.deviceUid = dv.getBigUint64(o, true); o += 8
-    trigger.endpoint = dv.getUint8(o); o += 1
+    trigger.entity = dv.getBigUint64(o, true); o += 8
     trigger.property = dv.getUint16(o, true); o += 2
     trigger.op = dv.getUint8(o); o += 1
     trigger.edge = dv.getUint8(o); o += 1
@@ -62,23 +61,21 @@ function decodeSemRule(dv, base) {
   const conditions = []
   for (let i = 0; i < conditionsCount; i++) {
     conditions.push({
-      deviceUid: dv.getBigUint64(o, true),
-      endpoint: dv.getUint8(o + 8),
-      property: dv.getUint16(o + 9, true),
-      op: dv.getUint8(o + 11),
-      value: dv.getFloat32(o + 12, true),
-      value2: dv.getFloat32(o + 16, true),
+      entity: dv.getBigUint64(o, true),
+      property: dv.getUint16(o + 8, true),
+      op: dv.getUint8(o + 10),
+      value: dv.getFloat32(o + 11, true),
+      value2: dv.getFloat32(o + 15, true),
     })
-    o += 20
+    o += 19
   }
   const action = {
-    deviceUid: dv.getBigUint64(o, true),
-    endpoint: dv.getUint8(o + 8),
-    property: dv.getUint16(o + 9, true),
-    action: dv.getUint8(o + 11),
-    valueKind: dv.getUint8(o + 12),
+    entity: dv.getBigUint64(o, true),
+    property: dv.getUint16(o + 8, true),
+    action: dv.getUint8(o + 10),
+    valueKind: dv.getUint8(o + 11),
   }
-  o += 13
+  o += 12
   if (action.valueKind === 1) { // SCALAR: u8 kind + u32/f32
     const kind = dv.getUint8(o); o += 1
     action.scalarKind = kind
@@ -174,14 +171,13 @@ function onFrame(buf) {
     emit()
     return
   }
-  if (frame.type === MSG.SEMANTIC_AUTOMATION || frame.type === MSG.SEMANTIC_AUTOMATION_REMOVE) {
+  if (frame.type === MSG3.AUTOMATION || frame.type === MSG3.AUTOMATION_REMOVE) {
     const id = payload.getBigUint64(0, true)
     const key = id.toString()
-    if (frame.type === MSG.SEMANTIC_AUTOMATION_REMOVE) {
+    if (frame.type === MSG3.AUTOMATION_REMOVE) {
       semAutomations.delete(key)
     } else {
-      const representable = payload.getUint8(8) === 1
-      semAutomations.set(key, { id, representable, rule: representable ? decodeSemRule(payload, 9) : null })
+      semAutomations.set(key, { id, rule: decodeRule(payload, 8) })
     }
     emit()
     return
