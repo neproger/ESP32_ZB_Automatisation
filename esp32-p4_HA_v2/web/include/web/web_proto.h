@@ -38,27 +38,6 @@ typedef enum {
     WEB_MSG_ENTITY = 0x10,
     WEB_MSG_ENTITY_REMOVE = 0x11,
     /*
-     * Аддитивно (Фаза 5.1): семантическое состояние рядом с raw ENTITY STATE.
-     * STATE DTO (16): u64 uid @0, u8 ep @8, u16 property @9, u8 kind @11, u32 bits @12.
-     * REMOVE (11): u64 uid @0, u8 ep @8, u16 property @9. Без cluster/attr/zcl_type/raw.
-     */
-    WEB_MSG_SEMANTIC_STATE = 0x12,
-    WEB_MSG_SEMANTIC_STATE_REMOVE = 0x13,
-    /*
-     * Семантическое событие (Фаза 5.4): уже HA_EVENT_* от источника, raw payload не отдаём.
-     * DTO (16): u8 source_kind @0, u64 source_uid @1, u8 endpoint @9, u8 event_id @10,
-     *           u8 value_kind @11, u32 value_bits @12.
-     */
-    WEB_MSG_EVENT = 0x16,
-    /*
-     * Semantic capabilities endpoint'а (Фаза 5.5.0): identity (uid, ep) + список свойств
-     * и их действий. DTO: u64 uid @0, u8 ep @8, u8 property_count @9,
-     *   properties[]{ u16 property_id, u8 action_count, u8 actions[action_count] }.
-     * REMOVE: ключ endpoint (uid+ep).
-     */
-    WEB_MSG_SEMANTIC_CAPABILITIES = 0x17,
-    WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE = 0x18,
-    /*
      * Canonical group item (A4): identity = (group_id, entity_id, property_id). Хранимая
      * запись уже entity-native, мост не нужен.
      * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
@@ -141,6 +120,11 @@ typedef enum {
      */
     WEB_MSG3_AUTOMATION = 0x36,
     WEB_MSG3_AUTOMATION_REMOVE = 0x37,
+    /*
+     * Canonical event (A6.2): источник — Entity, без uid/endpoint/raw payload.
+     * DTO (14): u64 source_entity @0, u8 event_id @8, u8 value_kind @9, u32 value_bits @10.
+     */
+    WEB_MSG3_EVENT = 0x38,
 } web_msg3_t;
 
 #define WEB_MSG3_ENTITY_SIZE 40u /* u64 entity_id + char name[HA_ENTITY_NAME_MAX=32] */

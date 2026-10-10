@@ -1,12 +1,12 @@
 import { useStore } from '../useStore.js'
-import { SYSTEM_DEVICE_UID, SYSTEM_ENDPOINT, WEEKDAY_NAMES } from '../system.js'
+import { ENTITY_SYSTEM, SYSTEM_DEVICE_UID, WEEKDAY_NAMES } from '../system.js'
 import { PROPERTY } from '../semantics.js'
 import { WEATHER_DEVICE_UID, weatherConditionName } from '../weather.js'
 
-// Время/локация/погода: только semantic-состояния системного девайса (без cluster/raw).
+// Время/локация/погода: canonical-свойства системы (ENTITY_SYSTEM) + запись локации.
 export default function SystemStatus() {
   const s = useStore()
-  const sem = (p) => s.semStateLegacy(SYSTEM_DEVICE_UID, SYSTEM_ENDPOINT, p)?.value
+  const sem = (p) => s.semState(ENTITY_SYSTEM, p)?.value
   const hour = sem(PROPERTY.SYSTEM_HOUR)
   const minute = sem(PROPERTY.SYSTEM_MINUTE)
   const mask = sem(PROPERTY.SYSTEM_WEEKDAY_MASK)

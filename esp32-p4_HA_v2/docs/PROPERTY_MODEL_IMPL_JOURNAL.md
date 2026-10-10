@@ -535,6 +535,17 @@ TLV / самоописание приложения              — запре�
             ha_zb_state_key_t из Display ушёл. ha_model 4/4, semantics 1/1, zigbee 9/9,
             automation 1/1, IDF + web-ui зелёные. Дальше: A6.2+ (остальные v3/удаление v2),
             A1.4 (остальные readers), A1.5 (raw cleanup).
+2026-10-10  шаг A, A6.2+ — canonical v3 complete + v2 semantic cleanup. EVENT стал v3
+            (WEB_MSG3_EVENT: u64 source_entity + u8 event_id + value; без source_uid/endpoint/raw).
+            Удалены v2 semantic сообщения/каналы: SEMANTIC_STATE(+REMOVE), SEMANTIC_CAPABILITIES
+            (+REMOVE), EVENT, SEMANTIC_AUTOMATION(+REMOVE), физический group-item wire и
+            web_do_group_item_*; web.c больше не проецирует raw STATE/ENDPOINT в semantic.
+            SystemStatus (frontend) и ui_status_bar (Display) читают canonical
+            PROPERTY_STATE(ENTITY_SYSTEM) — ENTITY_SYSTEM=0x9229b47704a245b5 (golden сверен).
+            Обычный frontend зависит только от canonical v3 (ENTITY/PROPERTY_STATE/CAPABILITIES/
+            AUTOMATION/GROUP_ITEM/EVENT) + commands (PROPERTY/ENTITY_RENAME/AUTOMATION/GROUP_ITEM).
+            Остаётся raw ENTITY-состояние как отдельный диагностический канал (снимется в A1.5).
+            ha_model 4/4, semantics 1/1, zigbee 9/9, automation 1/1, IDF + web-ui зелёные.
 ```
 
 ## 7. Открытые вопросы

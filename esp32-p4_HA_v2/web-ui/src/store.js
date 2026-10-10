@@ -19,11 +19,9 @@ const maps = {
   [ENTITY.SETTINGS]: new Map(),
 }
 
-// Семантическое состояние: ключ (uid, ep, property) — идентичность, готовая к шагу A.
-const semStates = new Map()
-// Семантические правила: ключ — id. { id, representable, rule|null }.
+// Семантические правила: ключ — id. { id, rule }.
 const semAutomations = new Map()
-// Semantic group items: ключ "group:uid:ep:property" → { groupId, uid, ep, property, order, title }.
+// Canonical group items: ключ "group:entity:property".
 const semGroupItems = new Map()
 
 // Canonical v3 (Шаг A, A6.1c): identity = entity_id. Это карты обычного UI.
@@ -125,7 +123,6 @@ function onFrame(buf) {
   if (frame.type === MSG.SYNC_BEGIN) {
     syncing = true
     for (const k in maps) maps[k].clear()
-    semStates.clear()
     semAutomations.clear()
     semGroupItems.clear()
     semEntities.clear()
@@ -155,14 +152,13 @@ function onFrame(buf) {
     emit()
     return
   }
-  if (frame.type === MSG.EVENT) {
+  if (frame.type === MSG3.EVENT) {
     events.push({
       seq: ++eventSeq,
       ts: Date.now(),
       kind: 'event',
-      sourceUid: payload.getBigUint64(1, true),
-      endpoint: payload.getUint8(9),
-      eventId: payload.getUint8(10),
+      sourceEntity: payload.getBigUint64(0, true),
+      eventId: payload.getUint8(8),
     })
     if (events.length > EVENT_LOG_MAX) events.splice(0, events.length - EVENT_LOG_MAX)
     emit()
@@ -175,29 +171,6 @@ function onFrame(buf) {
       semAutomations.delete(key)
     } else {
       semAutomations.set(key, { id, rule: decodeRule(payload, 8) })
-    }
-    emit()
-    return
-  }
-  if (frame.type === MSG.SEMANTIC_STATE || frame.type === MSG.SEMANTIC_STATE_REMOVE) {
-    const uid = payload.getBigUint64(0, true)
-    const ep = payload.getUint8(8)
-    const property = payload.getUint16(9, true)
-    const key = `${uid}:${ep}:${property}`
-    if (frame.type === MSG.SEMANTIC_STATE_REMOVE) {
-      semStates.delete(key)
-    } else {
-      const kind = payload.getUint8(11)
-      let value = null
-      switch (kind) {
-        case VALUE_KIND.BOOL: value = payload.getUint32(12, true) !== 0; break
-        case VALUE_KIND.I32: value = payload.getInt32(12, true); break
-        case VALUE_KIND.U32:
-        case VALUE_KIND.ENUM: value = payload.getUint32(12, true); break
-        case VALUE_KIND.FLOAT: value = payload.getFloat32(12, true); break
-        default: value = null
-      }
-      semStates.set(key, { uid, ep, property, kind, value })
     }
     emit()
     return
@@ -338,21 +311,14 @@ export const store = {
   get events() {
     return events
   },
-  get semStates() {
-    return semStates
-  },
   get semAutomations() {
     return semAutomations
   },
   get semGroupItems() {
     return semGroupItems
   },
-  // v2 (transitional, до A4/A6.2): состояние по (uid, ep, property).
-  semStateLegacy(uid, ep, property) {
-    return semStates.get(`${uid}:${ep}:${property}`)
-  },
 
-  // --- canonical v3 (A6.1c): обычный UI работает только с entity_id -------------
+  // --- canonical v3: обычный UI работает только с entity_id ---------------------
   get semEntities() {
     return semEntities
   },

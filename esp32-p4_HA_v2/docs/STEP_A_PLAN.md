@@ -302,6 +302,14 @@ A6  WS v3                                                                       
                     <b>A6.1 завершён.</b>
       Далее возврат к A3.3–A3.5, затем A4, затем A6.2+ (AUTOMATION/GROUP_ITEM/EVENT/commands)
       и A6.x (удаление v2 semantic transitional wire).
+      [x] A6.2+ canonical v3 complete + v2 semantic cleanup:
+                EVENT → v3 (u64 source_entity + u8 event_id + value), без source_uid/endpoint/
+                raw payload; AUTOMATION (ha_rule_t) и GROUP_ITEM (entity/property) как v3;
+                PROPERTY_ACTION (WEB_CMD_PROPERTY_COMMAND) и ENTITY_RENAME. Удалены v2
+                SEMANTIC_STATE/REMOVE, SEMANTIC_CAPABILITIES/REMOVE, EVENT, SEMANTIC_AUTOMATION
+                (всё), физический group-item wire. SystemStatus/ui_status_bar читают canonical
+                PROPERTY_STATE(ENTITY_SYSTEM). Обычный frontend не зависит от v2 semantic-каналов
+                (диагностика может читать raw ENTITY-состояние).
 
 A7  erase старого physical state ABI
       Удалить raw state store/таблицы; освободить регионы.

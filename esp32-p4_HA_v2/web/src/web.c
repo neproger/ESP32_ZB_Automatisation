@@ -242,46 +242,6 @@ static void web_broadcast(uint8_t type, uint16_t seq, const void *payload, uint1
     }
 }
 
-/* --- семантическое состояние (Фаза 5.1) --------------------------------- */
-
-/* raw STATE → semantic DTO; false при UNKNOWN/ошибке декода (ложное не шлём). */
-static bool semantic_state_payload(const ha_zb_state_key_t *key,
-                                   const ha_zb_state_record_t *record, uint8_t *out,
-                                   uint16_t *out_len)
-{
-    const ha_property_id_t property = semantics_property_from_key(key);
-    if (property == HA_PROPERTY_UNKNOWN) {
-        return false;
-    }
-    ha_value_t value = {0};
-    if (!semantics_state_value(key, record, &value)) {
-        return false;
-    }
-    put_u64(out, key->device_uid);
-    out[8] = key->endpoint;
-    out[9] = (uint8_t)(property & 0xff);
-    out[10] = (uint8_t)(property >> 8);
-    out[11] = (uint8_t)value.kind;
-    put_u32(out + 12, value_to_bits(&value));
-    *out_len = 16;
-    return true;
-}
-
-static bool semantic_state_remove_payload(const ha_zb_state_key_t *key, uint8_t *out,
-                                          uint16_t *out_len)
-{
-    const ha_property_id_t property = semantics_property_from_key(key);
-    if (property == HA_PROPERTY_UNKNOWN) {
-        return false;
-    }
-    put_u64(out, key->device_uid);
-    out[8] = key->endpoint;
-    out[9] = (uint8_t)(property & 0xff);
-    out[10] = (uint8_t)(property >> 8);
-    *out_len = 11;
-    return true;
-}
-
 /* --- canonical v3 (A6.1): identity = entity_id, без uid/endpoint/cluster/attr ----- */
 
 static bool web3_entity_payload(ha_entity_id_t entity_id, const char *name, uint8_t *out,
@@ -347,42 +307,6 @@ static bool semantic_automation_payload(const ha_automation_key_t *key, const ha
 }
 
 /*
- * Endpoint → semantic capabilities: server-кластеры → properties + actions.
- */
-static bool capability_payload(const ha_endpoint_key_t *key, const ha_endpoint_record_t *record,
-                               uint8_t *out, uint16_t *out_len)
-{
-    put_u64(out, key->device_uid);
-    out[8] = key->endpoint;
-    size_t o = 9;
-    const size_t count_off = o++;
-    uint8_t count = 0;
-    for (uint8_t i = 0; i < record->cluster_count && i < HA_ENDPOINT_CLUSTERS_MAX; i++) {
-        if (record->clusters[i].role != HA_ZB_ROLE_SERVER) {
-            continue;
-        }
-        ha_capability_t caps[8];
-        const size_t n = semantics_cluster_capabilities(record->clusters[i].cluster_id, caps, 8);
-        for (size_t j = 0; j < n; j++) {
-            if (o + 3 + HA_CAPABILITY_ACTIONS_MAX > WEB_PROTO_MAX_PAYLOAD) {
-                goto done;
-            }
-            out[o++] = (uint8_t)(caps[j].property & 0xff);
-            out[o++] = (uint8_t)(caps[j].property >> 8);
-            out[o++] = caps[j].action_count;
-            for (uint8_t k = 0; k < caps[j].action_count && k < HA_CAPABILITY_ACTIONS_MAX; k++) {
-                out[o++] = (uint8_t)caps[j].actions[k];
-            }
-            count++;
-        }
-    }
-done:
-    out[count_off] = count;
-    *out_len = (uint16_t)o;
-    return true;
-}
-
-/*
  * Canonical group_item → wire (A4): identity уже entity/property, мост не нужен.
  * ITEM (52): u64 group_id @0, u64 entity @8, u16 property @16, u16 order @18, title[32] @20.
  */
@@ -435,21 +359,6 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
     memcpy(payload + 1 + s->schema->key_size, record, s->schema->rec_size);
     web_send_frame(s->fd, WEB_MSG_ENTITY, 0, payload,
                    (uint16_t)(1 + s->schema->key_size + s->schema->rec_size));
-    if (s->schema->type == WEB_ENTITY_STATE) {
-        uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
-        uint16_t sem_len = 0;
-        if (semantic_state_payload((const ha_zb_state_key_t *)key,
-                                   (const ha_zb_state_record_t *)record, sem, &sem_len)) {
-            web_send_frame(s->fd, WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
-        }
-    } else if (s->schema->type == WEB_ENTITY_ENDPOINT) {
-        uint8_t cap[WEB_PROTO_MAX_PAYLOAD];
-        uint16_t cap_len = 0;
-        if (capability_payload((const ha_endpoint_key_t *)key,
-                               (const ha_endpoint_record_t *)record, cap, &cap_len)) {
-            web_send_frame(s->fd, WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
-        }
-    }
     (*s->count)++;
     return true;
 }
@@ -563,24 +472,22 @@ static void web_send_snapshot(int fd)
 /* --- delta -------------------------------------------------------------- */
 
 /*
- * semantic EVENT → WEB_MSG_EVENT (уже HA_EVENT_* от источника). Raw ha_zb_event_t
- * (transient payload) наружу НЕ отдаём — он нужен только legacy-shim Automation в прошивке.
- * DTO: u8 source_kind @0, u64 source_uid @1, u8 endpoint @9, u8 event_id @10,
- *      u8 value_kind @11, u32 value_bits @12 (16).
+ * Canonical EVENT (A6.2) → WEB_MSG3_EVENT: источник — Entity (key = entity_id), без
+ * uid/endpoint/raw payload. DTO (14): u64 source_entity @0, u8 event_id @8,
+ * u8 value_kind @9, u32 value_bits @10. Legacy DEVICE-keyed события игнорируем.
  */
 static void web_send_semantic_event(const domain_event_t *event)
 {
-    if (event->key_size != sizeof(ha_device_uid_t)) {
+    if (event->entity != (uint32_t)HA_ENTITY_ENTITY ||
+        event->key_size != sizeof(ha_entity_id_t)) {
         return;
     }
-    uint8_t out[16] = {0};
-    out[0] = event->source;
-    uint64_t uid = 0;
-    memcpy(&uid, event->key, sizeof(uid));
-    put_u64(out + 1, uid);
-    out[10] = (event->value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (uint8_t)event->value.v.u32
-                                                                : (uint8_t)HA_EVENT_NONE;
-    web_broadcast(WEB_MSG_EVENT, 0, out, sizeof(out));
+    uint8_t out[14] = {0};
+    memcpy(out, event->key, sizeof(ha_entity_id_t));
+    out[8] = (event->value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (uint8_t)event->value.v.u32
+                                                               : (uint8_t)HA_EVENT_NONE;
+    out[9] = (uint8_t)HA_VALUE_NONE; /* payload события пока не несём */
+    web_broadcast(WEB_MSG3_EVENT, 0, out, sizeof(out));
 }
 
 static void web_send_fact(const domain_event_t *event)
@@ -701,36 +608,8 @@ static void web_send_fact(const domain_event_t *event)
         memcpy(payload + 1 + schema->key_size, record, schema->rec_size);
         web_broadcast(WEB_MSG_ENTITY, 0, payload,
                       (uint16_t)(1 + schema->key_size + schema->rec_size));
-        if (schema->type == WEB_ENTITY_STATE && event->key_size == sizeof(ha_zb_state_key_t)) {
-            uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t sem_len = 0;
-            if (semantic_state_payload((const ha_zb_state_key_t *)event->key,
-                                       (const ha_zb_state_record_t *)record, sem, &sem_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
-            }
-        } else if (schema->type == WEB_ENTITY_ENDPOINT &&
-                   event->key_size == sizeof(ha_endpoint_key_t)) {
-            uint8_t cap[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t cap_len = 0;
-            if (capability_payload((const ha_endpoint_key_t *)event->key,
-                                   (const ha_endpoint_record_t *)record, cap, &cap_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES, 0, cap, cap_len);
-            }
-        }
     } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
         web_broadcast(WEB_MSG_ENTITY_REMOVE, 0, payload, (uint16_t)(1 + schema->key_size));
-        if (schema->type == WEB_ENTITY_STATE && event->key_size == sizeof(ha_zb_state_key_t)) {
-            uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
-            uint16_t sem_len = 0;
-            if (semantic_state_remove_payload((const ha_zb_state_key_t *)event->key, sem,
-                                              &sem_len)) {
-                web_broadcast(WEB_MSG_SEMANTIC_STATE_REMOVE, 0, sem, sem_len);
-            }
-        } else if (schema->type == WEB_ENTITY_ENDPOINT &&
-                   event->key_size == sizeof(ha_endpoint_key_t)) {
-            web_broadcast(WEB_MSG_SEMANTIC_CAPABILITIES_REMOVE, 0, event->key,
-                          (uint16_t)sizeof(ha_endpoint_key_t));
-        }
     }
 }
 

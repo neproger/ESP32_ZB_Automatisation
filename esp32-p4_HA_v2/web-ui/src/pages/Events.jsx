@@ -13,9 +13,13 @@ function deviceLabel(devices, uid) {
   return uidHex(uid)
 }
 
+function entityLabel(s, entity) {
+  return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
+}
+
 function describe(ev, s) {
   if (ev.kind === 'event') {
-    return `${deviceLabel(s.devices, ev.sourceUid)}: ${eventName(ev.eventId)}`
+    return `${entityLabel(s, ev.sourceEntity)}: ${eventName(ev.eventId)}`
   }
   const { entityType, key, record, action } = ev
   switch (entityType) {

@@ -4,7 +4,9 @@
 #include <string.h>
 
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_entity.h"
 #include "ha_model/ha_properties.h"
+#include "ha_model/ha_state.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
 #include "semantics/semantics.h"
@@ -106,23 +108,20 @@ void ui_status_bar_create(domain_t *domain)
     lv_obj_center(burger_icon);
 }
 
-/* Системное свойство (время) — по семантике, без ручного ZCL-ключа. */
+/* Системное свойство (время) — canonical PROPERTY_STATE(ENTITY_SYSTEM, property). */
 static bool read_system_byte(ha_property_id_t property, uint8_t *out)
 {
-    const ha_zb_state_key_t context = {.device_uid = HA_SYSTEM_DEVICE_UID,
-                                       .endpoint = HA_SYSTEM_ENDPOINT};
-    ha_zb_state_key_t key = {0};
-    if (!semantics_property_key(&context, property, &key)) {
+    const ha_state_key_t key = {
+        .entity = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM),
+        .property = property,
+    };
+    ha_state_record_t record = {0};
+    if (!sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &key,
+                                  &record))) {
         return false;
     }
-    ha_zb_state_record_t record = {0};
-    if (!sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, &key, &record))) {
-        return false;
-    }
-    ha_value_t value = {0};
     double number = 0.0;
-    if (!semantics_state_value(&key, &record, &value) ||
-        !semantics_value_to_double(&value, &number)) {
+    if (!semantics_value_to_double(&record.value, &number)) {
         return false;
     }
     *out = (uint8_t)number;
