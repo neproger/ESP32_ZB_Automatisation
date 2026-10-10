@@ -271,8 +271,11 @@ A6  WS v3                                                                       
       entity_id должен быть публичной identity для клиента ДО перевода хранения правил.
       [x] A6.0  canonical v3 message set: ENTITY / PROPERTY_STATE / CAPABILITIES
                 (web_proto.h WEB_MSG3_*, web-ui/proto.js MSG3). Без uid/endpoint/cluster/attr.
-      [ ] A6.1  backend отдаёт v3 (ENTITY/PROPERTY_STATE/CAPABILITIES из canonical) +
-                frontend identity = entity_id (semState(entity, property), capabilities(entity))
+      [~] A6.1  backend отдаёт v3 + frontend identity = entity_id. Промежуточно:
+                [x] backend ENTITY + PROPERTY_STATE из canonical (snapshot + delta)
+                [ ] backend CAPABILITIES (нужен canonical-источник: сущность по entity, не по uid/ep)
+                [ ] frontend identity = entity_id (semState(entity,property)/capabilities(entity))
+                [ ] ENTITY metadata (name) — для отображения; иначе UI без имён (см. вопрос)
       Далее возврат к A3.3–A3.5, затем A4, затем A6.2+ (AUTOMATION/GROUP_ITEM/EVENT/commands)
       и A6.x (удаление v2 semantic transitional wire).
 

@@ -457,6 +457,13 @@ TLV / самоописание приложения              — запре�
 2026-10-10  шаг A, A6.0 — canonical v3 message set (фонд): WEB_MSG3_ENTITY/PROPERTY_STATE/
             CAPABILITIES (+REMOVE) в web_proto.h и web-ui/proto.js. Обычный v3 без
             uid/endpoint/cluster/attr; identity = entity_id. Живёт рядом с v2 (кадр тот же).
+2026-10-10  шаг A, A6.1 (backend, часть) — web отдаёт v3 ENTITY + PROPERTY_STATE из
+            canonical (snapshot + delta), отдельными эмиттерами (типы 14/15 вне v2 SCHEMA).
+            Только canonical-источники; без uid/endpoint. IDF зелёный. Осталось: CAPABILITIES
+            v3 (нужен canonical-источник по entity — сейчас capabilities проецируются из
+            ENDPOINT(uid,ep) через мост, а web не имеет binding) и frontend identity = entity_id.
+            Найден продуктовый вопрос: ENTITY пока без metadata (имени) → обычный UI не сможет
+            показывать имена. Требуется решение (см. диалог): name в ENTITY, owner — adapter.
 ```
 
 ## 7. Открытые вопросы

@@ -13,6 +13,7 @@
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
 #include "ha_model/ha_settings.h"
+#include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
 #include "semantics/semantics.h"
@@ -282,6 +283,36 @@ static bool semantic_state_remove_payload(const ha_zb_state_key_t *key, uint8_t 
     return true;
 }
 
+/* --- canonical v3 (A6.1): identity = entity_id, без uid/endpoint/cluster/attr ----- */
+
+static bool web3_entity_payload(ha_entity_id_t entity_id, uint8_t *out, uint16_t *out_len)
+{
+    put_u64(out, entity_id);
+    *out_len = (uint16_t)WEB_MSG3_ENTITY_SIZE;
+    return true;
+}
+
+static bool web3_property_state_payload(ha_entity_id_t entity_id, ha_property_id_t property,
+                                        const ha_state_record_t *record, uint8_t *out,
+                                        uint16_t *out_len)
+{
+    put_u64(out, entity_id);
+    put_u16(out + 8, (uint16_t)property);
+    out[10] = (uint8_t)record->value.kind;
+    put_u32(out + 11, value_to_bits(&record->value));
+    *out_len = (uint16_t)WEB_MSG3_PROPERTY_STATE_SIZE;
+    return true;
+}
+
+static bool web3_property_state_remove_payload(ha_entity_id_t entity_id, ha_property_id_t property,
+                                               uint8_t *out, uint16_t *out_len)
+{
+    put_u64(out, entity_id);
+    put_u16(out + 8, (uint16_t)property);
+    *out_len = (uint16_t)WEB_MSG3_PROPERTY_STATE_REMOVE_SIZE;
+    return true;
+}
+
 /*
  * raw AUTOMATION → semantic DTO: u64 id + u8 representable (+ rule). Legacy/невыразимое
  * шлём как representable=0 — UI покажет «неподдерживаемое», не выдумывая смысл.
@@ -480,12 +511,43 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
     return true;
 }
 
+/* canonical v3: ENTITY и PROPERTY_STATE не входят в v2 SCHEMA — отдельные эмиттеры. */
+static bool snapshot_emit_entity3(const void *key, const void *record, void *ctx)
+{
+    (void)record;
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_MSG3_ENTITY_SIZE];
+    uint16_t len = 0;
+    if (web3_entity_payload(*(const ha_entity_id_t *)key, out, &len)) {
+        web_send_frame(s->fd, WEB_MSG3_ENTITY, 0, out, len);
+    }
+    (*s->count)++;
+    return true;
+}
+
+static bool snapshot_emit_property3(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    const ha_state_key_t *k = (const ha_state_key_t *)key;
+    uint8_t out[WEB_MSG3_PROPERTY_STATE_SIZE];
+    uint16_t len = 0;
+    if (web3_property_state_payload(k->entity, k->property, (const ha_state_record_t *)record, out,
+                                    &len)) {
+        web_send_frame(s->fd, WEB_MSG3_PROPERTY_STATE, 0, out, len);
+    }
+    (*s->count)++;
+    return true;
+}
+
 static void web_send_snapshot(int fd)
 {
     uint32_t total = 0;
     for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
         domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_count, &total);
     }
+    /* canonical v3 (A6.1) */
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
@@ -501,6 +563,11 @@ static void web_send_snapshot(int fd)
             .fd = fd, .schema = &SCHEMA[i], .count = &sent, .devices = &devices};
         domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_emit, &ctx);
     }
+
+    snapshot_ctx_t v3 = {.fd = fd, .schema = NULL, .count = &sent, .devices = NULL};
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_emit_entity3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
+                       snapshot_emit_property3, &v3);
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -535,6 +602,38 @@ static void web_send_fact(const domain_event_t *event)
         web_send_semantic_event(event);
         return;
     }
+
+    /* canonical v3 (A6.1): identity = entity_id. */
+    if (event->entity == (uint32_t)HA_ENTITY_ENTITY && event->key_size == sizeof(ha_entity_id_t)) {
+        const ha_entity_id_t entity_id = *(const ha_entity_id_t *)event->key;
+        uint8_t out[WEB_MSG3_ENTITY_SIZE];
+        uint16_t len = 0;
+        (void)web3_entity_payload(entity_id, out, &len);
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            web_broadcast(WEB_MSG3_ENTITY, 0, out, len);
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            web_broadcast(WEB_MSG3_ENTITY_REMOVE, 0, out, len);
+        }
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_PROPERTY_STATE &&
+        event->key_size == sizeof(ha_state_key_t)) {
+        const ha_state_key_t *key = (const ha_state_key_t *)event->key;
+        uint8_t out[WEB_MSG3_PROPERTY_STATE_SIZE];
+        uint16_t len = 0;
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_state_record_t record = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record)) &&
+                web3_property_state_payload(key->entity, key->property, &record, out, &len)) {
+                web_broadcast(WEB_MSG3_PROPERTY_STATE, 0, out, len);
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED &&
+                   web3_property_state_remove_payload(key->entity, key->property, out, &len)) {
+            web_broadcast(WEB_MSG3_PROPERTY_STATE_REMOVE, 0, out, len);
+        }
+        return;
+    }
+
     const web_schema_t *schema = schema_for((uint8_t)event->entity);
     if (schema == NULL || event->key_size != schema->key_size) {
         return;
