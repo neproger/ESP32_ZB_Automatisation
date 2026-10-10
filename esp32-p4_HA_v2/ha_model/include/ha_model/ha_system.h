@@ -37,17 +37,11 @@ extern "C" {
 #define HA_SYS_ATTR_TZ_OFFSET_MIN 0x0005u /* i16, смещение локального пояса от UTC, минуты */
 
 /*
- * События системного устройства. Публикуются фактом EVENT (domain_payload_put) с
- * value.enum = id; Automation вешает правила на пару (uid, id). Точное время задаётся
- * условием по MINUTES_OF_DAY, дни недели — условием по WEEKDAY_MASK (оператор битов).
+ * События системного устройства публикуются фактом EVENT (value.enum) в ОБЩЕМ vocabulary
+ * `ha_event_id_t` (ha_properties.h): HA_EVENT_MINUTE_TICK и т.д. Automation вешает правила
+ * на пару (uid, event_id). Точное время — условием по MINUTES_OF_DAY, дни недели —
+ * условием по WEEKDAY_MASK (оператор битов).
  */
-typedef enum {
-    HA_SYS_EVENT_MINUTE_TICK = 1,     /* каждую минуту */
-    HA_SYS_EVENT_HALF_HOUR_TICK = 2,  /* каждые 30 минут (:00 и :30) */
-    HA_SYS_EVENT_HOUR_TICK = 3,       /* каждый час на :00 */
-    HA_SYS_EVENT_DAY_TICK = 4,        /* 00:00 локального времени */
-    HA_SYS_EVENT_WEATHER_CHANGED = 5, /* сменилось условие погоды */
-} ha_system_event_t;
 
 #ifdef __cplusplus
 }

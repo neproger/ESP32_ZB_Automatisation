@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_properties.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_zigbee.h"
@@ -574,7 +575,7 @@ static void refresh_weather(void)
             s_weather_valid = true;
             s_weather_condition = rec.condition;
             if (changed) {
-                publish_event((uint8_t)HA_SYS_EVENT_WEATHER_CHANGED);
+                publish_event((uint8_t)HA_EVENT_WEATHER_CHANGED);
             }
             ESP_LOGI(TAG, "weather: cond=%u t=%.1fC hum=%u%% wind=%.1fkm/h",
                      (unsigned)rec.condition, (double)rec.temperature_c100 / 100.0,
@@ -607,14 +608,14 @@ static void update_time_states(const struct tm *tmv)
 
 static void emit_ticks(const struct tm *tmv)
 {
-    publish_event((uint8_t)HA_SYS_EVENT_MINUTE_TICK);
+    publish_event((uint8_t)HA_EVENT_MINUTE_TICK);
     if (tmv->tm_min % 30 == 0) {
-        publish_event((uint8_t)HA_SYS_EVENT_HALF_HOUR_TICK);
+        publish_event((uint8_t)HA_EVENT_HALF_HOUR_TICK);
     }
     if (tmv->tm_min == 0) {
-        publish_event((uint8_t)HA_SYS_EVENT_HOUR_TICK);
+        publish_event((uint8_t)HA_EVENT_HOUR_TICK);
         if (tmv->tm_hour == 0) {
-            publish_event((uint8_t)HA_SYS_EVENT_DAY_TICK);
+            publish_event((uint8_t)HA_EVENT_DAY_TICK);
         }
     }
 }

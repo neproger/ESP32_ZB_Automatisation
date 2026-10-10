@@ -13,6 +13,7 @@ idf_component_register(
     REQUIRES
         domain
         ha_model
+        semantics
         sys
         nvs_flash
         esp-zigbee-lib

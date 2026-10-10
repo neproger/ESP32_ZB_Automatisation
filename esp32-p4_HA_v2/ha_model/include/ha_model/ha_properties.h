@@ -76,8 +76,12 @@ typedef enum {
     HA_EVENT_SINGLE_PRESS = 1,
     HA_EVENT_DOUBLE_PRESS = 2,
     HA_EVENT_HOLD = 3,
-    /* системное событие: тик минуты (TIME-триггер) */
+    /* системные события (не Zigbee): тики времени и смена погоды */
     HA_EVENT_MINUTE_TICK = 4,
+    HA_EVENT_HALF_HOUR_TICK = 5,
+    HA_EVENT_HOUR_TICK = 6,
+    HA_EVENT_DAY_TICK = 7,
+    HA_EVENT_WEATHER_CHANGED = 8,
 } ha_event_id_t;
 
 /* Вид значения — дискриминатор union'а в ha_value_t. */

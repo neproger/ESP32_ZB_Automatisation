@@ -249,12 +249,16 @@ static void automation_fire_matches(automation_scan_t *scan, ha_device_uid_t tri
     }
 }
 
-static void automation_event_trigger(ha_device_uid_t device_uid, uint16_t command_id)
+/*
+ * Значение события в Domain — всегда HA_EVENT_* (семантика). «Будильники» приходят
+ * semantic-тиком system-девайса. Для legacy-правил DEVICE_EVENT (сохранён raw command_id)
+ * match_command = сырой command из transient payload — ВРЕМЕННЫЙ shim, удаляется на шаге A.
+ */
+static void automation_event_trigger(ha_device_uid_t device_uid, ha_event_id_t event_id,
+                                     uint16_t match_command)
 {
-    automation_scan_t scan = {.device_uid = device_uid, .command_id = command_id};
-    /* «Будильники» проверяются на минутном тике системного девайса. */
-    if (device_uid == HA_SYSTEM_DEVICE_UID &&
-        command_id == (uint16_t)HA_SYS_EVENT_MINUTE_TICK) {
+    automation_scan_t scan = {.device_uid = device_uid, .command_id = match_command};
+    if (event_id == HA_EVENT_MINUTE_TICK) {
         scan.has_time = read_system_time(&scan.minutes_of_day, &scan.weekday_mask);
     }
     if (sys_failed(domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION,
@@ -314,9 +318,19 @@ static void automation_task(void *arg)
             }
             ha_device_uid_t device_uid = 0;
             memcpy(&device_uid, event.key, sizeof(device_uid));
-            const uint16_t command_id =
-                (event.value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (uint16_t)event.value.v.u32 : 0;
-            automation_event_trigger(device_uid, command_id);
+            const ha_event_id_t event_id =
+                (event.value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (ha_event_id_t)event.value.v.u32
+                                                                 : HA_EVENT_NONE;
+            /* По умолчанию правило адресует semantic event id (system-события). */
+            uint16_t match_command = (uint16_t)event_id;
+            /* Legacy: у Zigbee-события есть сырой payload → правило хранит raw command_id. */
+            if (event.payload_size == sizeof(ha_zb_event_t)) {
+                ha_zb_event_t raw = {0};
+                if (sys_ok(domain_payload_get(s_domain, event.payload_ref, &raw, sizeof(raw)))) {
+                    match_command = raw.command_id;
+                }
+            }
+            automation_event_trigger(device_uid, event_id, match_command);
         } else if (event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED &&
                    event.entity == (uint32_t)HA_ENTITY_STATE &&
                    event.key_size == sizeof(ha_zb_state_key_t)) {

@@ -10,6 +10,7 @@
 #include "zigbee/zigbee_diag.h"
 #include "zigbee/zigbee_radio.h"
 #include "zigbee/zigbee_state.h"
+#include "semantics/semantics.h"
 
 /*
  * Задача сервиса — единственный, кто говорит с Domain от лица Zigbee-мира: приём
@@ -132,9 +133,27 @@ static sys_error_t zigbee_permit_execute(domain_command_t type, const void *args
     return SYS_OK;
 }
 
-/* EVENT с payload: событие несёт данные (cluster/command/bytes), а не значение атрибута. */
+/*
+ * EVENT: value = семантический HA_EVENT_* (общий vocabulary), payload = сырой
+ * ha_zb_event_t. Payload — ВРЕМЕННЫЙ compatibility shim для legacy-правил DEVICE_EVENT
+ * (удалить на шаге A, когда запись правила получит semantic event id).
+ */
 static void zigbee_event_publish(const zigbee_event_t *event)
 {
+    ha_zb_event_t physical = {0};
+    physical.device_uid = event->device_uid;
+    physical.endpoint = event->endpoint;
+    physical.cluster_id = event->cluster_id;
+    physical.command_id = event->command_id;
+    physical.payload_len = event->payload_length;
+    memcpy(physical.payload, event->payload, event->payload_length);
+
+    ha_device_record_t device = {0};
+    const bool has_device = sys_ok(domain_entity_get(
+        s_domain, (domain_entity_t)HA_ENTITY_DEVICE, &event->device_uid, &device));
+    ha_event_t semantic = {0};
+    const bool mapped = semantics_decode_event(&physical, has_device ? &device : NULL, &semantic);
+
     const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_DEVICE,
         .key = &event->device_uid,
@@ -142,11 +161,11 @@ static void zigbee_event_publish(const zigbee_event_t *event)
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
     meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = event->command_id;
+    meta.value.v.u32 = mapped ? (uint32_t)semantic.id : (uint32_t)HA_EVENT_NONE;
 
     domain_payload_ref_t ref = 0;
     const sys_error_t err =
-        domain_payload_put(s_domain, &target, &meta, event, sizeof(*event), &ref);
+        domain_payload_put(s_domain, &target, &meta, &physical, sizeof(physical), &ref);
     if (sys_failed(err)) {
         ESP_LOGW(TAG, "event not published: uid=%llx cluster=%04x err=%u",
                  (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
@@ -154,9 +173,10 @@ static void zigbee_event_publish(const zigbee_event_t *event)
         zigbee_diag_record(ZIGBEE_DIAG_EVENT, err);
         return;
     }
-    ESP_LOGI(TAG, "event: uid=%llx cluster=%04x cmd=%02x ep=%u",
+    ESP_LOGI(TAG, "event: uid=%llx cluster=%04x cmd=%02x ep=%u -> %u",
              (unsigned long long)event->device_uid, (unsigned)event->cluster_id,
-             (unsigned)event->command_id, (unsigned)event->endpoint);
+             (unsigned)event->command_id, (unsigned)event->endpoint,
+             (unsigned)(mapped ? semantic.id : HA_EVENT_NONE));
 }
 
 static void zigbee_task(void *arg)

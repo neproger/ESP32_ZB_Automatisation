@@ -142,17 +142,20 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       Zigbee её уже несёт целиком (`zigbee_event_t`), cluster/payload не теряются
 - [x] **4.1** `semantics_decode_event(physical, device_profile, out) → ha_event_t`; общий
       `ha_event_id_t` (вкл. `HA_EVENT_MINUTE_TICK`); host-тесты по парам/профилю
-- [ ] **4.2** Zigbee публикует semantic EVENT (value = event id) + сырой payload для переходного
-      matching; предварительно — сверить, что не ломается demo-правило
-- [ ] **4.3** System публикует события в том же `ha_event_id_t` (унификация с `ha_system_event_t` —
-      влияет на id, Automation и web-ui `SYSTEM_EVENTS`)
-- [ ] **4.4** Automation runtime — по semantic event id
-- [ ] **4.5** legacy DEVICE_EVENT-запись: остаётся transitional (raw matching), т.к. нет
-      cluster/payload → lossless невозможно; перевод — шаг A
-- [ ] **4.6** host-тесты: несколько профилей/payload
+- [x] **4.2** Zigbee: `semantics_decode_event` → публикует EVENT `value = HA_EVENT_*` + сырой
+      `ha_zb_event_t` в payload (ВРЕМЕННЫЙ shim)
+- [x] **4.3** System: события переведены на общий `ha_event_id_t` (`HA_EVENT_MINUTE_TICK` и др.);
+      `ha_system_event_t` удалён из контракта; web-ui `SYSTEM_EVENTS` → id 4..7
+- [x] **4.4** Automation: событие читает `event_id` из `value`; TIME-триггер — по
+      `HA_EVENT_MINUTE_TICK`; новый путь адресует semantic id
+- [x] **4.5** legacy DEVICE_EVENT: `match_command` = сырой `command_id` из transient payload
+      (shim); перевод на semantic id — шаг A. **Удалить shim на шаге A** вместе с полем
+      `event_id` в `ha_automation_record_t`
+- [x] **4.6** host-тесты `semantics_decode_event` (пары/профиль/NULL); host `test_rule`/`test_semantics`
+      1/1; IDF зелёная; прошито на P4
 
-**Чекпоинт 4.** 4.0/4.1 готовы (типы + mapper + тесты). 4.2–4.5 — отдельный шаг: затрагивают
-id системных событий (Automation + web-ui) и рабочее demo-правило, поэтому решаются явно.
+Итог: **event plane transport-agnostic** — `DOMAIN_FACT_EVENT.value` всегда `HA_EVENT_*`,
+источник (Zigbee/System) в id не зашит. State identity и automation storage — ещё transitional.
 
 ### Фаза A (позже, отдельный трек)
 
@@ -199,6 +202,9 @@ id системных событий (Automation + web-ui) и рабочее dem
 | 2026-10-10 | Display не кодирует ZCL (%, °, K, xy наружу); transition/direction/LE — в мосте | потребитель не знает кодировки |
 | 2026-10-10 | События нормализуем **до** публикации (эфемерны); `ha_event_id_t` — общий vocabulary всей системы | нет persistent-ABI, который держал бы ZCL; не строить вокруг `command_id` |
 | 2026-10-10 | Legacy DEVICE_EVENT-запись (device+command, без cluster/payload) — transitional | lossless-переход к semantic event id невозможен; перевод — шаг A |
+| 2026-10-10 | `DOMAIN_FACT_EVENT.value` всегда `HA_EVENT_*`; источник в id не кодируется | одно пространство event ids; источник есть отдельно (device) |
+| 2026-10-10 | Сырой `ha_zb_event_t` в payload — только временный shim для legacy-правил | не второй публичный контракт; удаляется на шаге A |
+| 2026-10-10 | System-события унифицированы в `ha_event_id_t` (сменились id) | одна семантика событий; цена — правка Automation + web-ui |
 
 ## 5. От чего отказались
 
@@ -232,6 +238,10 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 4.0–4.1: ha_event_t + ha_zb_event_t + ha_event_id_t (общий, вкл. MINUTE_TICK);
             semantics_decode_event (профиль устройства); test_semantics 1/1 (события).
             4.2–4.6 (публикация/System/Automation) — отдельный шаг
+2026-10-10  фаза 4.2–4.6: Zigbee публикует semantic EVENT (value=HA_EVENT_*) + shim-payload;
+            System → ha_event_id_t (ids 4..7, web-ui SYSTEM_EVENTS правлены); Automation по
+            event_id (TIME) + legacy raw через payload; tests 1/1, IDF зелёная, прошито на P4.
+            Event plane transport-agnostic
 ```
 
 ## 7. Открытые вопросы
