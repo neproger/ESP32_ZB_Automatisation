@@ -489,6 +489,14 @@ TLV / самоописание приложения              — запре�
             device-remove перенесён в Diagnostics. uid/ep остаются только в Diagnostics (raw),
             Groups/Automation/SystemStatus (transitional A4/A6.2). web-ui + IDF зелёные.
             Дальше: возврат к A3.3 (engine на ha_rule_t) → A3.4 → A3.5.
+2026-10-10  шаг A, A3.3 (ядро) — чистый semantic-evaluator `automation_rule_sem`
+            (automation_rule_sem.{h,c}): resolve(SOURCE→src), event_matches по (source,event_id),
+            time_matches, state_matches по (entity,property) с edge/BETWEEN, compare,
+            condition_ok, action → ha_property_command_t. Только entity/property/action — без
+            uid/endpoint/cluster/attr. Host test test_rule_sem (7 сценариев). automation 2/2,
+            IDF зелёный. Подключение к Domain (engine читает HA_ENTITY_AUTOMATION=ha_rule_t,
+            PROPERTY_STATE, HA_CMD_PROPERTY) неотделимо от A3.4: таблица automation должна
+            стать ha_rule_t, а web читает/пишет ту же таблицу → нужен Automation v3 wire (A6.2).
 ```
 
 ## 7. Открытые вопросы

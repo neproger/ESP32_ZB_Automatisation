@@ -7,7 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 enable_testing()
 
 # Тестируется только чистая логика правила: сопоставление и сборка команды.
-set(AUTOMATION_CORE ../src/automation_rule.c)
+set(AUTOMATION_CORE ../src/automation_rule.c ../src/automation_rule_sem.c)
 set(SEMANTICS_CORE ../../semantics/src/semantics.c)
 set(HA_PROPERTIES_CORE ../../ha_model/src/ha_properties.c)
 
@@ -27,3 +27,4 @@ function(automation_add_test name)
 endfunction()
 
 automation_add_test(test_rule)
+automation_add_test(test_rule_sem)

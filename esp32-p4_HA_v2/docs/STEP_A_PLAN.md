@@ -255,7 +255,12 @@ A3  Automation persistent semantic                                              
       [x] A3.2  adapter command-by-entity: HA_CMD_PROPERTY + ha_property_command_t;
                 zigbee_entity_physical (reverse) + executor резолвит entity→(uid,ep) и
                 кодирует через semantics_build_command. Потребителю транспорт не виден
-      [ ] A3.3  engine на ha_rule_t: STATE по canonical, EVENT по entity, action через adapter
+      [~] A3.3  engine на ha_rule_t. Чистое ядро готово: automation_rule_sem (match
+                EVENT по (source_entity,event_id), STATE по (entity,property) с edge/BETWEEN,
+                TIME, операторы, резолв HA_ENTITY_ID_SOURCE, сборка ha_property_command_t).
+                automation 2/2. Осталось подключить к Domain (HA_ENTITY_AUTOMATION как
+                ha_rule_t + PROPERTY_STATE + HA_CMD_PROPERTY) — это неотделимо от A3.4
+                (таблица = ha_rule_t), т.к. web читает ту же таблицу и пишет правило
       [ ] A3.4  Web хранит ha_rule_t напрямую (без compile/decompile) + erase старых правил
       [ ] A3.5  eval-parity: решение по canonical == решение по raw-проекции
 
