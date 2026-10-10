@@ -231,13 +231,28 @@ A1  canonical state (entity_id, property_id)                                    
       [ ] A1.4  переключить readers на canonical state
       [ ] A1.5  убрать raw state как canonical truth
 
+      РЕВИЗИЯ ПОРЯДКА (принято): A1.4/A1.5 гейтятся адресацией. Читатели (Web/Display/
+      Automation) адресуют состояние по (uid,ep,cluster,attr) и намеренно НЕ зависят от
+      `zigbee`; canonical адресует (entity,property), а обратный mapping entity→(uid,ep)
+      adapter-private. Поэтому без reverse-map в consumers порядок исполнения:
+        A3 (automation semantic storage) -> A4 (group_item semantic) -> A6 (WS v3
+        entity-addressed) -> A1.4 (switch readers) -> A1.5 (remove raw truth).
+      Обоснование: иначе читатель «формально» на canonical, но архитектурно нет.
+
 A2  Zigbee bridge пишет/читает canonical state
       Репорт → semantics → canonical (entity, property). Mapping cluster/attr ↔ property
       полностью внутри bridge. Consumers читают (entity, property).
 
-A3  Automation persistent semantic
+A3  Automation persistent semantic                                                    [в работе]
       Правило хранит (entity, property, op/value, action...) вместо 144-байтной physical.
       entities/группы правил — erase/migrate.
+      [x] A3.0  хранимая форма `ha_rule_t` (entity-адресованная, entity-событие, action по
+                entity; детерминированный POD 192; сентинел HA_ENTITY_ID_SOURCE) + test_rule
+      [ ] A3.1  событие entity-тегировано (ha_event_t / event payload несёт entity_id)
+      [ ] A3.2  adapter API «команда по entity» (reverse entity→addr + semantics_build_command)
+      [ ] A3.3  engine на ha_rule_t: STATE по canonical, EVENT по entity, action через adapter
+      [ ] A3.4  Web хранит ha_rule_t напрямую (без compile/decompile) + erase старых правил
+      [ ] A3.5  eval-parity: решение по canonical == решение по raw-проекции
 
 A4  Group Item persistent semantic
       Ключ (group, entity, property) вместо raw (uid,ep,cluster,attr).

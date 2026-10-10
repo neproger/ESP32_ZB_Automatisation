@@ -27,6 +27,13 @@ typedef uint64_t ha_entity_id_t;
 #define HA_ENTITY_ID_NONE ((ha_entity_id_t)0u)
 
 /*
+ * Сентинел «источник триггера» (Шаг A, A3): в правиле означает «то же устройство, что
+ * вызвало». Отличается и от NONE (0), и от любого выведенного id (derivation никогда не
+ * даёт all-ones). Резолвится в конкретный entity_id при eval, не хранит физику.
+ */
+#define HA_ENTITY_ID_SOURCE ((ha_entity_id_t)0xFFFFFFFFFFFFFFFFull)
+
+/*
  * Владелец identity — namespace/issuer, а не «transport» (id может создавать не только
  * физический транспорт). Значения стабильные, не переиспользуются.
  */
