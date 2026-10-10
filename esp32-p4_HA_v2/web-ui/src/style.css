@@ -162,13 +162,9 @@ select {
   padding: 0.22rem 0.5rem;
   font: inherit;
 }
-.auto-form {
-  margin: 0 1.25rem 1rem;
+.form-grid {
   display: grid;
   gap: 0.45rem;
-  border: 1px solid #2a2f38;
-  border-radius: 8px;
-  padding: 1rem;
 }
 .af-line {
   display: flex;
@@ -364,3 +360,34 @@ button.primary { background: #2563eb; border-color: #3b82f6; color: #fff; }
 button.primary:hover { background: #1d4ed8; }
 button.primary:disabled { opacity: 0.45; cursor: default; }
 .saved { color: #4caf50; font-size: 0.85rem; }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3rem 1rem;
+  overflow: auto;
+  z-index: 50;
+}
+.modal {
+  width: 100%;
+  max-width: 640px;
+  background: #191d24;
+  border: 1px solid #2a2f38;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal.wide { max-width: 860px; }
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid #2a2f38;
+}
+.modal-title { font-weight: 600; }
+.modal-head button { margin-left: auto; }
+.modal-body { padding: 1rem; }

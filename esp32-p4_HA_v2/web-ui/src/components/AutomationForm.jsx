@@ -144,7 +144,7 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   }
 
   return (
-    <form className="auto-form" onSubmit={submit}>
+    <form className="form-grid" onSubmit={submit}>
       <label className="af-line"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Включено</label>
 
       <div className="af-line">Триггер:

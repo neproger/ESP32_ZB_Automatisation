@@ -5,6 +5,7 @@ import { automationPut, automationRemove } from '../proto.js'
 import { uidHex, clusterName } from '../zcl.js'
 import { describeActionArgs, describeCondition, describeStateTrigger, TRIGGER_CMDS, ACTION_CLUSTERS, minutesToHHMM, maskToDays } from '../automation.js'
 import AutomationForm from '../components/AutomationForm.jsx'
+import Modal from '../components/Modal.jsx'
 import { SYSTEM_DEVICE_UID, SYSTEM_EVENTS } from '../system.js'
 
 function triggerCmdName(id) {
@@ -25,7 +26,7 @@ export default function Automations() {
   const s = useStore()
   const [editing, setEditing] = useState(null) // null | 'new' | id
 
-  const list = [...s.automations.values()]
+  const list = [...s.automations.values()].sort((a, b) => (a.key.id < b.key.id ? -1 : a.key.id > b.key.id ? 1 : 0))
   const devices = [...s.devices.values()]
   const nameOf = (uid) => {
     if (uid === 0n) return '—'
@@ -86,12 +87,18 @@ export default function Automations() {
       ))}
 
       {editing && (
-        <AutomationForm
-          id={editing === 'new' ? null : editing}
-          devices={devices}
-          automations={s.automations}
+        <Modal
+          title={editing === 'new' ? 'Новая автоматизация' : `Правило #${editing}`}
           onClose={() => setEditing(null)}
-        />
+          wide
+        >
+          <AutomationForm
+            id={editing === 'new' ? null : editing}
+            devices={devices}
+            automations={s.automations}
+            onClose={() => setEditing(null)}
+          />
+        </Modal>
       )}
     </section>
   )

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { groupPut, groupRemove, groupItemPut, groupItemRemove } from '../proto.js'
 import { uidHex, clusterName, attrName, formatAttrValue, widgetKind } from '../zcl.js'
+import Modal from '../components/Modal.jsx'
 
 // Экраны Display (docs/clients/DISPLAY.md): group — экран, group_item — виджет.
 // Виджет ссылается на состояние (device_uid, ep, cluster, attr); Display сам выбирает
@@ -88,9 +89,7 @@ function WidgetForm({ s, group, items, item, onClose }) {
   }
 
   return (
-    <div className="af-section">
-      <div className="af-section-head"><span>{item ? 'Виджет' : 'Новый виджет'}</span></div>
-
+    <div className="form-grid">
       <div className="af-line">Устройство:
         <select value={effUid} onChange={(e) => pickDevice(e.target.value)}>
           {devs.length === 0 && <option value="">(нет устройств с состояниями)</option>}
@@ -124,10 +123,32 @@ function WidgetForm({ s, group, items, item, onClose }) {
   )
 }
 
+// Форма экрана (создание/переименование) — общая для «+ Экран» и «Изменить».
+function ScreenForm({ initialTitle, onSave, onClose }) {
+  const [title, setTitle] = useState(initialTitle || '')
+  const save = () => {
+    if (!title.trim()) return
+    onSave(title.trim())
+    onClose()
+  }
+  return (
+    <div className="form-grid">
+      <div className="af-line">Название:
+        <input type="text" autoFocus value={title} placeholder="например, Гостиная"
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()} />
+      </div>
+      <div className="af-line">
+        <button className="primary" onClick={save} disabled={!title.trim()}>Сохранить</button>
+        <button className="ghost" onClick={onClose}>Отмена</button>
+      </div>
+    </div>
+  )
+}
+
 function GroupCard({ group, items, s }) {
-  const [title, setTitle] = useState(group.record.title)
-  useEffect(() => setTitle(group.record.title), [group.record.title])
-  const [form, setForm] = useState(null) // null | { item } (item=null → новый)
+  const [form, setForm] = useState(null) // null | { item } (item=null → новый виджет)
+  const [edit, setEdit] = useState(false)
 
   const move = (index, delta) => {
     const j = index + delta
@@ -141,11 +162,9 @@ function GroupCard({ group, items, s }) {
   return (
     <div className="card">
       <div className="card-head">
-        <input className="name" value={title} placeholder="Название экрана"
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => store.send(groupPut(group.key.id, title.trim()))}
-          onKeyDown={(e) => e.key === 'Enter' && e.target.blur()} />
+        <span className="rule-id">{group.record.title || '(без названия)'}</span>
         <span className="spacer" />
+        <button className="ghost" onClick={() => setEdit(true)}>Изменить</button>
         <button className="ghost danger" onClick={() => store.send(groupRemove(group.key.id))}>Удалить экран</button>
       </div>
 
@@ -175,8 +194,20 @@ function GroupCard({ group, items, s }) {
         <button onClick={() => setForm({ item: null })}>+ Добавить виджет</button>
       </div>
 
+      {edit && (
+        <Modal title="Экран" onClose={() => setEdit(false)}>
+          <ScreenForm
+            initialTitle={group.record.title}
+            onSave={(title) => store.send(groupPut(group.key.id, title))}
+            onClose={() => setEdit(false)}
+          />
+        </Modal>
+      )}
+
       {form && (
-        <WidgetForm s={s} group={group} items={items} item={form.item} onClose={() => setForm(null)} />
+        <Modal title={form.item ? 'Изменить виджет' : 'Новый виджет'} onClose={() => setForm(null)}>
+          <WidgetForm s={s} group={group} items={items} item={form.item} onClose={() => setForm(null)} />
+        </Modal>
       )}
     </div>
   )
@@ -184,7 +215,7 @@ function GroupCard({ group, items, s }) {
 
 export default function Groups() {
   const s = useStore()
-  const [newTitle, setNewTitle] = useState('')
+  const [newScreen, setNewScreen] = useState(false)
   const groups = [...s.groups.values()].sort((a, b) => (a.key.id < b.key.id ? -1 : 1))
 
   const nextId = () => {
@@ -195,14 +226,10 @@ export default function Groups() {
 
   return (
     <section>
-      <h2>Экраны</h2>
-      <div className="af-line">
-        <input type="text" placeholder="название нового экрана" value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)} />
-        <button onClick={() => { store.send(groupPut(nextId(), newTitle.trim())); setNewTitle('') }}>
-          + экран
-        </button>
-      </div>
+      <h2>
+        Экраны
+        <button className="primary" onClick={() => setNewScreen(true)}>+ Экран</button>
+      </h2>
 
       {groups.length === 0 && <p className="muted pad">экранов пока нет</p>}
       {groups.map((g) => (
@@ -215,6 +242,15 @@ export default function Groups() {
           s={s}
         />
       ))}
+
+      {newScreen && (
+        <Modal title="Новый экран" onClose={() => setNewScreen(false)}>
+          <ScreenForm
+            onSave={(title) => store.send(groupPut(nextId(), title))}
+            onClose={() => setNewScreen(false)}
+          />
+        </Modal>
+      )}
     </section>
   )
 }
