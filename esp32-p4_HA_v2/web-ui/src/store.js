@@ -1,5 +1,6 @@
 import { MSG, decodeFrame, snapshot } from './proto.js'
 import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
+import { VALUE_KIND } from './semantics.js'
 
 // Единый стор: WS-соединение + сырые сущности Domain. React читает через
 // useSyncExternalStore(store.subscribe, store.getVersion).
@@ -17,6 +18,9 @@ const maps = {
   [ENTITY.WIFI_STATUS]: new Map(),
   [ENTITY.SETTINGS]: new Map(),
 }
+
+// Семантическое состояние: ключ (uid, ep, property) — идентичность, готовая к шагу A.
+const semStates = new Map()
 
 const EVENT_LOG_MAX = 200
 const events = []
@@ -54,10 +58,34 @@ function onFrame(buf) {
   if (frame.type === MSG.SYNC_BEGIN) {
     syncing = true
     for (const k in maps) maps[k].clear()
+    semStates.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
     syncing = false
+    emit()
+    return
+  }
+  if (frame.type === MSG.SEMANTIC_STATE || frame.type === MSG.SEMANTIC_STATE_REMOVE) {
+    const uid = payload.getBigUint64(0, true)
+    const ep = payload.getUint8(8)
+    const property = payload.getUint16(9, true)
+    const key = `${uid}:${ep}:${property}`
+    if (frame.type === MSG.SEMANTIC_STATE_REMOVE) {
+      semStates.delete(key)
+    } else {
+      const kind = payload.getUint8(11)
+      let value = null
+      switch (kind) {
+        case VALUE_KIND.BOOL: value = payload.getUint32(12, true) !== 0; break
+        case VALUE_KIND.I32: value = payload.getInt32(12, true); break
+        case VALUE_KIND.U32:
+        case VALUE_KIND.ENUM: value = payload.getUint32(12, true); break
+        case VALUE_KIND.FLOAT: value = payload.getFloat32(12, true); break
+        default: value = null
+      }
+      semStates.set(key, { uid, ep, property, kind, value })
+    }
     emit()
     return
   }
@@ -146,6 +174,13 @@ export const store = {
   },
   get events() {
     return events
+  },
+  get semStates() {
+    return semStates
+  },
+  // Семантическое состояние по (uid, ep, property): { uid, ep, property, kind, value } | undefined.
+  semState(uid, ep, property) {
+    return semStates.get(`${uid}:${ep}:${property}`)
   },
   isMarkedForRemoval(uid) {
     return maps[ENTITY.DEVICE_REMOVE].has(`rm:${uid}`)

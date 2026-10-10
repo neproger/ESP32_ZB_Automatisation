@@ -37,6 +37,13 @@ typedef enum {
     WEB_MSG_SYNC_END = 0x02,
     WEB_MSG_ENTITY = 0x10,
     WEB_MSG_ENTITY_REMOVE = 0x11,
+    /*
+     * Аддитивно (Фаза 5.1): семантическое состояние рядом с raw ENTITY STATE.
+     * STATE DTO (16): u64 uid @0, u8 ep @8, u16 property @9, u8 kind @11, u32 bits @12.
+     * REMOVE (11): u64 uid @0, u8 ep @8, u16 property @9. Без cluster/attr/zcl_type/raw.
+     */
+    WEB_MSG_SEMANTIC_STATE = 0x12,
+    WEB_MSG_SEMANTIC_STATE_REMOVE = 0x13,
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;
 

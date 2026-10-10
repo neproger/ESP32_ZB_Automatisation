@@ -166,9 +166,12 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 
 - [x] **5.0 core** в `semantics`: `semantics_cluster_properties()` / `semantics_property_actions()`
       — capabilities без inference в браузере; host-тесты
-- [ ] **5.0 BFF** проекция state (`property + ha_value_t + descriptor`) и capabilities endpoint
-      в Web (аддитивные структуры/message)
-- [ ] **5.1** semantic state DTO поверх провода; фронт не зовёт `describeAttr()` и не масштабирует `raw`
+- [x] **5.0 BFF** проекция state через `semantics` + общий wire-кодек semantic-value
+      (`bits_to_value`/`value_to_bits`); capabilities endpoint — пока через 5.0 core
+- [x] **5.1** аддитивный `WEB_MSG_SEMANTIC_STATE` (0x12) / `_REMOVE` (0x13): DTO
+      `(uid, ep, property, kind, bits)`, без cluster/attr/zcl_type/raw; snapshot+delta проекция
+      (UNKNOWN/decode-fail → не шлём); browser store по ключу `(uid, ep, property)`;
+      `EndpointWidgets` читает семантику, а не raw-скейлы
 - [x] **5.2** command ingress: `WEB_CMD_SEMANTIC_COMMAND` (стабильный LE DTO, без C enum/union);
       Web декодирует, валидирует (размер/форма/NaN-Inf) → `semantics_build_command()` →
       `HA_CMD_ZIGBEE_CLUSTER`. `web_do_zb_command()` оставлен transitional. Живые контролы
@@ -180,9 +183,11 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
       `deriveEndpointMeta`, command encoding, `buildActionArgs`/`decodeActionArgs`); raw — только
       в явном диагностическом экране, если нужен
 
-**Чекпоинт 5.** 5.0 core и 5.2 готовы (capabilities + тесты; semantic command ingress end-to-end —
-POWER/BRIGHTNESS/COLOR_TEMP/COLOR xy доходят до устройства, состояние переключается). 5.0 BFF
-(state DTO), 5.1, 5.3–5.5 — далее; каждый аддитивен и не ломает raw wire.
+**Чекпоинт 5.** 5.0 (core+BFF), 5.1, 5.2 готовы. Проверено на P4: semantic command ingress
+(POWER/BRIGHTNESS/COLOR_TEMP/COLOR доходят, toggle переключает) и read-path — `WEB_MSG_SEMANTIC_STATE`
+отдаёт `(uid, ep, property, value)` в человеческих единицах (system time, POWER, BRIGHTNESS=70.08,
+COLOR_X/Y=0.3, TEMP). Осталось: 5.3 (Automation UI-компилятор), 5.4 (Events), 5.5 (удаление
+ZCL-семантики из фронта); raw `ENTITY` остаётся для диагностики до 5.5/A.
 
 ### Фаза A (позже, отдельный трек)
 
@@ -236,6 +241,10 @@ POWER/BRIGHTNESS/COLOR_TEMP/COLOR xy доходят до устройства, �
 | 2026-10-10 | Capabilities (cluster→properties, property→actions) — в `semantics`, не в браузере | убрать ZCL-inference UI (`capabilities.js`) |
 | 2026-10-10 | Semantic command DTO — стабильный LE (без C enum/union/`memcpy`), NaN/Inf reject на границе WS | wire не зависит от ABI компилятора; WS — trust boundary |
 | 2026-10-10 | Transition policy (0) остаётся в мосте, не в DTO | нет потребности в configurable transition; ZCL-параметр не тащим наверх |
+| 2026-10-10 | Semantic state — отдельный аддитивный message (0x12/0x13), не изменение raw `ENTITY STATE` | raw остаётся диагностикой/совместимостью; WS v3 не нужен |
+| 2026-10-10 | Identity semantic state в store — `(uid, ep, property)`, не raw key | уже сейчас совпадает с будущей canonical identity шага A |
+| 2026-10-10 | unit/range/name не дублируем в каждом state-кадре | descriptor — отдельно (`semantics.js`/vocabulary), в кадре только address+property+typed value |
+| 2026-10-10 | Общий codec semantic-value (kind+bits) для command и state | одна реализация, без дублей |
 
 ## 5. От чего отказались
 
@@ -279,6 +288,10 @@ TLV / самоописание приложения              — запре�
             web-ui: semantics.js + semanticCommand; EndpointWidgets/StateAttr шлют семантику
             (commands.js без ZCL). Проверено на P4: POWER/BRIGHTNESS/COLOR_TEMP/COLOR доходят,
             toggle переключает состояние. IDF+web-ui зелёные
+2026-10-10  фаза 5.0 BFF + 5.1: общий wire-кодек semantic-value (bits_to_value/value_to_bits);
+            WEB_MSG_SEMANTIC_STATE/_REMOVE (аддитивно, snapshot+delta, UNKNOWN не шлём); store по
+            (uid,ep,property); EndpointWidgets читает семантику. Строгие размеры DTO в 5.2.
+            Проверено на P4: 0x12-состояния корректны (system time, POWER, BRIGHTNESS, COLOR, TEMP)
 ```
 
 ## 7. Открытые вопросы

@@ -140,6 +140,65 @@ static uint64_t get_u64(const uint8_t *p)
     return (uint64_t)get_u32(p) | ((uint64_t)get_u32(p + 4) << 32);
 }
 
+static void put_u64(uint8_t *out, uint64_t value)
+{
+    put_u32(out, (uint32_t)value);
+    put_u32(out + 4, (uint32_t)(value >> 32));
+}
+
+/* Стабильный wire-кодек семантического скаляра: u8 kind + u32 bits (общий для
+ * command ingress и semantic state). bits трактуется по kind. */
+static bool bits_to_value(ha_value_kind_t kind, uint32_t bits, ha_value_t *out)
+{
+    out->kind = kind;
+    switch (kind) {
+    case HA_VALUE_BOOL:
+        out->value.b = bits != 0;
+        return true;
+    case HA_VALUE_I32:
+        out->value.i32 = (int32_t)bits;
+        return true;
+    case HA_VALUE_U32:
+        out->value.u32 = bits;
+        return true;
+    case HA_VALUE_ENUM:
+        out->value.enum_value = bits;
+        return true;
+    case HA_VALUE_FLOAT: {
+        float f = 0.0f;
+        memcpy(&f, &bits, sizeof(f));
+        if (!isfinite(f)) { /* граница доверия: NaN/Inf не проходит */
+            return false;
+        }
+        out->value.f32 = f;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static uint32_t value_to_bits(const ha_value_t *value)
+{
+    switch (value->kind) {
+    case HA_VALUE_BOOL:
+        return value->value.b ? 1u : 0u;
+    case HA_VALUE_I32:
+        return (uint32_t)value->value.i32;
+    case HA_VALUE_U32:
+        return value->value.u32;
+    case HA_VALUE_ENUM:
+        return value->value.enum_value;
+    case HA_VALUE_FLOAT: {
+        uint32_t bits = 0;
+        memcpy(&bits, &value->value.f32, sizeof(bits));
+        return bits;
+    }
+    default:
+        return 0;
+    }
+}
+
 static void web_send_frame(int fd, uint8_t type, uint16_t seq, const void *payload, uint16_t len)
 {
     uint8_t frame[WEB_PROTO_MAX_FRAME];
@@ -170,6 +229,46 @@ static void web_broadcast(uint8_t type, uint16_t seq, const void *payload, uint1
     }
 }
 
+/* --- семантическое состояние (Фаза 5.1) --------------------------------- */
+
+/* raw STATE → semantic DTO; false при UNKNOWN/ошибке декода (ложное не шлём). */
+static bool semantic_state_payload(const ha_zb_state_key_t *key,
+                                   const ha_zb_state_record_t *record, uint8_t *out,
+                                   uint16_t *out_len)
+{
+    const ha_property_id_t property = semantics_property_from_key(key);
+    if (property == HA_PROPERTY_UNKNOWN) {
+        return false;
+    }
+    ha_value_t value = {0};
+    if (!semantics_state_value(key, record, &value)) {
+        return false;
+    }
+    put_u64(out, key->device_uid);
+    out[8] = key->endpoint;
+    out[9] = (uint8_t)(property & 0xff);
+    out[10] = (uint8_t)(property >> 8);
+    out[11] = (uint8_t)value.kind;
+    put_u32(out + 12, value_to_bits(&value));
+    *out_len = 16;
+    return true;
+}
+
+static bool semantic_state_remove_payload(const ha_zb_state_key_t *key, uint8_t *out,
+                                          uint16_t *out_len)
+{
+    const ha_property_id_t property = semantics_property_from_key(key);
+    if (property == HA_PROPERTY_UNKNOWN) {
+        return false;
+    }
+    put_u64(out, key->device_uid);
+    out[8] = key->endpoint;
+    out[9] = (uint8_t)(property & 0xff);
+    out[10] = (uint8_t)(property >> 8);
+    *out_len = 11;
+    return true;
+}
+
 /* --- snapshot ----------------------------------------------------------- */
 
 static bool snapshot_count(const void *key, const void *record, void *ctx)
@@ -195,6 +294,14 @@ static bool snapshot_emit(const void *key, const void *record, void *ctx)
     memcpy(payload + 1 + s->schema->key_size, record, s->schema->rec_size);
     web_send_frame(s->fd, WEB_MSG_ENTITY, 0, payload,
                    (uint16_t)(1 + s->schema->key_size + s->schema->rec_size));
+    if (s->schema->type == WEB_ENTITY_STATE) {
+        uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
+        uint16_t sem_len = 0;
+        if (semantic_state_payload((const ha_zb_state_key_t *)key,
+                                   (const ha_zb_state_record_t *)record, sem, &sem_len)) {
+            web_send_frame(s->fd, WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
+        }
+    }
     (*s->count)++;
     return true;
 }
@@ -241,8 +348,24 @@ static void web_send_fact(const domain_event_t *event)
         memcpy(payload + 1 + schema->key_size, record, schema->rec_size);
         web_broadcast(WEB_MSG_ENTITY, 0, payload,
                       (uint16_t)(1 + schema->key_size + schema->rec_size));
+        if (schema->type == WEB_ENTITY_STATE && event->key_size == sizeof(ha_zb_state_key_t)) {
+            uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
+            uint16_t sem_len = 0;
+            if (semantic_state_payload((const ha_zb_state_key_t *)event->key,
+                                       (const ha_zb_state_record_t *)record, sem, &sem_len)) {
+                web_broadcast(WEB_MSG_SEMANTIC_STATE, 0, sem, sem_len);
+            }
+        }
     } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
         web_broadcast(WEB_MSG_ENTITY_REMOVE, 0, payload, (uint16_t)(1 + schema->key_size));
+        if (schema->type == WEB_ENTITY_STATE && event->key_size == sizeof(ha_zb_state_key_t)) {
+            uint8_t sem[WEB_PROTO_MAX_PAYLOAD];
+            uint16_t sem_len = 0;
+            if (semantic_state_remove_payload((const ha_zb_state_key_t *)event->key, sem,
+                                              &sem_len)) {
+                web_broadcast(WEB_MSG_SEMANTIC_STATE_REMOVE, 0, sem, sem_len);
+            }
+        }
     }
 }
 
@@ -290,42 +413,22 @@ static uint16_t web_do_semantic_command(const uint8_t *args, size_t len)
 
     ha_command_value_t value = {0};
     if (value_kind == (uint8_t)HA_COMMAND_VALUE_NONE) {
+        if (len != 13) { /* strict: точный размер каждой формы */
+            return SYS_CODE_INVALID_SIZE;
+        }
         value.kind = HA_COMMAND_VALUE_NONE;
     } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_SCALAR) {
-        if (len < 18) {
+        if (len != 18) {
             return SYS_CODE_INVALID_SIZE;
         }
         const ha_value_kind_t scalar_kind = (ha_value_kind_t)args[13];
         const uint32_t bits = get_u32(args + 14);
         value.kind = HA_COMMAND_VALUE_SCALAR;
-        value.value.scalar.kind = scalar_kind;
-        switch (scalar_kind) {
-        case HA_VALUE_BOOL:
-            value.value.scalar.value.b = bits != 0;
-            break;
-        case HA_VALUE_I32:
-            value.value.scalar.value.i32 = (int32_t)bits;
-            break;
-        case HA_VALUE_U32:
-            value.value.scalar.value.u32 = bits;
-            break;
-        case HA_VALUE_ENUM:
-            value.value.scalar.value.enum_value = bits;
-            break;
-        case HA_VALUE_FLOAT: {
-            float f = 0.0f;
-            memcpy(&f, &bits, sizeof(f));
-            if (!isfinite(f)) { /* NaN/Inf отсекаем на границе */
-                return SYS_CODE_INVALID_ARG;
-            }
-            value.value.scalar.value.f32 = f;
-            break;
-        }
-        default:
+        if (!bits_to_value(scalar_kind, bits, &value.value.scalar)) {
             return SYS_CODE_INVALID_ARG;
         }
     } else if (value_kind == (uint8_t)HA_COMMAND_VALUE_XY) {
-        if (len < 21) {
+        if (len != 21) {
             return SYS_CODE_INVALID_SIZE;
         }
         const uint32_t xb = get_u32(args + 13);

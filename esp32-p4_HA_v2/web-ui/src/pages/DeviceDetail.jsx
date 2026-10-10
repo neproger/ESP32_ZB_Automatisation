@@ -73,7 +73,7 @@ export default function DeviceDetail({ uid }) {
                   </span>
                 ))}
               </div>
-              <EndpointWidgets uid={target} ep={e.key.ep} record={e.record} states={states.filter((st) => st.key.ep === e.key.ep)} />
+              <EndpointWidgets uid={target} ep={e.key.ep} record={e.record} />
             </div>
           ))
         )}

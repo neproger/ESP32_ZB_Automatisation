@@ -1,24 +1,18 @@
 import { useEffect, useState } from 'react'
 import { store } from '../store.js'
 import { semanticCommand } from '../proto.js'
-import { deriveEndpointMeta, hasReport } from '../capabilities.js'
-import { formatAttrValue } from '../zcl.js'
 import { rgbHexToXy, xyToRgbHex } from '../color.js'
 import { CLUSTERS } from '../commands.js'
 import { PROPERTY, ACTION } from '../semantics.js'
 
-function find(states, cluster, attr) {
-  return states.find((s) => s.key.cluster === cluster && s.key.attr === attr) || null
-}
-function raw(states, cluster, attr) {
-  const st = find(states, cluster, attr)
-  return st ? st.record.raw >>> 0 : null
+/* Текущее семантическое значение свойства (в человеческих единицах). */
+function sem(uid, ep, property) {
+  return store.semState(uid, ep, property)?.value
 }
 
-/* Контрол одного свойства: виджет — по описанию, отправка — семантическая команда. */
-function CommandControl({ uid, ep, cmd, states }) {
+function CommandControl({ uid, ep, cmd }) {
   if (cmd.widget === 'onoff') {
-    const onoff = (raw(states, 0x0006, 0x0000) ?? 0) !== 0
+    const onoff = sem(uid, ep, PROPERTY.POWER) === true
     const set = (action) => store.send(semanticCommand({ uid, ep, property: PROPERTY.POWER, action }))
     return (
       <div className="wrow">
@@ -31,18 +25,17 @@ function CommandControl({ uid, ep, cmd, states }) {
     )
   }
   if (cmd.widget === 'level') {
-    const level = Math.max(0, Math.min(254, raw(states, 0x0008, 0x0000) ?? 0))
-    return <LevelControl uid={uid} ep={ep} current={Math.round((level / 254) * 100)} />
+    const v = sem(uid, ep, PROPERTY.BRIGHTNESS)
+    return <LevelControl uid={uid} ep={ep} current={v != null ? Math.round(v) : 0} />
   }
   if (cmd.widget === 'color_temp') {
-    const mired = raw(states, 0x0300, 0x0007) ?? 0
-    const current = mired > 0 ? Math.max(2000, Math.min(6500, Math.round(1_000_000 / mired))) : 3000
-    return <TempControl uid={uid} ep={ep} current={current} />
+    const v = sem(uid, ep, PROPERTY.COLOR_TEMPERATURE)
+    return <TempControl uid={uid} ep={ep} current={v != null ? Math.round(v) : 3000} />
   }
   if (cmd.widget === 'color_xy') {
-    const x = raw(states, 0x0300, 0x0003)
-    const y = raw(states, 0x0300, 0x0004)
-    return <ColorControl uid={uid} ep={ep} current={x != null && y != null ? xyToRgbHex(x, y) : '#ffffff'} />
+    const x = sem(uid, ep, PROPERTY.COLOR_X)
+    const y = sem(uid, ep, PROPERTY.COLOR_Y)
+    return <ColorControl uid={uid} ep={ep} current={x != null && y != null ? xyToRgbHex(x * 65535, y * 65535) : '#ffffff'} />
   }
   return null
 }
@@ -89,28 +82,27 @@ function ColorControl({ uid, ep, current }) {
   )
 }
 
-export default function EndpointWidgets({ uid, ep, record, states }) {
-  const meta = deriveEndpointMeta(record)
-  const serverClusters = (record.clusters || []).filter((c) => c.role === 1).map((c) => c.id)
-  const sensor = (cluster, attr) => {
-    const st = find(states, cluster, attr)
-    return st ? formatAttrValue(cluster, attr, st.record.zclType, st.record.raw) : null
-  }
+function sensor(uid, ep, property, fmt) {
+  const v = sem(uid, ep, property)
+  return v == null ? null : fmt(v)
+}
 
+export default function EndpointWidgets({ uid, ep, record }) {
+  const serverClusters = (record.clusters || []).filter((c) => c.role === 1).map((c) => c.id)
   return (
     <div className="widgets">
       {serverClusters.map((clusterId) => {
         const def = CLUSTERS[clusterId]
         if (!def) return null
         return def.commands.map((cmd) => (
-          <CommandControl key={`${clusterId}:${cmd.widget}`} uid={uid} ep={ep} cmd={cmd} states={states} />
+          <CommandControl key={`${clusterId}:${cmd.widget}`} uid={uid} ep={ep} cmd={cmd} />
         ))
       })}
       <div className="wrow">
-        {hasReport(meta, 'temperature_c') && <span className="sensor">Темп: <b>{sensor(0x0402, 0x0000) ?? '—'}</b></span>}
-        {hasReport(meta, 'humidity_pct') && <span className="sensor">Влажн: <b>{sensor(0x0405, 0x0000) ?? '—'}</b></span>}
-        {hasReport(meta, 'battery_pct') && <span className="sensor">Батарея: <b>{sensor(0x0001, 0x0021) ?? '—'}</b></span>}
-        {hasReport(meta, 'occupancy') && <span className="sensor">Присутствие: <b>{sensor(0x0406, 0x0000) ?? '—'}</b></span>}
+        {sensor(uid, ep, PROPERTY.TEMPERATURE, (v) => <span className="sensor" key="t">Темп: <b>{v.toFixed(1)} °C</b></span>)}
+        {sensor(uid, ep, PROPERTY.HUMIDITY, (v) => <span className="sensor" key="h">Влажн: <b>{v.toFixed(1)} %</b></span>)}
+        {sensor(uid, ep, PROPERTY.BATTERY_PERCENT, (v) => <span className="sensor" key="b">Батарея: <b>{v.toFixed(0)} %</b></span>)}
+        {sensor(uid, ep, PROPERTY.OCCUPANCY, (v) => <span className="sensor" key="o">Присутствие: <b>{v ? 'да' : 'нет'}</b></span>)}
       </div>
     </div>
   )
