@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "semantics/semantics.h"
 #include "sys/sys_error.h"
 
 /*
@@ -186,6 +187,34 @@ sys_error_t zigbee_device_remove(domain_t *domain, ha_device_uid_t uid)
         return err;
     }
     return SYS_OK;
+}
+
+bool zigbee_property_state_from_report(const zigbee_report_t *report, ha_entity_id_t entity_id,
+                                       ha_state_key_t *out_key, ha_state_record_t *out_record)
+{
+    if (report == NULL || out_key == NULL || out_record == NULL || entity_id == HA_ENTITY_ID_NONE) {
+        return false;
+    }
+
+    ha_zb_state_key_t physical = {0};
+    zigbee_state_key_build(report, &physical);
+
+    const ha_property_id_t property = semantics_property_from_key(&physical);
+    if (property == HA_PROPERTY_UNKNOWN) {
+        return false;
+    }
+
+    const ha_zb_state_record_t raw = {.raw = report->raw, .zcl_type = report->zcl_type};
+    ha_value_t value = {0};
+    if (!semantics_state_value(&physical, &raw, &value)) {
+        return false;
+    }
+
+    *out_key = (ha_state_key_t){0}; /* детерминированный ключ: reserved = 0 */
+    out_key->entity = entity_id;
+    out_key->property = property;
+    out_record->value = value;
+    return true;
 }
 
 sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, bool *out_changed)

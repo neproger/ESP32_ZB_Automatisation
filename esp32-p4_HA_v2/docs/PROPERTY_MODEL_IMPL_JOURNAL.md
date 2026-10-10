@@ -307,6 +307,14 @@ ZCL-семантики из фронта); raw `ENTITY` остаётся для 
 | 2026-10-10 | Entity ensure — только при успешном resolve; ошибка → явная, ложной Entity нет | принцип «не публиковать ложное» |
 | 2026-10-10 | `zb_entity_ensure_entity`: rollback binding при падении `domain_entity_put` | атомарность: не оставлять привязку без Entity (идемпотентно переприменится) |
 | 2026-10-10 | **A0 завершён**: identity доказана reboot/order/re-interview independent; registry RAM-only; persistent mutable id не нужен | следующий — A1 canonical state (entity_id, property_id) |
+| 2026-10-10 | A1 идёт без erase+replace: сперва parity raw↔canonical на одном входе | смена truth — отдельный шаг (A1.4), обратимая |
+| 2026-10-10 | A1.2 canonical — тень: пишется только при наличии Entity и маппинга; иначе raw остаётся единственной записью | не выдумывать смысл там, где его нет |
+| 2026-10-10 | `ha_state_key_t` содержит явный `reserved` (padding) | Domain сравнивает ключи побайтово; неявный padding делал lookup недетерминированным |
+
+**Правило (Domain key structs):** любая key-структура Domain обязана иметь полностью
+детерминированное байтовое представление — либо без padding, либо с явными `reserved`,
+которые всегда инициализируются нулём (`{0}`). Domain сравнивает ключи побайтово, поэтому
+неявный padding делает lookup недетерминированным (проявилось на `ha_state_key_t` в A1.3).
 
 ## 5. От чего отказались
 
@@ -408,6 +416,17 @@ TLV / самоописание приложения              — запре�
             in-memory Domain (first/repeat/order/reboot/re-pair/endpoint-change/atomicity).
             Identity доказана reboot/order/re-interview independent; registry RAM-only намеренно;
             persistent mutable id не нужен. zigbee 6/6, IDF зелёный. Canonical state всё ещё raw
+2026-10-10  шаг A, короткий ревью A0 (границы для A1) — зелёный: id только из derive; bridge
+            получает id только через binding/resolve; generic Entity API без uid/endpoint;
+            ensure — единственная точка создания Zigbee Entity; второго mapping нет; rollback
+            симметричен; id не зависит от cluster/attr/order; record минимален.
+2026-10-10  шаг A, A1.0–A1.3 — canonical state введён рядом с raw, БЕЗ переключения truth.
+            A1.0 форма key/record (ha_state.h). A1.1 таблица HA_ENTITY_PROPERTY_STATE (RAM).
+            A1.2 тень: Zigbee report -> entity_id(до binding lookup)+property(semantics) ->
+            ha_value_t; raw всё ещё источник, canonical не выдумывается при unmapped/miss.
+            A1.3 parity-тест raw-projection == canonical. Найдено: неявный padding в
+            ha_state_key_t → byte-lookup в Domain не находил запись; добавлен явный reserved.
+            ha_model 3/3, zigbee 7/7, IDF зелёный. A1.4 (переключить readers) — не начат
 ```
 
 ## 7. Открытые вопросы

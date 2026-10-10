@@ -216,9 +216,20 @@ A0  logical entity identity + binding model (canonical state пока не ме�
 (reboot/order/re-interview independent; registry RAM-only намеренно; persistent mutable
 entity-id mapping не требуется). Canonical state пока raw — **A1 следующий**.
 
-A1  canonical state (entity_id, property_id)
+A1  canonical state (entity_id, property_id)                                          [в работе]
       Новый тип canonical state; physical ZCL key уходит в adapter binding.
       Domain API по-прежнему агностичен (opaque key).
+      Принцип: не erase+replace сразу, а сперва parity на одном входе:
+        raw (uid,ep,cluster,attr) -> semantics -> value  ==  canonical (entity,property) -> value
+      [x] A1.0  форма canonical key/record (ha_model/ha_state.h: ha_state_key_t/ha_state_record_t)
+      [x] A1.1  canonical-таблица рядом с raw (HA_ENTITY_PROPERTY_STATE; APP_PROPERTY_STATE_CAPACITY)
+      [x] A1.2  Zigbee report -> entity_id + property_id: тень canonical (raw всё ещё truth).
+                Чистая проекция zigbee_property_state_from_report; read-only zigbee_entity_lookup;
+                непримапленный атрибут/lookup-miss -> canonical не выдумывается
+      [x] A1.3  parity-тест raw-projection == canonical (test_property_state:
+                known-match / unmapped-без-canonical / endpoint-часть-адреса)
+      [ ] A1.4  переключить readers на canonical state
+      [ ] A1.5  убрать raw state как canonical truth
 
 A2  Zigbee bridge пишет/читает canonical state
       Репорт → semantics → canonical (entity, property). Mapping cluster/attr ↔ property

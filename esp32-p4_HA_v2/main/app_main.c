@@ -12,6 +12,7 @@
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
 #include "ha_model/ha_settings.h"
+#include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
 #include "journal_console.h"
@@ -27,13 +28,14 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 14
+#define APP_ENTITY_TYPES 15
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
 
 #define APP_DEVICE_CAPACITY 32
 #define APP_STATE_CAPACITY 256
+#define APP_PROPERTY_STATE_CAPACITY 256
 #define APP_ENDPOINT_CAPACITY 128
 #define APP_AUTOMATION_CAPACITY 32
 #define APP_DEVICE_REMOVE_CAPACITY 32
@@ -205,6 +207,21 @@ static const domain_entity_desc_t entity_desc = {
     .persist_key = NULL,
 };
 
+/*
+ * Canonical property state (Шаг A, A1.1): семантическая истина (entity_id, property_id)
+ * → ha_value_t. RAM — состояние приносят репорты заново, как и raw. Соседствует с raw
+ * (state_desc) до переключения truth (A1.4): пока raw — источник, canonical наполняется
+ * теневым образом (A1.2) для parity-проверки (A1.3).
+ */
+static const domain_entity_desc_t property_state_desc = {
+    .type = (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
+    .key_size = sizeof(ha_state_key_t),
+    .payload_size = sizeof(ha_state_record_t),
+    .capacity = APP_PROPERTY_STATE_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
 /* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
 static const domain_entity_desc_t automation_desc = {
     .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
@@ -321,6 +338,10 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &entity_desc), "register entity")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &property_state_desc),
+                    "register property-state")) {
         return;
     }
     if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {

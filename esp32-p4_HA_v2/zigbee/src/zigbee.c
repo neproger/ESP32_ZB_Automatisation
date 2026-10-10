@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "zigbee/zigbee_command.h"
 #include "zigbee/zigbee_diag.h"
+#include "ha_model/ha_state.h"
 #include "zigbee/zigbee_entity_registry.h"
 #include "zigbee/zigbee_radio.h"
 #include "zigbee/zigbee_state.h"
@@ -180,6 +181,37 @@ static void zigbee_event_publish(const zigbee_event_t *event)
              (unsigned)(mapped ? semantic.id : HA_EVENT_NONE));
 }
 
+/*
+ * A1.2: canonical property state — тень raw (truth пока raw, переключение — A1.4).
+ * Публикуем, только если endpoint уже имеет logical Entity (после интервью) и атрибут
+ * есть в семантическом словаре; иначе смысл не выдумываем, raw остаётся единственной
+ * записью. Неудача записи тени не отменяет raw — поэтому только лог.
+ */
+static void zigbee_publish_property_state(const zigbee_report_t *report)
+{
+    ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
+    if (!zigbee_entity_lookup(report->device_uid, report->endpoint, &entity_id)) {
+        return;
+    }
+
+    ha_state_key_t key = {0};
+    ha_state_record_t record = {0};
+    if (!zigbee_property_state_from_report(report, entity_id, &key, &record)) {
+        return;
+    }
+
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
+                                              &key, &record, &meta, &changed);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "property state not published: uid=%llx ep=%u prop=%u err=%u",
+                 (unsigned long long)report->device_uid, (unsigned)report->endpoint,
+                 (unsigned)key.property, (unsigned)err.code);
+    }
+}
+
 static void zigbee_task(void *arg)
 {
     (void)arg;
@@ -203,6 +235,8 @@ static void zigbee_task(void *arg)
                          (unsigned long long)report.device_uid, (unsigned)report.cluster_id,
                          (unsigned)report.attr_id);
                 zigbee_diag_record(ZIGBEE_DIAG_REPORT, err);
+            } else {
+                zigbee_publish_property_state(&report);
             }
             continue;
         }

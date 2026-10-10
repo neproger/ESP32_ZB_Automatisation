@@ -23,3 +23,4 @@ endfunction()
 
 ha_model_add_test(test_properties)
 ha_model_add_test(test_entity)
+ha_model_add_test(test_state)

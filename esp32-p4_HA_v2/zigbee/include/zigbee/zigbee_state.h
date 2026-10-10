@@ -3,6 +3,7 @@
 #include "domain/domain.h"
 #include "domain/domain_types.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_state.h"
 #include "zigbee/zigbee.h"
 
 /*
@@ -42,3 +43,12 @@ domain_value_t zigbee_value_compact(const zigbee_report_t *report);
  * которого нет в Domain (интервью не завершено), — NOT_FOUND: факта не будет.
  */
 sys_error_t zigbee_state_apply(domain_t *domain, const zigbee_report_t *report, bool *out_changed);
+
+/*
+ * A1.2/A1.3: проекция репорта в canonical property state — адрес (entity_id, property_id)
+ * и семантическое значение. false — атрибут вне семантического словаря или значение не
+ * декодируется: смысл не выдумывается, canonical не пишется (raw остаётся записью).
+ * Чистая функция (без Domain/радио) — поэтому parity raw↔canonical тестируется на хосте.
+ */
+bool zigbee_property_state_from_report(const zigbee_report_t *report, ha_entity_id_t entity_id,
+                                       ha_state_key_t *out_key, ha_state_record_t *out_record);

@@ -55,6 +55,9 @@ typedef enum {
     HA_ENTITY_SETTINGS = 13,
     /* Логическая сущность (Шаг A): transport-agnostic identity. Форма — ha_model/ha_entity.h. */
     HA_ENTITY_ENTITY = 14,
+    /* Canonical property state (Шаг A): семантическая истина (entity_id, property_id).
+     * Форма — ha_model/ha_state.h. Соседствует с raw HA_ENTITY_STATE до A1.4. */
+    HA_ENTITY_PROPERTY_STATE = 15,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32

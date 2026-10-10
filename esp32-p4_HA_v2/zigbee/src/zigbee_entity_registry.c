@@ -28,3 +28,12 @@ sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t 
     }
     return SYS_OK;
 }
+
+bool zigbee_entity_lookup(ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out_entity_id)
+{
+    if (out_entity_id == NULL) {
+        return false;
+    }
+    return zb_entity_binding_find_entity(s_bindings, s_binding_count, uid, endpoint,
+                                         out_entity_id);
+}
