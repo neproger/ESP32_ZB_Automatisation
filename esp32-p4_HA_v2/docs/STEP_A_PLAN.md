@@ -129,12 +129,16 @@ Domain API где-то требует cluster/attr — миграция не з�
 
 ```text
 A0  logical entity identity + binding model (canonical state пока не меняем)
-    A0.0  контракт entity_id и binding
-    A0.1  ha_entity_id_t + transport-agnostic Entity (kind/metadata)
-    A0.2  Zigbee binding record { entity_id, transport=ZIGBEE, uid, endpoint }
-    A0.3  детерминированная derivation entity_id из binding (алгоритм — §5)
-    A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
-    A0.5  tests: reboot / порядок discovery / re-interview → та же identity
+    [x] A0.0  контракт entity_id и binding (без транспорта; см. §3)
+    [x] A0.1  `ha_entity_id_t` + transport-agnostic Entity (`ha_model/ha_entity.h`):
+              id+key, минимальный record, host-тест
+    [ ] A0.2  Zigbee binding record { entity_id, transport=ZIGBEE, uid, endpoint }
+    [ ] A0.3  детерминированная derivation entity_id из binding (алгоритм — §5)
+    [ ] A0.4  Zigbee bridge создаёт/восстанавливает Entity при интервью
+    [ ] A0.5  tests: reboot / порядок discovery / re-interview → та же identity
+
+> A0.1 **намеренно не определяет**, как выводится `entity_id`. Derivation — adapter-seed
+> based, реализуется в A0.3. Здесь зафиксирован только логический контракт Entity.
 
 A1  canonical state (entity_id, property_id)
       Новый тип canonical state; physical ZCL key уходит в adapter binding.
