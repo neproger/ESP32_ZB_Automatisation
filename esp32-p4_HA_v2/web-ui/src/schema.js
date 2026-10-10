@@ -137,6 +137,7 @@ export function decodeRecord(type, dv) {
           ep: dv.getUint8(o + 12),
           op: dv.getUint8(o + 13),
           value: dv.getFloat32(o + 16, true),
+          value2: dv.getFloat32(o + 20, true),
         })
       }
       return {
@@ -232,6 +233,7 @@ export function encodeAutomationRecord(r) {
     dv.setUint8(o + 12, c.ep || 0)
     dv.setUint8(o + 13, c.op || 1)
     dv.setFloat32(o + 16, Number(c.value) || 0, true)
+    dv.setFloat32(o + 20, Number(c.value2) || 0, true)
   })
   return out
 }

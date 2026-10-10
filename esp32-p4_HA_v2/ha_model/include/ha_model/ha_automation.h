@@ -59,6 +59,8 @@ typedef enum {
     HA_CONDITION_OP_LE = 6,
     /* Битовая маска: (value & actual) != 0. Для наборов, где EQ/NE мало (дни недели). */
     HA_CONDITION_OP_HAS_BITS = 7,
+    /* Диапазон: value <= actual <= value2 (оба порога — в человеческих единицах). */
+    HA_CONDITION_OP_BETWEEN = 8,
 } ha_condition_op_t;
 
 /*
@@ -73,7 +75,8 @@ typedef struct {
     uint8_t endpoint;
     uint8_t op; /* ha_condition_op_t */
     uint8_t reserved[2];
-    float value;
+    float value;  /* порог; для BETWEEN — нижняя граница */
+    float value2; /* BETWEEN: верхняя граница (занимает выравнивающий паддинг) */
 } ha_automation_condition_t;
 
 /*
@@ -127,6 +130,7 @@ typedef struct {
 #ifdef __cplusplus
 static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
+static_assert(offsetof(ha_automation_condition_t, value2) == 20, "automation: cond value2");
 static_assert(offsetof(ha_automation_record_t, trigger_a) == 4, "automation: layout trigger_a");
 static_assert(offsetof(ha_automation_record_t, trigger_b) == 8, "automation: layout trigger_b");
 static_assert(offsetof(ha_automation_record_t, trigger_b.event.command_id) == 16, "automation: event cmd");
@@ -139,6 +143,7 @@ static_assert(sizeof(ha_automation_record_t) <= 1024, "automation: больше 
 #else
 _Static_assert(sizeof(ha_automation_key_t) == 8, "ha_automation_key_t: неожиданный размер");
 _Static_assert(sizeof(ha_automation_condition_t) == 24, "ha_automation_condition_t: неожиданный размер");
+_Static_assert(offsetof(ha_automation_condition_t, value2) == 20, "automation: cond value2");
 _Static_assert(offsetof(ha_automation_record_t, trigger_a) == 4, "automation: layout trigger_a");
 _Static_assert(offsetof(ha_automation_record_t, trigger_b) == 8, "automation: layout trigger_b");
 _Static_assert(offsetof(ha_automation_record_t, trigger_b.event.command_id) == 16, "automation: event cmd");

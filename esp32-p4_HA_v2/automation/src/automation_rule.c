@@ -108,6 +108,9 @@ bool automation_rule_condition_ok(const ha_automation_condition_t *condition,
     if (!automation_rule_state_value(condition->cluster_id, condition->attr_id, state, &actual)) {
         return false;
     }
+    if ((ha_condition_op_t)condition->op == HA_CONDITION_OP_BETWEEN) {
+        return actual >= (double)condition->value && actual <= (double)condition->value2;
+    }
     return op_holds(condition->op, actual, (double)condition->value);
 }
 

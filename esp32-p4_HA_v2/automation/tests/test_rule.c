@@ -109,6 +109,16 @@ static void test_condition(void)
     cond.value = 22.0f;
     CHECK(!automation_rule_condition_ok(&cond, &t2));
 
+    /* BETWEEN: 10..15 °C. */
+    cond = (ha_automation_condition_t){.cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT,
+                                       .op = HA_CONDITION_OP_BETWEEN,
+                                       .value = 10.0f,
+                                       .value2 = 15.0f};
+    const ha_zb_state_record_t in_range = {.raw = 1250, .zcl_type = HA_ZB_TYPE_INT16};  /* 12.5 */
+    const ha_zb_state_record_t out_range = {.raw = 2000, .zcl_type = HA_ZB_TYPE_INT16}; /* 20.0 */
+    CHECK(automation_rule_condition_ok(&cond, &in_range));
+    CHECK(!automation_rule_condition_ok(&cond, &out_range));
+
     float f = 21.5f;
     uint32_t bits = 0;
     memcpy(&bits, &f, sizeof(bits));

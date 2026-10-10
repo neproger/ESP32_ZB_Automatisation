@@ -83,7 +83,7 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
   const updateCondition = (i, patch) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
   const addCondition = () => {
     if (conditions.length >= MAX_CONDITIONS) return
-    setConditions((cs) => [...cs, { deviceUid: 0n, cluster: 0x0006, attr: 0, ep: 0, op: 1, value: 1 }])
+    setConditions((cs) => [...cs, { deviceUid: 0n, cluster: 0x0006, attr: 0, ep: 0, op: 1, value: 1, value2: 0 }])
   }
 
   const submit = (e) => {
@@ -115,6 +115,7 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
           ep: c.ep,
           op: c.op,
           value: Number(c.value) || 0,
+          value2: Number(c.value2) || 0,
         })),
       }),
     )
@@ -278,7 +279,14 @@ export default function AutomationForm({ id, devices, automations, onClose }) {
               <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
                 {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-              {isBoolCond(c) ? (
+              {c.op === 8 ? (
+                <>
+                  <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
+                  <span className="muted">…</span>
+                  <input className="ep" type="number" step="any" value={c.value2 ?? 0} onChange={(e) => updateCondition(i, { value2: e.target.value })} />
+                  <span className="muted">{describeAttr(c.cluster, c.attr)?.unit || ''}</span>
+                </>
+              ) : isBoolCond(c) ? (
                 <select value={c.value ? 1 : 0} onChange={(e) => updateCondition(i, { value: Number(e.target.value) })}>
                   <option value={1}>Вкл</option>
                   <option value={0}>Выкл</option>

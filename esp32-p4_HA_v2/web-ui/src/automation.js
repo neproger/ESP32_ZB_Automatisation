@@ -77,13 +77,21 @@ export const CONDITION_OPS = [
   [5, '≥'],
   [6, '≤'],
   [7, 'содержит биты'],
+  [8, 'диапазон'],
 ]
 
 export function describeCondition(c, nameOf) {
   const dev = c.deviceUid && BigInt(c.deviceUid) !== 0n ? nameOf(c.deviceUid) : 'триггер'
   const op = (CONDITION_OPS.find(([v]) => v === c.op) || [, '?'])[1]
   const isBool = c.cluster === 0x0006 && c.attr === 0x0000
-  const val = isBool ? (c.value ? 'Вкл' : 'Выкл') : c.value
+  const val =
+    c.op === 8
+      ? `${c.value}…${c.value2}`
+      : isBool
+        ? c.value
+          ? 'Вкл'
+          : 'Выкл'
+        : c.value
   return `${dev}: ${clusterName(c.cluster)}·${attrName(c.cluster, c.attr)} ${op} ${val}`
 }
 
