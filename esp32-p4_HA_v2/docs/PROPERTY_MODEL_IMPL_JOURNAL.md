@@ -621,6 +621,16 @@ TLV / самоописание приложения              — запре�
             lowercase hex native_id и зовёт ha_device_id_derive. Незакоммиченный наивный B4
             (adapter сам писал Domain) откачен. STEP_B_PLAN перезаписан под source/native_id/
             parent, boundary Device service, порядок B1'..B9. ha_model 5/5, zigbee 9/9, IDF зелёный.
+2026-10-11  Step B, B3' — generic Device service (компонент `device`, над Domain, без
+            транспорта). device_register(domain, origin, ha_device_desc_t, out_id): derive
+            device_id/parent_device_id, upsert Logical Device (имя не перетираем). device_bind_
+            entity: ownership Entity.device_id (Entity должна существовать → NOT_FOUND).
+            device_remove: снять ownership (iter+filter по device_id, не мутируя внутри iter) +
+            удалить Logical Device. Adapter-specific unpair — через dispatcher выше (B7), не
+            отсюда. Граница: UI/бизнес → Device service → Domain; Domain adapter не вызывает.
+            Добавлен SYS_LAYER_DEVICE. Корневой CMake: EXTRA_COMPONENT_DIRS += device.
+            host test test_device_service (register/idempotent/parent/bind/remove). IDF зелёный.
+            Дальше B4': Zigbee интервью строит нормализованный Device graph и зовёт Device service.
 ```
 
 ## 7. Открытые вопросы

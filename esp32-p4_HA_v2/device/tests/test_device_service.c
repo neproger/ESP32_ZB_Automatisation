@@ -1,0 +1,198 @@
+#include "device/device_service.h"
+
+#include <stdio.h>
+#include <string.h>
+
+/*
+ * B3' (docs/STEP_B_PLAN.md): generic Device service над Domain. Нормализованный desc →
+ * canonical identity; ownership Entity; удаление Device. Транспорта не знает (source/native_id
+ * opaque). Source of truth — Domain (in-memory в тесте).
+ */
+
+static int g_failures = 0;
+
+#define CHECK(cond)                                                \
+    do {                                                           \
+        if (!(cond)) {                                             \
+            printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            g_failures++;                                          \
+        }                                                          \
+    } while (0)
+
+#define ROOT_NATIVE "00124b000a1b2c3d"
+#define CHILD_NATIVE "00124b000a1b2c3d/channel/1"
+
+static void put_entity(domain_t *d, ha_entity_id_t id, const char *name)
+{
+    const ha_entity_key_t key = {.id = id};
+    ha_entity_record_t rec = {0};
+    size_t n = strlen(name);
+    if (n >= sizeof(rec.name)) {
+        n = sizeof(rec.name) - 1;
+    }
+    memcpy(rec.name, name, n);
+    domain_fact_meta_t meta = {0};
+    bool changed = false;
+    (void)domain_entity_put(d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &rec, &meta, &changed);
+}
+
+static bool get_device(domain_t *d, ha_device_id_t id, ha_logical_device_record_t *out)
+{
+    const ha_logical_device_key_t key = {.id = id};
+    return sys_ok(
+        domain_entity_get(d, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, &key, out));
+}
+
+static bool get_entity_device(domain_t *d, ha_entity_id_t id, ha_device_id_t *out)
+{
+    const ha_entity_key_t key = {.id = id};
+    ha_entity_record_t rec = {0};
+    if (sys_failed(domain_entity_get(d, (domain_entity_t)HA_ENTITY_ENTITY, &key, &rec))) {
+        return false;
+    }
+    *out = rec.device_id;
+    return true;
+}
+
+static void ctx_init(domain_t *d)
+{
+    domain_init(d, 4, 16, 8, 64);
+    const domain_entity_desc_t entity_desc = {
+        .type = (domain_entity_t)HA_ENTITY_ENTITY,
+        .key_size = sizeof(ha_entity_key_t),
+        .payload_size = sizeof(ha_entity_record_t),
+        .capacity = 8,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    const domain_entity_desc_t device_desc = {
+        .type = (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE,
+        .key_size = sizeof(ha_logical_device_key_t),
+        .payload_size = sizeof(ha_logical_device_record_t),
+        .capacity = 8,
+        .backing = DOMAIN_BACKING_RAM,
+        .persist_key = NULL,
+    };
+    domain_register_entity(d, &entity_desc);
+    domain_register_entity(d, &device_desc);
+}
+
+static void test_register_and_idempotent(void)
+{
+    domain_t d;
+    memset(&d, 0, sizeof(d));
+    ctx_init(&d);
+
+    const ha_device_desc_t desc = {
+        .source = HA_SOURCE_ZIGBEE,
+        .native_id = ROOT_NATIVE,
+        .parent_native_id = "",
+        .name = "Реле",
+    };
+    ha_device_id_t id = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &desc, &id)));
+    CHECK(id == ha_device_id_derive(HA_SOURCE_ZIGBEE, ROOT_NATIVE));
+
+    ha_logical_device_record_t rec = {0};
+    CHECK(get_device(&d, id, &rec));
+    CHECK(rec.source == HA_SOURCE_ZIGBEE);
+    CHECK(rec.parent_device_id == HA_DEVICE_ID_NONE);
+    CHECK(strcmp(rec.native_id, ROOT_NATIVE) == 0);
+    CHECK(strcmp(rec.name, "Реле") == 0);
+
+    /* Идемпотентно: другое имя не перетирает существующее. */
+    ha_device_desc_t rename = desc;
+    memcpy(rename.name, "Другое", 7); /* включая NUL */
+    ha_device_id_t id2 = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &rename, &id2)));
+    CHECK(id2 == id);
+    memset(&rec, 0, sizeof(rec));
+    CHECK(get_device(&d, id, &rec));
+    CHECK(strcmp(rec.name, "Реле") == 0);
+
+    CHECK(sys_ok(domain_deinit(&d)));
+}
+
+static void test_parent_and_bind(void)
+{
+    domain_t d;
+    memset(&d, 0, sizeof(d));
+    ctx_init(&d);
+
+    const ha_device_desc_t root = {.source = HA_SOURCE_ZIGBEE,
+                                   .native_id = ROOT_NATIVE,
+                                   .parent_native_id = "",
+                                   .name = "Реле"};
+    ha_device_id_t root_id = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &root, &root_id)));
+
+    const ha_device_desc_t child = {.source = HA_SOURCE_ZIGBEE,
+                                    .native_id = CHILD_NATIVE,
+                                    .parent_native_id = ROOT_NATIVE,
+                                    .name = "Канал 1"};
+    ha_device_id_t child_id = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &child, &child_id)));
+    CHECK(child_id != root_id);
+
+    ha_logical_device_record_t rec = {0};
+    CHECK(get_device(&d, child_id, &rec));
+    CHECK(rec.parent_device_id == root_id);
+
+    /* bind: Entity должна существовать. */
+    const ha_entity_id_t e1 = 0xE1ull;
+    const ha_entity_id_t e2 = 0xE2ull;
+    put_entity(&d, e1, "клавиша 1");
+
+    ha_device_id_t got = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e1)));
+    CHECK(get_entity_device(&d, e1, &got) && got == root_id);
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e1))); /* idempotent */
+
+    /* отсутствующая Entity → NOT_FOUND. */
+    const sys_error_t missing =
+        device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e2);
+    CHECK(sys_is(missing, SYS_CODE_NOT_FOUND));
+
+    CHECK(sys_ok(domain_deinit(&d)));
+}
+
+static void test_remove_unbinds_and_deletes(void)
+{
+    domain_t d;
+    memset(&d, 0, sizeof(d));
+    ctx_init(&d);
+
+    const ha_device_desc_t root = {.source = HA_SOURCE_ZIGBEE,
+                                   .native_id = ROOT_NATIVE,
+                                   .parent_native_id = "",
+                                   .name = "Реле"};
+    ha_device_id_t id = HA_DEVICE_ID_NONE;
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &root, &id)));
+
+    const ha_entity_id_t e1 = 0xE1ull;
+    put_entity(&d, e1, "клавиша 1");
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, id, e1)));
+
+    CHECK(sys_ok(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id)));
+
+    ha_device_id_t got = 0;
+    CHECK(get_entity_device(&d, e1, &got) && got == HA_DEVICE_ID_NONE); /* ownership снят */
+    ha_logical_device_record_t rec = {0};
+    CHECK(!get_device(&d, id, &rec)); /* Device удалён */
+
+    CHECK(sys_ok(domain_deinit(&d)));
+}
+
+int main(void)
+{
+    test_register_and_idempotent();
+    test_parent_and_bind();
+    test_remove_unbinds_and_deletes();
+
+    if (g_failures == 0) {
+        printf("all device-service tests passed\n");
+        return 0;
+    }
+    printf("%d failure(s)\n", g_failures);
+    return 1;
+}

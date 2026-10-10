@@ -27,6 +27,7 @@ typedef enum {
     SYS_LAYER_WEB,
     SYS_LAYER_SYSTEM,
     SYS_LAYER_WIFI,
+    SYS_LAYER_DEVICE,
 } sys_layer_t;
 
 /*
