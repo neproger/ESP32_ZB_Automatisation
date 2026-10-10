@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "zigbee/zigbee_command.h"
 #include "zigbee/zigbee_diag.h"
+#include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_state.h"
 #include "zigbee/zigbee_entity_registry.h"
 #include "zigbee/zigbee_radio.h"
@@ -277,6 +278,37 @@ static void zigbee_publish_property_state(const zigbee_report_t *report)
     }
 }
 
+/*
+ * A6.1b: canonical capabilities Entity из кластеров endpoint'а (через мост), по entity_id.
+ * Cluster/attr в записи не сохраняются — web читает properties/actions напрямую.
+ */
+static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
+                                        ha_entity_id_t entity_id)
+{
+    const ha_endpoint_key_t ep_key = {.device_uid = uid, .endpoint = endpoint};
+    ha_endpoint_record_t ep_record = {0};
+    if (sys_failed(
+            domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ENDPOINT, &ep_key, &ep_record))) {
+        return;
+    }
+
+    ha_entity_capabilities_record_t caps = {0};
+    if (!semantics_endpoint_capabilities(&ep_record, &caps)) {
+        return;
+    }
+
+    const ha_entity_key_t key = {.id = entity_id};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    bool changed = false;
+    const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES,
+                                              &key, &caps, &meta, &changed);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "capabilities not published: id=%llx err=%u",
+                 (unsigned long long)entity_id, (unsigned)err.code);
+    }
+}
+
 static void zigbee_task(void *arg)
 {
     (void)arg;
@@ -325,11 +357,14 @@ static void zigbee_task(void *arg)
                 } else {
                     ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u",
                              (unsigned long long)result.uid, (unsigned)result.endpoint_count);
-                    /* A0.4: каждый endpoint — логическая Entity (identity детерминирована). */
+                    /* A0.4/A6.1b: endpoint → логическая Entity + её canonical capabilities. */
                     for (uint8_t i = 0; i < result.endpoint_count; i++) {
                         ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
-                        (void)zigbee_entity_ensure(s_domain, result.uid, result.endpoints[i].endpoint,
-                                                   &entity_id);
+                        const uint8_t endpoint = result.endpoints[i].endpoint;
+                        if (sys_ok(zigbee_entity_ensure(s_domain, result.uid, endpoint,
+                                                        &entity_id))) {
+                            zigbee_publish_capabilities(result.uid, endpoint, entity_id);
+                        }
                     }
                 }
             }

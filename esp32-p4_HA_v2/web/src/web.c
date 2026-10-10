@@ -9,6 +9,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
+#include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_groups.h"
@@ -319,6 +320,27 @@ static bool web3_property_state_remove_payload(ha_entity_id_t entity_id, ha_prop
     return true;
 }
 
+/* CAPABILITIES (перем.): u64 entity_id @0, u8 count @8, props[]{u16 property,u8 n,u8 actions[]}. */
+static bool web3_capabilities_payload(ha_entity_id_t entity_id,
+                                      const ha_entity_capabilities_record_t *record, uint8_t *out,
+                                      uint16_t *out_len)
+{
+    put_u64(out, entity_id);
+    size_t o = 8;
+    out[o++] = record->count;
+    for (uint8_t i = 0; i < record->count && i < HA_ENTITY_CAPABILITIES_MAX; i++) {
+        const ha_capability_t *cap = &record->caps[i];
+        put_u16(out + o, (uint16_t)cap->property);
+        o += 2;
+        out[o++] = cap->action_count;
+        for (uint8_t a = 0; a < cap->action_count && a < HA_CAPABILITY_ACTIONS_MAX; a++) {
+            out[o++] = (uint8_t)cap->actions[a];
+        }
+    }
+    *out_len = (uint16_t)o;
+    return true;
+}
+
 /*
  * raw AUTOMATION → semantic DTO: u64 id + u8 representable (+ rule). Legacy/невыразимое
  * шлём как representable=0 — UI покажет «неподдерживаемое», не выдумывая смысл.
@@ -545,6 +567,19 @@ static bool snapshot_emit_property3(const void *key, const void *record, void *c
     return true;
 }
 
+static bool snapshot_emit_capabilities3(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    uint16_t len = 0;
+    if (web3_capabilities_payload(*(const ha_entity_id_t *)key,
+                                  (const ha_entity_capabilities_record_t *)record, out, &len)) {
+        web_send_frame(s->fd, WEB_MSG3_CAPABILITIES, 0, out, len);
+    }
+    (*s->count)++;
+    return true;
+}
+
 static void web_send_snapshot(int fd)
 {
     uint32_t total = 0;
@@ -554,6 +589,7 @@ static void web_send_snapshot(int fd)
     /* canonical v3 (A6.1) */
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
@@ -574,6 +610,8 @@ static void web_send_snapshot(int fd)
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_emit_entity3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
                        snapshot_emit_property3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES,
+                       snapshot_emit_capabilities3, &v3);
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -640,6 +678,25 @@ static void web_send_fact(const domain_event_t *event)
         } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED &&
                    web3_property_state_remove_payload(key->entity, key->property, out, &len)) {
             web_broadcast(WEB_MSG3_PROPERTY_STATE_REMOVE, 0, out, len);
+        }
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_CAPABILITIES &&
+        event->key_size == sizeof(ha_entity_key_t)) {
+        const ha_entity_id_t entity_id = ((const ha_entity_key_t *)event->key)->id;
+        if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+            ha_entity_capabilities_record_t record = {0};
+            if (sys_ok(domain_entity_get(s_domain, event->entity, event->key, &record))) {
+                uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+                uint16_t len = 0;
+                if (web3_capabilities_payload(entity_id, &record, out, &len)) {
+                    web_broadcast(WEB_MSG3_CAPABILITIES, 0, out, len);
+                }
+            }
+        } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+            uint8_t out[8] = {0};
+            put_u64(out, entity_id);
+            web_broadcast(WEB_MSG3_CAPABILITIES_REMOVE, 0, out, sizeof(out));
         }
         return;
     }

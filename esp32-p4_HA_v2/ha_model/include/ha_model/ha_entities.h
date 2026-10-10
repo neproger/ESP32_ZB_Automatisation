@@ -58,6 +58,8 @@ typedef enum {
     /* Canonical property state (Шаг A): семантическая истина (entity_id, property_id).
      * Форма — ha_model/ha_state.h. Соседствует с raw HA_ENTITY_STATE до A1.4. */
     HA_ENTITY_PROPERTY_STATE = 15,
+    /* Canonical capabilities (Шаг A): что Entity умеет. Форма — ha_model/ha_capabilities.h. */
+    HA_ENTITY_CAPABILITIES = 16,
 } ha_entity_t;
 
 #define HA_DEVICE_NAME_MAX 32

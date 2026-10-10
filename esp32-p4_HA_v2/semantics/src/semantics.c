@@ -607,6 +607,30 @@ size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out,
     return (n < max) ? n : max;
 }
 
+bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
+                                     ha_entity_capabilities_record_t *out)
+{
+    if (endpoint == NULL || out == NULL) {
+        return false;
+    }
+    ha_entity_capabilities_record_t record = {0};
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < endpoint->cluster_count && i < HA_ENDPOINT_CLUSTERS_MAX; i++) {
+        if (endpoint->clusters[i].role != HA_ZB_ROLE_SERVER) {
+            continue;
+        }
+        ha_capability_t caps[HA_ENTITY_CAPABILITIES_MAX];
+        const size_t n = semantics_cluster_capabilities(endpoint->clusters[i].cluster_id, caps,
+                                                        HA_ENTITY_CAPABILITIES_MAX);
+        for (size_t j = 0; j < n && count < HA_ENTITY_CAPABILITIES_MAX; j++) {
+            record.caps[count++] = caps[j];
+        }
+    }
+    record.count = count;
+    *out = record;
+    return true;
+}
+
 /* --- Компилятор semantic-правила (фаза 5.3) ----------------------------- */
 
 bool semantics_event_to_physical(const ha_device_record_t *device, ha_event_id_t event,

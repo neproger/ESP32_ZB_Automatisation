@@ -277,7 +277,9 @@ A6  WS v3                                                                       
                     initial name при создании, повторный ensure имя НЕ перетирает; rename —
                     generic `HA_CMD_ENTITY_RENAME(entity_id, name)` (WEB_CMD_ENTITY_RENAME),
                     adapter не участвует; v3 ENTITY несёт name
-                [ ] backend CAPABILITIES (canonical-таблица по entity_id, пишет adapter)
+                [x] canonical CAPABILITIES: HA_ENTITY_CAPABILITIES (ключ entity_id, форма
+                    ha_capabilities.h); adapter при интервью пишет через
+                    semantics_endpoint_capabilities; web отдаёт v3 CAPABILITIES snapshot+delta
                 [ ] frontend identity = entity_id (semState(entity,property)/capabilities(entity))
       Далее возврат к A3.3–A3.5, затем A4, затем A6.2+ (AUTOMATION/GROUP_ITEM/EVENT/commands)
       и A6.x (удаление v2 semantic transitional wire).

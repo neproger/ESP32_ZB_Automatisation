@@ -12,10 +12,11 @@
 
 #include <stdbool.h>
 
-#include "ha_model/ha_automation.h" /* ha_sem_rule_t, ha_automation_record_t */
-#include "ha_model/ha_commands.h"   /* ha_zb_command_t */
-#include "ha_model/ha_entities.h"   /* ha_zb_state_key_t, ha_zb_state_record_t */
-#include "ha_model/ha_properties.h" /* ha_property_id_t, ha_value_t, ha_command_value_t */
+#include "ha_model/ha_automation.h"     /* ha_sem_rule_t, ha_automation_record_t */
+#include "ha_model/ha_capabilities.h"   /* ha_entity_capabilities_record_t */
+#include "ha_model/ha_commands.h"       /* ha_zb_command_t */
+#include "ha_model/ha_entities.h"       /* ha_zb_state_key_t, ha_zb_state_record_t */
+#include "ha_model/ha_properties.h"     /* ha_property_id_t, ha_value_t, ha_command_value_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,6 +76,13 @@ size_t semantics_property_actions(ha_property_id_t property, ha_action_id_t *out
 
 /* Semantic capabilities server-кластера: свойство + его действия. Для BFF endpoint-capabilities. */
 size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out, size_t max);
+
+/*
+ * Canonical capabilities entity из endpoint-записи: server-кластеры → список свойств/действий
+ * (cluster/attr не сохраняются). Adapter зовёт при интервью и пишет по entity_id.
+ */
+bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
+                                     ha_entity_capabilities_record_t *out);
 
 /*
  * Reverse: семантическое событие → legacy command_id по профилю устройства. false —

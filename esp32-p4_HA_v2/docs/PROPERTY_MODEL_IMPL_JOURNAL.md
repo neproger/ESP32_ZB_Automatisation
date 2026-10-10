@@ -472,6 +472,13 @@ TLV / самоописание приложения              — запре�
             HA_CMD_ENTITY_RENAME(entity_id,name) (executor в bootstrap, adapter не участвует),
             web-команда WEB_CMD_ENTITY_RENAME; v3 ENTITY теперь несёт name (40B).
             ha_model 4/4, zigbee 9/9 (test_entity_identity + name init/no-clobber), IDF зелёный
+2026-10-10  шаг A, A6.1b — canonical capabilities. HA_ENTITY_CAPABILITIES (ключ entity_id;
+            форма ha_capabilities.h, record 196B). Мост: semantics_endpoint_capabilities
+            (server-кластеры endpoint → properties/actions, кластеры не сохраняются). Adapter
+            пишет при интервью (после ensure Entity). web отдаёт v3 CAPABILITIES (snapshot+delta).
+            Все три canonical read-сущности v3 готовы (ENTITY/PROPERTY_STATE/CAPABILITIES);
+            источника uid/ep нет. semantics 1/1, ha_model 4/4, zigbee 9/9, IDF зелёный.
+            Осталось: frontend identity = entity_id (A6.1c).
 ```
 
 ## 7. Открытые вопросы

@@ -611,6 +611,32 @@ static void test_cluster_capabilities(void)
     CHECK(semantics_cluster_capabilities(0x1234, caps, 8) == 0);
 }
 
+/* A6.1b: canonical capabilities Entity из endpoint-записи (server-кластеры). */
+static void test_endpoint_capabilities(void)
+{
+    ha_endpoint_record_t endpoint = {0};
+    endpoint.cluster_count = 3;
+    endpoint.clusters[0].cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    endpoint.clusters[0].role = HA_ZB_ROLE_SERVER;
+    endpoint.clusters[1].cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT;
+    endpoint.clusters[1].role = HA_ZB_ROLE_SERVER;
+    endpoint.clusters[2].cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL; /* client — игнорируется */
+    endpoint.clusters[2].role = HA_ZB_ROLE_CLIENT;
+
+    ha_entity_capabilities_record_t caps = {0};
+    CHECK(semantics_endpoint_capabilities(&endpoint, &caps));
+    CHECK(caps.count == 2);
+
+    bool has_power = false, has_temp = false;
+    for (uint8_t i = 0; i < caps.count; i++) {
+        if (caps.caps[i].property == HA_PROPERTY_POWER) has_power = true;
+        if (caps.caps[i].property == HA_PROPERTY_TEMPERATURE) has_temp = true;
+    }
+    CHECK(has_power && has_temp);
+
+    CHECK(!semantics_endpoint_capabilities(NULL, &caps));
+}
+
 int main(void)
 {
     test_parity();
@@ -620,6 +646,7 @@ int main(void)
     test_build_command();
     test_decode_event();
     test_capabilities();
+    test_endpoint_capabilities();
     test_compile_automation();
     test_decompile_automation();
     test_cluster_capabilities();

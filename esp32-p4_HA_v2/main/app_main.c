@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_automation.h"
+#include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
@@ -30,7 +31,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 15
+#define APP_ENTITY_TYPES 16
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -38,6 +39,7 @@
 #define APP_DEVICE_CAPACITY 32
 #define APP_STATE_CAPACITY 256
 #define APP_PROPERTY_STATE_CAPACITY 256
+#define APP_CAPABILITIES_CAPACITY 32
 #define APP_ENDPOINT_CAPACITY 128
 #define APP_AUTOMATION_CAPACITY 32
 #define APP_DEVICE_REMOVE_CAPACITY 32
@@ -224,6 +226,16 @@ static const domain_entity_desc_t property_state_desc = {
     .persist_key = NULL,
 };
 
+/* Capabilities Entity (A6.1b): что сущность умеет; пишет adapter при интервью, RAM. */
+static const domain_entity_desc_t capabilities_desc = {
+    .type = (domain_entity_t)HA_ENTITY_CAPABILITIES,
+    .key_size = sizeof(ha_entity_key_t),
+    .payload_size = sizeof(ha_entity_capabilities_record_t),
+    .capacity = APP_CAPABILITIES_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM,
+    .persist_key = NULL,
+};
+
 /* Правила живут как сущности: создаёт их UI/Web, читает Automation (docs/AUTOMATION.md). */
 static const domain_entity_desc_t automation_desc = {
     .type = (domain_entity_t)HA_ENTITY_AUTOMATION,
@@ -379,6 +391,10 @@ void app_main(void)
     }
     if (!start_step(domain_register_entity(&s_domain, &property_state_desc),
                     "register property-state")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &capabilities_desc),
+                    "register capabilities")) {
         return;
     }
     if (!start_step(domain_register_command(&s_domain, HA_CMD_ENTITY_RENAME,
