@@ -465,3 +465,55 @@ bool semantics_build_command(const ha_zb_state_key_t *target, ha_property_id_t p
     *out = command;
     return true;
 }
+
+/* --- Семантические события (фаза 4): physical → ha_event_t --- */
+
+typedef struct {
+    const char *model_match; /* подстрока модели устройства; NULL — общий профиль */
+    uint16_t cluster_id;
+    uint8_t command_id;
+    ha_event_id_t event;
+} zb_event_map_t;
+
+static const zb_event_map_t ZB_EVENT_MAP[] = {
+    /*
+     * Кнопка/контроллер, приславший OnOff-команду координатору (лампа — сервер OnOff —
+     * команд не шлёт). Для вендоров с иной кодировкой добавляются profile-записи с
+     * `model_match`.
+     */
+    {NULL, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_ON, HA_EVENT_SINGLE_PRESS},
+    {NULL, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_OFF, HA_EVENT_SINGLE_PRESS},
+    {NULL, HA_ZB_CLUSTER_ON_OFF, HA_ZB_CMD_ON_OFF_TOGGLE, HA_EVENT_SINGLE_PRESS},
+};
+
+static bool model_matches(const char *model, const char *needle)
+{
+    if (needle == NULL) {
+        return true; /* общий профиль */
+    }
+    return model != NULL && strstr(model, needle) != NULL;
+}
+
+bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_record_t *device,
+                            ha_event_t *out)
+{
+    if (physical == NULL || out == NULL) {
+        return false;
+    }
+    const char *model = (device != NULL) ? device->model : NULL;
+    const size_t count = sizeof(ZB_EVENT_MAP) / sizeof(ZB_EVENT_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        const zb_event_map_t *entry = &ZB_EVENT_MAP[i];
+        if (entry->cluster_id == physical->cluster_id &&
+            entry->command_id == physical->command_id && model_matches(model, entry->model_match)) {
+            ha_event_t event = {0};
+            event.id = entry->event;
+            event.device_uid = physical->device_uid;
+            event.endpoint = physical->endpoint;
+            event.value.kind = HA_VALUE_NONE;
+            *out = event;
+            return true;
+        }
+    }
+    return false;
+}

@@ -42,6 +42,29 @@ bool semantics_property_key(const ha_zb_state_key_t *context, ha_property_id_t p
 bool semantics_value_to_double(const ha_value_t *value, double *out);
 
 /*
+ * Физическая форма Zigbee-события (до потери cluster/payload). Маппинг в семантику
+ * делается ДО публикации в Domain: событие эфемерно, persistent-ABI его не держит.
+ */
+#define ZB_EVENT_PAYLOAD_MAX 16
+
+typedef struct {
+    uint64_t device_uid;
+    uint8_t endpoint;
+    uint16_t cluster_id;
+    uint8_t command_id;
+    uint8_t payload_len;
+    uint8_t payload[ZB_EVENT_PAYLOAD_MAX];
+} ha_zb_event_t;
+
+/*
+ * Физическое событие → семантическое. Учитывает профиль устройства (device->model),
+ * т.к. один command_id может значить разное у разных производителей. false — нет
+ * семантики для этой пары (событие не публикуется как semantic).
+ */
+bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_record_t *device,
+                            ha_event_t *out);
+
+/*
  * Собрать физическую команду из семантического запроса: target(device/endpoint) +
  * property + action (+ value). Транспортная кодировка (scale, transition, direction,
  * LE, args_len) принадлежит мосту. false — нет такого (property, action) или value

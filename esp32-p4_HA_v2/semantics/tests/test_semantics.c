@@ -302,6 +302,46 @@ static void test_build_command(void)
     CHECK(!semantics_build_command(NULL, HA_PROPERTY_POWER, HA_ACTION_ON, NULL, &cmd));
 }
 
+/* --- События: физический Zigbee event → семантический ha_event_t (4.1) --- */
+static void test_decode_event(void)
+{
+    ha_zb_event_t phys = {0};
+    phys.device_uid = 0x00124B000A1B2C3Dull;
+    phys.endpoint = 1;
+    phys.cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    phys.command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
+
+    ha_device_record_t device = {0};
+    device.model[0] = 'X';
+
+    ha_event_t ev = {0};
+    CHECK(semantics_decode_event(&phys, &device, &ev));
+    CHECK(ev.id == HA_EVENT_SINGLE_PRESS);
+    CHECK(ev.device_uid == phys.device_uid);
+    CHECK(ev.endpoint == 1);
+    CHECK(ev.value.kind == HA_VALUE_NONE);
+
+    /* ON/OFF от контроллера — тоже нажатие кнопки. */
+    phys.command_id = HA_ZB_CMD_ON_OFF_ON;
+    CHECK(semantics_decode_event(&phys, &device, &ev) && ev.id == HA_EVENT_SINGLE_PRESS);
+    phys.command_id = HA_ZB_CMD_ON_OFF_OFF;
+    CHECK(semantics_decode_event(&phys, &device, &ev) && ev.id == HA_EVENT_SINGLE_PRESS);
+
+    /* неизвестная пара кластер/команда → нет семантики. */
+    phys.cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL;
+    phys.command_id = HA_ZB_CMD_ON_OFF_TOGGLE;
+    CHECK(!semantics_decode_event(&phys, &device, &ev));
+
+    /* device=NULL — общий профиль. */
+    phys.cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    CHECK(semantics_decode_event(&phys, NULL, &ev) && ev.id == HA_EVENT_SINGLE_PRESS);
+
+    CHECK(!semantics_decode_event(NULL, &device, &ev));
+
+    /* общий event vocabulary включает системный тик */
+    CHECK(HA_EVENT_MINUTE_TICK == 4);
+}
+
 int main(void)
 {
     test_parity();
@@ -309,6 +349,7 @@ int main(void)
     test_identity_and_failures();
     test_property_key();
     test_build_command();
+    test_decode_event();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");

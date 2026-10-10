@@ -230,6 +230,29 @@ COLOR            + SET(x, y)    ← цвет физически задаётся
 ZCL↔semantic для сохранённых действий — шаг A. Новые правила из UI позже кодируются через мост
 один раз — в старую физическую запись.
 
+### 4.7. События: физическая форма и семантика
+
+Событие **эфемерно** (не state), поэтому, в отличие от состояния, Zigbee здесь можно спрятать
+уже сейчас: нормализация делается **до** публикации в Domain.
+
+```text
+raw Zigbee frame → Zigbee service → semantics_decode_event → HA_EVENT_* → Domain EVENT → Automation
+```
+
+- физическая форма (до потери cluster/payload) — `ha_zb_event_t` (device/endpoint/cluster/
+  command/payload);
+- семантическая — `ha_event_t` (id + источник + опц. payload);
+- `ha_event_id_t` — **общий** vocabulary системы (не только кнопки): включает системные
+  события (`HA_EVENT_MINUTE_TICK`). Потребитель видит источник + event id и не знает,
+  Zigbee это или System;
+- `semantics_decode_event` учитывает профиль устройства (`device->model`) — один `command_id`
+  может значить разное у разных вендоров.
+
+**Ограничение (переходное).** Персистентная запись Automation для DEVICE_EVENT хранит только
+`device_uid + command_id` — без cluster/payload. Это слишком бедно для lossless-перехода к
+semantic event id. Поэтому старые DEVICE_EVENT-правила остаются transitional (raw) до шага A;
+обещать полную конвертацию всех старых правил нельзя (см. `PROPERTY_MODEL_IMPL_JOURNAL.md`).
+
 ## 5. Где живёт маппинг (уточнение к первоначальной идее)
 
 В наброске было `zigbee_property_decode()` прямо из Automation. Так делать нельзя:

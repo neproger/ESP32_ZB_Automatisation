@@ -67,12 +67,17 @@ typedef enum {
     HA_ACTION_SET = 4,
 } ha_action_id_t;
 
-/* Семантическое событие устройства (то, что не является состоянием). */
+/*
+ * Общий semantic event vocabulary всей системы (не только кнопки): сюда же — системные
+ * события. Потребителю не нужно знать, кто источник (Zigbee/System). Стабильные числа.
+ */
 typedef enum {
     HA_EVENT_NONE = 0,
     HA_EVENT_SINGLE_PRESS = 1,
     HA_EVENT_DOUBLE_PRESS = 2,
     HA_EVENT_HOLD = 3,
+    /* системное событие: тик минуты (TIME-триггер) */
+    HA_EVENT_MINUTE_TICK = 4,
 } ha_event_id_t;
 
 /* Вид значения — дискриминатор union'а в ha_value_t. */
@@ -136,6 +141,17 @@ typedef struct {
         } xy;
     } value;
 } ha_command_value_t;
+
+/*
+ * Семантическое событие: источник (device/endpoint) + event id + опциональный payload.
+ * Эфемерно (не state); потребитель не знает, был источник Zigbee или System.
+ */
+typedef struct {
+    ha_event_id_t id;
+    uint64_t device_uid;
+    uint8_t endpoint;
+    ha_value_t value; /* HA_VALUE_NONE, если payload нет */
+} ha_event_t;
 
 /* Описание свойства: смысл, а не кодировка. Диапазон — семантический. */
 typedef struct {

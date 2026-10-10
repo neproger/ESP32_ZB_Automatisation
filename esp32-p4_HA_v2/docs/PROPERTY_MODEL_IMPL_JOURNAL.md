@@ -133,6 +133,27 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 **Чекпоинт 5.** web-ui собирается; UI показывает имена/единицы без `cluster/attr`;
 провода/формы работают. Откат — revert. Риск: объём фронта — фаза дробится на под-шаги.
 
+### Фаза 4 — события: физическая форма → семантика
+
+Ключевое решение: событие эфемерно, поэтому нормализуем **до** публикации в Domain. Не строим
+фазу вокруг текущего `command_id`.
+
+- [x] **4.0** физическая форма `ha_zb_event_t` (device/endpoint/cluster/command/payload) —
+      Zigbee её уже несёт целиком (`zigbee_event_t`), cluster/payload не теряются
+- [x] **4.1** `semantics_decode_event(physical, device_profile, out) → ha_event_t`; общий
+      `ha_event_id_t` (вкл. `HA_EVENT_MINUTE_TICK`); host-тесты по парам/профилю
+- [ ] **4.2** Zigbee публикует semantic EVENT (value = event id) + сырой payload для переходного
+      matching; предварительно — сверить, что не ломается demo-правило
+- [ ] **4.3** System публикует события в том же `ha_event_id_t` (унификация с `ha_system_event_t` —
+      влияет на id, Automation и web-ui `SYSTEM_EVENTS`)
+- [ ] **4.4** Automation runtime — по semantic event id
+- [ ] **4.5** legacy DEVICE_EVENT-запись: остаётся transitional (raw matching), т.к. нет
+      cluster/payload → lossless невозможно; перевод — шаг A
+- [ ] **4.6** host-тесты: несколько профилей/payload
+
+**Чекпоинт 4.** 4.0/4.1 готовы (типы + mapper + тесты). 4.2–4.5 — отдельный шаг: затрагивают
+id системных событий (Automation + web-ui) и рабочее demo-правило, поэтому решаются явно.
+
 ### Фаза A (позже, отдельный трек)
 
 Не входит в B. Начинается при появлении второго транспорта.
@@ -176,6 +197,8 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | Команды: `COLOR SET(x,y)` — отдельная capability; `COLOR_X/COLOR_Y` — state | не сводить все команды к одному скаляру; args[] наружу не тащить |
 | 2026-10-10 | Запись Automation (action) остаётся opaque physical; мост её не перекодирует на fire | не платить CPU за `ZCL→semantic→ZCL`; ZCL↔semantic записи — шаг A |
 | 2026-10-10 | Display не кодирует ZCL (%, °, K, xy наружу); transition/direction/LE — в мосте | потребитель не знает кодировки |
+| 2026-10-10 | События нормализуем **до** публикации (эфемерны); `ha_event_id_t` — общий vocabulary всей системы | нет persistent-ABI, который держал бы ZCL; не строить вокруг `command_id` |
+| 2026-10-10 | Legacy DEVICE_EVENT-запись (device+command, без cluster/payload) — transitional | lossless-переход к semantic event id невозможен; перевод — шаг A |
 
 ## 5. От чего отказались
 
@@ -206,6 +229,9 @@ TLV / самоописание приложения              — запре�
             semantics_build_command + zb_action_map; Display → display_send_command (кодирование
             убрано из UI); Automation action остаётся opaque; test_semantics 1/1 (команды),
             IDF зелёная, прошито на P4
+2026-10-10  фаза 4.0–4.1: ha_event_t + ha_zb_event_t + ha_event_id_t (общий, вкл. MINUTE_TICK);
+            semantics_decode_event (профиль устройства); test_semantics 1/1 (события).
+            4.2–4.6 (публикация/System/Automation) — отдельный шаг
 ```
 
 ## 7. Открытые вопросы
