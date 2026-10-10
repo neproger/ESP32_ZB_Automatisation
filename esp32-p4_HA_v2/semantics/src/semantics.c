@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "ha_model/ha_system.h"
 #include "ha_model/ha_zigbee.h"
 
 /*
@@ -33,20 +34,49 @@ typedef struct {
 static const zb_property_map_t ZB_MAP[] = {
     {HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF, HA_PROPERTY_POWER, HA_ZB_TYPE_BOOL,
      ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    /* level 0..254 → процент */
+    {HA_ZB_CLUSTER_LEVEL_CONTROL, HA_ZB_ATTR_LEVEL_CURRENT_LEVEL, HA_PROPERTY_BRIGHTNESS,
+     HA_ZB_TYPE_UINT8, ZB_DECODE_SCALE, 100.0f / 254.0f, 0.0f},
+    /* ZCL hue 0..254 → градусы 0..360 */
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_HUE, HA_PROPERTY_COLOR_HUE,
+     HA_ZB_TYPE_UINT8, ZB_DECODE_SCALE, 360.0f / 254.0f, 0.0f},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_SATURATION, HA_PROPERTY_COLOR_SATURATION,
+     HA_ZB_TYPE_UINT8, ZB_DECODE_SCALE, 100.0f / 254.0f, 0.0f},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_X, HA_PROPERTY_COLOR_X,
+     HA_ZB_TYPE_UINT16, ZB_DECODE_SCALE, 1.0f / 65535.0f, 0.0f},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_Y, HA_PROPERTY_COLOR_Y,
+     HA_ZB_TYPE_UINT16, ZB_DECODE_SCALE, 1.0f / 65535.0f, 0.0f},
+    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_COLOR_TEMPERATURE, HA_PROPERTY_COLOR_TEMPERATURE,
+     HA_ZB_TYPE_UINT16, ZB_DECODE_MIREDS_TO_KELVIN, 0.0f, 0.0f},
     {HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT, HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE,
      HA_PROPERTY_TEMPERATURE, HA_ZB_TYPE_INT16, ZB_DECODE_SCALE, 0.01f, 0.0f},
     {HA_ZB_CLUSTER_RELATIVE_HUMIDITY, HA_ZB_ATTR_HUMIDITY_MEASURED_VALUE, HA_PROPERTY_HUMIDITY,
      HA_ZB_TYPE_UINT16, ZB_DECODE_SCALE, 0.01f, 0.0f},
+    {HA_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT, HA_ZB_ATTR_ILLUMINANCE_MEASURED_VALUE,
+     HA_PROPERTY_ILLUMINANCE, HA_ZB_TYPE_UINT16, ZB_DECODE_ILLUMINANCE, 0.0f, 0.0f},
+    {HA_ZB_CLUSTER_OCCUPANCY_SENSING, HA_ZB_ATTR_OCCUPANCY_OCCUPANCY, HA_PROPERTY_OCCUPANCY,
+     HA_ZB_TYPE_BITMAP8, ZB_DECODE_BITMAP_BOOL, 0.0f, 0.0f},
     {HA_ZB_CLUSTER_POWER_CONFIG, HA_ZB_ATTR_POWER_CONFIG_BATTERY_VOLTAGE,
      HA_PROPERTY_BATTERY_VOLTAGE, HA_ZB_TYPE_UINT8, ZB_DECODE_SCALE, 0.1f, 0.0f},
     {HA_ZB_CLUSTER_POWER_CONFIG, HA_ZB_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING,
      HA_PROPERTY_BATTERY_PERCENT, HA_ZB_TYPE_UINT8, ZB_DECODE_SCALE, 0.5f, 0.0f},
-    {HA_ZB_CLUSTER_ILLUMINANCE_MEASUREMENT, HA_ZB_ATTR_ILLUMINANCE_MEASURED_VALUE,
-     HA_PROPERTY_ILLUMINANCE, HA_ZB_TYPE_UINT16, ZB_DECODE_ILLUMINANCE, 0.0f, 0.0f},
-    {HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_COLOR_TEMPERATURE, HA_PROPERTY_COLOR_TEMPERATURE,
-     HA_ZB_TYPE_UINT16, ZB_DECODE_MIREDS_TO_KELVIN, 0.0f, 0.0f},
-    {HA_ZB_CLUSTER_OCCUPANCY_SENSING, HA_ZB_ATTR_OCCUPANCY_OCCUPANCY, HA_PROPERTY_OCCUPANCY,
-     HA_ZB_TYPE_BITMAP8, ZB_DECODE_BITMAP_BOOL, 0.0f, 0.0f},
+    /* системный девайс (время): значения как есть */
+    {HA_CLUSTER_TIME, HA_TIME_ATTR_UTC_TIME, HA_PROPERTY_SYSTEM_TIME_UTC, HA_ZB_TYPE_UINT32,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_TIME, HA_TIME_ATTR_TIME_STATUS, HA_PROPERTY_SYSTEM_TIME_STATUS, HA_ZB_TYPE_BITMAP8,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_HOUR, HA_PROPERTY_SYSTEM_HOUR, HA_ZB_TYPE_UINT8,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_MINUTE, HA_PROPERTY_SYSTEM_MINUTE, HA_ZB_TYPE_UINT8,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_WEEKDAY, HA_PROPERTY_SYSTEM_WEEKDAY, HA_ZB_TYPE_UINT8,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_WEEKDAY_MASK, HA_PROPERTY_SYSTEM_WEEKDAY_MASK,
+     HA_ZB_TYPE_BITMAP8, ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_MINUTES_OF_DAY, HA_PROPERTY_SYSTEM_MINUTES_OF_DAY,
+     HA_ZB_TYPE_UINT16, ZB_DECODE_IDENTITY, 0.0f, 0.0f},
+    {HA_CLUSTER_SYSTEM, HA_SYS_ATTR_TZ_OFFSET_MIN, HA_PROPERTY_SYSTEM_TZ_OFFSET, HA_ZB_TYPE_INT16,
+     ZB_DECODE_IDENTITY, 0.0f, 0.0f},
 };
 
 static const zb_property_map_t *map_find(uint16_t cluster_id, uint16_t attr_id)
@@ -54,6 +84,17 @@ static const zb_property_map_t *map_find(uint16_t cluster_id, uint16_t attr_id)
     const size_t count = sizeof(ZB_MAP) / sizeof(ZB_MAP[0]);
     for (size_t i = 0; i < count; i++) {
         if (ZB_MAP[i].cluster_id == cluster_id && ZB_MAP[i].attr_id == attr_id) {
+            return &ZB_MAP[i];
+        }
+    }
+    return NULL;
+}
+
+static const zb_property_map_t *map_find_by_property(ha_property_id_t property)
+{
+    const size_t count = sizeof(ZB_MAP) / sizeof(ZB_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_MAP[i].property == property) {
             return &ZB_MAP[i];
         }
     }
@@ -192,4 +233,49 @@ bool semantics_state_value(const ha_zb_state_key_t *key, const ha_zb_state_recor
 
     store_value(ha_property_desc(entry->property)->value_kind, value, out);
     return out->kind != HA_VALUE_NONE;
+}
+
+bool semantics_property_key(const ha_zb_state_key_t *context, ha_property_id_t property,
+                            ha_zb_state_key_t *out)
+{
+    if (context == NULL || out == NULL) {
+        return false;
+    }
+    const zb_property_map_t *entry = map_find_by_property(property);
+    if (entry == NULL) {
+        return false;
+    }
+    ha_zb_state_key_t key = {0};
+    key.device_uid = context->device_uid;
+    key.endpoint = context->endpoint;
+    key.cluster_id = entry->cluster_id;
+    key.attr_id = entry->attr_id;
+    *out = key;
+    return true;
+}
+
+bool semantics_value_to_double(const ha_value_t *value, double *out)
+{
+    if (value == NULL || out == NULL) {
+        return false;
+    }
+    switch (value->kind) {
+    case HA_VALUE_BOOL:
+        *out = value->value.b ? 1.0 : 0.0;
+        return true;
+    case HA_VALUE_I32:
+        *out = (double)value->value.i32;
+        return true;
+    case HA_VALUE_U32:
+        *out = (double)value->value.u32;
+        return true;
+    case HA_VALUE_FLOAT:
+        *out = (double)value->value.f32;
+        return true;
+    case HA_VALUE_ENUM:
+        *out = (double)value->value.enum_value;
+        return true;
+    default:
+        return false;
+    }
 }

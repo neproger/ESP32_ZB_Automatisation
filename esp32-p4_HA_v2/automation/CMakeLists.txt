@@ -7,5 +7,6 @@ idf_component_register(
     REQUIRES
         domain
         ha_model
+        semantics
         sys
 )

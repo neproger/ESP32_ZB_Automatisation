@@ -10,7 +10,7 @@
 | Компонент | `ha_model` (словарь) + модуль-мост (ZCL ↔ семантика) |
 | Контракт | `PROPERTY_MODEL.md` |
 | Стратегия | вариант B: семантика без смены canonical identity и storage geometry |
-| Реализовано | фаза 0: словарь + `ha_value_t` + `ha_property_desc()`; фаза 1: мост `semantics` (ZCL → семантика, `decode_kind`) |
+| Реализовано | фаза 0: словарь + `ha_value_t` + `ha_property_desc()`; фаза 1: мост `semantics` (`decode_kind`, `property_key`, `value_to_double`); фаза 2.0–2.2: обратный маппинг + свойств больше + Automation на мост |
 | Миграция данных | **не требуется** до шага A |
 | Проверено на P4 | — (поведение не менялось; IDF-сборка зелёная) |
 
@@ -63,17 +63,26 @@
 
 ### Фаза 2 — потребители state на property
 
-Цель: снять `cluster/attr`-свитчи у потребителей; они получают дескриптор свойства.
+Цель: снять `cluster/attr`-свитчи у потребителей; потребитель адресует семантику и не
+конструирует ZCL-ключи. Уточнено ревью: Display строит соседние ключи (`apply_color`),
+поэтому нужен обратный API моста (2.0) — одной замены `switch` недостаточно.
 
-- [ ] Automation: на загрузке правила resolve `(cluster/attr)` → `property`; сравнение — по
-      нормализованному значению через мост (`automation_rule.c`)
-- [ ] Display: `ui_widget_kind_for`/`format_value` (`ui_widgets.c:33-89`) — по `property`
-- [ ] `ha_value_kind`/`unit` берутся из дескриптора, не из свитча по cluster
-- [ ] host-тесты automation (`test_rule`) и паритет отображения
+- [x] **2.0** `semantics_property_key(context, property, out)` — обратный маппинг в том же объекте
+- [x] **2.1** расширен state-mapping: `BRIGHTNESS, COLOR_HUE, COLOR_SATURATION, COLOR_X, COLOR_Y,
+      COLOR_TEMPERATURE, POWER, OCCUPANCY, TEMPERATURE, HUMIDITY, ILLUMINANCE, BATTERY_*`;
+      сверх плана добавлены system-свойства (нужны для `HAS_BITS` по `WEEKDAY_MASK`) + `semantics_value_to_double()`
+- [x] **2.2** Automation: `automation_rule_state_value()`/`attr_scale()` удалены, `condition_ok` и
+      STATE-триггер декодируют через `semantics_state_value()`; `ha_zigbee.h` убран из чистой
+      логики правила. Сравнение `rule.cluster/attr == key.cluster/attr` в matching осталось —
+      это сравнение **opaque identity**, не семантика. Host-тесты переведены на реальные пары
+- [ ] **2.3** Display: выбор виджета и формат → `Property` + `ha_value_t`
+- [ ] **2.4** Display: соседние состояния (`apply_color`: X/Y/яркость) → `semantics_property_key()`
+- [ ] **2.5** IAS: выяснить, какой именно IAS-атрибут шлют устройства и соответствует ли
+      текущий UI (`ZONE_STATE` → «Тревога») семантике; **не** вводить `HA_PROPERTY_ALARM`
+      только ради сохранения `switch`
 
-**Чекпоинт 2.** Host-тесты зелёные; на P4: правило срабатывает, виджет рисуется, значения
-совпадают с прошлым поведением. Откат — revert. Риск: неполный маппинг — `UNKNOWN`
-деградирует явно, без ложной семантики.
+**Чекпоинт 2.** Host-тесты зелёные; на P4: правило срабатывает, виджет рисуется. Откат —
+revert. Риск: неполный маппинг — `UNKNOWN` деградирует явно, без ложной семантики.
 
 ### Фаза 3 — команды: Property + Action
 
@@ -148,6 +157,10 @@ revert. Риск: кодирование args (level 3 байта и т.п.) —
 | 2026-10-10 | Компонент-мост назван `semantics` (каталог `semantics/`), публичный API — только семантический | таблица (cluster, attr) и `decode_kind` приватны; потребитель видит лишь physical ref → property/value |
 | 2026-10-10 | Тесты разделены: паритет (линейное, существующее) и нормализация (нелинейное) — разные функции | не смешивать миграцию архитектуры с исправлением старой математики |
 | 2026-10-10 | В таблицу фазы 1 добавлены только: OnOff, temperature, humidity, battery V/pct, illuminance, color temp, occupancy | brightness/hue/sat/xy и system — по факту необходимости; словарь не раздуваем |
+| 2026-10-10 | Мост получил обратный API `semantics_property_key()` и `semantics_value_to_double()` | потребитель не конструирует соседние ZCL-ключи; сравнение значений — через единый числовой вид |
+| 2026-10-10 | Level→`BRIGHTNESS` (процент 0..100), ZCL hue→градусы, xy→0..1, color temp→Kelvin | семантические значения, а не raw; Display примет их в 2.3 |
+| 2026-10-10 | System-свойства добавлены в mapping (нужны `HAS_BITS` по `WEEKDAY_MASK` и system-условия) | «по факту необходимости» наступил на 2.2 |
+| 2026-10-10 | Условие на пару без маппинга → false | честная деградация; UI должен предлагать только замапленные свойства |
 
 ## 5. От чего отказались
 
@@ -168,6 +181,9 @@ TLV / самоописание приложения              — запре�
 2026-10-10  фаза 1: компонент semantics (мост ZCL↔семантика); приватная zb_property_map_t
             с decode_kind; парный host-тест test_semantics 1/1 (паритет + нормализация + отказы);
             IDF-сборка зелёная; мост ещё не подключён — поведение не менялось
+2026-10-10  фаза 2.0–2.2: semantics_property_key + value_to_double; расширен mapping
+            (level/hue/sat/xy/color temp + system); Automation декодирует через мост,
+            attr_scale и ha_zigbee.h убраны из чистой логики; host test_rule 1/1, IDF зелёная
 ```
 
 ## 7. Открытые вопросы

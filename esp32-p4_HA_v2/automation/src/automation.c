@@ -12,6 +12,7 @@
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_system.h"
+#include "semantics/semantics.h"
 
 /*
  * Задача сервиса — единственный, кто читает Domain и постит команды от лица Automation.
@@ -269,9 +270,13 @@ static void automation_state_trigger(const ha_zb_state_key_t *key)
     if (sys_failed(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_STATE, key, &record))) {
         return;
     }
+    ha_value_t decoded = {0};
+    if (!semantics_state_value(key, &record, &decoded)) {
+        return; /* нет маппинга/тип вне словаря скаляров: триггерить нечем */
+    }
     double value = 0.0;
-    if (!automation_rule_state_value(key->cluster_id, key->attr_id, &record, &value)) {
-        return; /* тип вне словаря скаляров: триггерить нечем */
+    if (!semantics_value_to_double(&decoded, &value)) {
+        return;
     }
 
     bool prev_known = false;

@@ -188,6 +188,21 @@ typedef struct {
 `domain_value_t`; сведение к одному типу — отдельный вопрос, `ha_model` не линкует Domain).
 Решается **до фазы 1**.
 
+### 4.5. Обратный маппинг: `property → physical key`
+
+Потребителю нельзя самому собирать соседние ZCL-ключи (например, «взять X и Y того же
+объекта»). Поэтому мост даёт обратную операцию в том же физическом контексте:
+
+```c
+bool semantics_property_key(const ha_zb_state_key_t *context, /* device/endpoint — opaque */
+                            ha_property_id_t property,
+                            ha_zb_state_key_t *out);
+```
+
+Display говорит «дай мне `HA_PROPERTY_COLOR_X` для этого же объекта», а не «замени `attr` на
+`0x0003`». На шаге A реализация сменится на `entity_id/property_id`, а потребитель не
+изменится. Это и закрывает цветовой виджет (X/Y/яркость одного объекта).
+
 ## 5. Где живёт маппинг (уточнение к первоначальной идее)
 
 В наброске было `zigbee_property_decode()` прямо из Automation. Так делать нельзя:

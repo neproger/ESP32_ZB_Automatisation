@@ -155,6 +155,48 @@ static void test_normalization(void)
     CHECK(decode(HA_ZB_CLUSTER_OCCUPANCY_SENSING, HA_ZB_ATTR_OCCUPANCY_OCCUPANCY, 2,
                  HA_ZB_TYPE_BITMAP8, &v)); /* bit0 не выставлен */
     CHECK_NEAR(v, 0.0, 1e-6);
+
+    /* level 0..254 → процент */
+    CHECK(decode(HA_ZB_CLUSTER_LEVEL_CONTROL, HA_ZB_ATTR_LEVEL_CURRENT_LEVEL, 127,
+                 HA_ZB_TYPE_UINT8, &v));
+    CHECK_NEAR(v, 50.0, 0.2);
+    /* ZCL hue 0..254 → градусы 0..360 */
+    CHECK(decode(HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_HUE, 254,
+                 HA_ZB_TYPE_UINT8, &v));
+    CHECK_NEAR(v, 360.0, 1e-2);
+    CHECK(decode(HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_SATURATION, 127,
+                 HA_ZB_TYPE_UINT8, &v));
+    CHECK_NEAR(v, 50.0, 0.2);
+    /* xy 0..65535 → 0..1 */
+    CHECK(decode(HA_ZB_CLUSTER_COLOR_CONTROL, HA_ZB_ATTR_COLOR_CURRENT_X, 65535,
+                 HA_ZB_TYPE_UINT16, &v));
+    CHECK_NEAR(v, 1.0, 1e-4);
+}
+
+/* --- Обратный маппинг: property → физический ключ в том же объекте --- */
+static void test_property_key(void)
+{
+    ha_zb_state_key_t context = {0};
+    context.device_uid = 0x00124B000A1B2C3Dull;
+    context.endpoint = 1;
+
+    ha_zb_state_key_t out = {0};
+    CHECK(semantics_property_key(&context, HA_PROPERTY_COLOR_X, &out));
+    CHECK(out.device_uid == context.device_uid);
+    CHECK(out.endpoint == 1);
+    CHECK(out.cluster_id == HA_ZB_CLUSTER_COLOR_CONTROL);
+    CHECK(out.attr_id == HA_ZB_ATTR_COLOR_CURRENT_X);
+
+    CHECK(semantics_property_key(&context, HA_PROPERTY_BRIGHTNESS, &out));
+    CHECK(out.cluster_id == HA_ZB_CLUSTER_LEVEL_CONTROL);
+    CHECK(out.attr_id == HA_ZB_ATTR_LEVEL_CURRENT_LEVEL);
+
+    CHECK(semantics_property_key(&context, HA_PROPERTY_POWER, &out));
+    CHECK(out.cluster_id == HA_ZB_CLUSTER_ON_OFF);
+
+    /* незамапленное свойство и NULL-контекст → false */
+    CHECK(!semantics_property_key(&context, HA_PROPERTY_SYSTEM_HOUR, &out));
+    CHECK(!semantics_property_key(NULL, HA_PROPERTY_POWER, &out));
 }
 
 /* --- Семантическая идентификация и отказы --- */
@@ -195,6 +237,7 @@ int main(void)
     test_parity();
     test_normalization();
     test_identity_and_failures();
+    test_property_key();
 
     if (g_failures == 0) {
         printf("all semantics tests passed\n");
