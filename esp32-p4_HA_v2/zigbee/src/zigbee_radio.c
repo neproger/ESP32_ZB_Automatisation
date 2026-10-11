@@ -314,6 +314,18 @@ static void interview_read_states(const interview_device_t *device)
 /* Интервью собрано: отдать его задаче сервиса для записи в Domain (ZIGBEE.md §6). */
 static void interview_finish(interview_device_t *device)
 {
+    if (device->endpoint_count == 0) {
+        /*
+         * Интервью не собралось (устройство не ответило на ZDO). Пустой Device не создаём —
+         * переинтервьюируем при следующем announce/rejoin.
+         */
+        ESP_LOGW(TAG, "interview empty (no endpoints): uid=%llx", (unsigned long long)device->uid);
+        zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY,
+                           sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND));
+        device->used = false;
+        return;
+    }
+
     zigbee_interview_result_t result = {0};
     result.uid = device->uid;
     memcpy(result.model, device->model, sizeof(result.model));
