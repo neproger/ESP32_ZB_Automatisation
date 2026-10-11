@@ -20,7 +20,7 @@ extern "C" {
 #endif
 
 /* Синтетический uid Wi-Fi (вне диапазона Zigbee), ASCII "WIFI" в старших байтах. */
-#define HA_WIFI_DEVICE_UID 0x5749464900000001ull
+#define HA_WIFI_DEVICE_ID 0x5749464900000001ull
 
 #define HA_WIFI_SSID_MAX     32
 #define HA_WIFI_PASSWORD_MAX 64

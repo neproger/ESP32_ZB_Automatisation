@@ -17,8 +17,7 @@ sys_error_t zigbee_entity_ensure(domain_t *domain, ha_device_uid_t uid, uint8_t 
                                  uint8_t endpoint_total, ha_entity_id_t *out_entity_id)
 {
     char initial_name[sizeof(((ha_entity_record_t *)0)->name)] = {0};
-    zb_entity_initial_name(domain, uid, endpoint, endpoint_total, initial_name,
-                           sizeof(initial_name));
+    zb_entity_initial_name(uid, endpoint, endpoint_total, initial_name, sizeof(initial_name));
 
     const size_t before = s_binding_count;
     const sys_error_t err = zb_entity_ensure_entity(

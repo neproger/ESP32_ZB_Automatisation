@@ -80,7 +80,7 @@ static void put_status(uint8_t state, uint8_t connected, int8_t rssi, const char
     if (ssid != NULL) {
         copy_str(record.ssid, sizeof(record.ssid), ssid);
     }
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_WIFI;
     bool changed = false;
@@ -90,7 +90,7 @@ static void put_status(uint8_t state, uint8_t connected, int8_t rssi, const char
 
 static void put_scan(const ha_wifi_scan_record_t *scan)
 {
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_WIFI;
     bool changed = false;
@@ -100,7 +100,7 @@ static void put_scan(const ha_wifi_scan_record_t *scan)
 
 static void clear_scan(void)
 {
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_WIFI;
     (void)domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_WIFI_SCAN, &uid, &meta);

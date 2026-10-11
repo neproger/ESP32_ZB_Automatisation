@@ -9,6 +9,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
+#include "ha_model/ha_logical_device.h"
 
 static const char *TAG = "journal";
 
@@ -74,32 +75,17 @@ static void value_text(const domain_value_t *value, char *out, size_t size)
 }
 
 /*
- * Ключи имеют общий layout сервисов (ha_model), поэтому печатаются по полям. Тип
- * сущности нужен: ключ состояния и ключ endpoint'а одной ширины, по размеру их не
- * различить.
+ * 64-битный ключ (device id и подобные) печатаем компактно, остальное — hex. Zigbee-raw
+ * ключей в Domain больше нет (Шаг C).
  */
 static void format_key(uint32_t entity, const uint8_t *key, uint8_t key_size, char *out,
                        size_t size)
 {
-    if (entity == (uint32_t)HA_ENTITY_ZB_DIAG_STATE && key_size == sizeof(ha_zb_state_key_t)) {
-        const ha_zb_state_key_t *state_key = (const ha_zb_state_key_t *)key;
-        snprintf(out, size, "uid=%llx ep=%u cluster=%04x attr=%04x",
-                 (unsigned long long)state_key->device_uid, (unsigned)state_key->endpoint,
-                 (unsigned)state_key->cluster_id, (unsigned)state_key->attr_id);
-        return;
-    }
-
-    if (entity == (uint32_t)HA_ENTITY_ENDPOINT && key_size == sizeof(ha_endpoint_key_t)) {
-        const ha_endpoint_key_t *endpoint_key = (const ha_endpoint_key_t *)key;
-        snprintf(out, size, "uid=%llx ep=%u", (unsigned long long)endpoint_key->device_uid,
-                 (unsigned)endpoint_key->endpoint);
-        return;
-    }
-
-    if (key_size == sizeof(ha_device_uid_t)) {
-        ha_device_uid_t uid = 0;
-        memcpy(&uid, key, sizeof(uid));
-        snprintf(out, size, "uid=%llx", (unsigned long long)uid);
+    (void)entity;
+    if (key_size == sizeof(uint64_t)) {
+        uint64_t value = 0;
+        memcpy(&value, key, sizeof(value));
+        snprintf(out, size, "id=%llx", (unsigned long long)value);
         return;
     }
 

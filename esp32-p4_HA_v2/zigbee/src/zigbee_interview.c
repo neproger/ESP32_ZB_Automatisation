@@ -1,10 +1,9 @@
 #include "zigbee/zigbee_interview.h"
 
-#include "zigbee/zigbee_state.h"
-#include "zigbee/zigbee_topology.h"
+#include "zigbee/zigbee_device_store.h"
 
 /*
- * Чистая часть интервью: ответы радио → топология Domain. Само интервью (ZDO-запросы
+ * Чистая часть интервью: ответы радио → RAM-модель адаптера. Само интервью (ZDO-запросы
  * и колбэки) живёт в zigbee_radio.c, потому что говорит с радио.
  */
 
@@ -48,15 +47,14 @@ sys_error_t zigbee_clusters_from_lists(const uint16_t *input, uint8_t input_coun
     return SYS_OK;
 }
 
-sys_error_t zigbee_interview_apply(domain_t *domain, const zigbee_interview_result_t *result)
+sys_error_t zigbee_interview_apply(const zigbee_interview_result_t *result)
 {
-    if (domain == NULL || result == NULL || result->endpoint_count > ZIGBEE_INTERVIEW_ENDPOINTS_MAX) {
+    if (result == NULL || result->endpoint_count > ZIGBEE_INTERVIEW_ENDPOINTS_MAX) {
         return zigbee_fail(SYS_CODE_INVALID_ARG);
     }
 
     bool changed = false;
-    const sys_error_t device =
-        zigbee_device_set_model(domain, result->uid, result->model, &changed);
+    const sys_error_t device = zigbee_device_set_model(result->uid, result->model, &changed);
     if (sys_failed(device)) {
         return device;
     }
@@ -71,7 +69,7 @@ sys_error_t zigbee_interview_apply(domain_t *domain, const zigbee_interview_resu
             .cluster_count = endpoint->cluster_count,
             .clusters = endpoint->clusters,
         };
-        const sys_error_t topology = zigbee_topology_apply(domain, &desc, &changed);
+        const sys_error_t topology = zigbee_topology_apply(&desc, &changed);
         if (sys_failed(topology)) {
             return topology;
         }

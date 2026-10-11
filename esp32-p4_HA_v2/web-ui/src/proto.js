@@ -28,14 +28,6 @@ export const CMD = {
   LOGICAL_DEVICE_REMOVE: 21,
 }
 
-// Diagnostics raw Zigbee (A1.5): transport-specific, вне web v3. Здесь допустимы uid/ep/cluster/raw.
-export const DIAG = {
-  ZB_DEVICE: 0x40,
-  ZB_ENDPOINT: 0x41,
-  ZB_STATE: 0x42,
-  ZB_REMOVE: 0x43,
-}
-
 // v3 canonical (Шаг A, A6.0): identity = entity_id, без uid/endpoint/cluster/attr.
 // Кадр тот же, что у v2; v3 отличается набором типов. Живут рядом до A6.x.
 export const MSG3 = {

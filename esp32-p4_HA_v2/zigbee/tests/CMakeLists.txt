@@ -11,7 +11,7 @@ enable_testing()
 set(ZIGBEE_CORE
     ../src/zigbee_state.c
     ../src/zigbee_command.c
-    ../src/zigbee_topology.c
+    ../src/zigbee_device_store.c
     ../src/zigbee_interview.c
     ../src/zigbee_entity_binding.c
     ../../ha_model/src/ha_entity.c

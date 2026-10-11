@@ -144,7 +144,7 @@ static void apply_time_location(void)
 
     char location_text[HA_LOCATION_NAME_MAX] = "";
     ha_location_record_t location = {0};
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
+    const ha_device_id_t uid = HA_SYSTEM_DEVICE_ID;
     if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid, &location))) {
         snprintf(location_text, sizeof(location_text), "%s", location.name);
     }
@@ -195,7 +195,7 @@ static const char *weather_glyph(uint8_t condition)
 static void apply_weather(void)
 {
     ha_weather_record_t weather = {0};
-    const ha_device_uid_t uid = HA_WEATHER_DEVICE_UID;
+    const ha_device_id_t uid = HA_WEATHER_DEVICE_ID;
     const bool present =
         sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_WEATHER, &uid, &weather));
 

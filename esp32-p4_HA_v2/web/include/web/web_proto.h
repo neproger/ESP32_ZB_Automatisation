@@ -18,9 +18,6 @@
 #define WEB_PROTO_MAX_FRAME (WEB_PROTO_HDR_SIZE + WEB_PROTO_MAX_PAYLOAD)
 
 /* Совпадает с ha_entity_t (ha_model/ha_entities.h); проверяется static_assert в web.c. */
-#define WEB_ENTITY_ZB_DIAG_DEVICE 1u
-#define WEB_ENTITY_ZB_DIAG_STATE 2u
-#define WEB_ENTITY_ENDPOINT 3u
 #define WEB_ENTITY_AUTOMATION 4u
 #define WEB_ENTITY_LOCATION 6u
 #define WEB_ENTITY_GROUP 7u
@@ -122,19 +119,6 @@ typedef enum {
     WEB_MSG3_DEVICE = 0x39,
     WEB_MSG3_DEVICE_REMOVE = 0x3A,
 } web_msg3_t;
-
-/*
- * Diagnostics-канал (A1.5): transport-specific raw Zigbee, НЕ часть web_msg3_t и НЕ
- * доменная модель. Здесь допустимы uid/endpoint/cluster/attr/zcl_type/raw.
- *   DIAG_ZB_DEVICE   (72): ha_device_uid_t(8) + ha_device_record_t(64)
- *   DIAG_ZB_ENDPOINT (88): ha_endpoint_key_t(16) + ha_endpoint_record_t(72)
- *   DIAG_ZB_STATE    (24): ha_zb_state_key_t(16) + ha_zb_state_record_t(8)
- *   DIAG_ZB_REMOVE    (rem): u8 kind (1=device,2=state,3=endpoint) + сырой ключ
- */
-#define WEB_MSG_DIAG_ZB_DEVICE 0x40u
-#define WEB_MSG_DIAG_ZB_ENDPOINT 0x41u
-#define WEB_MSG_DIAG_ZB_STATE 0x42u
-#define WEB_MSG_DIAG_ZB_REMOVE 0x43u
 
 #define WEB_MSG3_ENTITY_SIZE 48u /* u64 entity_id + u64 device_id + char name[32] */
 #define WEB_MSG3_DEVICE_SIZE 48u /* u64 device_id + u64 parent_device_id + char name[32] */

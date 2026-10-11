@@ -3,7 +3,7 @@ idf_component_register(
         "src/zigbee.c"
         "src/zigbee_state.c"
         "src/zigbee_command.c"
-        "src/zigbee_topology.c"
+        "src/zigbee_device_store.c"
         "src/zigbee_interview.c"
         "src/zigbee_entity_binding.c"
         "src/zigbee_entity_registry.c"

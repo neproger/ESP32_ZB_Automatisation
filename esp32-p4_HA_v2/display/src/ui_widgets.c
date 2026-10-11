@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ha_model/ha_entities.h"
 #include "semantics/semantics.h"
 #include "sys/sys_error.h"
 #include "ui_commands.h"

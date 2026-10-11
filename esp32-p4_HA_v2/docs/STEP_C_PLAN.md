@@ -1,14 +1,20 @@
 # Step C — Transport Boundary Cleanup
 
-**Статус: план зафиксирован, реализация отложена** (решение: diagnostics пока не трогаем).
-Сейчас выполнено только из «сопутствующего»: UI-карточка-устройство (Logical Device) + перенос
-удаления устройства с Diagnostics на страницу «Устройства» + домен-нейминг; начальное имя
-устройства берётся из имени или модели (напр. `ESP32C6-DISPLAY`). Фазы C1+ ниже — на будущее.
+**Статус: C1, C2, C6, C8 сделаны; C3/C4/C5/C7 выполнены одним связным коммитом.** Диагностику
+решено удалить целиком (устройство видно в списке Devices); функция никому не нужна. Raw
+адаптера (имя/модель устройства + топология endpoint'ов) переведён в Zigbee-private RAM-store;
+raw state удалён.
 
-Цель: **Zigbee существует только внутри `components/zigbee`**. Снаружи (production-код и
-generic core) система знает только `Device / Entity / Property / Action / Event / Capability`
-и `source / native_id`. Никаких `EUI64 / endpoint / cluster / attr / zcl_type`, никаких
-Zigbee-specific Domain-сущностей и команд.
+Цель: **Zigbee/ZCL существует только внутри `components/zigbee` и моста `semantics`**. Снаружи
+(production generic core: `ha_model`, `domain`, `device`, `automation`, `web`, `display`,
+`system`, `wifi`) система знает только `Device / Entity / Property / Action / Event /
+Capability` и `source / native_id`. Никаких `EUI64 / endpoint / cluster / attr / zcl_type`,
+никаких Zigbee-specific Domain-сущностей и команд.
+
+**Исключение — `semantics`.** Это transport translation layer (мост «физическая
+Zigbee-репрезентация ↔ generic Property/Action/Event»), а не application layer: ей одной
+разрешено знать обе стороны и держать ZCL-словарь (`semantics/ha_zigbee.h`) и физические
+формы (`semantics/zigbee_forms.h`, `semantics/zb_command.h`).
 
 Отличие от Step B: B вернул ownership/Device, но Zigbee-ABI всё ещё лежит в общем `ha_model`
 и в Domain registry (`HA_ENTITY_ZB_DIAG_*`, `HA_ENTITY_ENDPOINT`, `ha_zb_*`, `HA_CMD_ZIGBEE_*`).
@@ -42,14 +48,18 @@ bindings, raw diagnostics, deferred leave, esp-zigbee-sdk.
 
 ## grep-инвариант (после Step C)
 
-Вне `components/zigbee` и `zigbee/tests` (production) → **0**:
+Вне `zigbee/`, `zigbee/tests/` и `semantics/` (production generic core) → **0**
+идентификаторов:
 
 ```
 device_uid / EUI64 / endpoint / cluster_id / attr_id / zcl_type
-ha_zb_ / HA_ENTITY_ZB_ / HA_CMD_ZIGBEE_
+ha_zb_ / HA_ZB_ / HA_ENTITY_ZB_ / HA_CMD_ZIGBEE_
+ha_device_record_t / ha_endpoint_* / ha_cluster_entry_t
 ```
 
-Осознанные исключения (generic-совпадения) фиксируются явно.
+Упоминания слов в комментариях-пояснениях («здесь этого нет») не считаются. host-тесты
+generic core (`domain/tests`) используют собственные opaque-структуры с полем `endpoint`
+как произвольный layout — это не Zigbee-протечка. Исключения фиксируются явно.
 
 ## Порядок (C0…C8)
 

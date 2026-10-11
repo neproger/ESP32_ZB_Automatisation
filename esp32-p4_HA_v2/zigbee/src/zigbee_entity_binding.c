@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "zigbee/zigbee_device_store.h"
+
 bool zb_entity_binding_find_entity(const zb_entity_binding_t *list, size_t count,
                                    ha_device_uid_t uid, uint8_t endpoint, ha_entity_id_t *out)
 {
@@ -159,23 +161,25 @@ ha_device_id_t zb_device_id(ha_device_uid_t uid)
     return ha_device_id_derive(HA_SOURCE_ZIGBEE, native_id);
 }
 
-void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
-                            uint8_t endpoint_total, char *out, size_t out_size)
+void zb_entity_initial_name(ha_device_uid_t uid, uint8_t endpoint, uint8_t endpoint_total,
+                            char *out, size_t out_size)
 {
     if (out == NULL || out_size == 0) {
         return;
     }
     out[0] = '\0';
     ha_device_record_t device = {0};
-    if (domain == NULL ||
-        sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &device)) ||
-        device.name[0] == '\0') {
+    if (!zigbee_device_get(uid, &device)) {
+        return;
+    }
+    const char *base = device.name[0] != '\0' ? device.name : device.model;
+    if (base[0] == '\0') {
         return;
     }
     if (endpoint_total <= 1) {
-        snprintf(out, out_size, "%s", device.name);
+        snprintf(out, out_size, "%s", base);
     } else {
-        snprintf(out, out_size, "%s - %u", device.name, (unsigned)endpoint);
+        snprintf(out, out_size, "%s - %u", base, (unsigned)endpoint);
     }
 }
 

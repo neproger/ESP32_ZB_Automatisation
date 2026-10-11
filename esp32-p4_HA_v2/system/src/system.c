@@ -18,8 +18,6 @@
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
-#include "ha_model/ha_zigbee.h"
-#include "semantics/semantics.h"
 
 /*
  * Сервис времени (docs/services/SYSTEM.md). Пока только время: SNTP даёт UTC, GeoIP —
@@ -58,84 +56,47 @@ static bool s_have_last_location;
 
 /* --- сущности Domain ---------------------------------------------------- */
 
-static void put_device(void)
+/* System сам владеет семантикой своих величин (ZCL его не касается): canonical напрямую. */
+static ha_value_t u32_value(uint32_t v)
 {
-    ha_device_record_t rec = {0};
-    strlcpy(rec.name, "Время", sizeof(rec.name));
-    strlcpy(rec.model, "Система", sizeof(rec.model));
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &rec, &meta, &changed);
-}
-
-static void put_endpoint(void)
-{
-    ha_endpoint_record_t rec = {0};
-    rec.profile_id = HA_ZB_PROFILE_HA;
-    rec.device_id = 0x0000;
-    rec.cluster_count = 2;
-    rec.clusters[0].cluster_id = HA_CLUSTER_TIME;
-    rec.clusters[0].role = HA_ZB_ROLE_SERVER;
-    rec.clusters[1].cluster_id = HA_CLUSTER_SYSTEM;
-    rec.clusters[1].role = HA_ZB_ROLE_SERVER;
-
-    const ha_endpoint_key_t key = {.device_uid = HA_SYSTEM_DEVICE_UID,
-                                   .endpoint = HA_SYSTEM_ENDPOINT};
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_ENDPOINT, &key, &rec, &meta,
-                            &changed);
-}
-
-/* Значение состояния хранится как в ZCL: raw + тип (масштаб — сторона читателя). */
-static void put_state(uint16_t cluster_id, uint16_t attr_id, uint32_t raw, uint8_t zcl_type)
-{
-    const ha_zb_state_key_t key = {.device_uid = HA_SYSTEM_DEVICE_UID,
-                                   .cluster_id = cluster_id,
-                                   .attr_id = attr_id,
-                                   .endpoint = HA_SYSTEM_ENDPOINT};
-    const ha_zb_state_record_t rec = {.raw = raw, .zcl_type = zcl_type};
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    bool changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE, &key, &rec, &meta,
-                            &changed);
-
-    /*
-     * Canonical property state (Шаг A): Automation читает время как семантику
-     * (ENTITY_SYSTEM, property), а не как cluster/attr. Смысл даёт мост.
-     */
-    const ha_property_id_t property = semantics_property_from_key(&key);
-    if (property == HA_PROPERTY_UNKNOWN) {
-        return;
-    }
     ha_value_t value = {0};
-    if (!semantics_state_value(&key, &rec, &value)) {
-        return;
-    }
-    const ha_state_key_t property_key = {
+    value.kind = HA_VALUE_U32;
+    value.value.u32 = v;
+    return value;
+}
+
+static ha_value_t i32_value(int32_t v)
+{
+    ha_value_t value = {0};
+    value.kind = HA_VALUE_I32;
+    value.value.i32 = v;
+    return value;
+}
+
+static void put_state(ha_property_id_t property, ha_value_t value)
+{
+    const ha_state_key_t key = {
         .entity = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM),
         .property = property,
     };
-    const ha_state_record_t property_rec = {.value = value};
-    bool property_changed = false;
-    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &property_key,
-                            &property_rec, &meta, &property_changed);
+    const ha_state_record_t rec = {.value = value};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    bool changed = false;
+    (void)domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &key, &rec, &meta,
+                            &changed);
 }
 
 static bool get_location(ha_location_record_t *out)
 {
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
+    const ha_device_id_t uid = HA_SYSTEM_DEVICE_ID;
     return sys_ok(
         domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, &uid, out));
 }
 
 static void put_location_record(const ha_location_record_t *rec)
 {
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
+    const ha_device_id_t uid = HA_SYSTEM_DEVICE_ID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     bool changed = false;
@@ -162,18 +123,6 @@ static void put_location(const char *name, double lat, double lon, int32_t tz_of
 static void publish_event(uint8_t event_id)
 {
     const uint8_t payload = event_id;
-
-    const ha_device_uid_t uid = HA_SYSTEM_DEVICE_UID;
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
-        .key = &uid,
-    };
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = event_id;
-    domain_payload_ref_t ref = 0;
-    (void)domain_payload_put(s_domain, &target, &meta, &payload, sizeof(payload), &ref);
 
     const ha_entity_id_t source = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
     const domain_fact_target_t etarget = {
@@ -597,7 +546,7 @@ static bool fetch_weather(ha_weather_record_t *out)
 
 static void put_weather(const ha_weather_record_t *rec)
 {
-    const ha_device_uid_t uid = HA_WEATHER_DEVICE_UID;
+    const ha_device_id_t uid = HA_WEATHER_DEVICE_ID;
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
     bool changed = false;
@@ -634,15 +583,14 @@ static void update_time_states(const struct tm *tmv)
     const uint8_t weekday_mask = (uint8_t)(1u << weekday);
     const uint32_t minutes_of_day = (uint32_t)(tmv->tm_hour * 60 + tmv->tm_min);
 
-    put_state(HA_CLUSTER_TIME, HA_TIME_ATTR_UTC_TIME, (uint32_t)time(NULL), HA_ZB_TYPE_UINT32);
-    put_state(HA_CLUSTER_TIME, HA_TIME_ATTR_TIME_STATUS, 0x02u, HA_ZB_TYPE_BITMAP8);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_HOUR, (uint32_t)tmv->tm_hour, HA_ZB_TYPE_UINT8);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_MINUTE, (uint32_t)tmv->tm_min, HA_ZB_TYPE_UINT8);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_WEEKDAY, weekday, HA_ZB_TYPE_UINT8);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_WEEKDAY_MASK, weekday_mask, HA_ZB_TYPE_BITMAP8);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_MINUTES_OF_DAY, minutes_of_day, HA_ZB_TYPE_UINT16);
-    put_state(HA_CLUSTER_SYSTEM, HA_SYS_ATTR_TZ_OFFSET_MIN, (uint32_t)(int32_t)s_tz_offset_min,
-              HA_ZB_TYPE_INT16);
+    put_state(HA_PROPERTY_SYSTEM_TIME_UTC, u32_value((uint32_t)time(NULL)));
+    put_state(HA_PROPERTY_SYSTEM_TIME_STATUS, u32_value(0x02u));
+    put_state(HA_PROPERTY_SYSTEM_HOUR, u32_value((uint32_t)tmv->tm_hour));
+    put_state(HA_PROPERTY_SYSTEM_MINUTE, u32_value((uint32_t)tmv->tm_min));
+    put_state(HA_PROPERTY_SYSTEM_WEEKDAY, u32_value(weekday));
+    put_state(HA_PROPERTY_SYSTEM_WEEKDAY_MASK, u32_value(weekday_mask));
+    put_state(HA_PROPERTY_SYSTEM_MINUTES_OF_DAY, u32_value(minutes_of_day));
+    put_state(HA_PROPERTY_SYSTEM_TZ_OFFSET, i32_value(s_tz_offset_min));
 }
 
 static void emit_ticks(const struct tm *tmv)
@@ -671,8 +619,6 @@ static void system_task(void *arg)
     ESP_LOGI(TAG, "network up; syncing time");
     start_sntp();
 
-    put_device();
-    put_endpoint();
     resolve_location();
     refresh_weather();
     s_have_last_location = get_location(&s_last_location);

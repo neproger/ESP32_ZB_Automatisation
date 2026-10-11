@@ -12,6 +12,7 @@
 #include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "zigbee/zigbee_device_store.h"
 #include "zigbee/zigbee_remove_mark.h"
 #include "ha_model/ha_state.h"
 #include "zigbee/zigbee_entity_binding.h"
@@ -73,7 +74,7 @@ static void zigbee_send(const ha_zb_command_t *command)
 /* Проверка и постановка физической команды в очередь отправки. */
 static sys_error_t zigbee_enqueue_command(const ha_zb_command_t *command)
 {
-    const sys_error_t check = zigbee_command_check(s_domain, command);
+    const sys_error_t check = zigbee_command_check(command);
     if (sys_failed(check)) {
         zigbee_diag_record(ZIGBEE_DIAG_COMMAND, check);
         return check;
@@ -204,8 +205,7 @@ static void zigbee_event_publish(const zigbee_event_t *event)
     memcpy(physical.payload, event->payload, event->payload_length);
 
     ha_device_record_t device = {0};
-    const bool has_device = sys_ok(domain_entity_get(
-        s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &event->device_uid, &device));
+    const bool has_device = zigbee_device_get(event->device_uid, &device);
     ha_event_t semantic = {0};
     if (!semantics_decode_event(&physical, has_device ? &device : NULL, &semantic)) {
         return;
@@ -258,10 +258,8 @@ static void zigbee_publish_property_state(const zigbee_report_t *report)
 static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
                                         ha_entity_id_t entity_id)
 {
-    const ha_endpoint_key_t ep_key = {.device_uid = uid, .endpoint = endpoint};
     ha_endpoint_record_t ep_record = {0};
-    if (sys_failed(
-            domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ENDPOINT, &ep_key, &ep_record))) {
+    if (!zigbee_topology_get(uid, endpoint, &ep_record)) {
         return;
     }
 
@@ -298,13 +296,12 @@ static void zigbee_task(void *arg)
                 continue;
             }
 
-            bool changed = false;
-            const sys_error_t err = zigbee_state_apply(s_domain, &report, &changed);
-            if (sys_failed(err)) {
+            if (!zigbee_device_has(report.device_uid)) {
                 ESP_LOGW(TAG, "report dropped: uid=%llx cluster=%04x attr=%04x",
                          (unsigned long long)report.device_uid, (unsigned)report.cluster_id,
                          (unsigned)report.attr_id);
-                zigbee_diag_record(ZIGBEE_DIAG_REPORT, err);
+                zigbee_diag_record(ZIGBEE_DIAG_REPORT,
+                                   sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NOT_FOUND));
             } else {
                 zigbee_publish_property_state(&report);
             }
@@ -322,7 +319,7 @@ static void zigbee_task(void *arg)
         if (ready == s_interviews) {
             zigbee_interview_result_t result = {0};
             if (xQueueReceive(s_interviews, &result, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_interview_apply(s_domain, &result);
+                const sys_error_t err = zigbee_interview_apply(&result);
                 if (sys_failed(err)) {
                     ESP_LOGW(TAG, "interview not applied: uid=%llx err=%u",
                              (unsigned long long)result.uid, (unsigned)err.code);
@@ -341,9 +338,7 @@ static void zigbee_task(void *arg)
                     desc.source = HA_SOURCE_ZIGBEE;
                     (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
                     ha_device_record_t device = {0};
-                    if (sys_ok(domain_entity_get(s_domain,
-                                                 (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
-                                                 &result.uid, &device))) {
+                    if (zigbee_device_get(result.uid, &device)) {
                         /* initial name: пользовательское имя, иначе модель (напр. ESP32C6-DISPLAY) */
                         const char *label = device.name[0] != '\0' ? device.name : device.model;
                         size_t n = strlen(label);
@@ -395,7 +390,7 @@ static void zigbee_task(void *arg)
         if (ready == s_leaves) {
             ha_device_uid_t uid = 0;
             if (xQueueReceive(s_leaves, &uid, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_device_remove(s_domain, uid);
+                const sys_error_t err = zigbee_device_remove(uid);
                 if (sys_failed(err)) {
                     ESP_LOGW(TAG, "device not removed: uid=%llx err=%u",
                              (unsigned long long)uid, (unsigned)err.code);

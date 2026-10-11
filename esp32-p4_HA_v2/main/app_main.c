@@ -40,11 +40,8 @@
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
 
-#define APP_DEVICE_CAPACITY 32
-#define APP_STATE_CAPACITY 256
 #define APP_PROPERTY_STATE_CAPACITY 256
 #define APP_CAPABILITIES_CAPACITY 32
-#define APP_ENDPOINT_CAPACITY 128
 #define APP_AUTOMATION_CAPACITY 32
 #define APP_LOCATION_CAPACITY 4
 #define APP_GROUP_CAPACITY 16
@@ -64,43 +61,6 @@ static const char *TAG = "bootstrap";
 
 static domain_t s_domain;
 
-/* Устройство переживает перезагрузку: имя задаёт пользователь, модель — Basic-кластер. */
-static const domain_entity_desc_t device_desc = {
-    .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
-    .key_size = sizeof(ha_device_uid_t),
-    .payload_size = sizeof(ha_device_record_t),
-    .capacity = APP_DEVICE_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "device",
-};
-
-/*
- * Состояние атрибута — RAM: после перезагрузки его приносят репорты, а персистентность
- * здесь означала бы запись во flash на каждый репорт (docs/RECORD_MODEL.md:123-138).
- */
-static const domain_entity_desc_t state_desc = {
-    .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_STATE,
-    .key_size = sizeof(ha_zb_state_key_t),
-    .payload_size = sizeof(ha_zb_state_record_t),
-    .capacity = APP_STATE_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM,
-    .persist_key = NULL,
-};
-
-/*
- * Топология: состав кластеров endpoint'а. FLASH: у устройства endpoint'ы не меняются,
- * поэтому интервью сохраняется один раз и переживает перезагрузку (интервью обновляет
- * запись при повторном join). Состояние атрибутов при этом остаётся RAM.
- */
-static const domain_entity_desc_t endpoint_desc = {
-    .type = (domain_entity_t)HA_ENTITY_ENDPOINT,
-    .key_size = sizeof(ha_endpoint_key_t),
-    .payload_size = sizeof(ha_endpoint_record_t),
-    .capacity = APP_ENDPOINT_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "endpoint",
-};
-
 /*
  * Локация/пояс системного устройства. FLASH: пользователь может задать место и пояс
  * вручную (web), они должны пережить перезагрузку; system обновляет запись, только
@@ -108,7 +68,7 @@ static const domain_entity_desc_t endpoint_desc = {
  */
 static const domain_entity_desc_t location_desc = {
     .type = (domain_entity_t)HA_ENTITY_LOCATION,
-    .key_size = sizeof(ha_device_uid_t),
+    .key_size = sizeof(ha_device_id_t),
     .payload_size = sizeof(ha_location_record_t),
     .capacity = APP_LOCATION_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
@@ -144,7 +104,7 @@ static const domain_entity_desc_t group_item_desc = {
  */
 static const domain_entity_desc_t weather_desc = {
     .type = (domain_entity_t)HA_ENTITY_WEATHER,
-    .key_size = sizeof(ha_device_uid_t),
+    .key_size = sizeof(ha_device_id_t),
     .payload_size = sizeof(ha_weather_record_t),
     .capacity = APP_WEATHER_CAPACITY,
     .backing = DOMAIN_BACKING_RAM,
@@ -157,7 +117,7 @@ static const domain_entity_desc_t weather_desc = {
  */
 static const domain_entity_desc_t wifi_scan_desc = {
     .type = (domain_entity_t)HA_ENTITY_WIFI_SCAN,
-    .key_size = sizeof(ha_device_uid_t),
+    .key_size = sizeof(ha_device_id_t),
     .payload_size = sizeof(ha_wifi_scan_record_t),
     .capacity = APP_WIFI_SCAN_CAPACITY,
     .backing = DOMAIN_BACKING_RAM,
@@ -175,7 +135,7 @@ static const domain_entity_desc_t wifi_known_desc = {
 
 static const domain_entity_desc_t wifi_status_desc = {
     .type = (domain_entity_t)HA_ENTITY_WIFI_STATUS,
-    .key_size = sizeof(ha_device_uid_t),
+    .key_size = sizeof(ha_device_id_t),
     .payload_size = sizeof(ha_wifi_status_record_t),
     .capacity = APP_WIFI_STATUS_CAPACITY,
     .backing = DOMAIN_BACKING_RAM,
@@ -361,15 +321,6 @@ void app_main(void)
     if (!start_step(domain_init(&s_domain, APP_ENTITY_TYPES, APP_JOURNAL_CAPACITY,
                                 APP_PAYLOAD_CAPACITY, APP_PAYLOAD_MAX_SIZE),
                     "domain init")) {
-        return;
-    }
-    if (!start_step(domain_register_entity(&s_domain, &device_desc), "register device")) {
-        return;
-    }
-    if (!start_step(domain_register_entity(&s_domain, &state_desc), "register state")) {
-        return;
-    }
-    if (!start_step(domain_register_entity(&s_domain, &endpoint_desc), "register endpoint")) {
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &automation_desc), "register automation")) {

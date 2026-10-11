@@ -9,7 +9,7 @@
 
 #include <stdbool.h>
 
-#include "ha_model/ha_zigbee.h" /* ha_device_uid_t */
+#include "semantics/ha_zigbee.h" /* ha_device_uid_t */
 #include "sys/sys_error.h"
 
 #ifdef __cplusplus

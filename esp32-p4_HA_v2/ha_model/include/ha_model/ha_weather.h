@@ -19,9 +19,9 @@ extern "C" {
 
 /*
  * UID синтетической сущности погоды: вне диапазона Zigbee (не EUI-64 с реальным OUI),
- * ASCII "WTHR" в старших байтах — как HA_SYSTEM_DEVICE_UID для времени.
+ * ASCII "WTHR" в старших байтах — как HA_SYSTEM_DEVICE_ID для времени.
  */
-#define HA_WEATHER_DEVICE_UID 0x5754485200000001ull
+#define HA_WEATHER_DEVICE_ID 0x5754485200000001ull
 
 /*
  * Условие погоды. Имена совпадают с наборами Home Assistant / иконками v1

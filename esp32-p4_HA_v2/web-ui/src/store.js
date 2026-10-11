@@ -1,4 +1,4 @@
-import { MSG, MSG3, DIAG, decodeFrame, snapshot } from './proto.js'
+import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
 import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
 import { VALUE_KIND } from './semantics.js'
 
@@ -6,14 +6,9 @@ import { VALUE_KIND } from './semantics.js'
 // useSyncExternalStore(store.subscribe, store.getVersion).
 
 const maps = {
-  [ENTITY.ZB_DIAG_DEVICE]: new Map(),
-  [ENTITY.STATE]: new Map(),
-  [ENTITY.ENDPOINT]: new Map(),
   [ENTITY.AUTOMATION]: new Map(),
-  [ENTITY.DEVICE_REMOVE]: new Map(),
   [ENTITY.LOCATION]: new Map(),
   [ENTITY.GROUP]: new Map(),
-  [ENTITY.GROUP_ITEM]: new Map(),
   [ENTITY.WEATHER]: new Map(),
   [ENTITY.WIFI_STATUS]: new Map(),
   [ENTITY.SETTINGS]: new Map(),
@@ -241,32 +236,6 @@ function onFrame(buf) {
     emit()
     return
   }
-  // Diagnostics raw Zigbee (A1.5): отдельный канал, наполняет raw-карты для Diagnostics.
-  if (frame.type === DIAG.ZB_DEVICE || frame.type === DIAG.ZB_ENDPOINT || frame.type === DIAG.ZB_STATE) {
-    const type = frame.type === DIAG.ZB_DEVICE ? ENTITY.ZB_DIAG_DEVICE
-      : frame.type === DIAG.ZB_ENDPOINT ? ENTITY.ENDPOINT : ENTITY.STATE
-    const schema = SCHEMA[type]
-    const keyDv = new DataView(payload.buffer, payload.byteOffset, schema.keySize)
-    const key = decodeKey(type, keyDv)
-    const id = entityId(type, key)
-    const recDv = new DataView(payload.buffer, payload.byteOffset + schema.keySize, schema.recSize)
-    const record = decodeRecord(type, recDv)
-    maps[type].set(id, { key, record })
-    if (!syncing) logEvent('upsert', type, key, record)
-    emit()
-    return
-  }
-  if (frame.type === DIAG.ZB_REMOVE) {
-    const kind = payload.getUint8(0)
-    const type = kind === 1 ? ENTITY.ZB_DIAG_DEVICE : kind === 2 ? ENTITY.STATE : ENTITY.ENDPOINT
-    const schema = SCHEMA[type]
-    const keyDv = new DataView(payload.buffer, payload.byteOffset + 1, schema.keySize)
-    const key = decodeKey(type, keyDv)
-    maps[type].delete(entityId(type, key))
-    if (!syncing) logEvent('remove', type, key, null)
-    emit()
-    return
-  }
   if (frame.type !== MSG.ENTITY && frame.type !== MSG.ENTITY_REMOVE) return
 
   const type = payload.getUint8(0)
@@ -317,26 +286,11 @@ export const store = {
   get status() {
     return status
   },
-  get devices() {
-    return maps[ENTITY.ZB_DIAG_DEVICE]
-  },
-  get states() {
-    return maps[ENTITY.STATE]
-  },
-  get endpoints() {
-    return maps[ENTITY.ENDPOINT]
-  },
-  get removals() {
-    return maps[ENTITY.DEVICE_REMOVE]
-  },
   get locations() {
     return maps[ENTITY.LOCATION]
   },
   get groups() {
     return maps[ENTITY.GROUP]
-  },
-  get groupItems() {
-    return maps[ENTITY.GROUP_ITEM]
   },
   get weather() {
     return maps[ENTITY.WEATHER]
@@ -390,9 +344,6 @@ export const store = {
   },
   capabilities(entity) {
     return propCapabilities.get(entity.toString()) || []
-  },
-  isMarkedForRemoval(uid) {
-    return maps[ENTITY.DEVICE_REMOVE].has(`rm:${uid}`)
   },
   send(frame) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(frame.bytes)

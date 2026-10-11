@@ -4,24 +4,12 @@
 #include <string.h>
 
 #include "domain/domain.h"
-#include "mstore_platform.h"
-#include "nor_sim.h"
-#include "nor_sim_device.h"
-#include "storage/mstore_storage.h"
-
-#define SIM_SIZE (64u * 1024u)
-#define SIM_ERASE_SIZE 4096u
-
-static void flash_on(mstore_nor_sim_t **out_sim, nor_sim_device_t *device)
-{
-    *out_sim = mstore_nor_sim_create(SIM_SIZE, SIM_ERASE_SIZE);
-    nor_sim_device_init(device, *out_sim);
-    mstore_platform_flash_set_device(&device->base);
-}
+#include "zigbee/zigbee_device_store.h"
 
 /*
  * A0.5: доказательство стабильности logical Entity identity на уровне интеграции
- * (resolve binding + ensure Entity в настоящем in-memory Domain).
+ * (resolve binding + ensure Entity в настоящем in-memory Domain). Имя устройства берётся
+ * из Zigbee-private RAM-модели адаптера.
  */
 
 static int g_failures = 0;
@@ -57,29 +45,13 @@ static void ctx_init(ctx_t *c, size_t entity_cap)
         .persist_key = NULL,
     };
     domain_register_entity(&c->d, &entity_desc);
-    const domain_entity_desc_t device_desc = {
-        .type = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
-        .key_size = sizeof(ha_device_uid_t),
-        .payload_size = sizeof(ha_device_record_t),
-        .capacity = 4,
-        .backing = DOMAIN_BACKING_RAM,
-        .persist_key = NULL,
-    };
-    domain_register_entity(&c->d, &device_desc);
     c->n = 0;
 }
 
-static void put_device(ctx_t *c, ha_device_uid_t uid, const char *name)
+static void put_device(ha_device_uid_t uid, const char *name)
 {
-    ha_device_record_t rec = {0};
-    size_t n = strlen(name);
-    if (n >= sizeof(rec.name)) {
-        n = sizeof(rec.name) - 1;
-    }
-    memcpy(rec.name, name, n);
-    domain_fact_meta_t meta = {0};
     bool changed = false;
-    domain_entity_put(&c->d, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE, &uid, &rec, &meta, &changed);
+    zigbee_device_set_model(uid, name, &changed);
 }
 
 static bool domain_has(ctx_t *c, ha_entity_id_t id)
@@ -199,27 +171,23 @@ static void test_name_initialized_and_not_clobbered(void)
     domain_deinit(&c.d);
 }
 
-/* Initial-имя Entity: одна → имя device; несколько → "<device> - <endpoint>". */
+/* Initial-имя Entity: одна → имя/модель device; несколько → "<device> - <endpoint>". */
 static void test_initial_name(void)
 {
-    ctx_t c;
-    ctx_init(&c, 4);
-    put_device(&c, A, "Лампа");
+    put_device(A, "Лампа");
 
     char out[HA_ENTITY_NAME_MAX];
-    zb_entity_initial_name(&c.d, A, 1, 1, out, sizeof(out));
+    zb_entity_initial_name(A, 1, 1, out, sizeof(out));
     CHECK(strcmp(out, "Лампа") == 0);
-    zb_entity_initial_name(&c.d, A, 2, 3, out, sizeof(out));
+    zb_entity_initial_name(A, 2, 3, out, sizeof(out));
     CHECK(strcmp(out, "Лампа - 2") == 0);
-    zb_entity_initial_name(&c.d, A, 10, 12, out, sizeof(out));
+    zb_entity_initial_name(A, 10, 12, out, sizeof(out));
     CHECK(strcmp(out, "Лампа - 10") == 0);
 
     /* basename пустой → имя не задаётся */
-    put_device(&c, Y, "");
-    zb_entity_initial_name(&c.d, Y, 1, 1, out, sizeof(out));
+    put_device(Y, "");
+    zb_entity_initial_name(Y, 1, 1, out, sizeof(out));
     CHECK(out[0] == '\0');
-
-    domain_deinit(&c.d);
 }
 
 /*
@@ -244,10 +212,6 @@ static void test_ensure_sets_no_ownership(void)
 
 int main(void)
 {
-    mstore_nor_sim_t *sim = NULL;
-    nor_sim_device_t device;
-    flash_on(&sim, &device);
-
     test_first_and_repeat();
     test_order();
     test_reboot_repair();
@@ -256,9 +220,6 @@ int main(void)
     test_name_initialized_and_not_clobbered();
     test_initial_name();
     test_ensure_sets_no_ownership();
-
-    mstore_platform_flash_set_device(NULL);
-    mstore_nor_sim_destroy(sim);
 
     if (g_failures == 0) {
         printf("all entity-identity tests passed\n");

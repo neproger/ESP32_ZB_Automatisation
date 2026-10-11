@@ -691,6 +691,15 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step C, C3+C4+C5+C7 (один связный коммит) — граница Zigbee замкнута.
+            Диагностика удалена целиком (ZB_DIAG_DEVICE/STATE, ENDPOINT, WEB_MSG_DIAG_ZB_*,
+            страница Diagnostics, zcl.js, store-map'ы). Raw адаптера (имя/модель +
+            топология) переведён в Zigbee-private RAM-store (zigbee_device_store). ZCL-словарь
+            и физические формы уехали из ha_model в мост semantics (ha_zigbee.h,
+            zigbee_forms.h, zb_command.h). System публикует canonical сам (ZCL его больше не
+            касается). Введён нейтральный ha_device_id_t для generic-ключей. Итог: вне
+            zigbee/+semantics/ generic core не знает EUI64/endpoint/cluster/attr/zcl. IDF +
+            все host-тесты (ha5 sem1 auto1 device1 zb9 domain9) зелёные; web-ui и IDF собираются.
 2026-10-11  Step C, C6 — deferred-leave стал Zigbee-private (zigbee_remove_mark, NVS-blob).
             Убраны HA_ENTITY_DEVICE_REMOVE и ha_device_remove_record_t из generic Domain/
             ha_model (web_proto WEB_ENTITY_DEVICE_REMOVE, app_main device_remove_desc).

@@ -21,7 +21,6 @@ _Static_assert(offsetof(ha_logical_device_record_t, name) == 44, "record name la
 _Static_assert(sizeof(ha_device_desc_t) == 100, "device desc ABI");
 _Static_assert(HA_DEVICE_ID_NONE == 0, "device id none sentinel");
 _Static_assert(HA_ENTITY_LOGICAL_DEVICE == 17, "logical device entity type ABI");
-_Static_assert(HA_ENTITY_LOGICAL_DEVICE != HA_ENTITY_ZB_DIAG_DEVICE, "not the transport device type");
 _Static_assert(HA_ENTITY_LOGICAL_DEVICE != HA_ENTITY_ENTITY, "not a generic Entity");
 
 static int g_failures = 0;

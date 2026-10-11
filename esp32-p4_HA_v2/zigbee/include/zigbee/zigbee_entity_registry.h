@@ -12,7 +12,7 @@
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h" /* HA_ENTITY_ENTITY */
 #include "ha_model/ha_entity.h"
-#include "ha_model/ha_zigbee.h"
+#include "semantics/ha_zigbee.h"
 #include "sys/sys_error.h"
 
 #ifdef __cplusplus

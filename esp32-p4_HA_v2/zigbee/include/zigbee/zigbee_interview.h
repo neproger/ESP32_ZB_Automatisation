@@ -1,13 +1,13 @@
 #pragma once
 
-#include "domain/domain.h"
-#include "ha_model/ha_entities.h"
+#include "semantics/ha_zigbee.h"
+#include "semantics/zigbee_forms.h"
 #include "sys/sys_error.h"
 
 /*
  * Интервью устройства (docs/services/ZIGBEE.md §3.1, §9.4). Радио собирает Simple
- * Descriptor и Basic в эту форму; Domain она попадает только после завершения
- * интервью — устройство без интервью живёт лишь в RAM слоя Zigbee.
+ * Descriptor и Basic в эту форму; адаптер применяет её к своей RAM-модели только после
+ * завершения интервью — устройство без интервью живёт лишь в RAM слоя Zigbee.
  *
  * Здесь нет FreeRTOS и нет SDK: формулировка топологии из ответов радио (роли
  * кластеров) и запись устройства — чистая логика, тестируемая на хосте.
@@ -40,5 +40,5 @@ sys_error_t zigbee_clusters_from_lists(const uint16_t *input, uint8_t input_coun
                                        ha_cluster_entry_t *out, uint8_t out_max,
                                        uint8_t *out_count);
 
-/* Записать интервью в Domain: устройство (модель из Basic) и топология endpoint'ов. */
-sys_error_t zigbee_interview_apply(domain_t *domain, const zigbee_interview_result_t *result);
+/* Записать интервью в RAM-модель адаптера: устройство (модель из Basic) и топология. */
+sys_error_t zigbee_interview_apply(const zigbee_interview_result_t *result);

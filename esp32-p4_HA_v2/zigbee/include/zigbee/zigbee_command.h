@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/domain.h"
 #include "semantics/zb_command.h" /* ha_zb_command_t */
 #include "sys/sys_error.h"
 
@@ -13,4 +12,4 @@
  *
  * FreeRTOS и логирования нет, поэтому проверка собирается и тестируется на хосте.
  */
-sys_error_t zigbee_command_check(domain_t *domain, const ha_zb_command_t *command);
+sys_error_t zigbee_command_check(const ha_zb_command_t *command);

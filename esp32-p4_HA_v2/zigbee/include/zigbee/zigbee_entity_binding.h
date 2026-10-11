@@ -15,7 +15,7 @@
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h" /* HA_ENTITY_ENTITY */
 #include "ha_model/ha_entity.h"
-#include "ha_model/ha_zigbee.h" /* ha_device_uid_t */
+#include "semantics/ha_zigbee.h" /* ha_device_uid_t */
 #include "sys/sys_error.h"
 
 #ifdef __cplusplus
@@ -80,7 +80,7 @@ ha_device_id_t zb_device_id(ha_device_uid_t uid);
  * basename; несколько → "<basename> - <endpoint>". basename пустой → пустая строка (имя не
  * задаётся). Endpoint (не порядок discovery) делает имя reboot/order-stable.
  */
-void zb_entity_initial_name(domain_t *domain, ha_device_uid_t uid, uint8_t endpoint,
+void zb_entity_initial_name(ha_device_uid_t uid, uint8_t endpoint,
                             uint8_t endpoint_total, char *out, size_t out_size);
 
 #ifdef __cplusplus

@@ -210,7 +210,7 @@ static void rebuild_list(void)
     lv_obj_clean(s_list);
 
     ha_wifi_scan_record_t scan = {0};
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     if (!sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_WIFI_SCAN, &uid, &scan)) ||
         scan.count == 0) {
         lv_obj_t *empty = lv_label_create(s_list);
@@ -229,7 +229,7 @@ static void rebuild_list(void)
 static void apply_status(void)
 {
     ha_wifi_status_record_t status = {0};
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     const bool present =
         sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_WIFI_STATUS, &uid, &status));
 
@@ -262,7 +262,7 @@ static void apply_status(void)
 static void apply_scan(void)
 {
     domain_entity_meta_t meta = {0};
-    const ha_device_uid_t uid = HA_WIFI_DEVICE_UID;
+    const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     if (!sys_ok(domain_entity_meta(s_domain, (domain_entity_t)HA_ENTITY_WIFI_SCAN, &uid, &meta))) {
         if (s_has_scan_version) {
             s_has_scan_version = false;

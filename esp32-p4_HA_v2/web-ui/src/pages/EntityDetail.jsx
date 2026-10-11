@@ -34,7 +34,7 @@ export default function EntityDetail({ id }) {
 
   return (
     <section>
-      <p className="pad"><a href="#/entities">← Сущности</a> · <a href="#/diagnostics">Диагностика</a></p>
+        <p className="pad"><a href="#/entities">← Сущности</a></p>
       <div className="card">
         <div className="title">
           <input

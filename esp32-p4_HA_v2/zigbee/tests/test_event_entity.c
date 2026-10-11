@@ -1,5 +1,5 @@
 #include "ha_model/ha_entity.h"
-#include "ha_model/ha_zigbee.h"
+#include "semantics/ha_zigbee.h"
 #include "semantics/semantics.h"
 #include "zigbee/zigbee_entity_binding.h"
 

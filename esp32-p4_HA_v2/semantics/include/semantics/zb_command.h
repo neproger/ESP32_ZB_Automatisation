@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-#include "ha_model/ha_zigbee.h" /* ha_device_uid_t, HA_ZB_CLUSTER_*, HA_ZB_CMD_* */
+#include "semantics/ha_zigbee.h" /* ha_device_uid_t, HA_ZB_CLUSTER_*, HA_ZB_CMD_* */
 
 #ifdef __cplusplus
 extern "C" {

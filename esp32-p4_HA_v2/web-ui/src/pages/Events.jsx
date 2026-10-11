@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { ENTITY } from '../schema.js'
-import { uidHex } from '../zcl.js'
 import { eventName } from '../semantics.js'
 
-// Журнал: семантические события (HA_EVENT_*) + изменения сущностей. Snapshot не логируется.
+// Журнал: семантические события (HA_EVENT_*) + изменения generic-сущностей. Snapshot не
+// логируется. Raw Zigbee в Domain больше не попадает (Шаг C), поэтому журнал entity-native.
 
-function deviceLabel(devices, uid) {
-  for (const { key, record } of devices.values()) {
-    if (key.uid === uid) return record.name || record.model || uidHex(uid)
-  }
-  return uidHex(uid)
+const TYPE_LABEL = {
+  [ENTITY.AUTOMATION]: 'правило',
+  [ENTITY.LOCATION]: 'локация',
+  [ENTITY.GROUP]: 'экран',
+  [ENTITY.WEATHER]: 'погода',
+  [ENTITY.WIFI_STATUS]: 'wifi-статус',
+  [ENTITY.SETTINGS]: 'настройки',
 }
 
 function entityLabel(s, entity) {
@@ -21,23 +23,8 @@ function describe(ev, s) {
   if (ev.kind === 'event') {
     return `${entityLabel(s, ev.sourceEntity)}: ${eventName(ev.eventId)}`
   }
-  const { entityType, key, record, action } = ev
-  switch (entityType) {
-    case ENTITY.ZB_DIAG_DEVICE:
-      return action === 'remove'
-        ? `устройство ${deviceLabel(s.devices, key.uid)} удалено`
-        : `устройство ${record.name || record.model || uidHex(key.uid)}`
-    case ENTITY.STATE:
-      return `${deviceLabel(s.devices, key.uid)} · состояние изменилось`
-    case ENTITY.ENDPOINT:
-      return `топология ${deviceLabel(s.devices, key.uid)} · EP${key.ep}`
-    case ENTITY.AUTOMATION:
-      return `правило #${key.id}`
-    case ENTITY.DEVICE_REMOVE:
-      return `на удаление ${uidHex(key.uid)}`
-    default:
-      return ''
-  }
+  const label = TYPE_LABEL[ev.entityType] || 'сущность'
+  return ev.action === 'remove' ? `${label} удалена` : `${label} обновлена`
 }
 
 export default function Events() {

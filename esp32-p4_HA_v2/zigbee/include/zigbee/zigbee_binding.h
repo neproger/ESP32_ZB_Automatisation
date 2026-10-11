@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ezbee/af.h"
-#include "ha_model/ha_zigbee.h"
+#include "semantics/ha_zigbee.h"
 #include "zigbee/zigbee_interview.h"
 
 /*
