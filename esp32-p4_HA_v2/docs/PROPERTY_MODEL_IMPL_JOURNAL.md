@@ -691,6 +691,10 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step C, C1 — убран старый Web Zigbee-control/remove path. Удалены
+            WEB_CMD_DEVICE_REMOVE(6)/DEVICE_REMOVE_CANCEL(7) + их обработчики (raw uid → HA_CMD
+            ZIGBEE/DEVICE_REMOVE); удаление — только canonical WEB_CMD_LOGICAL_DEVICE_REMOVE.
+            Diagnostics — read-only. IDF зелёный.
 ```
 
 ## 7. Открытые вопросы

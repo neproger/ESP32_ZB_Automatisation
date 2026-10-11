@@ -1092,25 +1092,6 @@ static uint16_t web_rule_encode(const ha_automation_key_t *key, const ha_rule_t 
     return SYS_CODE_OK;
 }
 
-static uint16_t web_do_device_remove(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_device_uid_t)) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_device_uid_t uid;
-    memcpy(&uid, args, sizeof(uid));
-
-    const domain_fact_target_t target = {
-        .entity = (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
-        .key = &uid,
-    };
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    const sys_error_t err =
-        domain_post(s_domain, HA_CMD_DEVICE_REMOVE, &uid, sizeof(uid), &target, &meta);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
 static uint16_t web_do_permit_join(const uint8_t *args, size_t len)
 {
     if (len != 1) {
@@ -1121,21 +1102,6 @@ static uint16_t web_do_permit_join(const uint8_t *args, size_t len)
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;
     const sys_error_t err =
         domain_post(s_domain, HA_CMD_PERMIT_JOIN, &seconds, sizeof(seconds), NULL, &meta);
-    return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
-}
-
-static uint16_t web_do_device_remove_cancel(const uint8_t *args, size_t len)
-{
-    if (len != sizeof(ha_device_uid_t)) {
-        return SYS_CODE_INVALID_SIZE;
-    }
-    ha_device_uid_t uid;
-    memcpy(&uid, args, sizeof(uid));
-
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    const sys_error_t err = domain_entity_remove(
-        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &meta);
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
@@ -1315,12 +1281,6 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
         break;
     case WEB_CMD_AUTOMATION_REMOVE:
         status = web_do_automation_remove(args, len);
-        break;
-    case WEB_CMD_DEVICE_REMOVE:
-        status = web_do_device_remove(args, len);
-        break;
-    case WEB_CMD_DEVICE_REMOVE_CANCEL:
-        status = web_do_device_remove_cancel(args, len);
         break;
     case WEB_CMD_PERMIT_JOIN:
         status = web_do_permit_join(args, len);

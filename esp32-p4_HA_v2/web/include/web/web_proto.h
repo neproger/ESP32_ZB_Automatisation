@@ -52,8 +52,7 @@ typedef enum {
     WEB_CMD_SNAPSHOT = 1,
     WEB_CMD_AUTOMATION_PUT = 4,
     WEB_CMD_AUTOMATION_REMOVE = 5,
-    WEB_CMD_DEVICE_REMOVE = 6,
-    WEB_CMD_DEVICE_REMOVE_CANCEL = 7,
+    /* 6/7 (raw DEVICE_REMOVE/CANCEL) удалены: удаление — WEB_CMD_LOGICAL_DEVICE_REMOVE. */
     WEB_CMD_PERMIT_JOIN = 8,
     /* Экраны Display (docs/clients/DISPLAY.md): CRUD group. Виджеты — entity-native
      * (WEB_CMD_GROUP_ITEM_PUT/REMOVE ниже). */
