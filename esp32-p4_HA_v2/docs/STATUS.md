@@ -20,7 +20,7 @@
 | `automation` | подписка на canonical EVENT/STATE (по типу факта); правила `ha_rule_t` (entity-native): `DEVICE_EVENT`/`TIME`/`STATE`, условия (AND), `domain_post HA_CMD_PROPERTY` | host-тест 1/1, сквозной цикл на P4 |
 | `system` | время/погода: SNTP + GeoIP + Open-Meteo; публикует canonical `PROPERTY_STATE` системной Entity напрямую (ZCL не касается) + тики | запуск на P4 |
 | `wifi` | владелец радио на C3 (ESP-Hosted): стек, скан, подключение; сущности `wifi_scan/known/status` | host-тест 1/1; на железе — provisioning/стабильность AP |
-| `web` | HTTP+WS (BFF), canonical byte-wire v3 (`services/WEB_PROTOCOL.md`): snapshot, дельты, команды; UI встроен | устройство отдаёт UI, snapshot/команды |
+| `web` | HTTP+WS транспорт canonical-модели, byte-wire v3 (records verbatim, `services/WEB_PROTOCOL.md`): snapshot, дельты, команды; UI встроен | устройство отдаёт UI, snapshot/команды |
 | `display` | LVGL 9: группы/виджеты, status bar, меню, Wi-Fi, настройки; читает canonical | IDF-сборка, host-превью |
 | `ha_p4` (приложение) | bootstrap: 13 canonical типов (automation, location, group, group_item, weather, wifi_scan, wifi_known, wifi_status, settings, entity, property_state, capabilities, logical_device) | запуск на P4 rev 1.3 |
 

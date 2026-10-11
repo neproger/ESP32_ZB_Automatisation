@@ -80,9 +80,12 @@ Automation подписывается на canonical **тип факта** (не
 
 ## 8. Провод (Web)
 
-Canonical v3 DTO, entity-native: `ENTITY/DEVICE/PROPERTY_STATE/CAPABILITIES/EVENT/
-AUTOMATION/GROUP_ITEM` + generic `LOCATION/WEATHER/WIFI_STATUS/SETTINGS/GROUP`. Раскладка —
-`services/WEB_PROTOCOL.md`. Числовых Domain-типов и raw-записей на проводе нет.
+Canonical records **verbatim**: `type = ha_entity_t`, payload = `[key][record]`
+(`REMOVE` — `[key]`). Типы — `ENTITY/LOGICAL_DEVICE/PROPERTY_STATE/CAPABILITIES/
+AUTOMATION/GROUP_ITEM` + generic `LOCATION/WEATHER/WIFI_STATUS/SETTINGS/GROUP`; событие —
+`EVENT` = `ha_event_t`. Раскладка и offset'ы — `services/WEB_PROTOCOL.md`. Web не строит
+DTO: wire-форма совпадает с canonical layout, интерпретация — в браузере. Числовых
+Domain-типов и raw-записей на проводе нет.
 
 ## 9. Было / стало (кратко)
 

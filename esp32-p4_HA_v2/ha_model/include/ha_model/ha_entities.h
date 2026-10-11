@@ -19,8 +19,9 @@ extern "C" {
 #endif
 
 /*
- * Дискриминатор типа сущности: внутренняя runtime identity Domain, а не wire ABI —
- * наружу тип передаётся строковым именем (docs/RECORD_MODEL.md:60-63).
+ * Тип сущности: стабильный canonical ABI. Числа фиксированы и НИКОГДА не переиспользуются
+ * (удалённое значение остаётся «дыркой»). Служит и runtime-дискриминатором Domain, и
+ * wire-типом web v3 (`type = ha_entity_t`, docs/services/WEB_PROTOCOL.md §3).
  */
 typedef enum {
     /*

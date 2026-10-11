@@ -37,7 +37,7 @@ Command — намерение что-то сделать
 
 ```text
    Application / Clients
-   Automation | Web (BFF) | Display | System | Wi-Fi
+   Automation | Web | Display | System | Wi-Fi
             │                │
             │        Device service  — canonical Device lifecycle/ownership
             │                │
@@ -214,8 +214,9 @@ payload, процедуры создания/удаления устройств
   `services/SYSTEM.md`.
 - **Wi-Fi service** — владелец радио на внешнем C3 (ESP-Hosted): стек, скан, подключение.
   Сущности `wifi_scan/known/status` с ключом `device_id`. Детали — `services/WIFI.md`.
-- **Web service (BFF)** — адаптер для браузера: HTTP+WS, байтовый canonical wire
-  (`services/WEB_PROTOCOL.md`): snapshot, дельты, команды. UI встроен в прошивку.
+- **Web service** — тупой транспорт canonical-модели: HTTP+WS, canonical records verbatim
+  (`services/WEB_PROTOCOL.md`): snapshot, дельты, команды; интерпретация — в браузере.
+  UI встроен в прошивку.
 
 ## 5. Clients
 

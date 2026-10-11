@@ -1,10 +1,10 @@
-import { MSG, MSG3, decodeFrame, snapshot, ack } from './proto.js'
+import { MSG, ENTITY, decodeFrame, snapshot, ack } from './proto.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 
-// Единый стор: WS-соединение + канонические сущности Domain (entity-native). React читает
-// через useSyncExternalStore(store.subscribe, store.getVersion). Никаких числовых Domain-
-// типов/сырых записей: каждая запись — entity-native сообщение v3.
+// Единый стор: WS-соединение + канонические сущности Domain. React читает через
+// useSyncExternalStore(store.subscribe, store.getVersion). Wire v3 — canonical structs
+// verbatim (layout ha_model): type = ha_entity_t, payload = [key][record].
 
 // Generic-сущности (identity — device_id или id; record как есть).
 const locations = new Map()   // `loc:${id}`      → { key: { id }, record }
@@ -58,55 +58,53 @@ function decodeSettings(dv, o) {
 }
 const decodeGroup = (dv, o) => ({ title: cstr(dv, o, 32) })
 
-// Декод entity-native rule-wire (зеркало web.c:web_rule_encode). Без ZCL.
+// Декод canonical ha_rule_t (192) verbatim (layout ha_rule.h). Без ZCL.
+const RULE_OFF_CONDITIONS_COUNT = 189
+const RULE_OFF_ACTION = 190
+const CONDITION_SIZE = 32
+
 function decodeRule(dv, base) {
-  let o = base
-  const enabled = dv.getUint8(o); o += 1
-  const triggerKind = dv.getUint8(o); o += 1
-  const trigger = { kind: triggerKind }
-  if (triggerKind === 0) {
-    trigger.entity = dv.getBigUint64(o, true); o += 8
-    trigger.eventId = dv.getUint8(o); o += 1
-  } else if (triggerKind === 1) {
-    trigger.minutesOfDay = dv.getUint16(o, true); o += 2
-    trigger.weekdayMask = dv.getUint8(o); o += 1
-  } else if (triggerKind === 2) {
-    trigger.entity = dv.getBigUint64(o, true); o += 8
-    trigger.property = dv.getUint16(o, true); o += 2
-    trigger.op = dv.getUint8(o); o += 1
-    trigger.edge = dv.getUint8(o); o += 1
-    trigger.value = dv.getFloat32(o, true); o += 4
-    trigger.value2 = dv.getFloat32(o, true); o += 4
+  const kind = dv.getUint8(base + 26)
+  const trigger = {
+    kind,
+    entity: dv.getBigUint64(base + 16, true),
+    eventId: dv.getInt32(base + 24, true),
+    property: dv.getInt32(base + 28, true),
+    value: dv.getFloat32(base + 32, true),
+    value2: dv.getFloat32(base + 36, true),
+    minutesOfDay: dv.getUint16(base + 40, true),
+    op: dv.getUint8(base + 43),
+    edge: dv.getUint8(base + 44),
+    weekdayMask: dv.getUint8(base + 45),
   }
-  const conditionsCount = dv.getUint8(o); o += 1
+  const conditionsCount = dv.getUint8(base + RULE_OFF_CONDITIONS_COUNT)
   const conditions = []
   for (let i = 0; i < conditionsCount; i++) {
+    const p = base + 48 + i * CONDITION_SIZE
     conditions.push({
-      entity: dv.getBigUint64(o, true),
-      property: dv.getUint16(o + 8, true),
-      op: dv.getUint8(o + 10),
-      value: dv.getFloat32(o + 11, true),
-      value2: dv.getFloat32(o + 15, true),
+      entity: dv.getBigUint64(p, true),
+      property: dv.getInt32(p + 8, true),
+      op: dv.getUint8(p + 16),
+      value: dv.getFloat32(p + 20, true),
+      value2: dv.getFloat32(p + 24, true),
     })
-    o += 19
   }
   const action = {
-    entity: dv.getBigUint64(o, true),
-    property: dv.getUint16(o + 8, true),
-    action: dv.getUint8(o + 10),
-    valueKind: dv.getUint8(o + 11),
+    entity: dv.getBigUint64(base, true),
+    property: dv.getInt32(base + 8, true),
+    action: dv.getUint8(base + RULE_OFF_ACTION),
+    valueKind: dv.getInt32(base + 176, true),
   }
-  o += 12
-  if (action.valueKind === 1) { // SCALAR: u8 kind + u32/f32
-    const kind = dv.getUint8(o); o += 1
-    action.scalarKind = kind
-    action.value = kind === 4 ? dv.getFloat32(o, true) : dv.getUint32(o, true)
-    o += 4
+  if (action.valueKind === 1) { // SCALAR: ha_value_t {kind i32, value}
+    action.scalarKind = dv.getInt32(base + 180, true)
+    action.value = action.scalarKind === 4
+      ? dv.getFloat32(base + 184, true)
+      : dv.getUint32(base + 184, true)
   } else if (action.valueKind === 2) { // XY
-    action.x = dv.getFloat32(o, true)
-    action.y = dv.getFloat32(o + 4, true)
-    o += 8
+    action.x = dv.getFloat32(base + 180, true)
+    action.y = dv.getFloat32(base + 184, true)
   }
+  const enabled = dv.getUint8(base + 188) !== 0
   return { enabled, trigger, conditions, action }
 }
 
@@ -179,156 +177,105 @@ function onFrame(buf) {
     emit()
     return
   }
-  if (frame.type === MSG.GROUP_ITEM || frame.type === MSG.GROUP_ITEM_REMOVE) {
-    const groupId = payload.getBigUint64(0, true)
-    const entity = payload.getBigUint64(8, true)
-    const property = payload.getUint16(16, true)
-    const key = `${groupId}:${entity}:${property}`
-    if (frame.type === MSG.GROUP_ITEM_REMOVE) {
-      semGroupItems.delete(key)
-    } else {
-      semGroupItems.set(key, {
-        groupId, entity, property,
-        order: payload.getUint16(18, true),
-        title: textAt(payload, 20, 32),
-      })
-    }
+  if (frame.type === MSG.EVENT) {
+    const ev = decodeValue(payload, 16, 20)
+    pushEvent({ kind: 'event', entity: payload.getBigUint64(8, true), eventId: payload.getInt32(0, true), valueKind: ev.kind, value: ev.value })
     emit()
     return
   }
-  if (frame.type === MSG3.EVENT) {
-    const ev = decodeValue(payload, 9, 10)
-    pushEvent({ kind: 'event', entity: payload.getBigUint64(0, true), eventId: payload.getUint8(8), valueKind: ev.kind, value: ev.value })
-    emit()
-    return
-  }
-  if (frame.type === MSG3.AUTOMATION || frame.type === MSG3.AUTOMATION_REMOVE) {
+  if (frame.type === ENTITY.AUTOMATION) {
     const id = payload.getBigUint64(0, true)
-    const key = id.toString()
-    if (frame.type === MSG3.AUTOMATION_REMOVE) {
-      semAutomations.delete(key)
-    } else {
-      semAutomations.set(key, { id, rule: decodeRule(payload, 8) })
-    }
+    semAutomations.set(id.toString(), { id, rule: decodeRule(payload, 8) })
     emit()
     return
   }
-  if (frame.type === MSG3.ENTITY || frame.type === MSG3.ENTITY_REMOVE) {
+  if (frame.type === ENTITY.ENTITY) {
     const id = payload.getBigUint64(0, true)
-    const key = id.toString()
-    if (frame.type === MSG3.ENTITY_REMOVE) {
-      semEntities.delete(key)
-    } else {
-      semEntities.set(key, { id, deviceId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
-    }
+    semEntities.set(id.toString(), { id, deviceId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
     emit()
     return
   }
-  if (frame.type === MSG3.DEVICE || frame.type === MSG3.DEVICE_REMOVE) {
+  if (frame.type === ENTITY.LOGICAL_DEVICE) {
     const id = payload.getBigUint64(0, true)
-    const key = id.toString()
-    if (frame.type === MSG3.DEVICE_REMOVE) {
-      semDevices.delete(key)
-    } else {
-      semDevices.set(key, { id, parentId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
-    }
+    semDevices.set(id.toString(), { id, parentId: payload.getBigUint64(8, true), name: textAt(payload, 52, 32) })
     emit()
     return
   }
-  if (frame.type === MSG3.PROPERTY_STATE || frame.type === MSG3.PROPERTY_STATE_REMOVE) {
+  if (frame.type === ENTITY.PROPERTY_STATE) {
     const entity = payload.getBigUint64(0, true)
-    const property = payload.getUint16(8, true)
+    const property = payload.getInt32(8, true)
     const key = `${entity}:${property}`
     const prev = propStates.get(key)
-    if (frame.type === MSG3.PROPERTY_STATE_REMOVE) {
-      propStates.delete(key)
-      if (prev) pushEvent({ kind: 'state', entity, property, removed: true })
-    } else {
-      const { kind, value } = decodeValue(payload, 10, 11)
-      propStates.set(key, { entity, property, kind, value })
-      // Журнал: только реальные изменения, system исключён (минутные тики забили бы лог).
-      if (entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
-        pushEvent({ kind: 'state', entity, property, valueKind: kind, value })
-      }
+    const { kind, value } = decodeValue(payload, 16, 20)
+    propStates.set(key, { entity, property, kind, value })
+    // Журнал: только реальные изменения, system исключён (минутные тики забили бы лог).
+    if (entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
+      pushEvent({ kind: 'state', entity, property, valueKind: kind, value })
     }
     emit()
     return
   }
-  if (frame.type === MSG3.CAPABILITIES || frame.type === MSG3.CAPABILITIES_REMOVE) {
+  if (frame.type === ENTITY.CAPABILITIES) {
     const key = payload.getBigUint64(0, true).toString()
-    if (frame.type === MSG3.CAPABILITIES_REMOVE) {
-      propCapabilities.delete(key)
-      propEvents.delete(key)
-    } else {
-      const count = payload.getUint8(8)
-      let o = 9
-      const caps = []
-      for (let i = 0; i < count; i++) {
-        const property = payload.getUint16(o, true); o += 2
-        const ac = payload.getUint8(o); o += 1
-        const actions = []
-        for (let j = 0; j < ac; j++) actions.push(payload.getUint8(o++))
-        caps.push({ property, actions })
-      }
-      const ec = payload.getUint8(o); o += 1
-      const evs = []
-      for (let i = 0; i < ec; i++) evs.push(payload.getUint8(o++))
-      propCapabilities.set(key, caps)
-      propEvents.set(key, evs)
+    const count = payload.getUint8(8)
+    const caps = []
+    for (let i = 0; i < count; i++) {
+      const property = payload.getInt32(12 + i * 24, true)
+      const ac = payload.getUint8(16 + i * 24)
+      const actions = []
+      for (let j = 0; j < ac; j++) actions.push(payload.getInt32(20 + i * 24 + j * 4, true))
+      caps.push({ property, actions })
     }
+    const ec = payload.getUint8(204)
+    const evs = []
+    for (let i = 0; i < ec; i++) evs.push(payload.getInt32(208 + i * 4, true))
+    propCapabilities.set(key, caps)
+    propEvents.set(key, evs)
     emit()
     return
   }
-  if (frame.type === MSG3.LOCATION || frame.type === MSG3.LOCATION_REMOVE) {
+  if (frame.type === ENTITY.GROUP_ITEM) {
+    const groupId = payload.getBigUint64(0, true)
+    const entity = payload.getBigUint64(8, true)
+    const property = payload.getInt32(16, true)
+    semGroupItems.set(`${groupId}:${entity}:${property}`, {
+      groupId, entity, property,
+      order: payload.getUint16(24, true),
+      title: textAt(payload, 28, 32),
+    })
+    emit()
+    return
+  }
+  if (frame.type === ENTITY.LOCATION) {
     const id = payload.getBigUint64(0, true)
-    const key = `loc:${id}`
-    if (frame.type === MSG3.LOCATION_REMOVE) locations.delete(key)
-    else {
-      const record = decodeLocation(payload, 8)
-      locations.set(key, { key: { id }, record })
-      pushEvent({ kind: 'location', id, name: record.name })
-    }
+    const record = decodeLocation(payload, 8)
+    locations.set(`loc:${id}`, { key: { id }, record })
+    pushEvent({ kind: 'location', id, name: record.name })
     emit(); return
   }
-  if (frame.type === MSG3.WEATHER || frame.type === MSG3.WEATHER_REMOVE) {
+  if (frame.type === ENTITY.WEATHER) {
     const id = payload.getBigUint64(0, true)
-    const key = `weather:${id}`
-    if (frame.type === MSG3.WEATHER_REMOVE) weatherMap.delete(key)
-    else {
-      weatherMap.set(key, { key: { id }, record: decodeWeather(payload, 8) })
-      pushEvent({ kind: 'weather', id })
-    }
+    weatherMap.set(`weather:${id}`, { key: { id }, record: decodeWeather(payload, 8) })
+    pushEvent({ kind: 'weather', id })
     emit(); return
   }
-  if (frame.type === MSG3.WIFI_STATUS || frame.type === MSG3.WIFI_STATUS_REMOVE) {
+  if (frame.type === ENTITY.WIFI_STATUS) {
     const id = payload.getBigUint64(0, true)
-    const key = `wifi:${id}`
-    if (frame.type === MSG3.WIFI_STATUS_REMOVE) wifiStatusMap.delete(key)
-    else {
-      wifiStatusMap.set(key, { key: { id }, record: decodeWifiStatus(payload, 8) })
-      pushEvent({ kind: 'wifi', id })
-    }
+    wifiStatusMap.set(`wifi:${id}`, { key: { id }, record: decodeWifiStatus(payload, 8) })
+    pushEvent({ kind: 'wifi', id })
     emit(); return
   }
-  if (frame.type === MSG3.SETTINGS || frame.type === MSG3.SETTINGS_REMOVE) {
+  if (frame.type === ENTITY.SETTINGS) {
     const id = payload.getUint8(0)
-    const key = `set:${id}`
-    if (frame.type === MSG3.SETTINGS_REMOVE) settingsMap.delete(key)
-    else {
-      settingsMap.set(key, { key: { id }, record: decodeSettings(payload, 1) })
-      pushEvent({ kind: 'settings', id })
-    }
+    settingsMap.set(`set:${id}`, { key: { id }, record: decodeSettings(payload, 1) })
+    pushEvent({ kind: 'settings', id })
     emit(); return
   }
-  if (frame.type === MSG3.GROUP || frame.type === MSG3.GROUP_REMOVE) {
+  if (frame.type === ENTITY.GROUP) {
     const id = payload.getBigUint64(0, true)
-    const key = `grp:${id}`
-    if (frame.type === MSG3.GROUP_REMOVE) groups.delete(key)
-    else {
-      const record = decodeGroup(payload, 8)
-      groups.set(key, { key: { id }, record })
-      pushEvent({ kind: 'group', id, name: record.title })
-    }
+    const record = decodeGroup(payload, 8)
+    groups.set(`grp:${id}`, { key: { id }, record })
+    pushEvent({ kind: 'group', id, name: record.title })
     emit(); return
   }
 }

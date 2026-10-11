@@ -1,14 +1,36 @@
-// Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
-// Кадры протокола v2 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
+// Кадры протокола v3 (docs/services/WEB_PROTOCOL.md). Little-endian, заголовок 8 байт.
+//
+// Web — тупой транспорт canonical-модели: кадры несут canonical structs verbatim
+// (layout = ha_model, LE, fixed-width, reserved=0), а интерпретация живёт в браузере.
+//   UPSERT: [type=ha_entity_t][key][record]
+//   REMOVE: [type][key]
+//   EVENT:  [WEB_MSG_EVENT][ha_event_t]
+//   COMMAND:[WEB_MSG_COMMAND][cmd][args]   (args — canonical struct verbatim)
 import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 
 export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
   ACK: 0x03, // browser → device: подтверждение кадра с данным header.seq (пустой payload)
-  GROUP_ITEM: 0x19,
-  GROUP_ITEM_REMOVE: 0x1A,
+  EVENT: 0x10, // device → browser: payload = ha_event_t verbatim
   COMMAND: 0x20,
+}
+
+// Тип сущности = числовое значение ha_entity_t (стабильный canonical ABI, не переиспользуется).
+export const ENTITY = {
+  AUTOMATION: 4,
+  LOCATION: 6,
+  GROUP: 7,
+  GROUP_ITEM: 8,
+  WEATHER: 9,
+  WIFI_SCAN: 10,
+  WIFI_KNOWN: 11,
+  WIFI_STATUS: 12,
+  SETTINGS: 13,
+  ENTITY: 14,
+  PROPERTY_STATE: 15,
+  CAPABILITIES: 16,
+  LOGICAL_DEVICE: 17,
 }
 
 export const CMD = {
@@ -27,35 +49,8 @@ export const CMD = {
   LOGICAL_DEVICE_REMOVE: 21,
 }
 
-// v3 canonical (Шаг A, A6.0): identity = entity_id, без uid/endpoint/cluster/attr.
-// Кадр тот же, что у v2; v3 отличается набором типов. Живут рядом до A6.x.
-export const MSG3 = {
-  ENTITY: 0x30,
-  ENTITY_REMOVE: 0x31,
-  PROPERTY_STATE: 0x32,
-  PROPERTY_STATE_REMOVE: 0x33,
-  CAPABILITIES: 0x34,
-  CAPABILITIES_REMOVE: 0x35,
-  AUTOMATION: 0x36,
-  AUTOMATION_REMOVE: 0x37,
-  EVENT: 0x38,
-  DEVICE: 0x39,
-  DEVICE_REMOVE: 0x3A,
-  // Generic-сущности Domain (entity-native): device_id/group_id + record.
-  LOCATION: 0x3B,
-  LOCATION_REMOVE: 0x3C,
-  WEATHER: 0x3D,
-  WEATHER_REMOVE: 0x3E,
-  WIFI_STATUS: 0x3F,
-  WIFI_STATUS_REMOVE: 0x40,
-  SETTINGS: 0x41,
-  SETTINGS_REMOVE: 0x42,
-  GROUP: 0x43,
-  GROUP_REMOVE: 0x44,
-}
-
 export const HDR = 8
-export const VER = 2
+export const VER = 3
 
 export function decodeFrame(buf) {
   const dv = new DataView(buf)
@@ -91,37 +86,57 @@ export function ack(seq) {
   return encodeFrame(MSG.ACK, new Uint8Array(0), seq)
 }
 
-// Entity-native правило → wire делает фронтенд (зеркало web.c:web_rule_encode).
-const bU16 = (v) => [v & 0xff, (v >> 8) & 0xff]
-const bU32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff]
-const bU64 = (v) => { const o = []; let x = BigInt(v); for (let i = 0; i < 8; i++) { o.push(Number(x & 0xffn)); x >>= 8n } return o }
-function bF32(v) {
-  const dv = new DataView(new ArrayBuffer(4)); dv.setFloat32(0, Number(v) || 0, true)
-  return [dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)]
+const enc = new TextEncoder()
+function putText(out, off, text, max) {
+  out.set(enc.encode(text || '').subarray(0, max - 1), off)
 }
-// Entity-native правило (Шаг A, A6.2): identity = entity_id, без uid/ep/cluster/attr.
-export const ENTITY_SOURCE = 0xFFFFFFFFFFFFFFFFn // HA_ENTITY_ID_SOURCE
 
-function encodeRule(r) {
-  const b = []
-  const t = r.trigger
-  b.push(r.enabled ? 1 : 0, t.kind)
-  if (t.kind === 0) b.push(...bU64(t.entity ?? ENTITY_SOURCE), t.eventId & 0xff)
-  else if (t.kind === 1) b.push(...bU16(t.minutesOfDay || 0), (t.weekdayMask ?? 0) & 0xff)
-  else b.push(...bU64(t.entity ?? ENTITY_SOURCE), ...bU16(t.property || 0), t.op || 1, t.edge || 0, ...bF32(t.value || 0), ...bF32(t.value2 || 0))
-  const conds = (r.conditions || []).slice(0, 4)
-  b.push(conds.length)
-  for (const c of conds) b.push(...bU64(c.entity ?? ENTITY_SOURCE), ...bU16(c.property || 0), c.op || 1, ...bF32(c.value || 0), ...bF32(c.value2 || 0))
-  const a = r.action
-  b.push(...bU64(a.entity ?? ENTITY_SOURCE), ...bU16(a.property || 0), a.action || 0)
-  const vk = a.valueKind ?? (a.value == null ? COMMAND_VALUE.NONE : a.x != null ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR)
-  b.push(vk)
-  if (vk === COMMAND_VALUE.SCALAR) b.push(VALUE_KIND.FLOAT, ...bF32(a.value || 0))
-  else if (vk === COMMAND_VALUE.XY) b.push(...bF32(a.x || 0), ...bF32(a.y || 0))
-  return b
+// HA_ENTITY_ID_SOURCE: «то же, что источник триггера».
+export const ENTITY_SOURCE = 0xFFFFFFFFFFFFFFFFn
+
+// --- canonical structs verbatim (layout = ha_model) --------------------------
+
+// ha_property_command_t (28): entity u64@0, property i32@8, action u8@12, reserved[3],
+// ha_command_value_t@16 {kind i32, scalar{kind i32@+4, value@+8} | xy{x@+4, y@+8}}.
+export function propertyCommand({ entity, property, action, value }) {
+  const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
+  const out = new Uint8Array(28)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(entity), true)
+  dv.setInt32(8, Number(property) || 0, true)
+  dv.setUint8(12, Number(action) || 0)
+  dv.setInt32(16, kind, true)
+  if (kind === COMMAND_VALUE.SCALAR) {
+    dv.setInt32(20, VALUE_KIND.FLOAT, true)
+    dv.setFloat32(24, Number(value) || 0, true)
+  } else if (kind === COMMAND_VALUE.XY) {
+    dv.setFloat32(20, Number(value.xy.x) || 0, true)
+    dv.setFloat32(24, Number(value.xy.y) || 0, true)
+  }
+  return encodeCommand(CMD.PROPERTY_COMMAND, out)
 }
-export function automationPut(id, rule) {
-  return encodeCommand(CMD.AUTOMATION_PUT, new Uint8Array([...bU64(id), ...encodeRule(rule)]))
+
+// ha_entity_rename_t (40): entity u64@0, name[32]@8.
+export function entityRename(entityId, name) {
+  const out = new Uint8Array(40)
+  new DataView(out.buffer).setBigUint64(0, BigInt(entityId), true)
+  putText(out, 8, name, 32)
+  return encodeCommand(CMD.ENTITY_RENAME, out)
+}
+
+// DEVICE_RENAME: ha_device_id_t + char name[32].
+export function deviceRename(deviceId, name) {
+  const out = new Uint8Array(40)
+  new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
+  putText(out, 8, name, 32)
+  return encodeCommand(CMD.DEVICE_RENAME, out)
+}
+
+// LOGICAL_DEVICE_REMOVE: ha_device_id_t.
+export function deviceRemove(deviceId) {
+  const out = new Uint8Array(8)
+  new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
+  return encodeCommand(CMD.LOGICAL_DEVICE_REMOVE, out)
 }
 
 export function snapshot() {
@@ -133,58 +148,47 @@ export function startDiscovery(seconds = 180) {
   return encodeCommand(CMD.DISCOVERY, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
 }
 
-// AUTOMATION_REMOVE args = u64 id.
-export function automationRemove(id) {
-  const args = new Uint8Array(8)
-  new DataView(args.buffer).setBigUint64(0, BigInt(id), true)
-  return encodeCommand(CMD.AUTOMATION_REMOVE, args)
-}
-
-// DEVICE_REMOVE (v2, raw uid) больше не используется обычным UI: удаление — LOGICAL_DEVICE_REMOVE.
-
-const enc = new TextEncoder()
-function putText(out, off, text, max) {
-  out.set(enc.encode(text || '').subarray(0, max - 1), off)
-}
-
-// GROUP_PUT args = u64 id | char title[32].
+// GROUP_PUT: ha_group_key_t + ha_group_record_t (8+32).
 export function groupPut(id, title) {
-  const out = new Uint8Array(8 + 32)
+  const out = new Uint8Array(40)
   new DataView(out.buffer).setBigUint64(0, BigInt(id), true)
   putText(out, 8, title, 32)
   return encodeCommand(CMD.GROUP_PUT, out)
 }
 
-// GROUP_REMOVE args = u64 id.
+// GROUP_REMOVE: ha_group_key_t (8).
 export function groupRemove(id) {
   const out = new Uint8Array(8)
   new DataView(out.buffer).setBigUint64(0, BigInt(id), true)
   return encodeCommand(CMD.GROUP_REMOVE, out)
 }
 
-// Canonical group item (A4): identity = (group_id, entity_id, property).
-// PUT (52): group_id,u64 @0; entity,u64 @8; property,u16 @16; order,u16 @18; title[32] @20.
+// GROUP_ITEM_PUT (60) = ha_group_item_key_t (24) + ha_group_item_record_t (36):
+//   group_id u64@0, state.entity u64@8, state.property i32@16, reserved u32@20;
+//   order u16@24, reserved[2]@26, title[32]@28.
 export function groupItemPut(groupId, item) {
-  const out = new Uint8Array(52)
+  const out = new Uint8Array(60)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
   dv.setBigUint64(8, BigInt(item.entity), true)
-  dv.setUint16(16, item.property, true)
-  dv.setUint16(18, item.order || 0, true)
-  putText(out, 20, item.title || '', 32)
+  dv.setInt32(16, Number(item.property) || 0, true)
+  dv.setUint16(24, Number(item.order) || 0, true)
+  putText(out, 28, item.title, 32)
   return encodeCommand(CMD.GROUP_ITEM_PUT, out)
 }
-// REMOVE (18): group_id,u64 @0; entity,u64 @8; property,u16 @16.
+
+// GROUP_ITEM_REMOVE: ha_group_item_key_t (24).
 export function groupItemRemove(groupId, entity, property) {
-  const out = new Uint8Array(18)
+  const out = new Uint8Array(24)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
   dv.setBigUint64(8, BigInt(entity), true)
-  dv.setUint16(16, property, true)
+  dv.setInt32(16, Number(property) || 0, true)
   return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
 }
 
-// LOCATION_PUT args = u64 uid | ha_location_record_t (60).
+// ha_location_record_t (60): latitude f32@0, longitude f32@4, tz_offset_min i16@8,
+// flags u8@10, reserved u8@11, name[48]@12.
 export function encodeLocationRecord(r) {
   const out = new Uint8Array(60)
   const dv = new DataView(out.buffer)
@@ -199,56 +203,89 @@ export function encodeLocationRecord(r) {
   return out
 }
 
+// LOCATION_PUT: ha_device_id_t + ha_location_record_t (8+60).
 export function locationPut(uid, r) {
-  const out = new Uint8Array(8 + 60)
+  const out = new Uint8Array(68)
   new DataView(out.buffer).setBigUint64(0, BigInt(uid), true)
   out.set(encodeLocationRecord(r), 8)
   return encodeCommand(CMD.LOCATION_PUT, out)
 }
 
-// DEVICE_RENAME args = u64 device_id | char name[32] (Шаг B, B6). Имя принадлежит Logical Device.
-export function deviceRename(deviceId, name) {
-  const out = new Uint8Array(8 + 32)
-  new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
-  out.set(new TextEncoder().encode(name || '').subarray(0, 31), 8)
-  return encodeCommand(CMD.DEVICE_RENAME, out)
-}
-
-// LOGICAL_DEVICE_REMOVE args = u64 device_id (Шаг B, B7). Adapter remove + cascade.
-export function deviceRemove(deviceId) {
+// AUTOMATION_REMOVE: ha_automation_key_t (8).
+export function automationRemove(id) {
   const out = new Uint8Array(8)
-  new DataView(out.buffer).setBigUint64(0, BigInt(deviceId), true)
-  return encodeCommand(CMD.LOGICAL_DEVICE_REMOVE, out)
+  new DataView(out.buffer).setBigUint64(0, BigInt(id), true)
+  return encodeCommand(CMD.AUTOMATION_REMOVE, out)
 }
 
-// ENTITY_RENAME args = u64 entity_id | char name[32] (Шаг A, A6.1c). Имя принадлежит Entity.
-export function entityRename(entityId, name) {
-  const out = new Uint8Array(8 + 32)
-  new DataView(out.buffer).setBigUint64(0, BigInt(entityId), true)
-  const bytes = new TextEncoder().encode(name || '').subarray(0, 31)
-  out.set(bytes, 8)
-  return encodeCommand(CMD.ENTITY_RENAME, out)
-}
+// ha_rule_t (192) — плоский POD (offsetof-инварианты ha_rule.h):
+//   action_ref(16)@0 {entity u64, property i32@8, reserved u32@12}
+//   trigger(32)@16 {entity u64, event_id i32@8, property i32@12, value f32@16, value2 f32@20,
+//                   minutes_of_day u16@24, kind u8@26, op u8@27, edge u8@28, weekday u8@29, reserved[2]}
+//   conditions[4](32 each)@48 {ref(16), cmp{op u8@16, reserved[3], value f32@20, value2 f32@24}, reserved u32@28}
+//   action_value(12)@176 {kind i32, scalar{kind i32@+4, value@+8} | xy{x@+4, y@+8}}
+//   enabled u8@188, conditions_count u8@189, action u8@190, reserved0 u8@191
+const RULE_OFF_ACTION_REF = 0
+const RULE_OFF_TRIGGER = 16
+const RULE_OFF_CONDITIONS = 48
+const RULE_OFF_ACTION_VALUE = 176
+const RULE_OFF_ENABLED = 188
+const RULE_OFF_CONDITIONS_COUNT = 189
+const RULE_OFF_ACTION = 190
+const RULE_SIZE = 192
+const CONDITION_SIZE = 32
 
-// PROPERTY_COMMAND (Шаг A, A6.1c): u64 entity @0, u16 property @8, u8 action @10, u8 kind @11;
-// SCALAR @12 u8 scalar_kind + f32 @13; XY @12 f32 x + f32 y. Без uid/ep/cluster/attr.
-export function propertyCommand({ entity, property, action, value }) {
-  const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
-  const size = 12 + (kind === COMMAND_VALUE.SCALAR ? 5 : kind === COMMAND_VALUE.XY ? 8 : 0)
-  const out = new Uint8Array(size)
-  const dv = new DataView(out.buffer)
-  dv.setBigUint64(0, BigInt(entity), true)
-  dv.setUint16(8, property, true)
-  dv.setUint8(10, action)
-  dv.setUint8(11, kind)
-  if (kind === COMMAND_VALUE.SCALAR) {
-    dv.setUint8(12, VALUE_KIND.FLOAT)
-    dv.setFloat32(13, Number(value), true)
-  } else if (kind === COMMAND_VALUE.XY) {
-    dv.setFloat32(12, Number(value.xy.x), true)
-    dv.setFloat32(16, Number(value.xy.y), true)
+function encodeRule(dv, base, rule) {
+  const t = rule.trigger || {}
+  const kind = Number(t.kind) || 0
+  // action_ref
+  const a = rule.action || {}
+  dv.setBigUint64(base + RULE_OFF_ACTION_REF + 0, BigInt(a.entity ?? ENTITY_SOURCE), true)
+  dv.setInt32(base + RULE_OFF_ACTION_REF + 8, Number(a.property) || 0, true)
+  // trigger
+  const o = base + RULE_OFF_TRIGGER
+  dv.setBigUint64(o, kind === 0 || kind === 2 ? BigInt(t.entity ?? ENTITY_SOURCE) : 0n, true)
+  dv.setInt32(o + 8, kind === 0 ? Number(t.eventId) || 0 : 0, true)
+  dv.setInt32(o + 12, kind === 2 ? Number(t.property) || 0 : 0, true)
+  dv.setFloat32(o + 16, kind === 2 ? Number(t.value) || 0 : 0, true)
+  dv.setFloat32(o + 20, kind === 2 ? Number(t.value2) || 0 : 0, true)
+  dv.setUint16(o + 24, kind === 1 ? Number(t.minutesOfDay) || 0 : 0, true)
+  dv.setUint8(o + 26, kind)
+  dv.setUint8(o + 27, kind === 2 ? Number(t.op) || 1 : 0)
+  dv.setUint8(o + 28, kind === 2 ? Number(t.edge) || 0 : 0)
+  dv.setUint8(o + 29, kind === 1 ? Number(t.weekdayMask) || 0 : 0)
+  // conditions
+  const conds = (rule.conditions || []).slice(0, 4)
+  for (let i = 0; i < conds.length; i++) {
+    const c = conds[i]
+    const p = base + RULE_OFF_CONDITIONS + i * CONDITION_SIZE
+    dv.setBigUint64(p, BigInt(c.entity ?? ENTITY_SOURCE), true)
+    dv.setInt32(p + 8, Number(c.property) || 0, true)
+    dv.setUint8(p + 16, Number(c.op) || 1)
+    dv.setFloat32(p + 20, Number(c.value) || 0, true)
+    dv.setFloat32(p + 24, Number(c.value2) || 0, true)
   }
-  return encodeCommand(CMD.PROPERTY_COMMAND, out)
+  // action_value
+  const v = base + RULE_OFF_ACTION_VALUE
+  const vk = a.valueKind ?? (a.value == null ? COMMAND_VALUE.NONE : a.x != null ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR)
+  dv.setInt32(v, vk, true)
+  if (vk === COMMAND_VALUE.SCALAR) {
+    dv.setInt32(v + 4, VALUE_KIND.FLOAT, true)
+    dv.setFloat32(v + 8, Number(a.value) || 0, true)
+  } else if (vk === COMMAND_VALUE.XY) {
+    dv.setFloat32(v + 4, Number(a.x) || 0, true)
+    dv.setFloat32(v + 8, Number(a.y) || 0, true)
+  }
+  dv.setUint8(base + RULE_OFF_ENABLED, rule.enabled ? 1 : 0)
+  dv.setUint8(base + RULE_OFF_CONDITIONS_COUNT, conds.length)
+  dv.setUint8(base + RULE_OFF_ACTION, Number(a.action) || 0)
 }
 
-// DEVICE_RENAME (v2) не используется обычным UI: rename идёт по entity_id (entityRename).
+// AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+192).
+export function automationPut(id, rule) {
+  const out = new Uint8Array(8 + RULE_SIZE)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(id), true)
+  encodeRule(dv, 8, rule)
+  return encodeCommand(CMD.AUTOMATION_PUT, out)
+}
