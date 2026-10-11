@@ -21,7 +21,7 @@ static domain_event_t event_of(uint32_t entity, uint32_t value)
     event.ts = 1000 + value;
     event.kind = DOMAIN_FACT_ENTITY_UPSERTED;
     event.op = DOMAIN_OP_ENTITY_PUT;
-    event.source = DOMAIN_SOURCE_ZIGBEE;
+    event.source = DOMAIN_SOURCE_UI;
     event.key_size = 4;
     event.entity = entity;
     memcpy(event.key, &value, sizeof(value));
@@ -67,7 +67,7 @@ static void test_append_assigns_identity(void)
     CHECK(out.event_id == 1);
     CHECK(out.ts == 1042);
     CHECK(out.kind == DOMAIN_FACT_ENTITY_UPSERTED);
-    CHECK(out.source == DOMAIN_SOURCE_ZIGBEE);
+    CHECK(out.source == DOMAIN_SOURCE_UI);
     CHECK(out.entity == 1);
     CHECK(out.key_size == 4);
     CHECK(out.value.type == DOMAIN_VALUE_U32);

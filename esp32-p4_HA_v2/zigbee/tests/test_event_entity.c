@@ -78,7 +78,7 @@ static void test_system_event_has_own_entity(void)
 {
     const ha_entity_id_t sys = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
     uint8_t zig_seed[9] = {0};
-    const ha_entity_id_t zig = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, zig_seed, sizeof(zig_seed));
+    const ha_entity_id_t zig = ha_entity_id_derive(ZIGBEE_ENTITY_ISSUER, zig_seed, sizeof(zig_seed));
     CHECK(sys != HA_ENTITY_ID_NONE);
     CHECK(sys != HA_ENTITY_ID_SOURCE);
     CHECK(sys != zig);

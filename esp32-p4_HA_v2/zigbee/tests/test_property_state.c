@@ -69,7 +69,7 @@ static void feed(ctx_t *c, ha_device_uid_t uid, uint8_t ep, uint16_t cluster, ui
     ha_state_record_t record = {0};
     if (zigbee_property_state_from_report(&report, entity_id, &key, &record)) {
         domain_fact_meta_t meta = {0};
-        meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+        meta.source = (uint8_t)ZIGBEE_DOMAIN_SOURCE;
         bool put_changed = false;
         CHECK(sys_ok(domain_entity_put(&c->d, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &key,
                                        &record, &meta, &put_changed)));

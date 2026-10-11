@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_logical_device.h"
+#include "zigbee/zigbee_entity_binding.h" /* ZIGBEE_DOMAIN_SOURCE (adapter-owned id) */
 
 static const char *TAG = "journal";
 
@@ -54,7 +55,7 @@ static const char *fact_op_name(uint8_t op)
 static const char *fact_source_name(uint8_t source)
 {
     switch (source) {
-    case DOMAIN_SOURCE_ZIGBEE: return "ZIGBEE";
+    case ZIGBEE_DOMAIN_SOURCE: return "ZIGBEE";
     case DOMAIN_SOURCE_UI: return "UI";
     case DOMAIN_SOURCE_AUTOMATION: return "AUTOMATION";
     case DOMAIN_SOURCE_SYSTEM: return "SYSTEM";

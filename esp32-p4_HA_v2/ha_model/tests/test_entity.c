@@ -1,6 +1,8 @@
 #include "ha_model/ha_entity.h"
 
 #include <stddef.h>
+
+#define TEST_ISSUER ((ha_entity_issuer_t)1)
 #include <stdio.h>
 
 /*
@@ -12,7 +14,7 @@ _Static_assert(sizeof(ha_entity_id_t) == 8, "entity id ABI");
 _Static_assert(sizeof(ha_entity_key_t) == 8, "entity key ABI");
 _Static_assert(offsetof(ha_entity_key_t, id) == 0, "entity key layout");
 _Static_assert(HA_ENTITY_ID_NONE == 0, "entity none sentinel");
-_Static_assert(HA_ENTITY_ISSUER_ZIGBEE == 1, "issuer ABI");
+_Static_assert(TEST_ISSUER == 1, "issuer ABI");
 
 static int g_failures = 0;
 
@@ -53,22 +55,22 @@ static void test_derive(void)
     zigbee_seed(UID, 1, s1);
     zigbee_seed(UID, 2, s2);
 
-    const ha_entity_id_t a = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, s1, 9);
-    const ha_entity_id_t b = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, s1, 9);
+    const ha_entity_id_t a = ha_entity_id_derive(TEST_ISSUER, s1, 9);
+    const ha_entity_id_t b = ha_entity_id_derive(TEST_ISSUER, s1, 9);
 
     /* детерминизм + не NONE */
     CHECK(a == b);
     CHECK(a != HA_ENTITY_ID_NONE);
 
     /* другой endpoint → другой id */
-    CHECK(a != ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, s2, 9));
+    CHECK(a != ha_entity_id_derive(TEST_ISSUER, s2, 9));
     /* другой issuer → другой id */
     CHECK(a != ha_entity_id_derive(HA_ENTITY_ISSUER_SYSTEM, s1, 9));
 
     /* too-long seed → NONE */
     uint8_t big[HA_ENTITY_ID_DERIVE_SEED_MAX + 1] = {0};
-    CHECK(ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, big, sizeof(big)) == HA_ENTITY_ID_NONE);
-    CHECK(ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, NULL, 1) == HA_ENTITY_ID_NONE);
+    CHECK(ha_entity_id_derive(TEST_ISSUER, big, sizeof(big)) == HA_ENTITY_ID_NONE);
+    CHECK(ha_entity_id_derive(TEST_ISSUER, NULL, 1) == HA_ENTITY_ID_NONE);
 
     /* golden: ABI-lock композиции контракта (key + LE32(issuer)||LE32(len)||seed) */
     CHECK(a == 0xdf803cbaf588876dull);
@@ -78,7 +80,7 @@ static void test_derive(void)
 static void test_singleton(void)
 {
     const ha_entity_id_t sys = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
-    const ha_entity_id_t weather = ha_entity_singleton(HA_ENTITY_ISSUER_WEATHER);
+    const ha_entity_id_t weather = ha_entity_singleton(((ha_entity_issuer_t)3));
 
     CHECK(sys != HA_ENTITY_ID_NONE);
     CHECK(sys != HA_ENTITY_ID_SOURCE);

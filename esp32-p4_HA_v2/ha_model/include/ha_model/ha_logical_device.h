@@ -28,12 +28,12 @@ typedef uint64_t ha_device_id_t;
 
 #define HA_DEVICE_ID_NONE ((ha_device_id_t)0u)
 
-/* Кто предоставил внешний объект (adapter namespace). Стабильные значения, не переиспользуются. */
-typedef enum {
-    HA_SOURCE_NONE = 0,
-    HA_SOURCE_ZIGBEE = 1,
-    HA_SOURCE_GPIO = 2,
-} ha_source_id_t;
+/*
+ * Adapter namespace id (opaque): 0 — invalid/none. Конкретные значения принадлежат
+ * адаптерам (стабильные, не переиспользуются); generic core их не именует.
+ */
+typedef uint32_t ha_source_id_t;
+#define HA_SOURCE_NONE ((ha_source_id_t)0)
 
 #define HA_NATIVE_ID_MAX 32
 #define HA_LOGICAL_DEVICE_NAME_MAX 32

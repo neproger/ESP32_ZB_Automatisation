@@ -3,6 +3,8 @@
 #include "ha_model/ha_entities.h"
 
 #include <stddef.h>
+
+#define TEST_SOURCE ((ha_source_id_t)1)
 #include <stdio.h>
 #include <string.h>
 
@@ -37,12 +39,12 @@ static void test_record_holds_fields(void)
 {
     ha_logical_device_record_t rec = {0};
     rec.parent_device_id = HA_DEVICE_ID_NONE;
-    rec.source = HA_SOURCE_ZIGBEE;
+    rec.source = TEST_SOURCE;
     memcpy(rec.native_id, "00124b000a1b2c3d", 16);
     memcpy(rec.name, "wall switch", 11);
 
     CHECK(rec.parent_device_id == HA_DEVICE_ID_NONE);
-    CHECK(rec.source == HA_SOURCE_ZIGBEE);
+    CHECK(rec.source == TEST_SOURCE);
     CHECK(strcmp(rec.native_id, "00124b000a1b2c3d") == 0);
     CHECK(strcmp(rec.name, "wall switch") == 0);
 }
@@ -68,8 +70,8 @@ static void test_desc_zero_is_all_zero(void)
 
 static void test_derive_deterministic(void)
 {
-    const ha_device_id_t a = ha_device_id_derive(HA_SOURCE_ZIGBEE, "00124b000a1b2c3d");
-    const ha_device_id_t b = ha_device_id_derive(HA_SOURCE_ZIGBEE, "00124b000a1b2c3d");
+    const ha_device_id_t a = ha_device_id_derive(TEST_SOURCE, "00124b000a1b2c3d");
+    const ha_device_id_t b = ha_device_id_derive(TEST_SOURCE, "00124b000a1b2c3d");
     CHECK(a != HA_DEVICE_ID_NONE);
     CHECK(a == b);
     /* golden: ABI-lock композиции (source + native_id) через ha_entity_id_derive */
@@ -78,21 +80,21 @@ static void test_derive_deterministic(void)
 
 static void test_derive_sensitivity(void)
 {
-    const ha_device_id_t zigbee = ha_device_id_derive(HA_SOURCE_ZIGBEE, "00124b000a1b2c3d");
-    CHECK(zigbee != ha_device_id_derive(HA_SOURCE_ZIGBEE, "00124b000a1b2c3e")); /* другой native */
-    CHECK(zigbee != ha_device_id_derive(HA_SOURCE_GPIO, "00124b000a1b2c3d"));   /* другой source */
+    const ha_device_id_t zigbee = ha_device_id_derive(TEST_SOURCE, "00124b000a1b2c3d");
+    CHECK(zigbee != ha_device_id_derive(TEST_SOURCE, "00124b000a1b2c3e")); /* другой native */
+    CHECK(zigbee != ha_device_id_derive(((ha_source_id_t)2), "00124b000a1b2c3d")); /* другой source */
     CHECK(zigbee != HA_DEVICE_ID_NONE);
 }
 
 static void test_derive_invalid(void)
 {
-    CHECK(ha_device_id_derive(HA_SOURCE_ZIGBEE, NULL) == HA_DEVICE_ID_NONE);
-    CHECK(ha_device_id_derive(HA_SOURCE_ZIGBEE, "") == HA_DEVICE_ID_NONE);
+    CHECK(ha_device_id_derive(TEST_SOURCE, NULL) == HA_DEVICE_ID_NONE);
+    CHECK(ha_device_id_derive(TEST_SOURCE, "") == HA_DEVICE_ID_NONE);
     /* длиннее seed-лимита derivation (HA_ENTITY_ID_DERIVE_SEED_MAX = 64) */
     char big[72];
     memset(big, 'x', sizeof(big) - 1);
     big[sizeof(big) - 1] = '\0';
-    CHECK(ha_device_id_derive(HA_SOURCE_ZIGBEE, big) == HA_DEVICE_ID_NONE);
+    CHECK(ha_device_id_derive(TEST_SOURCE, big) == HA_DEVICE_ID_NONE);
 }
 
 int main(void)

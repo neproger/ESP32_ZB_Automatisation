@@ -49,9 +49,12 @@ typedef struct {
 /* Дискриминатор команды: Domain знает только число и callback исполнителя. */
 typedef uint32_t domain_command_t;
 
-/* Кто инициировал факт. Domain смысла источника не знает — это подпись вызывающего. */
+/*
+ * Кто инициировал факт. Domain смысла источника не знает — это подпись вызывающего.
+ * Адрес 1 зарезервирован под adapter-specific источник (напр. Zigbee): generic core
+ * его не именует, значение объявляет сам адаптер.
+ */
 typedef enum {
-    DOMAIN_SOURCE_ZIGBEE = 1,
     DOMAIN_SOURCE_UI = 2,
     DOMAIN_SOURCE_AUTOMATION = 3,
     DOMAIN_SOURCE_SYSTEM = 4,

@@ -691,6 +691,12 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step F (часть 2) — source/issuer vocabulary: generic core перестал именовать
+            адаптеры. domain_source_t теряет DOMAIN_SOURCE_ZIGBEE (адрес 1 зарезервирован
+            под adapter); ha_source_id_t/ha_entity_issuer_t — opaque uint32, остаются только
+            HA_SOURCE_NONE и HA_ENTITY_ISSUER_SYSTEM. Zigbee объявляет свои id
+            (ZIGBEE_SOURCE_ID / ZIGBEE_ENTITY_ISSUER / ZIGBEE_DOMAIN_SOURCE) в
+            zigbee_entity_binding.h. Тесты/журнал переведены на core-ids/локальные.
 2026-10-11  Step F (часть 1) — Boundary Purge: удалён мёртвый legacy-путь удаления
             HA_CMD_DEVICE_REMOVE (+ zigbee_remove_execute; zigbee_request_remove/remover
             остаются). Automation больше не фильтрует по DOMAIN_SOURCE_ZIGBEE: подписка по

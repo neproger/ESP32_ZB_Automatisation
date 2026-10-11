@@ -37,14 +37,12 @@ typedef uint64_t ha_entity_id_t;
 
 /*
  * Владелец identity — namespace/issuer, а не «transport» (id может создавать не только
- * физический транспорт). Значения стабильные, не переиспользуются.
+ * физический транспорт). Значения стабильные, не переиспользуются. Adapter-issuer'ы
+ * (Zigbee/GPIO/…) объявляют свои значения у себя; generic core знает только системный.
  */
-typedef enum {
-    HA_ENTITY_ISSUER_ZIGBEE = 1,
-    HA_ENTITY_ISSUER_SYSTEM = 2,
-    HA_ENTITY_ISSUER_WEATHER = 3,
-    HA_ENTITY_ISSUER_GPIO = 4,
-} ha_entity_issuer_t;
+typedef uint32_t ha_entity_issuer_t;
+
+#define HA_ENTITY_ISSUER_SYSTEM ((ha_entity_issuer_t)2)
 
 /* Максимальный размер seed для derivation (Zigbee seed — 9 байт). */
 #define HA_ENTITY_ID_DERIVE_SEED_MAX 64u

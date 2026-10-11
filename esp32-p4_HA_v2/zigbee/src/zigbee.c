@@ -176,7 +176,7 @@ static void zigbee_publish_entity_event(ha_entity_id_t source_entity, ha_event_i
     };
     const ha_event_t event = {.id = event_id, .source_entity = source_entity, .value = {0}};
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)ZIGBEE_DOMAIN_SOURCE;
     domain_payload_ref_t ref = 0;
     (void)domain_payload_put(s_domain, &target, &meta, &event, sizeof(event), &ref);
 }
@@ -225,7 +225,7 @@ static void zigbee_publish_property_state(const zigbee_report_t *report)
     }
 
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)ZIGBEE_DOMAIN_SOURCE;
     bool changed = false;
     const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
                                               &key, &record, &meta, &changed);
@@ -255,7 +255,7 @@ static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
 
     const ha_entity_key_t key = {.id = entity_id};
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)ZIGBEE_DOMAIN_SOURCE;
     bool changed = false;
     const sys_error_t err = domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES,
                                               &key, &caps, &meta, &changed);
@@ -320,7 +320,7 @@ static void zigbee_task(void *arg)
                      */
                     ha_device_id_t device_id = HA_DEVICE_ID_NONE;
                     ha_device_desc_t desc = {0};
-                    desc.source = HA_SOURCE_ZIGBEE;
+                    desc.source = ZIGBEE_SOURCE_ID;
                     (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
                     ha_device_record_t device = {0};
                     if (zigbee_device_get(result.uid, &device)) {
@@ -332,7 +332,7 @@ static void zigbee_task(void *arg)
                         }
                         memcpy(desc.name, label, n);
                     }
-                    if (sys_failed(device_register(s_domain, (uint8_t)DOMAIN_SOURCE_ZIGBEE, &desc,
+                    if (sys_failed(device_register(s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, &desc,
                                                    &device_id))) {
                         ESP_LOGW(TAG, "device register failed uid=%llx",
                                  (unsigned long long)result.uid);
@@ -350,7 +350,7 @@ static void zigbee_task(void *arg)
                                                         result.endpoint_count, &entity_id))) {
                             if (device_id != HA_DEVICE_ID_NONE) {
                                 const sys_error_t bind = device_bind_entity(
-                                    s_domain, (uint8_t)DOMAIN_SOURCE_ZIGBEE, device_id, entity_id);
+                                    s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, device_id, entity_id);
                                 ESP_LOGI(TAG, "entity->device: uid=%llx ep=%u entity=%llx device=%llx ok=%d",
                                          (unsigned long long)result.uid, (unsigned)endpoint,
                                          (unsigned long long)entity_id,
@@ -457,7 +457,7 @@ sys_error_t zigbee_start(domain_t *domain)
     if (sys_failed(cluster)) {
         return cluster;
     }
-    (void)device_register_remover(HA_SOURCE_ZIGBEE, zigbee_device_remover, NULL);
+    (void)device_register_remover(ZIGBEE_SOURCE_ID, zigbee_device_remover, NULL);
     return domain_register_command(domain, HA_CMD_PERMIT_JOIN, zigbee_permit_execute, NULL);
 }
 

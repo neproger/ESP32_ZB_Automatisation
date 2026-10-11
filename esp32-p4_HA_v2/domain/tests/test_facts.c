@@ -93,7 +93,7 @@ static void test_put_writes_fact_only_on_change(void)
     CHECK(fact_count(&domain) == 0);
 
     record.value = 10;
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 10);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 10);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed)));
     CHECK(changed);
     CHECK(fact_count(&domain) == 1);
@@ -104,7 +104,7 @@ static void test_put_writes_fact_only_on_change(void)
     CHECK(fact_count(&domain) == 1);
 
     record.value = 11;
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 11);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 11);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed)));
     CHECK(changed);
     CHECK(fact_count(&domain) == 2);
@@ -125,14 +125,14 @@ static void test_fact_carries_identity_and_meta(void)
     record.value = 42;
     bool changed = false;
     domain_fact_meta_t meta = {0};
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 42);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 42);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed)));
 
     const domain_event_t fact = last_fact(&domain);
     CHECK(fact.kind == DOMAIN_FACT_ENTITY_UPSERTED);
     CHECK(fact.op == DOMAIN_OP_ENTITY_PUT);
     CHECK(fact.entity == TYPE_A);
-    CHECK(fact.source == DOMAIN_SOURCE_ZIGBEE);
+    CHECK(fact.source == DOMAIN_SOURCE_UI);
     CHECK(fact.value.type == DOMAIN_VALUE_U32);
     CHECK(fact.value.v.u32 == 42);
     CHECK(fact.key_size == sizeof(test_key_t));
@@ -160,7 +160,7 @@ static void test_remove_writes_fact_with_key(void)
     test_record_t record = {0};
     bool changed = false;
     domain_fact_meta_t meta = {0};
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 1);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 1);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed)));
     CHECK(fact_count(&domain) == 1);
 
@@ -201,9 +201,9 @@ static void test_facts_are_ordered_across_types(void)
     bool changed = false;
     domain_fact_meta_t meta = {0};
 
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 1);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 1);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &key, &record, &meta, &changed)));
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 2);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 2);
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_B, &key, &record, &meta, &changed)));
     CHECK(fact_count(&domain) == 2);
 
@@ -239,7 +239,7 @@ static void test_runtime_error_is_recorded(void)
     test_record_t record = {0};
     bool changed = false;
     domain_fact_meta_t meta = {0};
-    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_ZIGBEE, 1);
+    meta_fill(&meta, (uint8_t)DOMAIN_SOURCE_UI, 1);
 
     CHECK(sys_ok(domain_entity_put(&domain, TYPE_A, &first, &record, &meta, &changed)));
     CHECK(fact_count(&domain) == 1);

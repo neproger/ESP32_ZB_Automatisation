@@ -103,7 +103,7 @@ static void put(domain_t *domain, domain_entity_t type, uint32_t id)
     record.value = id;
     bool changed = false;
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
     CHECK(sys_ok(domain_entity_put(domain, type, &key, &record, &meta, &changed)));
 }
 
@@ -166,7 +166,7 @@ static void test_filter_by_kind(void)
     test_record_t overflow_record = {0};
     bool changed = false;
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
     CHECK(sys_is(domain_entity_put(domain, TYPE_A, &overflow_key, &overflow_record, &meta, &changed), SYS_CODE_NO_SPACE));
     CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(errors.count == 1);

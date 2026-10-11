@@ -22,6 +22,15 @@
 extern "C" {
 #endif
 
+/*
+ * Adapter-owned canonical ids: generic core (ha_model/domain) не знает о Zigbee, поэтому
+ * значения source/issuer/domain-source объявляет сам адаптер. Числа стабильны (входят в
+ * derivation identity).
+ */
+#define ZIGBEE_SOURCE_ID ((ha_source_id_t)1)         /* provenance Device/Entity */
+#define ZIGBEE_ENTITY_ISSUER ((ha_entity_issuer_t)1) /* identity issuer */
+#define ZIGBEE_DOMAIN_SOURCE ((domain_source_t)1)    /* Journal source */
+
 /* key = (device_uid, endpoint); record = { entity_id }. */
 typedef struct {
     ha_entity_id_t entity_id;
@@ -46,7 +55,7 @@ bool zb_entity_binding_add(zb_entity_binding_t *list, size_t capacity, size_t *c
 
 /*
  * Resolve-or-create (A0.4): (uid, endpoint) → entity_id. Есть привязка — вернуть её;
- * нет — построить seed, вывести `ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, ...)` и
+ * нет — построить seed, вывести `ha_entity_id_derive(ZIGBEE_ENTITY_ISSUER, ...)` и
  * добавить привязку. Идемпотентно; порядок discovery не влияет. `out_created` — создана ли
  * новая привязка. false — не удалось (нет места); ложная identity НЕ создаётся.
  */

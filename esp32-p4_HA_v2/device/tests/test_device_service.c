@@ -9,6 +9,9 @@
 #include "ha_model/ha_rule.h"
 #include "ha_model/ha_state.h"
 
+/* Adapter-owned source id: в тесте произвольный (generic core его не именует). */
+#define TEST_SOURCE ((ha_source_id_t)1)
+
 /*
  * B3' (docs/STEP_B_PLAN.md): generic Device service над Domain. Нормализованный desc →
  * canonical identity; ownership Entity; удаление Device. Транспорта не знает (source/native_id
@@ -127,18 +130,18 @@ static void test_register_and_idempotent(void)
     ctx_init(&d);
 
     const ha_device_desc_t desc = {
-        .source = HA_SOURCE_ZIGBEE,
+        .source = TEST_SOURCE,
         .native_id = ROOT_NATIVE,
         .parent_native_id = "",
         .name = "Реле",
     };
     ha_device_id_t id = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &desc, &id)));
-    CHECK(id == ha_device_id_derive(HA_SOURCE_ZIGBEE, ROOT_NATIVE));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &desc, &id)));
+    CHECK(id == ha_device_id_derive(TEST_SOURCE, ROOT_NATIVE));
 
     ha_logical_device_record_t rec = {0};
     CHECK(get_device(&d, id, &rec));
-    CHECK(rec.source == HA_SOURCE_ZIGBEE);
+    CHECK(rec.source == TEST_SOURCE);
     CHECK(rec.parent_device_id == HA_DEVICE_ID_NONE);
     CHECK(strcmp(rec.native_id, ROOT_NATIVE) == 0);
     CHECK(strcmp(rec.name, "Реле") == 0);
@@ -147,7 +150,7 @@ static void test_register_and_idempotent(void)
     ha_device_desc_t rename = desc;
     memcpy(rename.name, "Другое", 7); /* включая NUL */
     ha_device_id_t id2 = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &rename, &id2)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &rename, &id2)));
     CHECK(id2 == id);
     memset(&rec, 0, sizeof(rec));
     CHECK(get_device(&d, id, &rec));
@@ -162,19 +165,19 @@ static void test_parent_and_bind(void)
     memset(&d, 0, sizeof(d));
     ctx_init(&d);
 
-    const ha_device_desc_t root = {.source = HA_SOURCE_ZIGBEE,
+    const ha_device_desc_t root = {.source = TEST_SOURCE,
                                    .native_id = ROOT_NATIVE,
                                    .parent_native_id = "",
                                    .name = "Реле"};
     ha_device_id_t root_id = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &root, &root_id)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &root, &root_id)));
 
-    const ha_device_desc_t child = {.source = HA_SOURCE_ZIGBEE,
+    const ha_device_desc_t child = {.source = TEST_SOURCE,
                                     .native_id = CHILD_NATIVE,
                                     .parent_native_id = ROOT_NATIVE,
                                     .name = "Канал 1"};
     ha_device_id_t child_id = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &child, &child_id)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &child, &child_id)));
     CHECK(child_id != root_id);
 
     ha_logical_device_record_t rec = {0};
@@ -187,18 +190,18 @@ static void test_parent_and_bind(void)
     put_entity(&d, e1, "клавиша 1");
 
     ha_device_id_t got = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e1)));
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_UI, root_id, e1)));
     CHECK(get_entity_device(&d, e1, &got) && got == root_id);
-    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e1))); /* idempotent */
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_UI, root_id, e1))); /* idempotent */
 
     /* Reassign уже привязанной Entity к другому Device — отклоняется. */
-    const sys_error_t reassign = device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, child_id, e1);
+    const sys_error_t reassign = device_bind_entity(&d, DOMAIN_SOURCE_UI, child_id, e1);
     CHECK(sys_is(reassign, SYS_CODE_INVALID_STATE));
     CHECK(get_entity_device(&d, e1, &got) && got == root_id);
 
     /* отсутствующая Entity → NOT_FOUND. */
     const sys_error_t missing =
-        device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, root_id, e2);
+        device_bind_entity(&d, DOMAIN_SOURCE_UI, root_id, e2);
     CHECK(sys_is(missing, SYS_CODE_NOT_FOUND));
 
     CHECK(sys_ok(domain_deinit(&d)));
@@ -221,18 +224,18 @@ static void test_remove_cascade(void)
     domain_t d;
     memset(&d, 0, sizeof(d));
     ctx_init(&d);
-    CHECK(sys_ok(device_register_remover(HA_SOURCE_ZIGBEE, test_remover, NULL)));
+    CHECK(sys_ok(device_register_remover(TEST_SOURCE, test_remover, NULL)));
 
-    const ha_device_desc_t root = {.source = HA_SOURCE_ZIGBEE,
+    const ha_device_desc_t root = {.source = TEST_SOURCE,
                                    .native_id = ROOT_NATIVE,
                                    .parent_native_id = "",
                                    .name = "Реле"};
     ha_device_id_t id = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &root, &id)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &root, &id)));
 
     const ha_entity_id_t e1 = 0xE1ull;
     put_entity(&d, e1, "клавиша 1");
-    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_ZIGBEE, id, e1)));
+    CHECK(sys_ok(device_bind_entity(&d, DOMAIN_SOURCE_UI, id, e1)));
 
     /* canonical-следы Entity */
     const ha_state_key_t ps_key = {.entity = e1, .property = HA_PROPERTY_POWER};
@@ -264,7 +267,7 @@ static void test_remove_cascade(void)
                                    &changed)));
 
     g_removed_count = 0;
-    CHECK(sys_ok(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id)));
+    CHECK(sys_ok(device_remove(&d, DOMAIN_SOURCE_UI, id)));
     CHECK(g_removed_count == 1 && strcmp(g_removed_native, ROOT_NATIVE) == 0);
 
     ha_entity_record_t er = {0};
@@ -281,7 +284,7 @@ static void test_remove_cascade(void)
     CHECK(sys_ok(domain_entity_get(&d, (domain_entity_t)HA_ENTITY_AUTOMATION, &akey, &kept)));
 
     /* повторное удаление — Device уже нет → NOT_FOUND */
-    CHECK(sys_is(device_remove(&d, DOMAIN_SOURCE_ZIGBEE, id), SYS_CODE_NOT_FOUND));
+    CHECK(sys_is(device_remove(&d, DOMAIN_SOURCE_UI, id), SYS_CODE_NOT_FOUND));
 
     CHECK(sys_ok(domain_deinit(&d)));
 }
@@ -293,18 +296,18 @@ static void test_rename_and_initial_name(void)
     memset(&d, 0, sizeof(d));
     ctx_init(&d);
 
-    const ha_device_desc_t unnamed = {.source = HA_SOURCE_ZIGBEE,
+    const ha_device_desc_t unnamed = {.source = TEST_SOURCE,
                                       .native_id = ROOT_NATIVE,
                                       .parent_native_id = "",
                                       .name = ""};
     ha_device_id_t id = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &unnamed, &id)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &unnamed, &id)));
 
     /* initial name из adapter заполняет пустое имя */
     ha_device_desc_t named = unnamed;
     snprintf(named.name, sizeof(named.name), "%s", "Реле");
     ha_device_id_t again = HA_DEVICE_ID_NONE;
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &named, &again)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &named, &again)));
     CHECK(again == id);
     ha_logical_device_record_t rec = {0};
     CHECK(get_device(&d, id, &rec) && strcmp(rec.name, "Реле") == 0);
@@ -314,14 +317,14 @@ static void test_rename_and_initial_name(void)
     memset(&rec, 0, sizeof(rec));
     CHECK(get_device(&d, id, &rec));
     CHECK(strcmp(rec.name, "Кухня") == 0);
-    CHECK(rec.source == HA_SOURCE_ZIGBEE);
+    CHECK(rec.source == TEST_SOURCE);
     CHECK(strcmp(rec.native_id, ROOT_NATIVE) == 0);
     CHECK(rec.parent_device_id == HA_DEVICE_ID_NONE);
 
     /* повторный register (другое имя) не перетирает пользовательское */
     ha_device_desc_t other = unnamed;
     memcpy(other.name, "Zzz", 4);
-    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_ZIGBEE, &other, &again)));
+    CHECK(sys_ok(device_register(&d, DOMAIN_SOURCE_UI, &other, &again)));
     memset(&rec, 0, sizeof(rec));
     CHECK(get_device(&d, id, &rec) && strcmp(rec.name, "Кухня") == 0);
 

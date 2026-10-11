@@ -82,7 +82,7 @@ bool zb_entity_resolve(zb_entity_binding_t *list, size_t capacity, size_t *count
     if (!zb_entity_seed(uid, endpoint, seed)) {
         return false;
     }
-    const ha_entity_id_t derived = ha_entity_id_derive(HA_ENTITY_ISSUER_ZIGBEE, seed, sizeof(seed));
+    const ha_entity_id_t derived = ha_entity_id_derive(ZIGBEE_ENTITY_ISSUER, seed, sizeof(seed));
     if (derived == HA_ENTITY_ID_NONE) { /* ложная identity не создаётся */
         return false;
     }
@@ -223,7 +223,7 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
     }
 
     domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
+    meta.source = (uint8_t)ZIGBEE_DOMAIN_SOURCE;
     bool changed = false;
     const sys_error_t err = domain_entity_put(domain, (domain_entity_t)HA_ENTITY_ENTITY, &key,
                                               &record, &meta, &changed);
