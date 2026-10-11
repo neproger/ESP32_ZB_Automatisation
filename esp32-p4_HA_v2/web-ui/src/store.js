@@ -1,6 +1,7 @@
 import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
 import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
 import { VALUE_KIND } from './semantics.js'
+import { ENTITY_SYSTEM } from './system.js'
 
 // Единый стор: WS-соединение + сырые сущности Domain. React читает через
 // useSyncExternalStore(store.subscribe, store.getVersion).
@@ -100,6 +101,14 @@ function logEvent(action, entityType, key, record) {
   }
 }
 
+// Журнал: событие уже в готовом виде (semantic event / canonical state change).
+function pushEvent(ev) {
+  events.push({ seq: ++eventSeq, ts: Date.now(), ...ev })
+  if (events.length > EVENT_LOG_MAX) {
+    events.splice(0, events.length - EVENT_LOG_MAX)
+  }
+}
+
 const emit = () => {
   version++
   for (const l of listeners) l()
@@ -152,14 +161,11 @@ function onFrame(buf) {
     return
   }
   if (frame.type === MSG3.EVENT) {
-    events.push({
-      seq: ++eventSeq,
-      ts: Date.now(),
+    pushEvent({
       kind: 'event',
       sourceEntity: payload.getBigUint64(0, true),
       eventId: payload.getUint8(8),
     })
-    if (events.length > EVENT_LOG_MAX) events.splice(0, events.length - EVENT_LOG_MAX)
     emit()
     return
   }
@@ -200,8 +206,10 @@ function onFrame(buf) {
     const entity = payload.getBigUint64(0, true)
     const property = payload.getUint16(8, true)
     const key = `${entity}:${property}`
+    const prev = propStates.get(key)
     if (frame.type === MSG3.PROPERTY_STATE_REMOVE) {
       propStates.delete(key)
+      if (!syncing && prev) pushEvent({ kind: 'property', entity, property, removed: true })
     } else {
       const kind = payload.getUint8(10)
       let value = null
@@ -214,6 +222,11 @@ function onFrame(buf) {
         default: value = null
       }
       propStates.set(key, { entity, property, kind, value })
+      // Журнал состояния: только реальные изменения и не системный девайс (иначе тики
+      // времени забивают лог). Snapshot (syncing) не логируется.
+      if (!syncing && entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
+        pushEvent({ kind: 'property', entity, property, kind, value })
+      }
     }
     emit()
     return

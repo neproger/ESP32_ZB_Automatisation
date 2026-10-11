@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { ENTITY } from '../schema.js'
-import { eventName } from '../semantics.js'
+import { eventName, propertyName, propertyUnit } from '../semantics.js'
 
 // Журнал: семантические события (HA_EVENT_*) + изменения generic-сущностей. Snapshot не
 // логируется. Raw Zigbee в Domain больше не попадает (Шаг C), поэтому журнал entity-native.
@@ -22,6 +22,15 @@ function entityLabel(s, entity) {
 function describe(ev, s) {
   if (ev.kind === 'event') {
     return `${entityLabel(s, ev.sourceEntity)}: ${eventName(ev.eventId)}`
+  }
+  if (ev.kind === 'property') {
+    const who = entityLabel(s, ev.entity)
+    if (ev.removed) return `${who}: ${propertyName(ev.property)} — сброшено`
+    const v = ev.value
+    const shown =
+      typeof v === 'boolean' ? (v ? 'да' : 'нет') : v == null ? '—'
+        : `${Number(v).toFixed(1)}${propertyUnit(ev.property) ? ' ' + propertyUnit(ev.property) : ''}`
+    return `${who}: ${propertyName(ev.property)} = ${shown}`
   }
   const label = TYPE_LABEL[ev.entityType] || 'сущность'
   return ev.action === 'remove' ? `${label} удалена` : `${label} обновлена`
@@ -63,7 +72,7 @@ export default function Events() {
           {shown.map((e) => (
             <li key={e.seq}>
               <span className="time">{new Date(e.ts).toLocaleTimeString()}</span>
-              <span className={`kind ${e.action}`}>{e.action === 'remove' ? '−' : '+'}</span>
+              <span className={`kind ${e.action || e.kind}`}>{e.removed || e.action === 'remove' ? '−' : '+'}</span>
               <span>{describe(e, s)}</span>
             </li>
           ))}
