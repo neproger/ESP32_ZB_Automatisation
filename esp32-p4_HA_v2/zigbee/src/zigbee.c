@@ -134,17 +134,6 @@ static sys_error_t zigbee_request_remove(ha_device_uid_t uid)
     return SYS_OK;
 }
 
-static sys_error_t zigbee_remove_execute(domain_command_t type, const void *args, size_t args_size,
-                                         void *ctx)
-{
-    (void)type;
-    (void)ctx;
-    if (args == NULL || args_size != sizeof(ha_device_uid_t)) {
-        return zigbee_fail(SYS_CODE_INVALID_ARG);
-    }
-    return zigbee_request_remove(*(const ha_device_uid_t *)args);
-}
-
 /* Adapter remover (Шаг B, B7): native_id (hex EUI64) → uid → удалить из локального Zigbee state. */
 static sys_error_t zigbee_device_remover(const char *native_id, void *ctx)
 {
@@ -468,12 +457,7 @@ sys_error_t zigbee_start(domain_t *domain)
     if (sys_failed(cluster)) {
         return cluster;
     }
-    const sys_error_t remove =
-        domain_register_command(domain, HA_CMD_DEVICE_REMOVE, zigbee_remove_execute, NULL);
     (void)device_register_remover(HA_SOURCE_ZIGBEE, zigbee_device_remover, NULL);
-    if (sys_failed(remove)) {
-        return remove;
-    }
     return domain_register_command(domain, HA_CMD_PERMIT_JOIN, zigbee_permit_execute, NULL);
 }
 

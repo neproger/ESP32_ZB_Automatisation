@@ -18,7 +18,6 @@ idf_component_register(
         sys
         ha_model
         device
-        semantics
     PRIV_REQUIRES
         esp_http_server
         nvs_flash

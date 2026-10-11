@@ -207,32 +207,6 @@ bool semantics_state_value(const ha_zb_state_key_t *key, const ha_zb_state_recor
     return out->kind != HA_VALUE_NONE;
 }
 
-bool semantics_value_to_double(const ha_value_t *value, double *out)
-{
-    if (value == NULL || out == NULL) {
-        return false;
-    }
-    switch (value->kind) {
-    case HA_VALUE_BOOL:
-        *out = value->value.b ? 1.0 : 0.0;
-        return true;
-    case HA_VALUE_I32:
-        *out = (double)value->value.i32;
-        return true;
-    case HA_VALUE_U32:
-        *out = (double)value->value.u32;
-        return true;
-    case HA_VALUE_FLOAT:
-        *out = (double)value->value.f32;
-        return true;
-    case HA_VALUE_ENUM:
-        *out = (double)value->value.enum_value;
-        return true;
-    default:
-        return false;
-    }
-}
-
 /* --- Семантические команды (фаза 3): (property, action, value) → ZCL --- */
 
 typedef enum {
@@ -284,7 +258,7 @@ static bool command_scalar(const ha_command_value_t *value, double *out)
     if (value == NULL || value->kind != HA_COMMAND_VALUE_SCALAR) {
         return false;
     }
-    return semantics_value_to_double(&value->value.scalar, out);
+    return ha_value_to_double(&value->value.scalar, out);
 }
 
 static uint8_t percent_to_level(double pct)

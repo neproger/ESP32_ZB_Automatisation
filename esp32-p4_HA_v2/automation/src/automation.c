@@ -13,7 +13,6 @@
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_rule.h"
 #include "ha_model/ha_state.h"
-#include "semantics/semantics.h"
 
 /*
  * Задача сервиса — единственный, кто читает Domain и постит команды от лица Automation.
@@ -111,7 +110,7 @@ static bool read_property_value(ha_entity_id_t entity, ha_property_id_t property
                                      &record))) {
         return false;
     }
-    return semantics_value_to_double(&record.value, out);
+    return ha_value_to_double(&record.value, out);
 }
 
 static bool read_system_time(uint16_t *minutes_of_day, uint8_t *weekday_mask)
@@ -277,7 +276,7 @@ static void automation_state_trigger(const ha_state_key_t *key)
         return;
     }
     double value = 0.0;
-    if (!semantics_value_to_double(&record.value, &value)) {
+    if (!ha_value_to_double(&record.value, &value)) {
         return;
     }
 
@@ -378,17 +377,19 @@ sys_error_t automation_start(domain_t *domain)
         return sys_error_make(SYS_LAYER_AUTOMATION, SYS_CODE_NO_MEM);
     }
 
-    const uint32_t env_sources =
-        (1u << (uint32_t)DOMAIN_SOURCE_ZIGBEE) | (1u << (uint32_t)DOMAIN_SOURCE_SYSTEM);
+    /*
+     * Фильтр по canonical типу факта, а не по adapter origin (source_mask 0 = любой):
+     * Automation не знает, какой transport породил Entity/событие.
+     */
 
     /* Семантические события (entity-адресованные) — триггеры EVENT/TIME. */
-    sys_error_t err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_EVENT, env_sources,
+    sys_error_t err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_EVENT, 0u,
                                 (domain_entity_t)HA_ENTITY_ENTITY);
     if (sys_failed(err)) {
         return err;
     }
     /* Canonical property state — триггер STATE и источники условий. */
-    err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED, env_sources,
+    err = subscribe(domain, 1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED, 0u,
                     (domain_entity_t)HA_ENTITY_PROPERTY_STATE);
     if (sys_failed(err)) {
         return err;

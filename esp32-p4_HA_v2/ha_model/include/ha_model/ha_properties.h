@@ -189,6 +189,13 @@ typedef struct {
  */
 const ha_property_desc_t *ha_property_desc(ha_property_id_t id);
 
+/*
+ * Canonical value → double (числовая проекция для порогов/сравнений Automation/Display).
+ * false — вид без числового смысла (NONE). Чистая операция над canonical value, без
+ * транспорта и Domain — поэтому живёт в словаре, а не в adapter/bridge.
+ */
+bool ha_value_to_double(const ha_value_t *value, double *out);
+
 #ifdef __cplusplus
 }
 #endif

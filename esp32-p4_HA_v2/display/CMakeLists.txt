@@ -25,6 +25,5 @@ idf_component_register(
         lvgl
         domain
         ha_model
-        semantics
         sys
 )

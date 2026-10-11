@@ -691,6 +691,12 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step F (часть 1) — Boundary Purge: удалён мёртвый legacy-путь удаления
+            HA_CMD_DEVICE_REMOVE (+ zigbee_remove_execute; zigbee_request_remove/remover
+            остаются). Automation больше не фильтрует по DOMAIN_SOURCE_ZIGBEE: подписка по
+            canonical типу факта (source_mask 0). semantics_value_to_double перенесён в
+            ha_model как ha_value_to_double; automation/display перестали зависеть от semantics,
+            у web убрана мёртвая зависимость. IDF + host-тесты зелёные.
 2026-10-11  Zigbee/semantics audit — найден и убран мёртвый код/костыли: zb_device_id
             (derivation перенесена в device_register), zigbee_device_ensure (device создаёт
             zigbee_topology_apply), zigbee_diag_snapshot+counters (диагностика удалена в C),

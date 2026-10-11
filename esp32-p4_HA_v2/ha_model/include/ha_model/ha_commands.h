@@ -16,9 +16,7 @@ extern "C" {
 #endif
 
 /* Был HA_CMD_ZIGBEE_CLUSTER(1): удалён (Шаг C, C2) — raw ZCL вне общего командного шины. */
-
-/* Пометить устройство на удаление (args = ha_zigbee uid): leave при появлении. */
-#define HA_CMD_DEVICE_REMOVE 2u
+/* Был HA_CMD_DEVICE_REMOVE(2): удалён (Step F) — удаление только через Device service. */
 
 /* Открыть сеть для подключения новых устройств (args = uint8_t seconds, 0 — закрыть). */
 #define HA_CMD_PERMIT_JOIN 3u

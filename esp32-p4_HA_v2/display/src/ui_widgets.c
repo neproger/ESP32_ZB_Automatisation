@@ -5,7 +5,8 @@
 #include <string.h>
 
 #include "ha_model/ha_entities.h"
-#include "semantics/semantics.h"
+#include "ha_model/ha_properties.h"
+#include "ha_model/ha_state.h"
 #include "sys/sys_error.h"
 #include "ui_commands.h"
 #include "ui_compat.h"
@@ -107,7 +108,7 @@ static void format_property(ha_property_id_t property, const ha_value_t *value, 
                             size_t out_size)
 {
     double number = 0.0;
-    if (!semantics_value_to_double(value, &number)) {
+    if (!ha_value_to_double(value, &number)) {
         snprintf(out, out_size, "—");
         return;
     }

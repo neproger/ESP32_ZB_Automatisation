@@ -20,7 +20,6 @@
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
-#include "semantics/semantics.h"
 #include "web/web_proto.h"
 
 /*

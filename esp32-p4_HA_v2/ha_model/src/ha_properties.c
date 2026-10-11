@@ -51,3 +51,29 @@ const ha_property_desc_t *ha_property_desc(ha_property_id_t id)
     }
     return &UNKNOWN;
 }
+
+bool ha_value_to_double(const ha_value_t *value, double *out)
+{
+    if (value == NULL || out == NULL) {
+        return false;
+    }
+    switch (value->kind) {
+    case HA_VALUE_BOOL:
+        *out = value->value.b ? 1.0 : 0.0;
+        return true;
+    case HA_VALUE_I32:
+        *out = (double)value->value.i32;
+        return true;
+    case HA_VALUE_U32:
+        *out = (double)value->value.u32;
+        return true;
+    case HA_VALUE_FLOAT:
+        *out = (double)value->value.f32;
+        return true;
+    case HA_VALUE_ENUM:
+        *out = (double)value->value.enum_value;
+        return true;
+    default:
+        return false;
+    }
+}

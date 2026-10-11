@@ -9,7 +9,6 @@
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
-#include "semantics/semantics.h"
 #include "ui_compat.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
@@ -121,7 +120,7 @@ static bool read_system_byte(ha_property_id_t property, uint8_t *out)
         return false;
     }
     double number = 0.0;
-    if (!semantics_value_to_double(&record.value, &number)) {
+    if (!ha_value_to_double(&record.value, &number)) {
         return false;
     }
     *out = (uint8_t)number;

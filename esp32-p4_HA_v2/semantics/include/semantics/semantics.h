@@ -33,7 +33,6 @@ bool semantics_state_value(const ha_zb_state_key_t *key, const ha_zb_state_recor
                            ha_value_t *out);
 
 /* Числовой вид значения (для сравнения). false — HA_VALUE_NONE. */
-bool semantics_value_to_double(const ha_value_t *value, double *out);
 
 /*
  * Физическая форма Zigbee-события (до потери cluster/payload). Маппинг в семантику

@@ -12,8 +12,6 @@
 #include "ha_model/ha_settings.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
-#include "semantics/ha_zigbee.h"
-#include "semantics/semantics.h"
 #include "ui_commands.h"
 #include "ui_menu.h"
 #include "ui_nav_dots.h"
