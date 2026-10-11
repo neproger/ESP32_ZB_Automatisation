@@ -1,5 +1,7 @@
 #include "zigbee/zigbee_remove_mark.h"
 
+#include "zigbee/zigbee_adapter_ids.h"
+
 #include <string.h>
 
 #include "nvs.h"
@@ -47,7 +49,7 @@ static sys_error_t save(void)
         }
         nvs_close(handle);
     }
-    return err == ESP_OK ? SYS_OK : sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    return err == ESP_OK ? SYS_OK : sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
 }
 
 sys_error_t zigbee_remove_mark_add(ha_device_uid_t uid)
@@ -59,7 +61,7 @@ sys_error_t zigbee_remove_mark_add(ha_device_uid_t uid)
         }
     }
     if (s_marks.count >= ZB_REMOVE_MARK_MAX) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NO_MEM);
     }
     s_marks.uids[s_marks.count++] = uid;
     return save();

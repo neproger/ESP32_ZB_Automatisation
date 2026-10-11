@@ -1,5 +1,7 @@
 #include "zigbee/zigbee_device_store.h"
 
+#include "zigbee/zigbee_adapter_ids.h"
+
 #include <string.h>
 
 #define ZB_DEVICE_STORE_MAX 32
@@ -23,7 +25,7 @@ static zb_endpoint_slot_t s_endpoints[ZB_ENDPOINT_STORE_MAX];
 
 static sys_error_t zigbee_fail(sys_code_t code)
 {
-    return sys_error_make(SYS_LAYER_ZIGBEE, code);
+    return sys_error_make(ZIGBEE_SYS_LAYER, code);
 }
 
 static zb_device_slot_t *device_find(ha_device_uid_t uid)

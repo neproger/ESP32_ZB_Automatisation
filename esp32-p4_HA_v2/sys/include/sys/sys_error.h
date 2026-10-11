@@ -16,19 +16,20 @@ extern "C" {
 
 /*
  * Кто создал ошибку. Это диагностика, а не логика: смысл определяет code, и вызывающий
- * сравнивает именно его, не разбирая, какой слой ошибку породил.
+ * сравнивает именно его, не разбирая, какой слой ошибку породил. Adapter-specific слои
+ * (Zigbee/GPIO/…) объявляют свои значения у себя; generic sys знает только core-слои.
  */
-typedef enum {
-    SYS_LAYER_NONE = 0,
-    SYS_LAYER_MSTORE,
-    SYS_LAYER_DOMAIN,
-    SYS_LAYER_ZIGBEE,
-    SYS_LAYER_AUTOMATION,
-    SYS_LAYER_WEB,
-    SYS_LAYER_SYSTEM,
-    SYS_LAYER_WIFI,
-    SYS_LAYER_DEVICE,
-} sys_layer_t;
+typedef uint16_t sys_layer_t;
+
+#define SYS_LAYER_NONE ((sys_layer_t)0)
+#define SYS_LAYER_MSTORE ((sys_layer_t)1)
+#define SYS_LAYER_DOMAIN ((sys_layer_t)2)
+/* 3 — adapter-specific (Zigbee) */
+#define SYS_LAYER_AUTOMATION ((sys_layer_t)4)
+#define SYS_LAYER_WEB ((sys_layer_t)5)
+#define SYS_LAYER_SYSTEM ((sys_layer_t)6)
+#define SYS_LAYER_WIFI ((sys_layer_t)7)
+#define SYS_LAYER_DEVICE ((sys_layer_t)8)
 
 /*
  * Общее пространство кодов: одно значение означает одно и то же в любом слое.

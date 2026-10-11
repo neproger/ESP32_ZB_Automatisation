@@ -49,7 +49,6 @@ typedef enum {
 /* Цвет роли активной палитры (0xRRGGBB). */
 uint32_t ui_palette_color(ui_palette_role_t role);
 
-ui_palette_id_t ui_palette_id(void);
 void ui_palette_set(ui_palette_id_t id);
 
 /* Человекочитаемое имя темы (для выбора в настройках). */

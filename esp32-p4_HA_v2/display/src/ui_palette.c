@@ -70,11 +70,6 @@ uint32_t ui_palette_color(ui_palette_role_t role)
     return kPalettes[s_id][role];
 }
 
-ui_palette_id_t ui_palette_id(void)
-{
-    return s_id;
-}
-
 void ui_palette_set(ui_palette_id_t id)
 {
     if ((unsigned)id < UI_PALETTE_COUNT) {

@@ -691,6 +691,10 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step F (часть 5) — добит boundary: sys_layer_t стал opaque (uint16), SYS_LAYER_ZIGBEE
+            убран из generic `sys`; adapter-owned ids (ZIGBEE_SOURCE_ID/_ENTITY_ISSUER/
+            _DOMAIN_SOURCE/_SYS_LAYER) собраны в zigbee/zigbee_adapter_ids.h. Dead-code проход
+            по web/display/system/wifi/main: удалён неиспользуемый ui_palette_id.
 2026-10-11  Step F (часть 3) — мост `semantics/` целиком перенесён внутрь `zigbee/`
             (zigbee_semantics.{h,c}, ha_zigbee.h, zb_command.h, zigbee_forms.h; test_semantics
             теперь в zigbee/tests). Компонент semantics удалён, из CMake и REQUIRES убран;

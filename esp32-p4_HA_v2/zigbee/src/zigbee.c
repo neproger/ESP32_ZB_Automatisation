@@ -1,5 +1,7 @@
 #include "zigbee/zigbee.h"
 
+#include "zigbee/zigbee_adapter_ids.h"
+
 #include <string.h>
 
 #include "esp_log.h"
@@ -55,7 +57,7 @@ static QueueSetHandle_t s_inbox;
 
 static sys_error_t zigbee_fail(sys_code_t code)
 {
-    return sys_error_make(SYS_LAYER_ZIGBEE, code);
+    return sys_error_make(ZIGBEE_SYS_LAYER, code);
 }
 
 /* Отправка идёт из задачи сервиса: в чужом контексте трогать радио нельзя. */
@@ -286,7 +288,7 @@ static void zigbee_task(void *arg)
                          (unsigned long long)report.device_uid, (unsigned)report.cluster_id,
                          (unsigned)report.attr_id);
                 zigbee_diag_record(ZIGBEE_DIAG_REPORT,
-                                   sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NOT_FOUND));
+                                   sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND));
             } else {
                 zigbee_publish_property_state(&report);
             }

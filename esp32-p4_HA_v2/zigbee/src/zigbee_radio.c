@@ -1,5 +1,7 @@
 ﻿#include "zigbee/zigbee_radio.h"
 
+#include "zigbee/zigbee_adapter_ids.h"
+
 #include <string.h>
 
 #include <stdbool.h>
@@ -658,12 +660,12 @@ static void commission_on_startup(void)
 sys_error_t zigbee_radio_open_network(uint8_t seconds)
 {
     if (!s_ready) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_STATE);
     }
     const ezb_err_t err = ezb_bdb_open_network(seconds);
     if (err != EZB_ERR_NONE) {
         ESP_LOGW(TAG, "network not opened: code=0x%x", (unsigned)err);
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
     }
     ESP_LOGI(TAG, "network open requested for %u s", (unsigned)seconds);
     return SYS_OK;
@@ -748,16 +750,16 @@ static void leave_req_done(const ezb_zdo_nwk_mgmt_leave_req_result_t *result, vo
 sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid)
 {
     if (!s_ready) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_STATE);
     }
     const ezb_extaddr_t ext = {.u64 = uid};
     ezb_shortaddr_t short_addr = 0;
     if (ezb_address_short_by_extended(&ext, &short_addr) != EZB_ERR_NONE) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NOT_FOUND);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND);
     }
     leave_ctx_t *ctx = leave_ctx_acquire(uid);
     if (ctx == NULL) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NO_MEM);
     }
     const ezb_zdo_nwk_mgmt_leave_req_t request = {
         .dst_nwk_addr = short_addr,
@@ -768,7 +770,7 @@ sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid)
     const ezb_err_t err = ezb_zdo_nwk_mgmt_leave_req(&request);
     if (err != EZB_ERR_NONE) {
         ctx->used = false;
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
     }
     ESP_LOGI(TAG, "leave requested: uid=%llx short=0x%04x", (unsigned long long)uid,
              (unsigned)short_addr);
@@ -883,7 +885,7 @@ static sys_error_t radio_fail(const char *what, uint32_t code)
     } else {
         ESP_LOGE(TAG, "%s", what);
     }
-    return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
 }
 
 static sys_error_t create_coordinator_device(void)
@@ -981,7 +983,7 @@ static sys_error_t radio_error(ezb_err_t result)
     if (result == EZB_ERR_NONE) {
         return SYS_OK;
     }
-    return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+    return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
 }
 
 /*
@@ -1020,10 +1022,10 @@ static sys_error_t send_raw_zcl(const ha_zb_command_t *command)
 sys_error_t zigbee_radio_send(const ha_zb_command_t *command)
 {
     if (command == NULL) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_ARG);
     }
     if (!s_ready) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_STATE);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_STATE);
     }
 
     return send_raw_zcl(command);
@@ -1106,17 +1108,17 @@ static void zigbee_stack_task(void *arg)
 sys_error_t zigbee_radio_start(domain_t *domain)
 {
     if (domain == NULL) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_ARG);
     }
 
     s_radio_init_done = xSemaphoreCreateBinaryStatic(&s_radio_init_done_storage);
     if (s_radio_init_done == NULL) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NO_MEM);
     }
 
     if (xTaskCreate(zigbee_stack_task, "zigbee_radio", RADIO_TASK_STACK, NULL, RADIO_TASK_PRIORITY,
                     NULL) != pdPASS) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NO_MEM);
     }
 
     /*
@@ -1126,7 +1128,7 @@ sys_error_t zigbee_radio_start(domain_t *domain)
      * (services/ZIGBEE.md §5).
      */
     if (xSemaphoreTake(s_radio_init_done, pdMS_TO_TICKS(RADIO_START_TIMEOUT_MS)) != pdTRUE) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_IO);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_IO);
     }
     return s_radio_init_error;
 }

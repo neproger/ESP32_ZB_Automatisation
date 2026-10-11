@@ -1,5 +1,7 @@
 #include "zigbee/zigbee_interview.h"
 
+#include "zigbee/zigbee_adapter_ids.h"
+
 #include "zigbee/zigbee_device_store.h"
 
 /*
@@ -9,7 +11,7 @@
 
 static sys_error_t zigbee_fail(sys_code_t code)
 {
-    return sys_error_make(SYS_LAYER_ZIGBEE, code);
+    return sys_error_make(ZIGBEE_SYS_LAYER, code);
 }
 
 sys_error_t zigbee_clusters_from_lists(const uint16_t *input, uint8_t input_count,

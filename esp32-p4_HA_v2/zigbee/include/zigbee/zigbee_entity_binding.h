@@ -22,14 +22,7 @@
 extern "C" {
 #endif
 
-/*
- * Adapter-owned canonical ids: generic core (ha_model/domain) не знает о Zigbee, поэтому
- * значения source/issuer/domain-source объявляет сам адаптер. Числа стабильны (входят в
- * derivation identity).
- */
-#define ZIGBEE_SOURCE_ID ((ha_source_id_t)1)         /* provenance Device/Entity */
-#define ZIGBEE_ENTITY_ISSUER ((ha_entity_issuer_t)1) /* identity issuer */
-#define ZIGBEE_DOMAIN_SOURCE ((domain_source_t)1)    /* Journal source */
+#include "zigbee/zigbee_adapter_ids.h" /* ZIGBEE_SOURCE_ID / _ENTITY_ISSUER / _DOMAIN_SOURCE */
 
 /* key = (device_uid, endpoint); record = { entity_id }. */
 typedef struct {

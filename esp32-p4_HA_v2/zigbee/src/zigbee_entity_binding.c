@@ -188,12 +188,12 @@ sys_error_t zb_entity_ensure_entity(domain_t *domain, zb_entity_binding_t *list,
                                     const char *initial_name, ha_entity_id_t *out_entity_id)
 {
     if (domain == NULL || list == NULL || count == NULL || out_entity_id == NULL) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_INVALID_ARG);
     }
     ha_entity_id_t id = HA_ENTITY_ID_NONE;
     bool created = false;
     if (!zb_entity_resolve(list, capacity, count, uid, endpoint, &id, &created)) {
-        return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_NO_MEM);
+        return sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NO_MEM);
     }
 
     const ha_entity_key_t key = {.id = id};
