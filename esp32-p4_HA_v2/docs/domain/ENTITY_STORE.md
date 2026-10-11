@@ -64,12 +64,12 @@ Domain добавляет `event_id / ts / entity / key / op` и не вычис
 
 Domain не знает отношений между сущностями. Связи выражаются данными:
 
-- составные ключи: `endpoint = (device_uid, endpoint)`;
-- ссылки в полях: `endpoint.device_uid`, `group_item.device_uid/endpoint`;
-- списки внутри записи (например `endpoint.in_clusters[]`).
+- составные ключи: `state = (entity_id, property_id)`; `group_item = (group_id, entity_id, property_id)`;
+- ссылки в полях: `Entity.device_id`, `LogicalDevice.parent_device_id`;
+- списки внутри записи (например `endpoint.clusters[]` — adapter-private).
 
-Примеры: «endpoint'ы устройства» → `list(ENDPOINT, prefix=device_uid)`; «родитель
-кластера» → endpoint, в котором кластер лежит. Relationship-таблиц нет.
+Примеры: «Entity устройства» → `list(ENTITY)` с фильтром по `device_id`;
+«свойства Entity» → `list(PROPERTY_STATE, prefix=entity_id)`. Relationship-таблиц нет.
 
 ## 6. Remove
 

@@ -66,9 +66,9 @@ Domain знает только discriminator и callback — ничего пре
 COMMAND = fire-and-forget intent (передали и результат не ждём)
 ```
 
-Операции, которым вызывающему реально нужен ответ (`read_attr`, network scan,
-`permit_join`, binding table) — **другой класс взаимодействия**. Он пока не решается
-и не смешивается с COMMAND.
+Операции, которым вызывающему реально нужен ответ (`read_attr`, network scan, binding
+table) — **другой класс взаимодействия**, пока не решается. Discovery новых устройств —
+fire-and-forget `HA_CMD_DISCOVERY` (adapter трактует как permit join / commissioning).
 
 ## 7. Контракт payload команды
 
@@ -79,23 +79,19 @@ Domain Command
     executor/type       — дискриминатор, по которому Domain выбирает executor
     payload             — opaque bytes для Domain
 
-Zigbee command payload  — форма из ha_model (ha_commands.h)
-    device_uid          — IEEE EUI-64, stable identity устройства
-    dst_endpoint
-    cluster_id          — из ha_zigbee.h
-    command_id          — из ha_zigbee.h
-    arguments           — уже в кодировке ZCL
+Canonical команда (ha_model/ha_commands.h) — payload entity-native
+    HA_CMD_PROPERTY   — ha_property_command_t { entity_id, property_id, action, value }
+    HA_CMD_DISCOVERY  — u8 seconds (adapter трактует как permit join и т.п.)
 ```
 
 Правила:
 
-- `cluster_id` / `command_id` берём из словаря `ha_zigbee.h`, не изобретаем;
-- `src_endpoint` — внутренняя политика Zigbee service/gateway, в контракте его нет;
-- short address **не** является идентичностью команды: сервис сам разрешает
-  `device_uid → current network address`;
-- структуры `ezb_*` esp-zigbee-sdk создаются только внутри Zigbee service;
-- Domain payload не разбирает: для него это байты. Масштабирование единиц
-  (уровень, 0.01 °C) — тоже сторона сервиса.
+- Domain payload не разбирает: для него это байты;
+- физический адрес (uid/endpoint) и ZCL-кодировку резолвит **adapter**: он переводит
+  `HA_CMD_PROPERTY` в ZCL-команду через мост внутри `zigbee/`;
+- `src_endpoint` и short address — внутренняя политика адаптера, в контракте их нет;
+- структуры `ezb_*` esp-zigbee-sdk создаются только внутри `zigbee/`;
+- масштабирование единиц (уровень, 0.01 °C) — сторона adapter'а.
 
 ## 8. Открытые вопросы
 
@@ -106,9 +102,9 @@ Zigbee command payload  — форма из ha_model (ha_commands.h)
   ключ устройства, поэтому подписчик относит команду к устройству сам, сравнивая ключ
   доставленного события. Адресат проверяется **до** вызова executor'а: неизвестный тип
   — отказ `NOT_FOUND`, факта нет. Payload Domain по-прежнему не разбирает (§7).
-- **Гранулярность дискриминатора.** Один `HA_CMD_*` на весь Zigbee-кластерный путь
-  (`HA_CMD_ZIGBEE_CLUSTER`) или разбиение по классам команд — решит сервис по своему
-  словарю (`RECORD_MODEL.md` §9).
+- ~~**Гранулярность дискриминатора.**~~ Решено: семантическая `HA_CMD_PROPERTY`
+  (entity/Property/Action) + `HA_CMD_DISCOVERY`; raw ZCL-команда удалена (мост внутри
+  `zigbee/`). `HA_CMD_ZIGBEE_CLUSTER` больше не существует.
 - **Контекст вызова executor'а.** Executor вызывается синхронно в контексте
   вызывающего, поэтому для Zigbee он обязан копировать args и уходить в свою задачу;
   отправка в радио из чужого контекста недопустима. Проверить на реализации сервиса.

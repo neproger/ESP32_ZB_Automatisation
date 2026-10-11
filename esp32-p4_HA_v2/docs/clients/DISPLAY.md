@@ -30,12 +30,12 @@ group_item  — виджет на экране: ссылка на состоян
 Это **не** Zigbee-группы (`0x0004`, `../services/ZIGBEE.md` §8): здесь «группа» —
 раскладка экрана, а не адресация ZCL.
 
-Виджет ссылается на **состояние**, а не на endpoint, и берёт его готовым ключом Domain —
-`ha_zb_state_key_t` (`(device_uid, endpoint, cluster_id, attr_id)`, `ha_entities.h`).
+Виджет ссылается на **canonical свойство Entity**, а не на endpoint, и берёт его готовым
+ключом Domain — `ha_state_key_t` (`(entity_id, property_id)`, `ha_model/ha_state.h`).
 Новый ref для состояния не вводится.
 
-Ключ `group_item` — составной `(group_id, ha_zb_state_key_t)`: **одно состояние можно
-показать на нескольких экранах/дашбордах** (many-to-many). Оба компонента числовые и
+Ключ `group_item` — составной `(group_id, entity_id, property_id)`: **одно свойство можно
+показать на нескольких экранах/дашбордах** (many-to-many). Компоненты числовые и
 фиксированной ширины (`../RECORD_MODEL.md` §5); строк в ключах нет.
 
 Display держит только opaque-версии для сравнения и не дублирует данные Domain.
@@ -66,9 +66,8 @@ for each item:
 ## 4. Проекция виджета
 
 Что рисовать — вычисляемая проекция, а не хранимая сущность. Тип виджета выводится из
-пары `(cluster_id, attr_id)` состояния: числа — `ha_zigbee.h`, семантика — таблица
-проекции (`../services/ZIGBEE_CAPABILITIES.md` §4). Display не изобретает имена и не
-заводит вторую систему идентификаторов.
+canonical `property_id` (таблица проекции в `ui_widgets.c`, `ha_properties.h`).
+Display не изобретает имена и не заводит вторую систему идентификаторов.
 
 ## 5. Команды
 
@@ -76,10 +75,10 @@ for each item:
 потребителя (`../domain/COMMANDS.md`); прямого обращения к Zigbee-сервису нет.
 
 Виджет **цвета** (`UI_WIDGET_COLOR`): слайдер оттенка (0..359) + кружок-превью
-текущего цвета + слайдер яркости. Оттенок конвертируется sRGB→CIE xy (в
-`ui_widgets.c`) и уходит командой **MoveToColor** (`0x07`, `HA_ZB_CMD_COLOR_MOVE_TO_COLOR`),
-яркость — `MoveToLevel` соседнего Level Control. Превью читает из Domain `CurrentX`/
-`CurrentY` и `CurrentLevel` (соседние атрибуты того же устройства/endpoint).
+текущего цвета + слайдер яркости. Оттенок конвертируется sRGB→CIE xy (в `ui_widgets.c`) и
+уходит canonical командой `(entity, property=COLOR, action=SET, xy)`; яркость —
+`(entity, property=BRIGHTNESS, action=SET)`. Превью читает canonical `COLOR_X`/`COLOR_Y`
+и `BRIGHTNESS`. ZCL-кодировку делает мост внутри `zigbee/`.
 
 ## 6. Реализация и превью
 

@@ -1,30 +1,34 @@
 # ESP32 Home Automation v2 — Architecture
 
-> **Ревизия 2.** Описание структуры и ответственностей системы.
+> **Ревизия 3 (baseline после Steps A–F).** Описание структуры и ответственностей системы.
 > Это **не план реализации**: сигнатуры, типы и API уточняются в коде.
 
 ## 1. Обзор
 
 ### 1.1. Главный принцип
 
-**Device state is authoritative; transport representation is adapter-owned.**
+**Canonical device-domain model; transport representation is adapter-owned.**
 
-Каноническое состояние приходит только от устройства через транспорт-адаптер и
-подтверждается его репортом; отсутствие репорта — отсутствие факта, а не ошибка. Поверх
-транспорта не вводим optimistic state, корреляцию command→result, synthetic
-acknowledgements.
+Верхние слои и бизнес-логика работают только с canonical-моделью:
 
-**Переходный период (см. `PROPERTY_MODEL.md`).** Сейчас canonical state identity остаётся
-Zigbee-производной (`device_uid/endpoint/cluster/attr`), но верхнеслойная семантика —
-`Property/Action/Event`. Zigbee-координата — это **физический адрес и adapter-owned
-представление**, а не общий смысл: `cluster/attr/command` не интерпретируются верхними
-слоями. Замена canonical identity на `(entity_id, property_id)` — шаг A, отложена до
-второго транспорта.
+```text
+Logical Device ── Entity ── Property / Capability / Event
+                         └─ Action (намерение над Property)
+```
+
+- **Identity.** `Entity.id` (`entity_id`) и `Logical Device.id` (`device_id`) — opaque,
+  детерминированно выведённые из стабильного внешнего ключа (`source` + `native_id`), а не
+  из сетевого адреса. `device_uid/endpoint/cluster/attr/command/zcl_type` верхним слоям
+  неизвестны.
+- **State** — единственная истина состояния: canonical `PROPERTY_STATE` `(entity_id,
+  property_id)`. Raw-состояния транспорта в Domain не хранится.
+- **Transport-specifics** (EUI64, endpoint, cluster, attribute, ZCL, network address,
+  interview, bindings, raw diagnostics) живут **только внутри `zigbee/`**.
 
 Отсюда три категории данных. Больше ничего поверх не строим.
 
 ```text
-State   — последнее известное состояние
+State   — последнее известное состояние Property
 Event   — что-то произошло, state из этого не следует
 Command — намерение что-то сделать
 ```
@@ -32,30 +36,37 @@ Command — намерение что-то сделать
 ### 1.2. Слои
 
 ```text
-           ha_model — общий словарь форм данных
-           линкуют сервисы и bootstrap, но не Domain
-             ╱              │              ╲
-        Zigbee       Automation     Web / Display / System
+   Application / Clients
+   Automation | Web (BFF) | Display | System | Wi-Fi
+            │                │
+            │        Device service  — canonical Device lifecycle/ownership
+            │                │
+            └──────────► Domain ◄──────────┐  canonical API (entities, facts, commands)
+                          │                │
+                       mstore           Adapters
+                  (Table / Ring)     Zigbee  (transport-private:
+                                      store, interview, bridge, radio)
 
-                  Services / Clients
-       Zigbee | Automation | Web | Display | System
-                       │
-                      ▼
-        ┌───────────────── Domain API ─────────────────┐
-        │  Entity Store       — state                   │
-        │  Journal            — поток фактов            │
-        │  Transient Payload  — best-effort runtime     │
-        │  Dispatcher         — доставка                │
-        └───────────────────────────────────────────────┘
-                      │
-                      ▼
-        ┌────────────────── mstore ────────────────────┐
-        │  Table Store              Ring Store           │
-        └───────────────────────────────────────────────┘
+   ha_model — canonical vocabulary (forms, ids, pure lookups); линкуют все, но не Domain.
 ```
 
-Три уровня: **хранение** (`mstore`) → **ядро** (`Domain`) → **потребители**
-(`Services` / `Clients`).
+- **`mstore`** — storage primitives. Домен-агностичен.
+- **`Domain`** — ядро: entity store, journal, transient payload, dispatcher, commands.
+  Не знает предметной области и транспорта.
+- **`Device service`** — нейтральный сервис над Domain: `register / bind / rename /
+  remove` + `register_remover(source, …)`. Превращает нормализованный `ha_device_desc_t`
+  в canonical Logical Device и ownership Entity. Транспорта не знает.
+- **`ha_model`** — словарь canonical форм/идентификаторов и чистые функции. Не слой, не
+  runtime-посредник, не линкует Domain.
+- **Adapters** — реализация транспорта. Снаружи отдают только canonical contract;
+  внутрь прячут физическую модель. Единственный существующий адаптер — `zigbee`; мост
+  «ZCL ↔ canonical» находится внутри него.
+- **Application / Clients** — Automation, Web, Display, System, Wi-Fi. Знают только
+  canonical Device/Entity/Property/Event/Action.
+
+Строгая граница: **вне `zigbee/` нет `EUI64 / endpoint / cluster / attribute / ZCL /
+ha_zb_*`**. Единственное исключение — composition root (`app_main`), который собирает и
+запускает адаптер наравне с прочими сервисами.
 
 ### 1.3. Модель взаимодействия
 
@@ -63,36 +74,34 @@ Command — намерение что-то сделать
 
 ```text
 Zigbee report
-  → Zigbee service
-  → Domain: upsert entity
-  → Entity Store обновлён + Journal: ENTITY_UPSERTED (compact value)
-  → Dispatcher
-  → subscribers (читают актуальный state из Entity Store)
+  → Zigbee adapter (private store + bridge ZCL→canonical)
+  → Domain: upsert PROPERTY_STATE (entity, property)
+  → Journal: ENTITY_UPSERTED (compact value)
+  → Dispatcher → subscribers
 ```
 
 **Command** — намерение:
 
 ```text
 UI / Automation
-  → Domain: post command
-  → Domain маршрутизирует напрямую executor'у (Zigbee service)
+  → Domain: post command (HA_CMD_PROPERTY | HA_CMD_DISCOVERY | …)
+  → Domain маршрутизирует executor'у (adapter)
+  → adapter резолвит entity → физический адрес и кодирует в ZCL
   → Journal: COMMAND_SENT
-  → Dispatcher
 ```
 
-**Event** — произошло, но state не меняется:
+**Event** — произошло, но state не следует (кнопки, тики времени):
 
 ```text
-источник
-  → Domain: publish event   (+ optional transient payload)
-  → Journal: EVENT
-  → Dispatcher
+источник (adapter / system)
+  → Domain: publish canonical EVENT (payload = ha_event_t)
+  → Journal: EVENT → Dispatcher → subscribers
 ```
 
 **Подписка**:
 
 ```text
-subscriber (contact + filter)
+subscriber (filter по canonical типу факта, не по источнику)
   ← Dispatcher кладёт compact event в inbox
   → читает state из Entity Store / payload через Domain
 ```
@@ -101,12 +110,14 @@ subscriber (contact + filter)
 
 - `mstore` линкует только Domain.
 - Services и Clients **не зависят друг от друга** и не видят `mstore`.
-- Для работы с системой они зависят от Domain API; для общей формы canonical records —
-  от `ha_model` (`RECORD_MODEL.md`). `ha_model` — словарь, а не слой: он не находится
-  между сервисами и Domain и не является runtime-посредником.
-- `ha_model` не линкует Domain и не содержит runtime/service-логики: только формы,
-  immutable-словари и чистые lookup-функции (напр. `ha_property_desc(id)`), лимиты и
-  стабильный словарь идентификаторов. Мутируемого состояния и поведения сервисов здесь нет.
+- Работа с системой — через Domain API; общие canonical-формы — из `ha_model`
+  (`RECORD_MODEL.md`). `ha_model` не линкует Domain.
+- Adapter не имеет обратной зависимости от Application: Domain не вызывает adapter;
+  adapter-specific удаление инициируется через `device_register_remover(source, …)`.
+- Application подписывается на canonical **тип факта**, а не на `source`: какой адаптер
+  породил Entity/событие — не его дело.
+- `ha_model` не именует адаптеры: `source`/`issuer`/`sys_layer` — opaque-числа; свои
+  значения объявляет сам адаптер.
 
 ## 2. mstore — слой хранения
 
@@ -123,19 +134,15 @@ subscriber (contact + filter)
 | Table Store | storage primitive над массивом slots (`meta + key + payload`), key → slot, fixed capacity, дешёвая проверка изменения без чтения payload |
 | Ring Store | append, monotonic seq как identity, overwrite-oldest, чтение по seq в пределах окна |
 
-Table Store не выставляет CRUD с key в центре: key (принадлежит storage, хранится в
-слоте как часть canonical state) разрешается в физический slot один раз (`slot_find`),
-дальше hot-path идёт по slot (`slot_meta` / `slot_read` / `slot_allocate` /
-`slot_update` / `slot_free`). Мутирующие операции принимают `expected_generation` и
-защищают от stale slot; `slot_read` атомарно отдаёт `meta + key + payload`.
-Canonical state — сами slots, а `index / free-list / live_count` — производные
-ускорители.
+Table Store не выставляет CRUD с key в центре: key разрешается в физический slot один
+раз (`slot_find`), дальше hot-path идёт по slot. Мутирующие операции принимают
+`expected_generation` (защита от stale slot); `slot_read` атомарно отдаёт
+`meta + key + payload`.
 
 **Не знает про:** Domain, Journal, Zigbee, Automation, UI, WebSocket.
 
-На mstore строятся конкретные хранилища Domain: Entity Store (Table),
-Journal и Transient Payload (Ring). Persistence, zero-copy и полный API — тема
-`storage/MSTORE.md`.
+На mstore строятся хранилища Domain: Entity Store (Table), Journal и Transient Payload
+(Ring). Детали — `storage/MSTORE.md`.
 
 ## 3. Domain — ядро
 
@@ -148,10 +155,8 @@ Journal и Transient Payload (Ring). Persistence, zero-copy и полный API 
 ### 3.1. Entity Store
 
 Последнее известное состояние. Все entity равны; `entity_type` → таблица/schema через
-простой registry (+ опциональный validator). Generic CRUD: `get / list / upsert / remove`.
-
-Тот, кто меняет состояние, сам передаёт компактное описание факта (`source`, `value`,
-опц. `payload_ref`). Domain не открывает запись, чтобы «догадаться», что писать в Journal.
+registry. Generic CRUD: `get / list / upsert / remove`. Кто меняет состояние — сам
+передаёт компактное описание факта (`source`, `value`); Domain не «догадывается».
 
 ### 3.2. Journal
 
@@ -163,58 +168,60 @@ EVENT                             — произошло, state не следу�
 COMMAND_SENT                      — Domain передал intent исполнителю
 ```
 
-Несёт компактный `value` (история/диагностика) и опциональный `payload_ref`.
-Bounded ring: при заполнении вытесняется самый старый факт; никто его не удерживает и не
-ждёт. События **не** схлопываются. Источник истины — Entity Store, не Journal.
+Несёт компактный `value` (диагностика) и опциональный `payload_ref`. Bounded ring:
+вытесняется самый старый факт. События **не** схлопываются. Источник истины — Entity
+Store, не Journal. `domain_value_t` (компактное значение факта) — отдельный словарь
+Domain, независимый от canonical `ha_value_t` (совпадающая нумерация — контролируемый
+ABI-boundary, не объединяем, чтобы Domain не зависел от `ha_model`).
 
 ### 3.3. Transient Payload
 
-Escape hatch для event-like данных, где компактного `value` недостаточно, payload нужен
-runtime-потребителю и не является persistent state. Best-effort: без ownership / refcount /
-release / TTL; вытеснённый payload читается как STALE. Сервисы работают только через
-Domain-фасад; ring-API наружу не выходит.
+Escape hatch для event-like данных. Best-effort: без ownership / refcount / release /
+TTL; вытеснённый payload читается как STALE. Canonical событие (`ha_event_t`) несётся
+именно здесь; Domain его не интерпретирует.
 
 ### 3.4. Dispatcher
 
-Отдельная задача-потребитель Journal. Доставляет compact event в inbox подписчика и будит
-его; логику подписчика **не** выполняет и **не** ждёт. Единственный потребитель Journal,
-поэтому именно он обнаруживает Journal-gap (по `event_id`).
+Отдельная задача-потребитель Journal. Доставляет compact event в inbox подписчика и
+будит его; логику подписчика **не** выполняет. Единственный потребитель Journal,
+поэтому обнаруживает Journal-gap (по `event_id`).
 
 ### 3.5. Domain API
 
-Сервисы видят только Domain API: entity CRUD + дешёвую ревизию (`meta`), commands,
-payload, subscription/event delivery. Контракт фасада — `domain/DOMAIN_API.md`.
-Типы `mstore` (seq, slot, generation, ring) наружу не выходят; доменные identity —
-opaque-типы Domain, включая `domain_entity_version_t`.
+Сервисы видят только Domain API: entity CRUD + дешёвую ревизию (`domain_entity_meta`),
+commands, payload, subscription/event delivery. Контракт — `domain/DOMAIN_API.md`.
 
 **Domain не знает про:** pending UI, lifecycle команд, correlation, ownership/TTL
-payload, процедуры создания/удаления устройств, связи между сущностями, роли/permissions.
+payload, процедуры создания/удаления устройств, связи между сущностями, роли/permissions,
+транспорт.
 
 ## 4. Services
 
 **Модель сервиса:** знает свою внешнюю среду; читает Domain; получает события; пишет
 обратно; не знает деталей других сервисов.
 
-- **Zigbee service** — держит Zigbee-модель (endpoint/cluster/attribute), присылает
-  state и events, исполняет команды. Детали — отдельная тема.
-- **Automation service** — подписчик фактов; при срабатывании правила постит команду.
-  Работает по текущему состоянию (event = триггер, state = данные); события при этом
-  не схлопываются.
-- **System service** — точное время (SNTP) и, далее, погода. Держит синтетическое
-  системное устройство «Время» и сущность `location` в Domain, публикует события-тики.
-  Детали — `services/SYSTEM.md`.
-- **Wi-Fi service** — единственный владелец радио на внешнем C3 (ESP-Hosted): подъём
-  стека, скан, подключение, provisioning. Детали — `services/WIFI.md`.
-- **Web service (BFF)** — адаптер для браузера: projection canonical records → DTO,
-  snapshot при подключении, deltas, приём команд/CRUD. Все фронтенд-особенности
-  (batching, throttling, формат) живут здесь и не лезут в Domain.
+- **Device service** — canonical lifecycle/ownership Logical Device и Entity. Нейтральный;
+  `register_remover(source, …)` — generic-механизм для adapter-specific удаления.
+- **Zigbee adapter** — единственный транспорт. Внутри: приватный RAM-store устройства и
+  топологии endpoint'ов, интервью, bindings/reporting, мост «ZCL ↔ canonical», radio
+  (spinel UART → RCP `ot_rcp` на C6). Наружу — canonical Device/Entity/Property/Event/
+  Capability и executor команды `HA_CMD_PROPERTY`. Детали — `services/ZIGBEE.md`.
+- **Automation service** — подписчик canonical фактов (EVENT/STATE), правила `ha_rule_t`
+  (`entity_id`-адресованные); при срабатывании постит `HA_CMD_PROPERTY`. Детали —
+  `services/AUTOMATION.md`.
+- **System service** — точное время (SNTP), GeoIP, погода; публикует canonical
+  `PROPERTY_STATE` системной Entity напрямую (ZCL не касается) и события-тики. Детали —
+  `services/SYSTEM.md`.
+- **Wi-Fi service** — владелец радио на внешнем C3 (ESP-Hosted): стек, скан, подключение.
+  Сущности `wifi_scan/known/status` с ключом `device_id`. Детали — `services/WIFI.md`.
+- **Web service (BFF)** — адаптер для браузера: HTTP+WS, байтовый canonical wire
+  (`services/WEB_PROTOCOL.md`): snapshot, дельты, команды. UI встроен в прошивку.
 
 ## 5. Clients
 
-- **Display** — осознанное исключение: прямой polling Domain read API (в т.ч.
-  `domain_entity_meta`) ради дешёвых LVGL-обновлений. Остаётся клиентом Domain, к
-  `mstore` не линкуется. Экраны — данные `group`/`group_item`, плюс `location`/`weather`
-  системного устройства (`clients/DISPLAY.md`); host-превью без железа — с фейковым Domain.
+- **Display** — прямое чтение canonical (`PROPERTY_STATE`, `LOCATION/WEATHER/WIFI/SETTINGS`)
+  ради дешёвых LVGL-обновлений; к `mstore` не линкуется. Экраны — `group`/`group_item`.
+  Host-превью — с фейковым Domain (`clients/DISPLAY.md`).
 - **Browser** — через Web service.
 
 ## 6. Сквозные правила
@@ -225,47 +232,24 @@ payload, процедуры создания/удаления устройств
 4. Команда — fire-and-forget: передана executor'у, результат не ждём, корреляции нет.
 5. Связи сущностей выражаются данными и составными ключами, а не Domain-relations.
 6. Domain не расширяем заранее: новый механизм — только под доказанную потребность.
-7. Ошибка создаётся слоем, в котором возникла, и проходит через остальные слои без
-   перекодирования (`ERRORS.md`).
+7. Ошибка создаётся слоем, в котором возникла, и проходит без перекодирования (`ERRORS.md`).
+8. Zigbee-словарь не выходит за `zigbee/`: вне него нет `EUI64/endpoint/cluster/attr/ZCL`.
 
 ## 7. Структура документации
 
 ```text
 docs/
 ├── ARCHITECTURE.md          — карта: что существует и зачем
-├── RECORD_MODEL.md          — единая модель записей, обязательна для всех слоёв
-├── PROPERTY_MODEL.md        — семантика Property/Action/Event (граница Zigbee ↔ верхние слои)
-├── PROPERTY_MODEL_IMPL_JOURNAL.md — журнал миграции семантики (план и чекпоинты)
-├── ERRORS.md                — единая модель ошибок: один тип на всю систему
-├── STATUS.md                — где мы: что сделано, что проверено, что дальше
-├── domain/
-│   ├── DOMAIN_API.md
-│   ├── ENTITY_STORE.md
-│   ├── JOURNAL.md
-│   ├── DISPATCHER.md
-│   ├── TRANSIENT_PAYLOAD.md
-│   └── COMMANDS.md
-├── services/
-│   ├── ZIGBEE.md
-│   ├── ZIGBEE_CAPABILITIES.md
-│   ├── ZIGBEE_IMPL_JOURNAL.md
-│   ├── AUTOMATION.md
-│   ├── SYSTEM.md
-│   ├── WIFI.md
-│   ├── SETTINGS.md
-│   ├── WEB.md
-│   └── WEB_PROTOCOL.md
-├── clients/
-│   └── DISPLAY.md
-├── hardware/
-│   └── JC4880P443C_I_W.md   — плата: характеристики и процедуры
-└── storage/
-    ├── MSTORE.md
-    ├── MSTORE_FLASH_FORMAT.md
-    ├── MSTORE_FLASH_REGIONS.md
-    ├── MSTORE_IMPL_JOURNAL.md
-    ├── MSTORE_BENCH.md
-    └── MICRO_DB_V1_REVIEW.md
+├── RECORD_MODEL.md          — единая модель записей
+├── PROPERTY_MODEL.md        — canonical Device/Entity/Property/Action/Event
+├── PROPERTY_MODEL_IMPL_JOURNAL.md — журнал миграции (план и чекпоинты)
+├── ERRORS.md                — единая модель ошибок
+├── STATUS.md                — где мы
+├── domain/                  — контракт ядра (DOMAIN_API, ENTITY_STORE, JOURNAL, …)
+├── services/                — контракты сервисов/адаптеров
+├── clients/                 — Display
+├── hardware/                — плата
+└── storage/                 — mstore
 ```
 
 Правило разделения:
@@ -276,6 +260,4 @@ layer/component document  → контракт и поведение слоя
 code                      → конкретная реализация
 ```
 
-Детали не дублируются между документами. `ARCHITECTURE.md` говорит «Journal — поток
-фактов», а подробности живут только в `domain/JOURNAL.md`. Открытые вопросы — в
-соответствующем layer-документе.
+Детали не дублируются. Открытые вопросы — в соответствующем layer-документе.

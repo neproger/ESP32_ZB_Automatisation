@@ -28,32 +28,28 @@ system_start(domain) -> task:
   спим до начала следующей минуты
 ```
 
-## 3. Системный девайс
+## 3. Системная Entity
 
-UID — `HA_SYSTEM_DEVICE_UID` (`ha_model/ha_system.h`), ASCII "SYST" в старших байтах,
-вне диапазона реальных Zigbee EUI-64. Endpoint 1. Имя — **«Время»** (модель «Система»);
-когда появится погода, она станет отдельным состоянием этого же девайса либо рядом.
+Id — `HA_SYSTEM_DEVICE_ID` (`ha_model/ha_system.h`), ASCII "SYST" в старших байтах, вне
+диапазона реальных Zigbee EUI-64. System публикует семантику своих величин **напрямую** в
+canonical `PROPERTY_STATE` `(ENTITY_SYSTEM, property)` — ZCL/кластеров не касается
+(это единственный сервис, который не ходит через мост `zigbee/`).
 
-Состояния (числовой ключ `cluster`/`attr`, как у любого устройства):
+Свойства (`ha_property_id_t`):
 
-| cluster | attr | смысл | ZCL-тип |
-|---|---|---|---|
-| `0x000A` Time | `0x0000` | время (UTC epoch, с) | uint32 |
-| `0x000A` Time | `0x0001` | TimeStatus | bitmap8 |
-| `0xFC00` System | `0x0000` | локальный час 0..23 | uint8 |
-| `0xFC00` System | `0x0001` | локальная минута | uint8 |
-| `0xFC00` System | `0x0002` | день недели (0=Пн..6=Вс) | uint8 |
-| `0xFC00` System | `0x0003` | маска дней недели (бит 0=Пн..6=Вс) | bitmap8 |
-| `0xFC00` System | `0x0004` | минуты от начала суток | uint16 |
-| `0xFC00` System | `0x0005` | смещение пояса, мин | int16 |
+```text
+SYSTEM_TIME_UTC, SYSTEM_TIME_STATUS,
+SYSTEM_HOUR, SYSTEM_MINUTE, SYSTEM_WEEKDAY, SYSTEM_WEEKDAY_MASK,
+SYSTEM_MINUTES_OF_DAY, SYSTEM_TZ_OFFSET
+```
 
-Строка города в state не влезает (там число+тип), поэтому она — отдельная сущность
-`HA_ENTITY_LOCATION` (текст + координаты + tz-offset), ключ — uid.
+Строка города в `ha_value_t` не влезает (значение — число/enum), поэтому она — отдельная
+сущность `HA_ENTITY_LOCATION` (текст + координаты + tz-offset), ключ — `HA_SYSTEM_DEVICE_ID`.
 
 ### 3.1. Погода
 
 Погода — отдельная сущность `HA_ENTITY_WEATHER`, форма — `ha_model/ha_weather.h`, ключ —
-синтетический `HA_WEATHER_DEVICE_UID` (вне диапазона Zigbee). Одна запись на текущие
+синтетический `HA_WEATHER_DEVICE_ID` (вне диапазона Zigbee). Одна запись на текущие
 условия: `condition` (enum; имена как в HA и в иконках v1), температура/влажность в 0.01,
 давление, скорость и направление ветра, облачность. RAM: данные приходят из сети,
 персистентность не нужна (как `location`). Заполняет сервис: Open-Meteo `current`

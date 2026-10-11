@@ -96,7 +96,7 @@ domain_entity_version_t — ревизия записи (meta без payload), �
 типом сущности. Но сервис **строит** его сам по типизированному layout:
 
 ```c
-ha_endpoint_key_t key = { .device_uid = uid, .endpoint = ep };
+ha_state_key_t key = { .entity = entity_id, .property = property_id };
 ```
 
 Domain видит те же байты как opaque: состав ключа для него не существует

@@ -1,116 +1,136 @@
-# Web protocol v2 (бинарный, raw entities)
+# Web protocol (бинарный, canonical v3)
 
 > Контракт провода между браузером и `web`-сервисом. Роль сервиса — `WEB.md`,
-> разводка Wi-Fi — `../hardware/JC4880P443C_I_W.md` §4.5. Реализация — `web/src`.
+> разводка Wi-Fi — `../hardware/JC4880P443C_I_W.md` §4.5. Реализация — `web/src`,
+> браузерная сторона — `web-ui/src/proto.js`.
 
 ## 1. Принципы
 
-- Транспорт — бинарный WebSocket (`/ws`), кадры `HTTPD_WS_TYPE_BINARY`.
-- Маленький endian (`LE`).
-- Payload — **сырые записи Domain как есть** (`ha_model/ha_entities.h`), без проекции
-  на стороне прошивки и без копирования в DTO. Браузер декодирует по схеме (§5).
-- Строк в протоколе нет. Единственные строки — пользовательские `device.name`/`model`
-  внутри самой записи.
-- Заголовок 8 байт. Длина — из заголовка; размеры ключа/записи браузер знает из схемы.
+- Транспорт — бинарный WebSocket (`/ws`), кадры `HTTPD_WS_TYPE_BINARY`. Маленький endian.
+- Payload — **entity-native canonical DTO**: identity это `entity_id` / `device_id` /
+  `(parent)`, без числовых Domain-типов и без `uid/endpoint/cluster/attr/zcl_type`.
+- Строк в протоколе нет; строки — только пользовательские имена внутри DTO.
+- Заголовок 8 байт; длина — из заголовка. Размеры DTO фиксированы (см. §4), переменную
+  длину несёт только `AUTOMATION`/`CAPABILITIES`.
 
 ## 2. Заголовок (8 байт)
 
 | offset | тип | поле |
 |---|---|---|
-| 0 | u8 | `ver` = 2 |
+| 0 | u8 | `ver` = 2 (версия кадра; набор типов — canonical) |
 | 1 | u8 | `type` (см. §3) |
 | 2 | u16 | `len` — длина payload |
-| 4 | u16 | `seq` — корреляция команд/ответов |
+| 4 | u16 | `seq` — корреляция команд |
 | 6 | u16 | `flags` — зарезервировано (0) |
 
-## 3. Типы сообщений
+## 3. Типы сообщений (device → browser)
 
 | type | имя | payload |
 |---|---|---|
 | 0x01 | SYNC_BEGIN | `u32 count` |
 | 0x02 | SYNC_END | `u32 count` |
-| 0x10 | ENTITY | `u8 type | key | record` |
-| 0x11 | ENTITY_REMOVE | `u8 type | key` |
-| 0x20 | COMMAND | `u8 cmd | args` |
-| 0x21 | CMD_RESULT | `i16 status` |
+| 0x30 | ENTITY | `u64 entity_id, u64 device_id, char name[32]` |
+| 0x31 | ENTITY_REMOVE | `u64 entity_id` |
+| 0x32 | PROPERTY_STATE | `u64 entity_id, u16 property, u8 kind, u32 bits` |
+| 0x33 | PROPERTY_STATE_REMOVE | `u64 entity_id, u16 property` |
+| 0x34 | CAPABILITIES | `u64 entity_id, u8 count, props[]{u16 property,u8 n,u8 actions[]}, u8 event_count, u8 events[]` |
+| 0x35 | CAPABILITIES_REMOVE | `u64 entity_id` |
+| 0x36 | AUTOMATION | `u64 id | ha_rule_t (entity-native)` |
+| 0x37 | AUTOMATION_REMOVE | `u64 id` |
+| 0x38 | EVENT | `u64 source_entity, u8 event_id, u8 value_kind, u32 value_bits` |
+| 0x39 | DEVICE | `u64 device_id, u64 parent_device_id, char name[32]` |
+| 0x3A | DEVICE_REMOVE | `u64 device_id` |
+| 0x19 | GROUP_ITEM | `u64 group_id, u64 entity, u16 property, u16 order, char title[32]` |
+| 0x1A | GROUP_ITEM_REMOVE | `u64 group_id, u64 entity, u16 property` |
+| 0x3B | LOCATION | `u64 device_id | ha_location_record_t` |
+| 0x3C | LOCATION_REMOVE | `u64 device_id` |
+| 0x3D | WEATHER | `u64 device_id | ha_weather_record_t` |
+| 0x3E | WEATHER_REMOVE | `u64 device_id` |
+| 0x3F | WIFI_STATUS | `u64 device_id | ha_wifi_status_record_t` |
+| 0x40 | WIFI_STATUS_REMOVE | `u64 device_id` |
+| 0x41 | SETTINGS | `u8 id | ha_settings_record_t` |
+| 0x42 | SETTINGS_REMOVE | `u8 id` |
+| 0x43 | GROUP | `u64 id | ha_group_record_t` |
+| 0x44 | GROUP_REMOVE | `u64 id` |
 
-`ENTITY`/`ENTITY_REMOVE` — и в snapshot, и в дельте. `key`/`record` — сырые байты
-layout'а типа (§5). `SYNC_BEGIN/END` обрамляют snapshot.
+`SYNC_BEGIN/END` обрамляют snapshot. Удаление — соответствующий `*_REMOVE` (key-only).
+`wifi_scan`/`wifi_known` в браузер не отдаются (велик/пароли) — их читает Display из Domain.
 
-## 4. Команды (browser → device)
+## 4. Формы canonical записей
+
+Источник истины — `ha_model`. Байтовые form'ы (little-endian, фиксированный размер):
+
+| сущность | форма |
+|---|---|
+| Entity | `ha_entity_record_t` (device_id + name) |
+| Logical Device | `ha_logical_device_record_t` (parent_device_id, source, native_id, name) |
+| Property state | `ha_state_record_t` (`ha_value_t`: kind + bits) |
+| Capabilities | `ha_entity_capabilities_record_t` (properties[] + events[]) |
+| Automation | `ha_rule_t` (entity-native; см. §5) |
+| Location | `ha_location_record_t` (60) |
+| Weather | `ha_weather_record_t` (16) |
+| Wi-Fi status | `ha_wifi_status_record_t` (36) |
+| Settings | `ha_settings_record_t` (8) |
+| Group / group_item | `ha_group_record_t` (32) / `ha_group_item_record_t` (36) |
+
+## 5. Rule wire (entity-native)
+
+`AUTOMATION` и `WEB_CMD_AUTOMATION_PUT` совпадают:
+
+```text
+u64 id; u8 enabled; u8 kind;
+trigger{ EVENT: u64 entity + u8 event_id
+       | TIME:  u16 minutes_of_day + u8 weekday_mask
+       | STATE: u64 entity + u16 property + u8 op + u8 edge + f32 value + f32 value2 }
+u8 conditions_count; conditions[]{ u64 entity, u16 property, u8 op, f32 value, f32 value2 }
+action{ u64 entity, u16 property, u8 action, u8 value_kind
+        [, SCALAR: u8 kind + u32/f32 | XY: f32 x + f32 y ] }
+```
+
+`entity == 0xFFFFFFFFFFFFFFFF` (`HA_ENTITY_ID_SOURCE`) — «то же, что источник триггера».
+
+## 6. Команды (browser → device)
 
 | cmd | имя | args |
 |---|---|---|
 | 1 | SNAPSHOT | — (повторная высылка этому клиенту) |
-| 2 | ZB_COMMAND | `ha_zb_command_t` |
-| 3 | DEVICE_RENAME | `u64 uid | char name[32]` |
-| 4 | AUTOMATION_PUT | `u64 id | ha_automation_record_t` |
+| 4 | AUTOMATION_PUT | `u64 id | rule` (§5) |
 | 5 | AUTOMATION_REMOVE | `u64 id` |
+| 8 | DISCOVERY | `u8 seconds` (0 — stop). Adapter решает, что это (Zigbee → permit join) |
+| 9 | GROUP_PUT | `u64 id | char title[32]` |
+| 10 | GROUP_REMOVE | `u64 id` |
+| 13 | LOCATION_PUT | `u64 device_id | ha_location_record_t` |
+| 16 | GROUP_ITEM_PUT | `u64 group_id, u64 entity, u16 property, u16 order, char title[32]` |
+| 17 | GROUP_ITEM_REMOVE | `u64 group_id, u64 entity, u16 property` |
+| 18 | ENTITY_RENAME | `u64 entity_id | char name[32]` |
+| 19 | PROPERTY_COMMAND | `u64 entity_id, u16 property, u8 action, u8 value_kind[, scalar | xy]` |
+| 20 | DEVICE_RENAME | `u64 device_id | char name[32]` |
+| 21 | LOGICAL_DEVICE_REMOVE | `u64 device_id` |
 
-Ответ — `CMD_RESULT` с тем же `seq`; `status` = 0 (OK) или `sys_error` code.
-
-## 5. Схема записей (key/record)
-
-Дискриминатор типа совпадает с `ha_entity_t` (`ha_model/ha_entities.h`):
-
-| type | сущность | key | record |
-|---|---|---|---|
-| 1 | device | `u64 uid` | `{ char name[32]; char model[32]; }` |
-| 2 | state | `{ u64 uid; u16 cluster; u16 attr; u8 ep; u8 rsv[3]; }` (16) | `{ u32 raw; u8 zcl_type; u8 rsv[3]; }` (8) |
-| 3 | endpoint | `{ u64 uid; u8 ep; u8 rsv[7]; }` (16) | `{ u16 profile; u16 device_id; u8 count; u8 rsv[3]; cluster[16]{u16 id; u8 role; u8 rsv;} }` |
-| 4 | automation | `u64 id` | `{ u8 enabled; u8 args_len; u8 conditions_count; u8 trigger_kind; u16 trigger_minutes_of_day; u8 trigger_weekday_mask; u8 rsv; u64 trigger_uid; u16 trigger_cmd; u64 action_uid; u8 action_ep; u16 action_cluster; u8 action_cmd; u8 action_args[8]; condition[4] }` (144) |
-
-`trigger_kind`: 0 — событие устройства (`trigger_uid`/`trigger_cmd`), 1 — время
-(`trigger_minutes_of_day` + `trigger_weekday_mask`), 2 — состояние. Поля триггера —
-`union` по видам, размер записи неизменен (144). Для `kind=2` (`STATE`):
-`trigger_uid` — device_uid (обязателен, ≠0); байты @4..7 — порог `f32`
-(`state_value`); @16 endpoint (0 — любой), @18 cluster (`u16`), @20 attr (`u16`),
-@22 `op` (`ha_condition_op_t`), @23 `edge` (0 любое изменение, 1 стало истинно,
-2 стало ложно).
-
-| 6 | location | `u64 uid` | `{ f32 lat; f32 lon; i16 tz_offset_min; u8 rsv[2]; char name[48]; }` (60) |
-| 7 | group | `u64 id` | `{ char title[32]; }` (32) |
-| 8 | group_item | `u64 group_id; state(16)` (24) | `{ u16 order; u8 rsv[2]; char title[32]; }` (36) |
-| 9 | weather | `u64 uid` | `{ u8 condition; u8 cloud_pct; i16 temp_c100; u16 humidity_p100; u16 pressure_hpa; u16 wind_kmh10; u16 wind_dir_deg; u8 rsv[4]; }` (16) |
-| 12 | wifi_status | `u64 uid` | `{ u8 state; u8 connected; i8 rssi; u8 rsv; char ssid[32]; }` (36) |
-| 13 | settings | `u8 id` | `{ u32 screensaver_timeout_ms; u8 brightness_pct; u8 rsv[3]; }` (8) |
-
-`wifi_scan (10)` и `wifi_known (11)` в браузер не отдаются: первая слишком велика
-(16 AP), вторая содержит пароли; их читает Display напрямую из Domain.
-
-`condition[4]` — условия правила (AND), первые `conditions_count` значимы:
-`{ u64 device_uid; u16 cluster; u16 attr; u8 ep; u8 op; u8 rsv[2]; f32 value; }` (24).
-`device_uid == 0` — устройство-источник триггера, `ep == 0` — любой endpoint;
-`op` — `ha_condition_op_t` (1 `=`, 2 `≠`, 3 `>`, 4 `<`, 5 `≥`, 6 `≤`).
-
-Заголовки/структуры — источник истины `ha_model`. Браузерная копия схемы —
-`web-ui/src/schema.js`.
-
-## 6. Сценарии
+## 7. Сценарии
 
 ```text
-WS connect (GET): сервер только принимает соединение. Слать snapshot прямо в GET нельзя:
-  ответ 101 завершается после возврата хендлера, и кадр уйдёт раньше. Snapshot инициирует
-  клиент командой SNAPSHOT сразу после open.
+WS connect (GET): сервер принимает соединение. Snapshot шлёт сам клиент командой SNAPSHOT
+  сразу после open (в GET слать нельзя: 101 завершается после возврата хендлера).
 
 client → SNAPSHOT:
-  web task → этому fd: SYNC_BEGIN{count}, ENTITY per record (по типам), SYNC_END{count}
+  SYNC_BEGIN{count} → ENTITY/DEVICE/PROPERTY_STATE/CAPABILITIES/AUTOMATION/GROUP_ITEM
+  + LOCATION/WEATHER/WIFI_STATUS/SETTINGS/GROUP → SYNC_END{count}
 
-Domain subscription (ENTITY_UPSERTED | ENTITY_REMOVED, любые source/entity):
-  UPSERTED → domain_entity_get → ENTITY → broadcast всем WS-клиентам
-  REMOVED  → ENTITY_REMOVE → broadcast
+Domain subscription (любые source; фильтр — по типу факта):
+  UPSERTED → canonical DTO → broadcast; REMOVED → *_REMOVE → broadcast
 
 WS COMMAND:
-  ZB_COMMAND      → domain_post(HA_CMD_ZIGBEE_CLUSTER, …)
-  DEVICE_RENAME   → domain_entity_get/put(device)
-  AUTOMATION_*    → domain_entity_put/remove(automation)
-  SNAPSHOT        → повторный snapshot этому клиенту
-  → CMD_RESULT{seq,status}
+  PROPERTY_COMMAND       → ha_property_command_t → domain_post(HA_CMD_PROPERTY)
+  ENTITY_RENAME/DEVICE_RENAME → domain_entity_put
+  AUTOMATION_*           → domain_entity_put/remove(AUTOMATION)
+  LOGICAL_DEVICE_REMOVE  → device_remove (Device service → remover → cascade)
+  DISCOVERY              → domain_post(HA_CMD_DISCOVERY)
+  GROUP_*/LOCATION_PUT/GROUP_ITEM_* → domain_entity_put/remove
 ```
 
-## 7. Открытые вопросы
+## 8. Открытые вопросы
 
-- snapshot шлётся под Domain-lock (итерация + отправка). При медленном клиенте это
-  задерживает писателей Domain; при росте числа клиентов — собирать в буфер и слать
-  после освобождения lock.
-- события (`EVENT`, type 0x30) пока не шлются: добавим вместе с потребителем в UI.
+- snapshot шлётся под Domain-lock (итерация + отправка); при медленном клиенте это
+  задерживает писателей Domain — при росте числа клиентов собирать в буфер и слать после
+  освобождения lock.

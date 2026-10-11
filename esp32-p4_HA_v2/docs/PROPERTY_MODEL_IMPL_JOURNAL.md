@@ -691,6 +691,13 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Docs — приведены к baseline после Steps A–F. ARCHITECTURE.md (rev3, canonical
+            Device/Entity-модель, без «переходного периода»); STATUS.md (13 canonical типов,
+            v3 wire, discovery); PROPERTY_MODEL.md переписан как финальная canonical-модель;
+            RECORD_MODEL.md (canonical ключи, vocabulary внутри zigbee); ZIGBEE.md (адаптер:
+            private store + мост внутри); WEB_PROTOCOL.md (canonical v3, entity-native);
+            AUTOMATION/SYSTEM/COMMANDS/DOMAIN_API/ENTITY_STORE/DISPLAY/ZIGBEE_CAPABILITIES —
+            точечно. Исторические STEP_*/журналы не трогались.
 2026-10-11  Step F (часть 5) — добит boundary: sys_layer_t стал opaque (uint16), SYS_LAYER_ZIGBEE
             убран из generic `sys`; adapter-owned ids (ZIGBEE_SOURCE_ID/_ENTITY_ISSUER/
             _DOMAIN_SOURCE/_SYS_LAYER) собраны в zigbee/zigbee_adapter_ids.h. Dead-code проход

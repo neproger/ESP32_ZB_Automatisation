@@ -1,241 +1,145 @@
-# Zigbee Service
+# Zigbee Adapter
 
-Слой: **Services / Zigbee**. Карта системы — `../ARCHITECTURE.md`.
-Документ описывает контракт и поведение; конкретная реализация — в коде.
+Слой: **Adapters / Zigbee**. Карта системы — `../ARCHITECTURE.md`.
+Документ описывает контракт и поведение; реализация — в коде (`zigbee/`).
 
-Как сервис вызывает Domain — не здесь: `../domain/DOMAIN_API.md`. Формы записей и
-ключей — `../RECORD_MODEL.md`. Словарь ZCL — `ha_model/include/ha_model/ha_zigbee.h`.
-Интерпретация устройств (endpoint / cluster / role) и проекция возможностей —
-`ZIGBEE_CAPABILITIES.md`.
+Как адаптер вызывает Domain — `../domain/DOMAIN_API.md`. Canonical-формы — `../RECORD_MODEL.md`.
+Словарь ZCL и мост «ZCL ↔ canonical» живут **внутри `zigbee/`**: `zigbee/include/zigbee/ha_zigbee.h`,
+`zigbee_forms.h`, `zb_command.h`, `zigbee_semantics.{h,c}`. Интерпретация устройств и проекция
+возможностей — `ZIGBEE_CAPABILITIES.md`.
 
 ## 1. Роль
 
-Zigbee service — адаптер к Zigbee-миру. Он знает Zigbee-модель и работает с ней, но не
-хранит source of truth: состояние живёт в Domain.
+Zigbee — **полностью внутренний адаптер**. Наружу отдаёт только canonical contract
+(`Device/Entity/Property/Event/Capability`, executor команды `HA_CMD_PROPERTY`); весь
+транспортный словарь (`EUI64/endpoint/cluster/attribute/ZCL`, сетевой адрес, интервью,
+bindings, radio) не выходит за `zigbee/`.
 
-Он:
+```text
+по репорту/событию:  radio → private store → bridge (ZCL→canonical) → Domain (canonical факт)
+по команде:          Domain → executor → resolve entity→addr → bridge (canonical→ZCL) → radio
+по удалению:         Device service remover(source=ZIGBEE) → deferred leave
+```
 
-- принимает reports/events от Zigbee и превращает их в изменения Domain
-  (`upsert` state, `publish` event);
-- исполняет команды, приходящие от Domain (напрямую, см. `../domain/COMMANDS.md`);
-- не знает деталей других сервисов.
-
-## 2. Разделение данных: сервис vs Domain
+## 2. Разделение данных: adapter vs Domain
 
 | Данные | Где живёт | Почему |
 |---|---|---|
-| EUI-64, short address, список endpoint'ов, simple descriptors | RAM сервиса | текущее сетевое состояние, меняется без нашего участия |
-| состояние интервью, политика повторов, reporting config | RAM сервиса | процедура, а не состояние устройства |
-| canonical state устройства и его атрибутов | Domain Entity Store | источник истины для всех потребителей |
-| компактное значение факта | Domain Journal | история и диагностика |
-| `last_seen` / `rssi` / `lqi` | отдельный тип сущности или RAM сервиса | меняется на каждом сообщении (`../RECORD_MODEL.md:123-138`) |
+| EUI-64, endpoints, кластеры с ролями, имя/модель устройства | Zigbee-private RAM store (`zigbee_device_store`) | транспортное состояние интервью; наружу не выходит |
+| пометка «удалить» (deferred leave) | Zigbee-private NVS (`zigbee_remove_mark`) | переживает reboot; generic Domain не знает |
+| mapping `(uid, endpoint) ↔ entity_id` | Zigbee-private RAM registry (`zigbee_entity_registry`) | adapter-private; identity детерминирована → восстанавливается |
+| canonical состояние | Domain `PROPERTY_STATE` `(entity_id, property)` | единственная истина для всех потребителей |
+| canonical Device/Entity/Capabilities | Domain | canonical модель |
+| `source`/`issuer`/`sys_layer` адаптера | `zigbee_adapter_ids.h` | generic core их не именует |
 
-Сервис **не** держит копию состояния как истину и не «быстрее читает из своего
-кэша»: чтение состояния — через Domain. Структуры сервиса в RAM производные и
-восстановимы.
+Адаптер не держит canonical state как истину; его RAM-структуры производные и восстановимы.
 
-## 3. Модель внутри сервиса
-
-```text
-device (EUI-64)
-  └── endpoint
-        └── cluster (role: client | server)
-              ├── attribute  → состояние
-              └── command    → намерение
-```
-
-Правила:
-
-- identity устройства — `ha_device_uid_t` (IEEE EUI-64), **не** short address: он
-  меняется при перепривязке (`ha_zigbee.h:26-31`);
-- интерпретация значения — по ZCL data type из словаря (`ha_zigbee.h:121-134`);
-- роль кластера в simple descriptor определяет «кнопка» vs «реле/лампа»
-  (`ha_zigbee.h:136-138`);
-- кластеры, команды и атрибуты берутся из `ha_zigbee.h`, а не изобретаются;
-- масштабирование единиц (уровень 0..254, 0.01 °C, батарея 0.5 %) — сторона сервиса,
-  в словарь не входит (`ha_zigbee.h:15-16`).
-
-### 3.1. Формы сущностей
+## 3. Приватная модель (внутри адаптера)
 
 ```text
-Zigbee device                     — entity HA_ENTITY_DEVICE, ключ = EUI-64
-  └── endpoint                    — entity HA_ENTITY_ENDPOINT, ключ = (EUI-64, endpoint)
-        └── cluster
-              └── attribute       — entity HA_ENTITY_STATE, одна на атрибут
+device (EUI-64)                       — zigbee_device_store
+  └── endpoint (profile, device_id)   — topology
+        └── cluster (role: client|server)
 ```
 
-- endpoint несёт profile, device_id и состав кластеров с ролями — это canonical
-  state: возможности устройства меняются редко и значимы для всех потребителей;
-- топология живёт в RAM: интервью повторяется на каждом старте, а писать её во flash
-  значило бы платить за данные, которые и так приходят заново;
-- состояние атрибута в топологию не входит никогда — оно адресуется отдельно.
+- identity — `ha_device_uid_t` (EUI-64), не short address (меняется при перепривязке);
+- `zigbee_device_store` — RAM: имя/модель + топология endpoint'ов (cluster+role);
+  интервью повторяется на каждом старте, persistence не нужна.
 
-```c
-ha_zb_state_key_t    { device_uid u64, cluster_id u16, attr_id u16, endpoint u8 }  /* 16 */
-ha_zb_state_record_t { raw u32, zcl_type u8 }                                      /* 8  */
-```
+## 4. Мост «ZCL ↔ canonical» (внутри zigbee)
 
-- ключ состояния — та же координата, что в ZCL-репорте, поэтому трансляции
-  «атрибут → семантическое имя» нет;
-- runtime state — одна сущность на один атрибут: `changed` имеет точный смысл
-  («изменился именно этот атрибут»), и Journal получает ровно тот факт, который
-  произошёл;
-- значение хранится в кодировке ZCL с явным типом: `payload_size` фиксирован на тип
-  сущности, а масштабирование делает читатель;
-- топология (endpoint, список кластеров с ролями) — отдельный шаг вместе с интервью,
-  в эти формы не входит.
+`zigbee_semantics.c` — единственное место, где числа ZCL получают смысл:
 
-Формы — `ha_model/include/ha_model/ha_entities.h`.
+- `semantics_property_from_key` / `semantics_state_value` — `(cluster,attr)+zcl_type` →
+  `(property_id, ha_value_t)`;
+- `semantics_build_command` — `property+action(+value)` → `ha_zb_command_t`;
+- `semantics_decode_event` — `(cluster,command)` → `ha_event_id_t`;
+- `semantics_endpoint_capabilities` — endpoint → canonical `Capabilities`
+  (server-кластеры → properties/actions, client-кластеры → events).
 
-## 4. Репорт: как он становится фактом
+Поверх этого моста адаптер говорит с Domain только canonical DTO.
 
-Поток идёт в задаче сервиса, порядок фиксирован:
+## 5. Репорт → canonical состояние
 
 ```text
-1. принять ZCL Report Attributes (0x0A)
-2. найти устройство по EUI-64
-3. разобрать значение по ZCL type и привести к форме записи
-4. собрать ключ состояния, zero-fill запись, заполнить canonical state
-5. domain_entity_put(type, key, record, meta{source=ZIGBEE, value}, &changed)
-6. changed == false → ничего не произошло: факта нет, подписчики не будятся
-7. то, что не является состоянием (нажатие кнопки, IAS Zone) → EVENT, а не upsert
+1. ZCL Report Attributes (0x0A) в задаче радио
+2. device по EUI-64 известен? (zigbee_device_has) — иначе репорт не факт
+3. bridge: декод значения в (property, ha_value_t)
+4. domain_entity_put(HA_ENTITY_PROPERTY_STATE, {entity,property}, {value})
+5. changed == false → факта нет, подписчики не будятся
 ```
 
-- шаг 6 — штатная ветка, а не потеря: состояние не изменилось, значит факта нет
-  (`../domain/ENTITY_STORE.md` §8, `../domain/JOURNAL.md:48`);
-- `meta.value` — компактный snapshot из формы записи; журнал не хранит саму запись
-  (`../domain/JOURNAL.md:101-104`);
-- событие без состояния публикуется через `domain_payload_put` (нужен payload) или
-  как `EVENT` с компактным значением;
-- «устройство живо» — не факт: диагностике место в счётчиках и логе
-  (`../domain/JOURNAL.md:124-127`).
+- сырое состояние (`ha_zb_state_record_t`) в Domain **не** хранится (истина — canonical);
+- «устройство живо» — не факт: диагностике место в счётчиках и логе.
 
-## 5. Команда: как она уходит в радио
+## 6. Событие → canonical EVENT
+
+Входящая cluster-specific команда (кнопка/пульт) — сырой ZCL-кадр → bridge даёт
+`ha_event_id_t` → публикуется canonical событие (payload = `ha_event_t`,
+`source_entity` из binding). Payload события (сырые байты команды) не читается — носится
+только canonical event.
+
+## 7. Команда
 
 ```text
 Automation / Web
-  → domain_post(HA_CMD_ZIGBEE_CLUSTER, &ha_zb_command_t, sizeof(...))
-  → executor сервиса (контекст вызывающего)
-      → проверить адресата и аргументы
-      → скопировать args в свою очередь
-      → вернуть SYS_OK
+  → domain_post(HA_CMD_PROPERTY, &ha_property_command_t)
+  → executor: zigbee_entity_physical(entity) → (uid, endpoint)
+              bridge: semantics_build_command → ha_zb_command_t
+              очередь отправки
   → Journal: COMMAND_SENT
-  → задача сервиса отправляет в радио
+  → задача адаптера: zigbee_radio_send
 ```
 
-Правила:
+- executor короткий: валидация + постановка в очередь; радио из чужого контекста не трогает;
+- `COMMAND_SENT` = «передали исполнителю»; подтверждение — только репортом;
+- адрес (uid/endpoint) и short address — внутренняя политика адаптера, в контракте их нет.
 
-- исполнитель **короткий**: он копирует аргументы и ставит их в очередь своей задачи.
-  Отправка в радио из чужого контекста недопустима (`../domain/COMMANDS.md:112-114`);
-- `COMMAND_SENT` означает только «передали исполнителю»: ни получения, ни подтверждения
-  устройством (`../domain/COMMANDS.md:45-48`);
-- результат исполнения подтверждается репортом, а не ответом на команду: пока его нет,
-  состояние прежнее (`ARCHITECTURE.md:10-15`);
-- отказ executor'а (устройство неизвестно, аргументы вне формы, очередь заполнена) —
-  обычная ошибка вызывающему, `COMMAND_SENT` не пишется
-  (`../domain/COMMANDS.md:31-32`). Проверка до отправки — `zigbee_command_check()`;
- 
-- адресат, `src_endpoint` и short address — внутренняя политика сервиса, в контракте
-  команды их нет (`ha_commands.h:11-15`).
-
-Отправка (`zigbee_radio_send`) адресует устройство по EUI-64 и читает `args` по форме
-кластера/команды:
+## 8. Удаление устройства (deferred leave)
 
 ```text
-On/Off        off | on | toggle         args_len = 0
-Level Control MoveToLevel               args_len = 1, args[0] = уровень 0..254
-              (время перехода — 0xFFFF, т. е. OnOff transition time)
+UI: LOGICAL_DEVICE_REMOVE(device_id)
+  → Device service: find remover по source device-а, вызов
+  → zigbee_device_remover: native_id → uid → remove_mark_add(uid) + leave (best-effort)
+  → успех → Domain cascade: снять ownership Entity, PROPERTY_STATE, CAPABILITIES, GROUP_ITEM refs;
+            Automation refs сохраняются
+  → на завершение leave: zigbee_device_remove (private store) + entity_forget + mark clear
 ```
 
-Кластер, команда или форма аргументов вне словаря — `INVALID_ARG`, команда не уходит.
+Единственный путь удаления. Устройство offline → пометка ждёт announce (NVS переживает reboot).
 
-## 6. Задачи и контексты
+## 9. Возможности endpoint'а
 
-| Контекст | Что делает | Ограничение |
-|---|---|---|
-| задача Zigbee | приём репортов, интервью, отправка команд, сетевые события | единственный, кто говорит с радио |
-| executor команды | контекст вызывающего (`domain_post`) | только валидация и постановка в очередь; без ожидания |
-| dispatcher | `try_push` / `wake` подписчика | короткий, API Domain не вызывать (`../domain/DOMAIN_API.md:190-192`) |
+`semantics_endpoint_capabilities` собирает canonical interface: server-кластеры →
+`properties[]` (property + allowed actions), client-кластеры → `events[]` (press-события).
+Кнопка, у которой нет server-кластеров, получает `properties=[]`, `events=[...]`.
+Публикуется адаптером по `entity_id` при интервью.
 
-Сервис не вызывает мутирующий API Domain из колбэка итерации и из `try_push`.
+## 10. Ошибки и диагностика
 
-## 7. Ошибки и диагностика
+- слой `ZIGBEE_SYS_LAYER` (adapter-owned) в `zigbee_adapter_ids.h`;
+- ошибку нижележащего слоя не перекодирует;
+- не ошибка: отсутствие репорта, повтор значения, неизвестный атрибут;
+- `zigbee_diag_record()` — счётчики по видам сбоя, тег `zigbee.diag`.
 
-- своя ошибка создаётся со слоем `SYS_LAYER_ZIGBEE`, код — из общего пространства
-  (`../ERRORS.md`);
-- ошибку нижележащего слоя сервис не перекодирует: `NO_SPACE` от хранилища приходит как
-  есть;
-- **не** считаются ошибкой: отсутствие репорта, повтор того же значения,
-  неизвестный атрибут (диагностика, а не сбой);
-- считаются: отказ радио, нехватка места в таблице/очереди, повреждение принятых данных
-  на границе доверия (`../RECORD_MODEL.md` §7);
-- ошибка времени исполнения приходит в Journal как ERROR-факт — это исход операции;
-- **диагностика идёт отдельным потоком**: `zigbee_diag_record()` ведёт счётчики по
-  видам сбоя (репорт, очередь, команда, отправка, топология) с последней ошибкой и печатает
-  тегом `zigbee.diag`, снимок — `zigbee_diag_snapshot()`. Пачка однотипных ERROR иначе
-  вытесняет из ring факты состояния (`../domain/JOURNAL.md:124-127`).
+## 11. Вне scope документа
 
-## 8. Вне scope этого документа
-
-Реализовано в слое, но вне контракта этого документа: комиссионирование координатора
-(создание сети, её открытие на конечное время, steering), интервью устройства
-(ZDO-дискавери `Active_EP`/`Simple_Desc` + чтение Basic), подписка на состояние
-(binding server-кластеров устройства на координатор + Configure Reporting; набор
-reportable-атрибутов — `zigbee_binding.c:REPORT_RULES`: OnOff, Level Control, Color
-Control (hue/sat/X/Y/temp), датчики температуры/влажности/освещённости/присутствия,
-батарея), приём
-событий (входящие cluster-specific команды через сырой ZCL-кадр → `EVENT`) и уход
-устройства (`LEAVE_INDICATION` / `DEVICE_UPDATE` → снятие device/endpoints/state).
-Всё это идёт в задаче радио, результат кладётся в очередь сервиса — как и репорт.
+Комиссионирование координатора (formation/open/steering), интервью (`Active_EP`/`Simple_Desc`
++ Basic), подписка (bind server-кластеров + Configure Reporting), radio spinel→`ot_rcp`,
+события входящих команд, уход по сетевому leave — реализовано в задаче радио.
 
 ```text
-политика повторов и таймаутов интервью (отказ возвращает устройство в ожидание rejoin)
-security; явное удаление устройства пользователем (сейчас — по сетевому leave)
-группы, сцены, OTA; пользовательские binding'и (автоподписка координатора — реализована)
-маршрутизация mesh и работа с радио-шлюзом
-операции «запрос-ответ» (read_attr, permit_join, network scan) —
-    отдельный класс взаимодействия, не COMMAND (../domain/COMMANDS.md:66-71)
+открытые: политика повторов/таймаутов интервью; удаление offline-устройства (deferred leave);
+groups/scenes/OTA; пользовательские bindings; mesh-маршрутизация; read_attr/network scan
 ```
 
-## 9. Открытые вопросы
-
-Решаются до реализации каркаса, каждая развилка меняет состав `ha_model`:
-
-1. ~~**Ключ состояния — числовой или семантический.**~~ Решено: числовой
-   `(device_uid, endpoint, cluster_id, attr_id)` (`ha_entities.h`). ZCL-числа остаются
-   общим словарём, второй системы идентификаторов не появляется.
-2. ~~**Гранулярность состояния.**~~ Решено: одна сущность на один атрибут (§3.1).
-3. **Адресат в факте.** `COMMAND_SENT` / `EVENT` пишутся без `entity`/`key`, поэтому
-   подписчик не фильтрует по устройству (`../domain/COMMANDS.md:104-108`). Варианты:
-   фасад принимает адресата отдельным параметром, либо адресат остаётся только в payload.
-4. ~~**Устройство, которого нет в Entity Store.**~~ Решено: устройство без интервью
-   живёт в RAM сервиса; в Domain попадает по завершении интервью, репорт до этого —
-   не факт (`ZIGBEE_IMPL_JOURNAL.md` §3).
-5. **`device_meta`.** Отдельный тип сущности или поля внутри записи устройства
-   (`../RECORD_MODEL.md:277`).
-6. **Гранулярность дискриминатора команды.** Один `HA_CMD_ZIGBEE_CLUSTER` на весь
-   кластерный путь или разбиение по классам (`../domain/COMMANDS.md:109-111`).
-
-## 10. Порядок реализации
+## 12. Порядок реализации
 
 ```text
-1. решить пп. 1-2 (ключ и гранулярность состояния)                  выполнено
-2. формы записей в ha_model (ha_entities.h)                         выполнено
-3. типы из bootstrap, размер раздела                                выполнено
-4. каркас сервиса: задача, приём репорта, upsert в Domain           выполнено
-5. команды: executor + проверка адресата + очередь отправки         выполнено
-6. топология: endpoint и состав кластеров                           выполнено
-7. счётчики диагностики (zigbee_diag)                               выполнено
-8. радиоканал: spinel-UART + standalone ot_rcp, репорты и ZCL       выполнено
-9. комиссионирование: formation/open(180с)/steering                  выполнено
-10. интервью: Active_EP -> Simple_Desc -> Basic, upsert в Domain     выполнено
-11. подписка: bind + Configure Reporting -> репорты состояния        выполнено
-12. события: сырой ZCL-кадр команды -> EVENT с payload               выполнено
-13. уход устройства: LEAVE_INDICATION/DEVICE_LEFT -> снятие записей  выполнено (host)
+Steps A–C: canonical identity/state, граница адаптера, приватный store, удаление diagnostics
+Step D:    events в capabilities (server→properties, client→events)
+Step E:    canonical event-факт (ha_event_t), wire v3 для generic-сущностей
+Step F:    мост semantics внутрь zigbee; adapter-owned ids; DISCOVERY вместо permit-join
 ```
 
-Заглушек нет: источник кадров (`zigbee_stub_feed.c`) удалён. Приём репортов, интервью
-и отправка команд идут настоящим радиоканалом (`zigbee_radio.c`); состояние устройства
-приходит по подписке (`zigbee_binding.c`).
-Открытые вопросы §9: адресат в факте закрыт (`COMMANDS.md` §8), устройство без интервью
-закрыто (п. 4); остаются `device_meta` и гранулярность дискриминатора команды.
+Все пункты выполнены; открытые вопросы — от конкретных устройств (composition, словарь кластеров).

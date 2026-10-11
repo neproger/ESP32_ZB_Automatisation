@@ -38,29 +38,29 @@ descriptor через единый механизм:
 
 ```c
 domain_entity_desc_t desc = {
-    .type         = HA_ENTITY_DEVICE,
-    .key_size     = sizeof(ha_device_key_t),
-    .payload_size = sizeof(ha_device_record_t),
-    .capacity     = APP_DEVICE_CAPACITY,
-    .backing      = DOMAIN_BACKING_RAM_FLASH,
-    .persist_key  = "device",
+    .type         = (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE,
+    .key_size     = sizeof(ha_logical_device_key_t),
+    .payload_size = sizeof(ha_logical_device_record_t),
+    .capacity     = APP_LOGICAL_DEVICE_CAPACITY,
+    .backing      = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key  = "logical_device",
 };
 
 domain_register_entity(domain, &desc);
 ```
 
-Этот код принадлежит **bootstrap приложения**, а не сервису: `device` создаёт Zigbee, но
-читают его Web, Automation и другие. Владение таблицей системное, а не владение одного
-потребителя. API общий — без `domain_register_device()` и подобных имён: Domain не должен
-знать этих слов.
+Этот код принадлежит **bootstrap приложения**, а не сервису: Logical Device создаёт
+Zigbee через Device service, но читают его Web, Automation и другие. Владение таблицей
+системное, а не владение одного потребителя. API общий — без `domain_register_device()` и
+подобных имён: Domain не должен знать этих слов.
 
 Bootstrap остаётся единственным местом, где собраны реальные экземпляры таблиц и их
 ёмкости — ровно то, что нужно для пересчёта размера раздела.
 
-Числовой `entity_type` (`HA_ENTITY_DEVICE`, `HA_ENTITY_ENDPOINT`, …) — **внутренняя
-runtime identity Domain**, а не wire ABI. Порядок значений внутри прошивки свободный.
-Наружу (WS) тип передаётся строковым именем (`"device"`, `"endpoint"`, `"automation"`) —
-это уже контракт Web service и он версионируется отдельно.
+Числовой `entity_type` — **внутренняя runtime identity Domain**, не wire ABI. Порядок
+значений внутри прошивки свободный. Наружу (WS) тип кодируется дискриминатором canonical
+сообщения, а identity — `entity_id`/`device_id`; числовые Domain-типы на провод не выходят
+(`services/WEB_PROTOCOL.md`).
 
 ## 2. Дисциплина записи
 
@@ -168,14 +168,12 @@ event                  то, что вообще не является сост�
 - ключ — **непрозрачные байты фиксированной длины**, принадлежит слою хранения;
 - **не** извлекается из записи колбэком (`MICRO_DB_V1_REVIEW.md:61` — отвергнутый приём v1);
 - компоненты составного ключа — **числовые и фиксированной ширины**, строк в ключах нет;
-- пример, уже проверенный v1: `endpoint = (device_uid, endpoint)`,
-  `group_item = (device_uid, endpoint)` (`gw_model_schema.c:42-59, 98-115`).
-  В v2 ключ `group_item` иной — `(group_id, state_key)` (`../clients/DISPLAY.md` §2):
-  одно состояние может стоять на нескольких экранах. Принцип тот же — числовые
-  компоненты фиксированной ширины.
+- пример составного canonical-ключа: `group_item = (group_id, entity_id, property_id)`
+  (`ha_model/ha_groups.h`) — одно свойство может стоять на нескольких экранах. Числовые
+  компоненты фиксированной ширины, строк в ключах нет.
 
-Формат ключа состояния зафиксирован вместе с Zigbee-слоем (§10.2): числовой
-`(device_uid, endpoint, cluster_id, attr_id)`, форма — `ha_model/ha_entities.h`.
+Canonical-ключи: состояние — `(entity_id, property_id)` (`ha_model/ha_state.h`); Entity —
+`entity_id`; Logical Device — `device_id`; group / group_item — выше.
 
 ## 6. Нулевой marshalling
 
@@ -229,60 +227,23 @@ CRC отвечает за «биты доехали», но **не** замен�
 Аппаратное вычисление CRC — возможная оптимизация, но не архитектурное решение: она
 допустима только по замеру и меняет только порт (`mstore/src/storage/mstore_bytes.c`).
 
-## 9. Общий словарь Zigbee (`ha_zigbee.h`)
+## 9. Canonical vocabulary
 
-> **Переходный контракт.** Раздел описывает **текущий** физический ABI. Семантически он
-> переопределяется `PROPERTY_MODEL.md` (вариант B): `cluster/attr` — adapter-owned
-> представление, а не общий смысл; верхние слои переходят на `Property/Action/Event`.
-> Физический ключ и словарь сохраняются до шага A.
+Canonical формы и идентификаторы — `ha_model` (Entity, Logical Device, Property,
+Capability, Event, Action, Rule, Group, Settings). `ha_model` не линкует Domain и не
+именует адаптеры (`source`/`issuer`/`sys_layer` — opaque; свои значения объявляет адаптер).
 
-Формула границы: **`ha_zigbee.h` — vocabulary published by Zigbee service, not Zigbee
-behavior.**
-
-Заголовок: `ha_model/include/ha_model/ha_zigbee.h` (компонент `ha_model`, заголовочный,
-Domain не линкует). Значения взяты из ZCL6 (07-5123-06): кластеры, команды, атрибуты,
-типы данных. Имена esp-zigbee-sdk v2.x (пространство `EZB_ZCL_*`) — способ сверить
-числа при появлении Zigbee-слоя, а не источник: расхождение означает ошибку в словаре.
-
-Словарь содержит только стабильные общие идентификаторы, нужные нескольким сервисам:
-
-```text
-profile_id, device_id, cluster_id, attribute_id
-command_id — в той мере, в какой он нужен для идентификации
-ZCL value type IDs
-```
-
-Не содержит:
-
-```text
-состояние интервью и политику повторов
-допустимые переходы состояний
-формирование команд и валидацию ZCL-аргументов
-ESP Zigbee descriptors
-```
-
-Automation использует этот словарь для выражения триггеров и действий и при этом **не
-становится зависимым от реализации Zigbee service**.
-
-Масштабирование единиц (температура 0.01 °C, влажность 0.01 %, батарея 0.5 %) в словарь
-не входит: это поведение Zigbee-сервиса, а не общий идентификатор.
+ZCL-словарь (`ha_zigbee.h`) и мост «ZCL ↔ canonical» (`zigbee_semantics.c`) живут
+**внутри `zigbee/`** и наружу не выходят. Верхние слои (Automation/Web/Display) ZCL не
+видят и не используют — они работают с canonical `Property/Action/Event`
+(`PROPERTY_MODEL.md`).
 
 ## 10. Открытые вопросы
 
 1. **Имя и путь компонента** (принято: `esp32-p4_HA_v2/ha_model`) — уточняется в коде.
-2. ~~**Ключ состояния.**~~ Решено: числовой `(device_uid, endpoint, cluster_id, attr_id)`
-   вместо семантической строки v1 (`"onoff"`, `"temperature_c"`); семантика остаётся
-   проекцией Zigbee/Web (`gw_model_sync.c:236-348`). Форма — `ha_model/ha_entities.h`,
-   обоснование и гранулярность состояния — `services/ZIGBEE.md` §3.1, §9.
-
-    Числовой ключ влечёт: `cluster_id` / `attribute_id` входят в ключ сущности, поэтому
-    эти числа обязаны быть общими для того, кто ключ собирает (Zigbee service), и того,
-    кто по нему адресует (Automation, Web) — словарь Zigbee-идентификаторов живёт в
-    `ha_model`.
-
-    > **Переходное.** Верно для текущего физического ключа. Семантически переопределено в
-    > `PROPERTY_MODEL.md`: Automation/Web должны адресовать по `Property/Action/Event`, а не
-    > собирать ZCL-ключ. Физический ключ и общий словарь остаются до шага A.
+2. ~~**Ключ состояния.**~~ Решено: canonical `(entity_id, property_id)`
+   (`ha_model/ha_state.h`); физический `(device_uid, endpoint, cluster_id, attr_id)` живёт
+   только внутри адаптера. Детали — `PROPERTY_MODEL.md`.
 3. **`device_meta`.** Отдельный тип сущности (как в v1) или поля внутри `device`.
 4. **TEXT-значение.** Компактный value журнала не имеет строк (`JOURNAL.md:49`); уточнить,
    достаточно ли этого. Погода решена отдельной сущностью с enum-условием (`ha_weather.h`),
@@ -312,4 +273,4 @@ Automation использует этот словарь для выражени�
 без явного `reserved[]`; заполнение записи без zero-fill; строка в ключе; поле версии
 внутри payload; TLV; отсутствие валидации на границе; дубль описания полей для транспорта
 вместо проекции; «универсальный» формат ради будущего; числовой `entity_type` на проводе;
-Zigbee-поведение внутри `ha_zigbee.h`; Domain, инклюдящий `ha_model`.
+ZCL/`ha_zb_*` вне `zigbee/`; Domain, инклюдящий `ha_model`.

@@ -1,8 +1,9 @@
 # Zigbee: интерпретация устройств и проекция возможностей
 
-Слой: **Services / Zigbee** (интерпретация) → потребители (**Web / Automation**).
-Карта системы — `../ARCHITECTURE.md`; формы записей — `../RECORD_MODEL.md`,
-`ha_model/ha_entities.h`; словарь ZCL — `ha_model/include/ha_model/ha_zigbee.h`.
+Слой: **Adapters / Zigbee** (интерпретация) → canonical для потребителей (**Web / Automation**).
+Карта системы — `../ARCHITECTURE.md`; canonical-модель — `../PROPERTY_MODEL.md`;
+формы — `../RECORD_MODEL.md`; словарь ZCL — `zigbee/include/zigbee/ha_zigbee.h`
+(внутри компонента `zigbee`).
 
 Документ отвечает на вопрос: **по каким данным система понимает, что перед ней за
 устройство** (реле, кнопка, датчик, диммер, замок), и как это единообразно
@@ -235,13 +236,17 @@ Server-атрибут может быть устойчивым или момен
 ## 7. Что хранит наш слой, что проецируется
 
 ```text
-Храним (canonical, Domain):
-    ha_endpoint_record_t { profile_id, device_id, cluster_count, clusters[(cluster_id, role)] }
-    ha_zb_state_record_t { raw, zcl_type }  на атрибут
-    ha_device_record_t   { name, model }    из Basic (ModelIdentifier, ManufacturerName)
+Canonical (Domain, для потребителей):
+    PROPERTY_STATE { (entity_id, property_id) → ha_value_t }
+    CAPABILITIES   { properties[]: property+actions; events[] }
+    ENTITY / LOGICAL_DEVICE { identity, name, device_id }
+
+Adapter-private (RAM, внутри zigbee/):
+    device { uid, name, model из Basic (ModelIdentifier/ManufacturerName) }
+    endpoint topologia { profile_id, device_id, clusters[(cluster_id, role)] }
 
 Не храним (проекция потребителя):
-    capability (switch / dimmable / sensor.* / controller.*)
+    widget kind (switch / dimmable / sensor.* / controller.*)
 ```
 
 Ключевые атрибуты Basic для ярлыка (`ezbee/zcl/cluster/basic_desc.h`):
