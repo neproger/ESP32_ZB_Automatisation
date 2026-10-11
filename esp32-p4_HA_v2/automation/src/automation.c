@@ -297,6 +297,19 @@ static void automation_state_trigger(const ha_state_key_t *key)
         }
         if (automation_rule_sem_state_matches(&rule, key->entity, key->entity, key->property, value,
                                               prev_known, prev)) {
+            /*
+             * Loop-guard: STATE-правило, чьё действие адресует то же (entity, property), что и
+             * триггер, зациклилось бы (команда → репорт → снова триггер). Пропускаем.
+             */
+            const ha_entity_id_t action_entity =
+                (rule.action_ref.entity == HA_ENTITY_ID_SOURCE) ? key->entity
+                                                                : rule.action_ref.entity;
+            if (action_entity == key->entity && rule.action_ref.property == key->property) {
+                ESP_LOGW(TAG, "rule %llu self-trigger skipped: entity=%llx property=%u",
+                         (unsigned long long)s_index[i].rule_id, (unsigned long long)key->entity,
+                         (unsigned)key->property);
+                continue;
+            }
             automation_fire(s_index[i].rule_id, key->entity);
         }
     }

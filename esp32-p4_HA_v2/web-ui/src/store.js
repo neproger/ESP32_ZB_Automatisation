@@ -1,4 +1,4 @@
-import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
+import { MSG, MSG3, decodeFrame, snapshot, ack } from './proto.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 
@@ -133,6 +133,8 @@ let version = 0
 let status = 'connecting'
 let socket = null
 const listeners = new Set()
+// Stop-and-wait транспорт: seq сервер-присвоенный; дубликат (retry) применяем один раз.
+let lastSeq = -1
 
 // Журнал: одна typed-запись (kind + канонические поля). Snapshot (syncing) не логируется.
 function pushEvent(ev) {
@@ -157,6 +159,14 @@ function wsUrl() {
 function onFrame(buf) {
   const frame = decodeFrame(buf)
   if (!frame) return
+  // Подтверждаем каждый серверный кадр (at-least-once + dedup по seq = effective-once).
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(ack(frame.seq).bytes)
+  }
+  if (frame.seq === lastSeq) {
+    return // дубликат после retry: ACK уже отправлен, payload не применяем
+  }
+  lastSeq = frame.seq
   const { payload } = frame
   if (frame.type === MSG.SYNC_BEGIN) {
     syncing = true
@@ -323,18 +333,23 @@ function onFrame(buf) {
   }
 }
 
+let reconnectDelay = 500
+
 function connect() {
   socket = new WebSocket(wsUrl())
   socket.binaryType = 'arraybuffer'
   socket.onopen = () => {
     status = 'online'
+    lastSeq = -1 // новая сессия: seq сервера снова с 0
+    reconnectDelay = 500
     emit()
     socket.send(snapshot().bytes)
   }
   socket.onclose = () => {
     status = 'offline'
     emit()
-    setTimeout(connect, 1500)
+    setTimeout(connect, reconnectDelay)
+    reconnectDelay = Math.min(reconnectDelay * 2, 5000) // backoff против reconnect-шторма
   }
   socket.onerror = () => socket.close()
   socket.onmessage = (ev) => onFrame(ev.data)

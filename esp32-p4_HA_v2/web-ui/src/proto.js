@@ -5,6 +5,7 @@ import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
+  ACK: 0x03, // browser → device: подтверждение кадра с данным header.seq (пустой payload)
   GROUP_ITEM: 0x19,
   GROUP_ITEM_REMOVE: 0x1A,
   COMMAND: 0x20,
@@ -73,16 +74,21 @@ export function encodeCommand(cmd, args = new Uint8Array(0)) {
   return encodeFrame(MSG.COMMAND, payload)
 }
 
-export function encodeFrame(type, payload) {
-  const seq = ++seqCounter & 0xffff
+export function encodeFrame(type, payload, seq) {
+  const s = (seq === undefined ? ++seqCounter : seq) & 0xffff
   const out = new Uint8Array(HDR + payload.length)
   const dv = new DataView(out.buffer)
   dv.setUint8(0, VER)
   dv.setUint8(1, type)
   dv.setUint16(2, payload.length, true)
-  dv.setUint16(4, seq, true)
+  dv.setUint16(4, s, true)
   out.set(payload, HDR)
-  return { seq, bytes: out }
+  return { seq: s, bytes: out }
+}
+
+// ACK входящего серверного кадра: header.seq = подтверждаемый seq.
+export function ack(seq) {
+  return encodeFrame(MSG.ACK, new Uint8Array(0), seq)
 }
 
 // Entity-native правило → wire делает фронтенд (зеркало web.c:web_rule_encode).

@@ -691,6 +691,14 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Fix — wedge системы при работе с UI/Automation. Причина: web слал WS-кадры
+            под Domain-lock (snapshot через domain_entity_iter → web_send_frame), блокирующая
+            запись в сокет держала lock → вставал Zigbee-адаптер и web. Введён тупой надёжный
+            транспорт: per-client TX-очередь + stop-and-wait (per-client seq, ACK 0x03, retry
+            ≤3), bounded (переполнение → kill session), snapshot только через enqueue (не под
+            lock); UI: ACK + dedup по seq + reconnect-backoff. Плюс loop-guard в Automation
+            (STATE-правило не триггерит само себя) и UI backoff. Проверено: snapshot 0..N
+            подряд без пропусков; no-ack клиент убит за ~6с, плата отзывчива.
 2026-10-11  Docs — приведены к baseline после Steps A–F. ARCHITECTURE.md (rev3, canonical
             Device/Entity-модель, без «переходного периода»); STATUS.md (13 canonical типов,
             v3 wire, discovery); PROPERTY_MODEL.md переписан как финальная canonical-модель;

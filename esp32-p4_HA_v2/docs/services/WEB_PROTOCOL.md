@@ -23,6 +23,29 @@
 | 4 | u16 | `seq` — корреляция команд |
 | 6 | u16 | `flags` — зарезервировано (0) |
 
+### 2.1. Транспорт: per-client TX queue, stop-and-wait
+
+Транспорт тупой: знает только байты и `seq`, не различает типы сообщений.
+
+```text
+web_tx_enqueue(fd, frame)   — поставить кадр (никогда не шлёт); seq присваивает транспорт
+web_tx_ack(fd, seq)         — клиент подтвердил head
+sender (web-задача)         — шлёт head, ждёт ACK, retry ≤ 3, иначе закрывает сессию
+```
+
+- каждый кадр device → browser несёт `header.seq` (per-client, с 0); браузер отвечает
+  кадром `ACK (0x03)` с `header.seq` = подтверждаемый seq (payload пуст);
+- очередь bounded (64 кадра / 16 КБ): переполнение = клиент не успевает → сессия
+  закрывается (`httpd_sess_trigger_close`); после reconnect клиент получает свежий snapshot;
+- порядок железный (stop-and-wait): `enqueue A,B,C` → клиент видит A→B→C;
+- at-least-once: при потере ACK кадр повторяется; браузер дедуплицирует по `seq`
+  (повторно не применяет) → effectively once за сессию;
+- отправка идёт из web-задачи и **никогда — под Domain-lock**: snapshot только `enqueue`
+  (это устраняет прежний стоп-эффект, когда блокирующая отправка держала Domain-lock).
+
+Контракт: *within an active session — ordered, retried, acknowledged; across disconnect —
+no guarantee; reconnect + snapshot восстанавливают истину.*
+
 ## 3. Типы сообщений (device → browser)
 
 | type | имя | payload |
@@ -129,8 +152,9 @@ WS COMMAND:
   GROUP_*/LOCATION_PUT/GROUP_ITEM_* → domain_entity_put/remove
 ```
 
-## 8. Открытые вопросы
+## 8. Решённые вопросы
 
-- snapshot шлётся под Domain-lock (итерация + отправка); при медленном клиенте это
-  задерживает писателей Domain — при росте числа клиентов собирать в буфер и слать после
-  освобождения lock.
+- ~~snapshot под Domain-lock~~ — решено: snapshot и дельты только `web_tx_enqueue`
+  (никакой отправки под Domain-lock); отправляет `web_tx_step` из web-задачи.
+- ~~медленный клиент~~ — решено: bounded-очередь + stop-and-wait; не успевает → сессия
+  закрывается, reconnect даёт свежий snapshot.

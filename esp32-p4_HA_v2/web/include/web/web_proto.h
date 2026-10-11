@@ -20,6 +20,8 @@
 typedef enum {
     WEB_MSG_SYNC_BEGIN = 0x01,
     WEB_MSG_SYNC_END = 0x02,
+    /* browser → device: подтверждение кадра с данным header.seq (payload пуст). */
+    WEB_MSG_ACK = 0x03,
     /*
      * Canonical group item (A4): identity = (group_id, entity_id, property_id). Хранимая
      * запись уже entity-native, мост не нужен.
