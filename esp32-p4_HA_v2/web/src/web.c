@@ -28,7 +28,7 @@
  *   UPSERT: [type=ha_entity_t][key][record]   (record — canonical struct как есть)
  *   REMOVE: [type][key]
  *   EVENT:  [WEB_MSG_EVENT][ha_event_t]
- *   COMPAND: [cmd][args] (args — canonical struct verbatim)
+ *   COMMAND: [cmd][args] (args — canonical struct verbatim)
  *
  * Роль web: HTTP/WS-сервер, сессии, TX-очередь (seq/ACK/retry), framing, snapshot и
  * дельта-рассылка generic-обходом Domain, декодирование команд в Domain-операции.

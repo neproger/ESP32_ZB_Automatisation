@@ -46,6 +46,9 @@ extern "C" {
 /*
  * Семантическая команда: цель — (entity_id, property_id), намерение — action + value.
  * HA_ENTITY_ID_SOURCE/NONE сюда не попадают: вызывающий резолвит источник до постинга.
+ *
+ * `reserved2` — явный tail padding, а не неявный: canonical ABI наружу = байты `sizeof`,
+ * поэтому размер детерминирован (payload исполняется verbatim с args_size == sizeof).
  */
 typedef struct {
     ha_entity_id_t entity;
@@ -53,6 +56,7 @@ typedef struct {
     uint8_t action; /* ha_action_id_t */
     uint8_t reserved[3];
     ha_command_value_t value;
+    uint8_t reserved2[4];
 } ha_property_command_t;
 
 /* Аргумент HA_CMD_ENTITY_RENAME. */
@@ -62,8 +66,11 @@ typedef struct {
 } ha_entity_rename_t;
 
 #ifdef __cplusplus
-static_assert(sizeof(ha_property_command_t) == 28, "ha_property_command_t: неожиданный размер");
+static_assert(sizeof(ha_property_command_t) == 32, "ha_property_command_t: неожиданный размер");
 static_assert(sizeof(ha_entity_rename_t) == 40, "ha_entity_rename_t: неожиданный размер");
+#else
+_Static_assert(sizeof(ha_property_command_t) == 32, "ha_property_command_t: неожиданный размер");
+_Static_assert(sizeof(ha_entity_rename_t) == 40, "ha_entity_rename_t: неожиданный размер");
 #endif
 
 #ifdef __cplusplus

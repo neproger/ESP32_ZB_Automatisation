@@ -96,11 +96,12 @@ export const ENTITY_SOURCE = 0xFFFFFFFFFFFFFFFFn
 
 // --- canonical structs verbatim (layout = ha_model) --------------------------
 
-// ha_property_command_t (28): entity u64@0, property i32@8, action u8@12, reserved[3],
-// ha_command_value_t@16 {kind i32, scalar{kind i32@+4, value@+8} | xy{x@+4, y@+8}}.
+// ha_property_command_t (32): entity u64@0, property i32@8, action u8@12, reserved[3],
+// ha_command_value_t@16 {kind i32, scalar{kind i32@+4, value@+8} | xy{x@+4, y@+8}},
+// reserved2[4]@28 (явный tail padding; wire = sizeof(struct)).
 export function propertyCommand({ entity, property, action, value }) {
   const kind = value == null ? COMMAND_VALUE.NONE : value.xy ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR
-  const out = new Uint8Array(28)
+  const out = new Uint8Array(32)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(entity), true)
   dv.setInt32(8, Number(property) || 0, true)

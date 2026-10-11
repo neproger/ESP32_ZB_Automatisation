@@ -119,6 +119,10 @@ Domain-таблица не становится публичным API авто�
 
 ## 6. Команды (browser → device) — args verbatim
 
+Args каждой команды = `sizeof` соответствующей canonical-формы (включая явный tail padding;
+см. `reserved2` у `ha_property_command_t`). Сервер проверяет `len == sizeof`, поэтому скрытый
+padding недопустим.
+
 | cmd | имя | args (canonical) |
 |---|---|---|
 | 1 | SNAPSHOT | — (повторная высылка этому клиенту) |
@@ -131,7 +135,7 @@ Domain-таблица не становится публичным API авто�
 | 16 | GROUP_ITEM_PUT | `ha_group_item_key_t` + `ha_group_item_record_t` |
 | 17 | GROUP_ITEM_REMOVE | `ha_group_item_key_t` |
 | 18 | ENTITY_RENAME | `ha_entity_rename_t` (40): `entity u64@0`, `name[32]@8` |
-| 19 | PROPERTY_COMMAND | `ha_property_command_t` (28): `entity u64@0`, `property i32@8`, `action u8@12`, `reserved[3]`, `ha_command_value_t@16` (`kind i32`, `scalar{kind i32, value}` / `xy{x,y}`) |
+| 19 | PROPERTY_COMMAND | `ha_property_command_t` (32): `entity u64@0`, `property i32@8`, `action u8@12`, `reserved[3]`, `ha_command_value_t@16` (`kind i32`, `scalar{kind i32, value}` / `xy{x,y}`), `reserved2[4]@28`. Wire = `sizeof` (включая явный tail padding) |
 | 20 | DEVICE_RENAME | `ha_device_id_t` + `char name[32]` |
 | 21 | LOGICAL_DEVICE_REMOVE | `ha_device_id_t` |
 

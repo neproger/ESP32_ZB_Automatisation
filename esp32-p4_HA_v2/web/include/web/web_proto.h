@@ -43,7 +43,7 @@ typedef enum {
 
 /*
  * Команды browser → device. Args — canonical struct verbatim (без перекодирования):
- *   PROPERTY_COMMAND       = ha_property_command_t
+ *   PROPERTY_COMMAND       = ha_property_command_t (32, wire = sizeof)
  *   ENTITY_RENAME          = ha_entity_rename_t
  *   AUTOMATION_PUT         = ha_automation_key_t + ha_rule_t
  *   AUTOMATION_REMOVE      = ha_automation_key_t
