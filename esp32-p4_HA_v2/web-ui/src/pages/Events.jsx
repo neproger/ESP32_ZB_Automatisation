@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { ENTITY } from '../schema.js'
 import { eventName, propertyName, propertyUnit } from '../semantics.js'
+import { ENTITY_SYSTEM } from '../system.js'
 
 // Журнал: семантические события (HA_EVENT_*) + изменения generic-сущностей. Snapshot не
 // логируется. Raw Zigbee в Domain больше не попадает (Шаг C), поэтому журнал entity-native.
@@ -16,6 +17,7 @@ const TYPE_LABEL = {
 }
 
 function entityLabel(s, entity) {
+  if (BigInt(entity) === ENTITY_SYSTEM) return 'Система'
   return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
 }
 

@@ -223,9 +223,10 @@ function onFrame(buf) {
       }
       propStates.set(key, { entity, property, kind, value })
       // Журнал состояния: только реальные изменения и не системный девайс (иначе тики
-      // времени забивают лог). Snapshot (syncing) не логируется.
+      // времени забивают лог). Snapshot (syncing) не логируется. valueKind — не `kind`,
+      // чтобы не затереть дискриминатор записи журнала.
       if (!syncing && entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
-        pushEvent({ kind: 'property', entity, property, kind, value })
+        pushEvent({ kind: 'property', entity, property, valueKind: kind, value })
       }
     }
     emit()
