@@ -68,6 +68,10 @@ typedef enum {
 /*
  * Компактное значение факта: то, без чего запись Journal со временем теряет смысл.
  * Строк тут нет намеренно — human-readable вид строит UI (docs/domain/JOURNAL.md §3).
+ *
+ * Нумерация совпадает с canonical ha_value_kind_t (ha_model/ha_properties.h) — это один
+ * vocabulary значений, но объявлен отдельно: Domain — транспорт-агностичный core и не
+ * зависит от ha_model (граница слоёв). Дублирование осознанное; менять числа нельзя.
  */
 typedef enum {
     DOMAIN_VALUE_NONE = 0,

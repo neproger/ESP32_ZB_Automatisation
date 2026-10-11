@@ -35,49 +35,6 @@ static zigbee_report_t report_of(uint16_t cluster_id, uint16_t attr_id, uint8_t 
     return report;
 }
 
-static void test_value_mapping(void)
-{
-    const zigbee_report_t boolean = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
-                                              HA_ZB_TYPE_BOOL, 1);
-    const domain_value_t boolean_value = zigbee_value_compact(&boolean);
-    CHECK(boolean_value.type == (uint8_t)DOMAIN_VALUE_U32);
-    CHECK(boolean_value.v.u32 == 1u);
-
-    const zigbee_report_t level = report_of(HA_ZB_CLUSTER_LEVEL_CONTROL,
-                                            HA_ZB_ATTR_LEVEL_CURRENT_LEVEL, HA_ZB_TYPE_UINT8, 254);
-    const domain_value_t level_value = zigbee_value_compact(&level);
-    CHECK(level_value.type == (uint8_t)DOMAIN_VALUE_U32);
-    CHECK(level_value.v.u32 == 254u);
-
-    /* Отрицательное значение приходит расширенным по знаку: int16 -25. */
-    const zigbee_report_t temperature = report_of(HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT,
-                                                  HA_ZB_ATTR_TEMPERATURE_MEASURED_VALUE,
-                                                  HA_ZB_TYPE_INT16, (uint32_t)-25);
-    const domain_value_t temperature_value = zigbee_value_compact(&temperature);
-    CHECK(temperature_value.type == (uint8_t)DOMAIN_VALUE_I32);
-    CHECK(temperature_value.v.i32 == -25);
-
-    float as_float = 21.5f;
-    uint32_t float_bits = 0;
-    memcpy(&float_bits, &as_float, sizeof(float_bits));
-    const zigbee_report_t measured = report_of(HA_ZB_CLUSTER_RELATIVE_HUMIDITY,
-                                               HA_ZB_ATTR_HUMIDITY_MEASURED_VALUE,
-                                               HA_ZB_TYPE_SINGLE_FLOAT, float_bits);
-    const domain_value_t measured_value = zigbee_value_compact(&measured);
-    CHECK(measured_value.type == (uint8_t)DOMAIN_VALUE_F32);
-    CHECK(measured_value.v.f32 == as_float);
-
-    const zigbee_report_t enum_value = report_of(HA_ZB_CLUSTER_COLOR_CONTROL,
-                                                 HA_ZB_ATTR_COLOR_COLOR_MODE, HA_ZB_TYPE_ENUM8, 3);
-    const domain_value_t mode = zigbee_value_compact(&enum_value);
-    CHECK(mode.type == (uint8_t)DOMAIN_VALUE_ENUM);
-    CHECK(mode.v.u32 == 3u);
-
-    /* Тип вне словаря скаляров не изобретает значение: факт остаётся без value. */
-    const zigbee_report_t text = report_of(HA_ZB_CLUSTER_BASIC, 0x0004u, HA_ZB_TYPE_CHAR_STRING, 0);
-    CHECK(zigbee_value_compact(&text).type == (uint8_t)DOMAIN_VALUE_NONE);
-}
-
 static void test_key_matches_report(void)
 {
     const zigbee_report_t report = report_of(HA_ZB_CLUSTER_ON_OFF, HA_ZB_ATTR_ON_OFF_ON_OFF,
@@ -129,7 +86,6 @@ static void test_store_rejects_bad_args(void)
 
 int main(void)
 {
-    test_value_mapping();
     test_key_matches_report();
     test_device_model_store();
     test_store_rejects_bad_args();

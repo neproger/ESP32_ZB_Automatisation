@@ -86,7 +86,11 @@ typedef enum {
     HA_EVENT_WEATHER_CHANGED = 8,
 } ha_event_id_t;
 
-/* Вид значения — дискриминатор union'а в ha_value_t. */
+/*
+ * Вид значения — дискриминатор union'а в ha_value_t. Нумерация совпадает с Domain
+ * domain_value_type_t (DOMAIN_VALUE_*) намеренно: это один vocabulary, но Domain —
+ * отдельный core и не зависит от ha_model (граница слоёв). Менять числа нельзя.
+ */
 typedef enum {
     HA_VALUE_NONE = 0,
     HA_VALUE_BOOL = 1,

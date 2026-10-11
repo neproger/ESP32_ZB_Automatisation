@@ -691,6 +691,10 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step E, E5 — убран мёртвый zigbee_value_compact (оставался от удалённого
+            zigbee_state_apply); граница value-типов зафиксирована комментарием: Domain
+            domain_value_t (журнал) и canonical ha_value_t — один vocabulary (совпадающие
+            числа), объявлены отдельно из-за границы слоёв.
 2026-10-11  Step E (E1–E4) — все клиентские/транспортные абстракции переведены на device-domain.
             E1: событие — канонический факт (payload = ha_event_t), убрано дублирование
             event_id (meta.value + u8 payload); web/automation читают payload. E2: EVENT DTO

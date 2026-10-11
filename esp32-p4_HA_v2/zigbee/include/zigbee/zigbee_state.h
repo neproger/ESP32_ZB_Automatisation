@@ -19,9 +19,6 @@
 
 void zigbee_state_key_build(const zigbee_report_t *report, ha_zb_state_key_t *out_key);
 
-/* Компактное значение факта: журнал не хранит запись целиком (JOURNAL.md §3). */
-domain_value_t zigbee_value_compact(const zigbee_report_t *report);
-
 /*
  * A1.2/A1.3: проекция репорта в canonical property state — адрес (entity_id, property_id)
  * и семантическое значение. false — атрибут вне семантического словаря или значение не

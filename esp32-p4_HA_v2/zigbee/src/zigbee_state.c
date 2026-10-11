@@ -23,45 +23,6 @@ void zigbee_state_key_build(const zigbee_report_t *report, ha_zb_state_key_t *ou
     *out_key = key;
 }
 
-domain_value_t zigbee_value_compact(const zigbee_report_t *report)
-{
-    domain_value_t value = {0};
-
-    switch (report->zcl_type) {
-    case HA_ZB_TYPE_BOOL:
-    case HA_ZB_TYPE_BITMAP8:
-    case HA_ZB_TYPE_UINT8:
-    case HA_ZB_TYPE_UINT16:
-    case HA_ZB_TYPE_UINT32:
-        value.type = (uint8_t)DOMAIN_VALUE_U32;
-        value.v.u32 = report->raw;
-        break;
-    case HA_ZB_TYPE_INT8:
-    case HA_ZB_TYPE_INT16:
-    case HA_ZB_TYPE_INT32:
-        value.type = (uint8_t)DOMAIN_VALUE_I32;
-        value.v.i32 = (int32_t)report->raw; /* значение приходит расширенным по знаку */
-        break;
-    case HA_ZB_TYPE_SINGLE_FLOAT: {
-        float as_float = 0.0f;
-        memcpy(&as_float, &report->raw, sizeof(as_float));
-        value.type = (uint8_t)DOMAIN_VALUE_F32;
-        value.v.f32 = as_float;
-        break;
-    }
-    case HA_ZB_TYPE_ENUM8:
-    case HA_ZB_TYPE_ENUM16:
-        value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-        value.v.u32 = report->raw;
-        break;
-    default:
-        value.type = (uint8_t)DOMAIN_VALUE_NONE;
-        break;
-    }
-
-    return value;
-}
-
 bool zigbee_property_state_from_report(const zigbee_report_t *report, ha_entity_id_t entity_id,
                                        ha_state_key_t *out_key, ha_state_record_t *out_record)
 {
