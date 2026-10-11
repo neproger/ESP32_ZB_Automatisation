@@ -1,6 +1,6 @@
 # Web Service
 
-Слой: **Services / Web (backend-for-frontend)**. Карта системы — `../ARCHITECTURE.md`.
+Слой: **Services / Web (транспорт canonical-модели)**. Карта системы — `../ARCHITECTURE.md`.
 Документ описывает контракт и поведение; конкретная реализация — в коде.
 
 ## 1. Роль
@@ -30,6 +30,11 @@ canonical Domain records (ha_model) → verbatim binary WS → браузер (�
 `web` не собирает отдельный view: canonical форма уже и есть wire-форма
 (little-endian, fixed-width), а вся семантика (имена, виджеты, единицы) — на клиенте.
 Компактных DTO/кодеков в `web` нет.
+
+Модули (`web/src`): `web_sessions` — per-client доставка (очередь + stop-and-wait
+seq/ACK/retry); `web_projection` — canonical → браузер (явный список типов, snapshot,
+дельты); `web_commands` — браузер → Domain/Device (args verbatim); `web_proto` — framing;
+`web` — HTTP/WS-сервер, подписка, задача, lifecycle.
 
 ## 3. Snapshot и delta
 

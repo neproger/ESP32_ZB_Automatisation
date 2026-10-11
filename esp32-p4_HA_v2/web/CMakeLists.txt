@@ -11,6 +11,9 @@ idf_component_register(
     SRCS
         "src/web.c"
         "src/web_proto.c"
+        "src/web_sessions.c"
+        "src/web_projection.c"
+        "src/web_commands.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
