@@ -1,4 +1,4 @@
-#include "semantics/semantics.h"
+#include "zigbee/zigbee_semantics.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -6,7 +6,7 @@
 #include "ha_model/ha_automation.h"
 #include "ha_model/ha_properties.h"
 #include "ha_model/ha_system.h"
-#include "semantics/ha_zigbee.h"
+#include "zigbee/ha_zigbee.h"
 
 /*
  * Фаза 1 (docs/PROPERTY_MODEL.md): мост ZCL ↔ семантика.

@@ -2,8 +2,8 @@
 
 /*
  * Формы команд (docs/RECORD_MODEL.md §9, docs/domain/COMMANDS.md §7) — transport-agnostic.
- * Raw ZCL-команда (ha_zb_command_t) здесь НЕ живёт: она принадлежит мосту semantics
- * (semantics/zb_command.h). Здесь — только Domain-дискриминаторы и payload'ы.
+ * Raw ZCL-команда (ha_zb_command_t) здесь НЕ живёт: она принадлежит мосту внутри zigbee
+ * (zigbee/zb_command.h). Здесь — только Domain-дискриминаторы и payload'ы.
  */
 
 #include <stdint.h>
@@ -18,8 +18,11 @@ extern "C" {
 /* Был HA_CMD_ZIGBEE_CLUSTER(1): удалён (Шаг C, C2) — raw ZCL вне общего командного шины. */
 /* Был HA_CMD_DEVICE_REMOVE(2): удалён (Step F) — удаление только через Device service. */
 
-/* Открыть сеть для подключения новых устройств (args = uint8_t seconds, 0 — закрыть). */
-#define HA_CMD_PERMIT_JOIN 3u
+/*
+ * Запустить/остановить поиск новых устройств (args = uint8_t seconds, 0 — стоп). Generic:
+ * конкретный adapter решает, что это (Zigbee — permit join, Matter — commissioning и т.п.).
+ */
+#define HA_CMD_DISCOVERY 3u
 
 /* Wi-Fi: запустить скан (args нет); результат — сущность HA_ENTITY_WIFI_SCAN. */
 #define HA_CMD_WIFI_SCAN 4u

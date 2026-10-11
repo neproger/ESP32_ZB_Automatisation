@@ -691,6 +691,14 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step F (часть 3) — мост `semantics/` целиком перенесён внутрь `zigbee/`
+            (zigbee_semantics.{h,c}, ha_zigbee.h, zb_command.h, zigbee_forms.h; test_semantics
+            теперь в zigbee/tests). Компонент semantics удалён, из CMake и REQUIRES убран;
+            мёртвая зависимость system→semantics убрана. PERMIT_JOIN переименован в generic
+            HA_CMD_DISCOVERY/WEB_CMD_DISCOVERY (+ UI startDiscovery): adapter решает, что это
+            (Zigbee → permit join). Финальный grep: вне zigbee/ Zigbee/ZCL/endpoint/cluster/ha_zb_
+            и т.п. — только в комментариях-пояснениях и composition-root main (+ SYS_LAYER_ZIGBEE
+            в sys — кандидат на отдельный проход).
 2026-10-11  Step F (часть 2) — source/issuer vocabulary: generic core перестал именовать
             адаптеры. domain_source_t теряет DOMAIN_SOURCE_ZIGBEE (адрес 1 зарезервирован
             под adapter); ha_source_id_t/ha_entity_issuer_t — opaque uint32, остаются только

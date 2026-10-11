@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "semantics/semantics.h"
+#include "zigbee/zigbee_semantics.h"
 
 /*
  * Репорт → canonical состояние. Ничего не знает о радио, очередях и задачах: этим

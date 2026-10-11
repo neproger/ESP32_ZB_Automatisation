@@ -19,7 +19,7 @@
 #include "zigbee/zigbee_entity_registry.h"
 #include "zigbee/zigbee_radio.h"
 #include "zigbee/zigbee_state.h"
-#include "semantics/semantics.h"
+#include "zigbee/zigbee_semantics.h"
 
 /*
  * Задача сервиса — единственный, кто говорит с Domain от лица Zigbee-мира: приём
@@ -458,7 +458,8 @@ sys_error_t zigbee_start(domain_t *domain)
         return cluster;
     }
     (void)device_register_remover(ZIGBEE_SOURCE_ID, zigbee_device_remover, NULL);
-    return domain_register_command(domain, HA_CMD_PERMIT_JOIN, zigbee_permit_execute, NULL);
+    /* Generic discovery → permit join: конкретику транспорта решает adapter. */
+    return domain_register_command(domain, HA_CMD_DISCOVERY, zigbee_permit_execute, NULL);
 }
 
 sys_error_t zigbee_submit_report(const zigbee_report_t *report)

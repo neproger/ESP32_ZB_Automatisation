@@ -963,7 +963,7 @@ static uint16_t web_rule_encode(const ha_automation_key_t *key, const ha_rule_t 
     return SYS_CODE_OK;
 }
 
-static uint16_t web_do_permit_join(const uint8_t *args, size_t len)
+static uint16_t web_do_discovery(const uint8_t *args, size_t len)
 {
     if (len != 1) {
         return SYS_CODE_INVALID_SIZE;
@@ -972,7 +972,7 @@ static uint16_t web_do_permit_join(const uint8_t *args, size_t len)
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_UI;
     const sys_error_t err =
-        domain_post(s_domain, HA_CMD_PERMIT_JOIN, &seconds, sizeof(seconds), NULL, &meta);
+        domain_post(s_domain, HA_CMD_DISCOVERY, &seconds, sizeof(seconds), NULL, &meta);
     return sys_failed(err) ? err.code : (uint16_t)SYS_CODE_OK;
 }
 
@@ -1153,8 +1153,8 @@ static void web_handle_command(int fd, uint8_t cmd, const uint8_t *args, size_t 
     case WEB_CMD_AUTOMATION_REMOVE:
         status = web_do_automation_remove(args, len);
         break;
-    case WEB_CMD_PERMIT_JOIN:
-        status = web_do_permit_join(args, len);
+    case WEB_CMD_DISCOVERY:
+        status = web_do_discovery(args, len);
         break;
     case WEB_CMD_GROUP_PUT:
         status = web_do_group_put(args, len);

@@ -3,7 +3,7 @@
 #include "domain/domain.h"
 #include "domain/domain_types.h"
 #include "ha_model/ha_state.h"
-#include "semantics/zigbee_forms.h"
+#include "zigbee/zigbee_forms.h"
 #include "sys/sys_error.h"
 #include "zigbee/zigbee.h"
 

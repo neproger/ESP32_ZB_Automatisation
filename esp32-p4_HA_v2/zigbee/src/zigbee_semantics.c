@@ -1,10 +1,10 @@
-#include "semantics/semantics.h"
+#include "zigbee/zigbee_semantics.h"
 
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
 
-#include "semantics/ha_zigbee.h"
+#include "zigbee/ha_zigbee.h"
 
 /*
  * Приватная таблица нормализации (docs/PROPERTY_MODEL.md §4.2). Единственное место,

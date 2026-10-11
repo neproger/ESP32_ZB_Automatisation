@@ -8,7 +8,7 @@
  * линкуют сервисы и bootstrap; Domain его не включает и этих имён не знает.
  *
  * Физических Zigbee-форм (device/state/endpoint, ZCL-ключи) здесь нет: они transport
- * vocabulary и живут в мосте semantics (semantics/zigbee_forms.h).
+ * vocabulary и живут в мосте внутри zigbee (zigbee/zigbee_forms.h).
  */
 
 #include <stddef.h>

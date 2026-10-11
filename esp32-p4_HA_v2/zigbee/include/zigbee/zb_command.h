@@ -1,14 +1,14 @@
 #pragma once
 
 /*
- * Физическая ZCL-команда (Шаг C, C2): transport/ZCL-private форма. Живёт в мосте
- * `semantics` (владелец ZCL-кодирования), НЕ в transport-agnostic `ha_model`.
+ * Физическая ZCL-команда (Шаг C, C2): transport/ZCL-private форма. Живёт в мосте внутри
+ * `zigbee` (владелец ZCL-кодирования), НЕ в transport-agnostic `ha_model`.
  * Zigbee adapter получает её из `semantics_build_command` и отправляет.
  */
 
 #include <stdint.h>
 
-#include "semantics/ha_zigbee.h" /* ha_device_uid_t, HA_ZB_CLUSTER_*, HA_ZB_CMD_* */
+#include "zigbee/ha_zigbee.h" /* ha_device_uid_t, HA_ZB_CLUSTER_*, HA_ZB_CMD_* */
 
 #ifdef __cplusplus
 extern "C" {

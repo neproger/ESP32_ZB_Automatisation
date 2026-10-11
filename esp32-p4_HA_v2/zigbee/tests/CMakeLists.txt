@@ -14,10 +14,10 @@ set(ZIGBEE_CORE
     ../src/zigbee_device_store.c
     ../src/zigbee_interview.c
     ../src/zigbee_entity_binding.c
+    ../src/zigbee_semantics.c
     ../../ha_model/src/ha_entity.c
     ../../ha_model/src/ha_properties.c
-    ../../ha_model/src/ha_logical_device.c
-    ../../semantics/src/semantics.c)
+    ../../ha_model/src/ha_logical_device.c)
 
 set(DOMAIN_CORE
     ../../domain/src/domain_registry.c
@@ -61,8 +61,7 @@ function(zigbee_add_test name)
         ../../mstore/src
         ../../mstore/tests/support
         ../../sys/include
-        ../../ha_model/include
-        ../../semantics/include)
+        ../../ha_model/include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
     else()
@@ -80,3 +79,4 @@ zigbee_add_test(test_entity_identity)
 zigbee_add_test(test_property_state)
 zigbee_add_test(test_event_entity)
 zigbee_add_test(test_command_entity)
+zigbee_add_test(test_semantics)

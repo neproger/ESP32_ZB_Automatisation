@@ -1,5 +1,5 @@
 #include "domain/domain.h"
-#include "semantics/semantics.h"
+#include "zigbee/zigbee_semantics.h"
 #include "zigbee/zigbee_entity_binding.h"
 #include "zigbee/zigbee_state.h"
 

@@ -8,16 +8,14 @@ enable_testing()
 
 # Тестируется только чистая логика правила: сопоставление и сборка команды.
 set(AUTOMATION_CORE ../src/automation_rule_sem.c)
-set(SEMANTICS_CORE ../../semantics/src/semantics.c)
 set(HA_PROPERTIES_CORE ../../ha_model/src/ha_properties.c)
 
 function(automation_add_test name)
-    add_executable(${name} ${name}.c ${AUTOMATION_CORE} ${SEMANTICS_CORE} ${HA_PROPERTIES_CORE})
+    add_executable(${name} ${name}.c ${AUTOMATION_CORE} ${HA_PROPERTIES_CORE})
     target_include_directories(${name} PRIVATE
         ../include
         ../../sys/include
-        ../../ha_model/include
-        ../../semantics/include)
+        ../../ha_model/include)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4)
     else()

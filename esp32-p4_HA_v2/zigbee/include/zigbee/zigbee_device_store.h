@@ -13,8 +13,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "semantics/ha_zigbee.h"    /* ha_device_uid_t */
-#include "semantics/zigbee_forms.h" /* ha_device_record_t, ha_endpoint_record_t, ha_cluster_entry_t */
+#include "zigbee/ha_zigbee.h"    /* ha_device_uid_t */
+#include "zigbee/zigbee_forms.h" /* ha_device_record_t, ha_endpoint_record_t, ha_cluster_entry_t */
 #include "sys/sys_error.h"
 
 #ifdef __cplusplus

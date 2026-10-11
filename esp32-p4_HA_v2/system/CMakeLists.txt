@@ -5,8 +5,7 @@ idf_component_register(
         "include"
 REQUIRES
     domain
-    ha_model
-    semantics
+        ha_model
         sys
     PRIV_REQUIRES
         esp_netif

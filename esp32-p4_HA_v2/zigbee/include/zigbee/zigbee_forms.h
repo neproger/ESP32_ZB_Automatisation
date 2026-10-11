@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "semantics/ha_zigbee.h"
+#include "zigbee/ha_zigbee.h"
 
 #ifdef __cplusplus
 extern "C" {

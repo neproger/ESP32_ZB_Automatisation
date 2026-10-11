@@ -15,7 +15,7 @@
 #include "domain/domain.h"
 #include "ha_model/ha_entities.h" /* HA_ENTITY_ENTITY */
 #include "ha_model/ha_entity.h"
-#include "semantics/ha_zigbee.h" /* ha_device_uid_t */
+#include "zigbee/ha_zigbee.h" /* ha_device_uid_t */
 #include "sys/sys_error.h"
 
 #ifdef __cplusplus

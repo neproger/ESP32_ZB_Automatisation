@@ -14,7 +14,7 @@ export const CMD = {
   SNAPSHOT: 1,
   AUTOMATION_PUT: 4,
   AUTOMATION_REMOVE: 5,
-  PERMIT_JOIN: 8,
+  DISCOVERY: 8,
   GROUP_PUT: 9,
   GROUP_REMOVE: 10,
   LOCATION_PUT: 13,
@@ -122,9 +122,9 @@ export function snapshot() {
   return encodeCommand(CMD.SNAPSHOT)
 }
 
-// PERMIT_JOIN args = u8 seconds (0 — закрыть сеть).
-export function permitJoin(seconds = 180) {
-  return encodeCommand(CMD.PERMIT_JOIN, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
+// DISCOVERY args = u8 seconds (0 — стоп). Транспорт решает adapter.
+export function startDiscovery(seconds = 180) {
+  return encodeCommand(CMD.DISCOVERY, new Uint8Array([Math.max(0, Math.min(255, seconds))]))
 }
 
 // AUTOMATION_REMOVE args = u64 id.

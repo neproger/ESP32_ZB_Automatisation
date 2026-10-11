@@ -1,7 +1,7 @@
 #pragma once
 
 #include "domain/domain.h"
-#include "semantics/zb_command.h" /* ha_zb_command_t */
+#include "zigbee/zb_command.h" /* ha_zb_command_t */
 #include "sys/sys_error.h"
 
 /*

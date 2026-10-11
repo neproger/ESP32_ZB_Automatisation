@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { permitJoin, entityRename } from '../proto.js'
+import { startDiscovery, entityRename } from '../proto.js'
 import DeviceCard from '../components/DeviceCard.jsx'
 import EntityWidgets from '../components/EntityWidgets.jsx'
 import { propertyName, propertyUnit } from '../semantics.js'
@@ -54,7 +54,7 @@ export default function Entities() {
   )
 
   const openNetwork = () => {
-    store.send(permitJoin(JOIN_SECONDS))
+    store.send(startDiscovery(JOIN_SECONDS))
     setStatus(`Сеть открыта на ${JOIN_SECONDS} с — включите устройство в режиме подключения`)
   }
 

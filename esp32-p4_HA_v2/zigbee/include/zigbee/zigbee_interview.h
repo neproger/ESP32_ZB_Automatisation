@@ -1,7 +1,7 @@
 #pragma once
 
-#include "semantics/ha_zigbee.h"
-#include "semantics/zigbee_forms.h"
+#include "zigbee/ha_zigbee.h"
+#include "zigbee/zigbee_forms.h"
 #include "sys/sys_error.h"
 
 /*

@@ -14,8 +14,8 @@
 
 #include "ha_model/ha_capabilities.h"   /* ha_entity_capabilities_record_t */
 #include "ha_model/ha_properties.h"     /* ha_property_id_t, ha_value_t, ha_command_value_t */
-#include "semantics/zb_command.h"       /* ha_zb_command_t (ZCL-private форма) */
-#include "semantics/zigbee_forms.h"     /* ha_zb_state_key_t/record, device/endpoint forms */
+#include "zigbee/zb_command.h"       /* ha_zb_command_t (ZCL-private форма) */
+#include "zigbee/zigbee_forms.h"     /* ha_zb_state_key_t/record, device/endpoint forms */
 
 #ifdef __cplusplus
 extern "C" {

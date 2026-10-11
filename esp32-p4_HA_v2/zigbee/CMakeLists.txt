@@ -11,13 +11,13 @@ idf_component_register(
         "src/zigbee_diag.c"
         "src/zigbee_radio.c"
         "src/zigbee_remove_mark.c"
+        "src/zigbee_semantics.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         domain
         ha_model
         device
-        semantics
         sys
         nvs_flash
         esp-zigbee-lib
