@@ -78,6 +78,20 @@ main {
   border-radius: 8px;
   padding: 0.75rem 1rem;
 }
+/* Entity внутри карточки-устройства: разделитель, без вложенной карточки. */
+.entity {
+  border-top: 1px solid #2a2f38;
+  padding: 0.6rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.entity input.name {
+  width: 100%;
+}
+.child-device {
+  margin-left: 1rem;
+}
 .title {
   display: flex;
   align-items: center;

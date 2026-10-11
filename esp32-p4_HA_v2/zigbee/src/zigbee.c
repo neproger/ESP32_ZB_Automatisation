@@ -356,13 +356,16 @@ static void zigbee_task(void *arg)
                     desc.source = HA_SOURCE_ZIGBEE;
                     (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
                     ha_device_record_t device = {0};
-                    if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
+                    if (sys_ok(domain_entity_get(s_domain,
+                                                 (domain_entity_t)HA_ENTITY_ZB_DIAG_DEVICE,
                                                  &result.uid, &device))) {
-                        size_t n = strlen(device.name);
+                        /* initial name: пользовательское имя, иначе модель (напр. ESP32C6-DISPLAY) */
+                        const char *label = device.name[0] != '\0' ? device.name : device.model;
+                        size_t n = strlen(label);
                         if (n >= sizeof(desc.name)) {
                             n = sizeof(desc.name) - 1;
                         }
-                        memcpy(desc.name, device.name, n);
+                        memcpy(desc.name, label, n);
                     }
                     if (sys_failed(device_register(s_domain, (uint8_t)DOMAIN_SOURCE_ZIGBEE, &desc,
                                                    &device_id))) {

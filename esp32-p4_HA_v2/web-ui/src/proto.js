@@ -16,8 +16,6 @@ export const CMD = {
   SNAPSHOT: 1,
   AUTOMATION_PUT: 4,
   AUTOMATION_REMOVE: 5,
-  DEVICE_REMOVE: 6,
-  DEVICE_REMOVE_CANCEL: 7,
   PERMIT_JOIN: 8,
   GROUP_PUT: 9,
   GROUP_REMOVE: 10,
@@ -135,18 +133,7 @@ export function automationRemove(id) {
   return encodeCommand(CMD.AUTOMATION_REMOVE, args)
 }
 
-// DEVICE_REMOVE args = u64 uid (пометка на удаление; leave при появлении).
-export function removeDevice(uid) {
-  const args = new Uint8Array(8)
-  new DataView(args.buffer).setBigUint64(0, BigInt(uid), true)
-  return encodeCommand(CMD.DEVICE_REMOVE, args)
-}
-
-export function cancelRemoveDevice(uid) {
-  const args = new Uint8Array(8)
-  new DataView(args.buffer).setBigUint64(0, BigInt(uid), true)
-  return encodeCommand(CMD.DEVICE_REMOVE_CANCEL, args)
-}
+// DEVICE_REMOVE (v2, raw uid) больше не используется обычным UI: удаление — LOGICAL_DEVICE_REMOVE.
 
 const enc = new TextEncoder()
 function putText(out, off, text, max) {

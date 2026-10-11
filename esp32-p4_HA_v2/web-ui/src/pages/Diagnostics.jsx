@@ -1,11 +1,9 @@
 import { useStore } from '../useStore.js'
-import { store } from '../store.js'
 import { uidHex, clusterName, describeProfile, describeDeviceId, hex16 } from '../zcl.js'
-import { removeDevice, cancelRemoveDevice } from '../proto.js'
 import StateAttr from '../components/StateAttr.jsx'
 
 // Единственное место обычного UI, где показывается raw Zigbee (cluster/attr/zcl_type/raw).
-// Это transitional Web↔Domain ABI; обычные страницы его не читают.
+// Read-only: управление/удаление устройств живёт на странице «Устройства».
 export default function Diagnostics() {
   const s = useStore()
   const devices = [...s.devices.values()]
@@ -24,15 +22,7 @@ export default function Diagnostics() {
             <div className="card-head">
               <b>{d.record.name || d.record.model || uidHex(d.key.uid)}</b>
               <span className="uid">{uidHex(d.key.uid)}</span>
-              <span className="spacer" />
-              {s.isMarkedForRemoval(d.key.uid) ? (
-                <>
-                  <span className="chip warn">на удаление</span>
-                  <button className="ghost" onClick={() => store.send(cancelRemoveDevice(d.key.uid))}>Отменить</button>
-                </>
-              ) : (
-                <button className="ghost danger" onClick={() => store.send(removeDevice(d.key.uid))}>Удалить</button>
-              )}
+              {s.isMarkedForRemoval(d.key.uid) && <span className="chip warn">на удаление</span>}
             </div>
             {endpoints.map((e) => (
               <div className="endpoint" key={e.key.ep}>

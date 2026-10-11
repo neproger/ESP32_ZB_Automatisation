@@ -679,6 +679,14 @@ TLV / самоописание приложения              — запре�
             diagnostics (канал WEB_MSG_DIAG_ZB_DEVICE); ordinary Web/UI на него не подписан.
             Логическая модель Device не менялась. grep старых имён = 0. ha_model 5/5,
             semantics 1/1, automation 1/1, device 1/1, zigbee 9/9, IDF + web-ui зелёные.
+2026-10-11  UI: карточка-устройство (Logical Device) возвращена — DeviceCard с именем
+            устройства и Entity-контролами/значениями внутри (дерево по parent). Удаление
+            устройства перенесено с Diagnostics (raw uid, v2) на страницу «Устройства»
+            (LOGICAL_DEVICE_REMOVE); Diagnostics — read-only. Удалены dead proto device-remove
+            (v2 uid) и EntityCard. Initial name Logical Device = DEVICE.name или DEVICE.model
+            (напр. ESP32C6-DISPLAY/SNZB-01P). Заодно подтверждён re-pair: тот же device_id
+            (ad8745aca6c843cb) и entity_id (274002a78a9cd8bb) после rejoin. Зафиксирован
+            docs/STEP_C_PLAN.md (план Step C; diagnostics отложены). IDF + web-ui зелёные.
 ```
 
 ## 7. Открытые вопросы
