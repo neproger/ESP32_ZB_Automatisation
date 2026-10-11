@@ -691,6 +691,13 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Fix — автоматизации не сохранялись. Причина: off-by-one в web_rule_decode:
+            предпроверка action-хвоста была NEED(13), а минимум (entity8+property2+
+            action1+value_kind1) = 12. Действия ON/OFF/TOGGLE (value_kind=NONE) давали
+            ровно 12 байт и правило 26 байт отклонялось как INVALID_SIZE (лог
+            "command 4 rejected: code=7"); SET/XY (17/20) проходили. Исправлено на NEED(12).
+            Проверено вживую: TIME-правило с action POWER/ON сохраняется и возвращается
+            (дельта + snapshot).
 2026-10-11  Step D, D1..D4 — полный semantic interface Entity. Canonical capabilities теперь
             две независимые части: properties[] (property+actions) и events[] (press-события).
             semantics.endpoint_capabilities сам собирает обе: server-кластеры → properties,

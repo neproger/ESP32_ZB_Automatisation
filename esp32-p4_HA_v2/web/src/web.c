@@ -857,7 +857,7 @@ static uint16_t web_rule_decode(const uint8_t *a, size_t len, ha_automation_key_
         memcpy(&c->cmp.value2, &b2, sizeof(b2));
     }
 
-    NEED(13);
+    NEED(12); /* entity(8)+property(2)+action(1)+value_kind(1); value — отдельно ниже */
     out->action_ref.entity = get_u64(a + o);
     o += 8;
     out->action_ref.property = (ha_property_id_t)get_u16(a + o);
