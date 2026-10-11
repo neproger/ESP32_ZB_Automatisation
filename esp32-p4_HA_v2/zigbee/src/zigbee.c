@@ -12,6 +12,7 @@
 #include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
+#include "zigbee/zigbee_remove_mark.h"
 #include "ha_model/ha_state.h"
 #include "zigbee/zigbee_entity_binding.h"
 #include "zigbee/zigbee_entity_registry.h"
@@ -122,14 +123,9 @@ static sys_error_t zigbee_property_execute(domain_command_t type, const void *ar
  */
 static sys_error_t zigbee_request_remove(ha_device_uid_t uid)
 {
-    const ha_device_remove_record_t record = {.requested = 1};
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
-    bool changed = false;
-    const sys_error_t put = domain_entity_put(
-        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &record, &meta, &changed);
-    if (sys_failed(put)) {
-        return put;
+    const sys_error_t mark = zigbee_remove_mark_add(uid);
+    if (sys_failed(mark)) {
+        return mark;
     }
     if (s_remove_requests == NULL || xQueueSend(s_remove_requests, &uid, 0) != pdTRUE) {
         return zigbee_fail(SYS_CODE_BUSY);
@@ -407,11 +403,7 @@ static void zigbee_task(void *arg)
                 } else {
                     ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
                     zigbee_entity_forget(uid); /* adapter-private bindings больше не нужны */
-                    /* Устройство ушло — снимаем и пометку на удаление. */
-                    domain_fact_meta_t meta = {0};
-                    meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-                    (void)domain_entity_remove(
-                        s_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid, &meta);
+                    zigbee_remove_mark_clear(uid); /* устройство ушло — снимаем пометку */
                 }
             }
             continue;

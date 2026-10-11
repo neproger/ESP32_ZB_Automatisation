@@ -50,8 +50,6 @@ _Static_assert(WEB_ENTITY_ZB_DIAG_DEVICE == (uint32_t)HA_ENTITY_ZB_DIAG_DEVICE, 
 _Static_assert(WEB_ENTITY_ZB_DIAG_STATE == (uint32_t)HA_ENTITY_ZB_DIAG_STATE, "entity id: state");
 _Static_assert(WEB_ENTITY_ENDPOINT == (uint32_t)HA_ENTITY_ENDPOINT, "entity id: endpoint");
 _Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
-_Static_assert(WEB_ENTITY_DEVICE_REMOVE == (uint32_t)HA_ENTITY_DEVICE_REMOVE,
-               "entity id: device-remove");
 _Static_assert(WEB_ENTITY_LOCATION == (uint32_t)HA_ENTITY_LOCATION, "entity id: location");
 _Static_assert(WEB_ENTITY_GROUP == (uint32_t)HA_ENTITY_GROUP, "entity id: group");
 _Static_assert(WEB_ENTITY_GROUP_ITEM == (uint32_t)HA_ENTITY_GROUP_ITEM, "entity id: group-item");
@@ -73,7 +71,6 @@ typedef struct {
  * когда automation вырос до 144 при буфере под endpoint 72).
  */
 #define WEB_SCHEMA_LIST(X)                                                                  \
-    X(WEB_ENTITY_DEVICE_REMOVE, sizeof(ha_device_uid_t), sizeof(ha_device_remove_record_t)) \
     X(WEB_ENTITY_LOCATION, sizeof(ha_device_uid_t), sizeof(ha_location_record_t))           \
     X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
     X(WEB_ENTITY_WEATHER, sizeof(ha_device_uid_t), sizeof(ha_weather_record_t))             \

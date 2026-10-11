@@ -691,6 +691,11 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step C, C6 — deferred-leave стал Zigbee-private (zigbee_remove_mark, NVS-blob).
+            Убраны HA_ENTITY_DEVICE_REMOVE и ha_device_remove_record_t из generic Domain/
+            ha_model (web_proto WEB_ENTITY_DEVICE_REMOVE, app_main device_remove_desc).
+            zigbee.c/zigbee_radio.c используют приватный стор. IDF зелёная, zb/domain тесты
+            зелёные. (C5 выяснил: ha_device_uid_t кросс-разрезный — wifi/display/web/system.)
 2026-10-11  Step C, C2 — raw ZCL-команда вынесена из ha_model в мост semantics
             (semantics/zb_command.h: ha_zb_command_t, HA_ZB_COMMAND_ARGS_MAX). Удалён
             HA_CMD_ZIGBEE_CLUSTER(1) и его executor в zigbee (producer'а нет). Domain

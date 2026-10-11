@@ -46,7 +46,6 @@
 #define APP_CAPABILITIES_CAPACITY 32
 #define APP_ENDPOINT_CAPACITY 128
 #define APP_AUTOMATION_CAPACITY 32
-#define APP_DEVICE_REMOVE_CAPACITY 32
 #define APP_LOCATION_CAPACITY 4
 #define APP_GROUP_CAPACITY 16
 #define APP_GROUP_ITEM_CAPACITY 128
@@ -100,19 +99,6 @@ static const domain_entity_desc_t endpoint_desc = {
     .capacity = APP_ENDPOINT_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
     .persist_key = "endpoint",
-};
-
-/*
- * Список на удаление: устройство нельзя убрать из сети напрямую, поэтому помечаем его
- * и шлём leave, когда оно появится. FLASH — пометка должна пережить перезагрузку.
- */
-static const domain_entity_desc_t device_remove_desc = {
-    .type = (domain_entity_t)HA_ENTITY_DEVICE_REMOVE,
-    .key_size = sizeof(ha_device_uid_t),
-    .payload_size = sizeof(ha_device_remove_record_t),
-    .capacity = APP_DEVICE_REMOVE_CAPACITY,
-    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "device_remove",
 };
 
 /*
@@ -387,9 +373,6 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &automation_desc), "register automation")) {
-        return;
-    }
-    if (!start_step(domain_register_entity(&s_domain, &device_remove_desc), "register device-remove")) {
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &location_desc), "register location")) {

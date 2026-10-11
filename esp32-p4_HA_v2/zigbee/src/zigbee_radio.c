@@ -18,6 +18,7 @@
 #include "zigbee/zigbee.h"
 #include "zigbee/zigbee_binding.h"
 #include "zigbee/zigbee_interview.h"
+#include "zigbee/zigbee_remove_mark.h"
 #include "ezbee/zcl/cluster/basic_desc.h"
 #include "ezbee/zcl/cluster/color_control.h"
 #include "ezbee/zcl/cluster/level.h"
@@ -704,8 +705,8 @@ static bool device_left(ha_device_uid_t uid, uint16_t short_addr)
 }
 
 /*
- * Удаление. Устройство нельзя убрать из сети напрямую: держим пометку (список в
- * Domain, HA_ENTITY_DEVICE_REMOVE) и шлём ZDO Mgmt_Leave, когда оно в сети. Успешный
+ * Удаление. Устройство нельзя убрать из сети напрямую: держим пометку (Zigbee-private,
+ * zigbee_remove_mark) и шлём ZDO Mgmt_Leave, когда оно в сети. Успешный
  * leave кладёт факт leave в сервис — он и удаляет устройство/endpoint'ы, и снимает
  * пометку. Повторный announce/rediscovery помеченного устройства тоже уходит в leave
  * (интервью не запускаем).
@@ -718,7 +719,6 @@ typedef struct {
 } leave_ctx_t;
 
 static leave_ctx_t s_leave_ctx[LEAVE_CTX_MAX];
-static domain_t *s_radio_domain;
 
 static leave_ctx_t *leave_ctx_acquire(ha_device_uid_t uid)
 {
@@ -785,12 +785,7 @@ sys_error_t zigbee_radio_request_leave(ha_device_uid_t uid)
 
 static bool device_marked_for_removal(ha_device_uid_t uid)
 {
-    if (s_radio_domain == NULL) {
-        return false;
-    }
-    ha_device_remove_record_t record = {0};
-    return sys_ok(domain_entity_get(s_radio_domain, (domain_entity_t)HA_ENTITY_DEVICE_REMOVE, &uid,
-                                    &record));
+    return zigbee_remove_mark_has(uid);
 }
 
 static bool app_signal_handler(const ezb_app_signal_t *signal)
@@ -1121,7 +1116,6 @@ sys_error_t zigbee_radio_start(domain_t *domain)
     if (domain == NULL) {
         return sys_error_make(SYS_LAYER_ZIGBEE, SYS_CODE_INVALID_ARG);
     }
-    s_radio_domain = domain;
 
     s_radio_init_done = xSemaphoreCreateBinaryStatic(&s_radio_init_done_storage);
     if (s_radio_init_done == NULL) {
