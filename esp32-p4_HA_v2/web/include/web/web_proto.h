@@ -34,8 +34,9 @@ typedef enum {
     WEB_MSG_SYNC_END = 0x02,
     /* browser → device: подтверждение кадра с данным header.seq (payload пуст). */
     WEB_MSG_ACK = 0x03,
-    /* device → browser: payload = ha_event_t verbatim. */
-    WEB_MSG_EVENT = 0x10,
+    /* device → browser: payload = ha_event_t verbatim.
+     * Вне диапазона ha_entity_t (иначе пересекается с CAPABILITIES=16). */
+    WEB_MSG_EVENT = 0xE0,
     /* browser → device: payload = [cmd][args] (args — canonical struct verbatim). */
     WEB_MSG_COMMAND = 0x20,
 } web_msg_t;

@@ -12,7 +12,7 @@ export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
   ACK: 0x03, // browser → device: подтверждение кадра с данным header.seq (пустой payload)
-  EVENT: 0x10, // device → browser: payload = ha_event_t verbatim
+  EVENT: 0xE0, // device → browser: payload = ha_event_t verbatim (вне диапазона ha_entity_t)
   COMMAND: 0x20,
 }
 

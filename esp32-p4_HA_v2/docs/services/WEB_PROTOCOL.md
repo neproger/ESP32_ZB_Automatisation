@@ -57,7 +57,7 @@ no guarantee; reconnect + snapshot восстанавливают истину.*
 | 0x01 | SYNC_BEGIN | `u32 count` |
 | 0x02 | SYNC_END | `u32 count` |
 | 0x03 | ACK | — (browser → device; `header.seq` = подтверждаемый) |
-| 0x10 | EVENT | `ha_event_t` verbatim |
+| 0xE0 | EVENT | `ha_event_t` verbatim |
 | 0x20 | COMMAND | `u8 cmd` + args (browser → device; см. §6) |
 
 ### 3.2. Сущностные (`type = ha_entity_t`)
