@@ -691,6 +691,10 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step C, C2 — raw ZCL-команда вынесена из ha_model в мост semantics
+            (semantics/zb_command.h: ha_zb_command_t, HA_ZB_COMMAND_ARGS_MAX). Удалён
+            HA_CMD_ZIGBEE_CLUSTER(1) и его executor в zigbee (producer'а нет). Domain
+            больше не знает о ZCL. IDF зелёная, ha/sem/auto/device/zb/domain тесты зелёные.
 2026-10-11  Step C, C1 — убран старый Web Zigbee-control/remove path. Удалены
             WEB_CMD_DEVICE_REMOVE(6)/DEVICE_REMOVE_CANCEL(7) + их обработчики (raw uid → HA_CMD
             ZIGBEE/DEVICE_REMOVE); удаление — только canonical WEB_CMD_LOGICAL_DEVICE_REMOVE.

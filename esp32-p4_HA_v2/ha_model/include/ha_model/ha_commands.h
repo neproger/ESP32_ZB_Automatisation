@@ -1,38 +1,23 @@
 #pragma once
 
 /*
- * Формы команд (docs/RECORD_MODEL.md §9, docs/domain/COMMANDS.md §7).
- *
- * Два разных уровня адресации не смешиваются:
- *
- *   Domain Command      — executor/type + opaque payload. Domain не знает, что внутри.
- *   Zigbee command      — device_uid + dst_endpoint + cluster/command + аргументы.
- *
- * Чего здесь нет и не будет:
- *   - src_endpoint: внутренняя политика Zigbee service/gateway;
- *   - short address: текущее сетевое состояние, а не identity — сервис разрешает
- *     device_uid → network address сам;
- *   - ezb_* структур esp-zigbee-sdk: они живут только внутри Zigbee service.
+ * Формы команд (docs/RECORD_MODEL.md §9, docs/domain/COMMANDS.md §7) — transport-agnostic.
+ * Raw ZCL-команда (ha_zb_command_t) здесь НЕ живёт: она принадлежит мосту semantics
+ * (semantics/zb_command.h). Здесь — только Domain-дискриминаторы и payload'ы.
  */
 
 #include <stdint.h>
 
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_properties.h"
-#include "ha_model/ha_zigbee.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/*
- * Дискриминатор команды Domain: по нему выбирается executor. Это общий идентификатор
- * для Automation (кто постит) и Zigbee service (кто исполняет), а не предметная
- * семантика.
- */
-#define HA_CMD_ZIGBEE_CLUSTER 1u
+/* Был HA_CMD_ZIGBEE_CLUSTER(1): удалён (Шаг C, C2) — raw ZCL вне общего командного шины. */
 
-/* Пометить устройство на удаление (args = ha_device_uid_t): leave при появлении. */
+/* Пометить устройство на удаление (args = ha_zigbee uid): leave при появлении. */
 #define HA_CMD_DEVICE_REMOVE 2u
 
 /* Открыть сеть для подключения новых устройств (args = uint8_t seconds, 0 — закрыть). */
@@ -57,23 +42,6 @@ extern "C" {
  */
 #define HA_CMD_ENTITY_RENAME 7u
 
-/* Предел аргументов ZCL-команды: форма фиксирована, как и любая форма словаря. */
-#define HA_ZB_COMMAND_ARGS_MAX 16u
-
-/*
- * Адресат описывается устройством и endpoint: кластер и команда берутся из
- * ha_zigbee.h, аргументы — уже в кодировке ZCL (без масштабирования: 0..254 уровень,
- * 0.01 °C и т. п. разбирает сервис).
- */
-typedef struct {
-    ha_device_uid_t device_uid;
-    uint8_t dst_endpoint;
-    uint16_t cluster_id;
-    uint8_t command_id;
-    uint8_t args_len;
-    uint8_t args[HA_ZB_COMMAND_ARGS_MAX];
-} ha_zb_command_t;
-
 /*
  * Семантическая команда: цель — (entity_id, property_id), намерение — action + value.
  * HA_ENTITY_ID_SOURCE/NONE сюда не попадают: вызывающий резолвит источник до постинга.
@@ -93,7 +61,6 @@ typedef struct {
 } ha_entity_rename_t;
 
 #ifdef __cplusplus
-static_assert(sizeof(ha_zb_command_t) == 32, "ha_zb_command_t: неожиданный размер");
 static_assert(sizeof(ha_property_command_t) == 28, "ha_property_command_t: неожиданный размер");
 static_assert(sizeof(ha_entity_rename_t) == 40, "ha_entity_rename_t: неожиданный размер");
 #endif

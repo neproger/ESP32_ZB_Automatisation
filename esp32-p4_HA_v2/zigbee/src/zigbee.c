@@ -10,6 +10,7 @@
 #include "zigbee/zigbee_diag.h"
 #include "device/device_service.h"
 #include "ha_model/ha_capabilities.h"
+#include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_state.h"
 #include "zigbee/zigbee_entity_binding.h"
@@ -83,18 +84,6 @@ static sys_error_t zigbee_enqueue_command(const ha_zb_command_t *command)
         return busy;
     }
     return SYS_OK;
-}
-
-static sys_error_t zigbee_execute(domain_command_t type, const void *args, size_t args_size,
-                                  void *ctx)
-{
-    (void)type;
-    (void)ctx;
-
-    if (args == NULL || args_size != sizeof(ha_zb_command_t)) {
-        return zigbee_fail(SYS_CODE_INVALID_ARG);
-    }
-    return zigbee_enqueue_command((const ha_zb_command_t *)args);
 }
 
 /*
@@ -492,8 +481,7 @@ sys_error_t zigbee_start(domain_t *domain)
 
     /* Регистрация исполнителя — часть инициализации, а не runtime-механизм. */
     const sys_error_t cluster =
-        domain_register_command(domain, HA_CMD_ZIGBEE_CLUSTER, zigbee_execute, NULL);
-    domain_register_command(domain, HA_CMD_PROPERTY, zigbee_property_execute, NULL);
+        domain_register_command(domain, HA_CMD_PROPERTY, zigbee_property_execute, NULL);
     if (sys_failed(cluster)) {
         return cluster;
     }
