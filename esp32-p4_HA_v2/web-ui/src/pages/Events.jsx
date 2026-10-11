@@ -32,8 +32,14 @@ function describe(ev, s) {
         : `${Number(v).toFixed(1)}${propertyUnit(ev.property) ? ' ' + propertyUnit(ev.property) : ''}`
     return `${who}: ${propertyName(ev.property)} = ${shown}`
   }
-  const label = TYPE_LABEL[ev.entityType] || 'сущность'
-  return ev.action === 'remove' ? `${label} удалена` : `${label} обновлена`
+  // General-сущность (location/group/weather/wifi/settings/automation): показываем тип и
+  // доступный идентификатор (title/name из записи или #id из ключа). Нет подписи — не
+  // выдумываем, а показываем номер типа.
+  const label = TYPE_LABEL[ev.entityType] || `объект типа ${ev.entityType}`
+  const title = ev.record?.title || ev.record?.name
+  const id = ev.key?.id != null ? ` #${ev.key.id}` : ''
+  const what = title ? ` «${title}»` : id
+  return `${ev.action === 'remove' ? 'удалено' : 'изменено'}: ${label}${what}`
 }
 
 export default function Events() {
