@@ -23,23 +23,40 @@ static const char *TAG = "web";
 
 #define WEB_TASK_STACK 6144
 #define WEB_TASK_PRIORITY 4
-#define WEB_INBOX_LENGTH 32
+#define WEB_INBOX_LENGTH 64
 #define WEB_CMD_BUF WEB_PROTO_MAX_FRAME
 
 static domain_t *s_domain;
 static httpd_handle_t s_server;
 static QueueHandle_t s_inbox;
 
-/* Элемент inbox: факт Domain либо запрос snapshot конкретному fd. */
+/*
+ * Элемент inbox. Все обращения к таблице клиентов (open/ack/snapshot) делает задача
+ * web — она же отвечает за отправку; httpd-задача лишь кладёт запрос. Это исключает
+ * гонку за очередь клиента между задачами (httpd open/ack vs web send/step/kill).
+ */
 typedef struct {
-    uint8_t kind; /* 0 — факт, 1 — snapshot */
+    uint8_t kind; /* 0 — факт, 1 — snapshot, 2 — open, 3 — ack */
     int fd;
+    uint16_t seq;
     domain_event_t event;
 } web_inbox_item_t;
 
 static void web_request_snapshot(int fd)
 {
     const web_inbox_item_t item = {.kind = 1, .fd = fd};
+    xQueueSend(s_inbox, &item, 0);
+}
+
+static void web_request_open(int fd)
+{
+    const web_inbox_item_t item = {.kind = 2, .fd = fd};
+    xQueueSend(s_inbox, &item, 0);
+}
+
+static void web_request_ack(int fd, uint16_t seq)
+{
+    const web_inbox_item_t item = {.kind = 3, .fd = fd, .seq = seq};
     xQueueSend(s_inbox, &item, 0);
 }
 
@@ -98,9 +115,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
     const int fd = httpd_req_to_sockfd(req);
 
     if (req->method == HTTP_GET) {
-        /* Snapshot запрашивает клиент командой SNAPSHOT: слать из GET нельзя —
-         * ответ 101 завершается после возврата хендлера, и кадр уйдёт раньше. */
-        web_sessions_open(fd);
+        /* Сессию регистрирует задача web (таблица клиентов — её собственность). */
+        web_request_open(fd);
         ESP_LOGI(TAG, "WS client connected (fd=%d)", fd);
         return ESP_OK;
     }
@@ -126,7 +142,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (frame.len >= WEB_PROTO_HDR_SIZE &&
         web_frame_decode(frame.payload, frame.len, &hdr, &payload, &payload_len)) {
         if (hdr.type == (uint8_t)WEB_MSG_ACK) {
-            web_sessions_ack(fd, hdr.seq);
+            web_request_ack(fd, hdr.seq);
         } else if (hdr.type == (uint8_t)WEB_MSG_COMMAND && payload_len >= 1) {
             if (payload[0] == (uint8_t)WEB_CMD_SNAPSHOT) {
                 web_request_snapshot(fd); /* snapshot — read-path, через задачу web */
@@ -231,15 +247,32 @@ static void web_task(void *arg)
     ESP_LOGI(TAG, "web server started");
 
     for (;;) {
+        /* Дренаж очереди: все запросы к транспорту обрабатываем в этой задаче. */
         web_inbox_item_t item = {0};
-        if (xQueueReceive(s_inbox, &item, pdMS_TO_TICKS(20)) == pdTRUE) {
-            if (item.kind == 0) {
+        bool got = false;
+        while (xQueueReceive(s_inbox, &item, 0) == pdTRUE) {
+            got = true;
+            switch (item.kind) {
+            case 0:
                 web_projection_on_event(&item.event);
-            } else {
+                break;
+            case 1:
                 web_projection_snapshot(item.fd);
+                break;
+            case 2:
+                web_sessions_open(item.fd);
+                break;
+            case 3:
+                web_sessions_ack(item.fd, item.seq);
+                break;
+            default:
+                break;
             }
         }
         web_sessions_step();
+        if (!got) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
     }
 }
 
