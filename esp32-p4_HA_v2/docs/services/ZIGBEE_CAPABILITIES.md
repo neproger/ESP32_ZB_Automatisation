@@ -60,7 +60,7 @@ output clusters = client  (0x02)
 
 | Роль | Кто | Что делает | У нас |
 |---|---|---|---|
-| **server** | реле / лампа / розетка | держит `OnOff`, принимает `Off/On/Toggle`, репортит | `HA_ENTITY_STATE` на атрибут + capability `switch`; цель команд |
+| **server** | реле / лампа / розетка | держит `OnOff`, принимает `Off/On/Toggle`, репортит | canonical `PROPERTY_STATE` (POWER) + capability `switch`; цель команд |
 | **client** | кнопка / пульт / выключатель | отправляет `Off/On/Toggle` | состояния нет; нажатие — **событие** (`EVENT`) |
 
 То же для `Level Control` (`0x0008`): server — диммируемая лампа, client —
@@ -217,10 +217,9 @@ device ...                       vendor-specific
 
 Server-атрибут может быть устойчивым или моментным:
 
-- **устойчивое** (OnOff `OnOff`, Level `CurrentLevel`, MeasuredValue) →
-  `HA_ENTITY_STATE`, `changed` имеет смысл;
-- **моментное** (нажатие, тревога, импульс) → `EVENT` / `domain_payload_put`,
-  состояния не создаёт.
+- **устойчивое** (OnOff `OnOff`, Level `CurrentLevel`, MeasuredValue) → canonical
+  `PROPERTY_STATE`, `changed` имеет смысл;
+- **моментное** (нажатие, тревога, импульс) → canonical `EVENT`, состояния не создаёт.
 
 Различители из спецификации:
 
