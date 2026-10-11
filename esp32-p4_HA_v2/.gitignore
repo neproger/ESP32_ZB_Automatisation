@@ -1,6 +1,7 @@
 # ===== Build artifacts =====
 **/build/
 **/managed_components/
+**/third_party/
 **/CMakeFiles/
 **/CMakeCache.txt
 **/cmake_install.cmake

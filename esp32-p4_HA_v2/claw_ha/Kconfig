@@ -1,0 +1,46 @@
+menu "HA Claw (local agent)"
+
+config HA_CLAW_ENABLE
+    bool "Enable ESP-Claw framework (local agent over Domain)"
+    default y
+    help
+        Подключить framework-компоненты ESP-Claw (claw_core/claw_cap) как локального
+        потребителя Domain. Shell esp-claw (app_claw/app_config/board/FATFS) не тянем.
+
+config HA_CLAW_SELFTEST
+    bool "Claw self-test: submit one request at boot"
+    depends on HA_CLAW_ENABLE
+    default y
+    help
+        На старте отправить одну тестовую заявку (mock LLM -> tool_call home_ping) и
+        залогировать ответ. Временный bring-up шаг (C2.1), позже выключить.
+
+config HA_CLAW_USE_REAL_LLM
+    bool "Use a real LLM (OpenAI-compatible) instead of the mock backend"
+    depends on HA_CLAW_ENABLE
+    default n
+    help
+        Включить реальный HTTPS-бэкенд (OpenAI-совместимый, напр. Gemini/DeepSeek).
+        Требует сеть, синхронизированное время и API key ниже.
+
+config HA_CLAW_LLM_BACKEND
+    string "LLM backend id"
+    depends on HA_CLAW_USE_REAL_LLM
+    default "openai_compatible"
+
+config HA_CLAW_LLM_BASE_URL
+    string "LLM base URL (OpenAI-compatible)"
+    depends on HA_CLAW_USE_REAL_LLM
+    default ""
+
+config HA_CLAW_LLM_MODEL
+    string "LLM model"
+    depends on HA_CLAW_USE_REAL_LLM
+    default ""
+
+config HA_CLAW_LLM_API_KEY
+    string "LLM API key (stored in local sdkconfig only; never commit)"
+    depends on HA_CLAW_USE_REAL_LLM
+    default ""
+
+endmenu

@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/claw_ha.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        domain
+        sys
+        ha_model
+        claw_core
+        claw_cap
+        esp_netif
+)

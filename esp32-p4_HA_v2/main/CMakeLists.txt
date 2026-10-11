@@ -15,4 +15,5 @@ idf_component_register(
         wifi
         system
         display_p4
+        claw_ha
 )

@@ -1,0 +1,10 @@
+menu "HA debug"
+
+config HA_DEBUG_HEAP_PROBE
+    bool "Periodic heap probe (internal free/min-ever/largest, PSRAM)"
+    default y
+    help
+        Периодический лог памяти для наблюдения за Claw/TLS на реальном устройстве.
+        Выключается после стабилизации.
+
+endmenu

@@ -5,6 +5,7 @@
 
 #include "automation/automation_rule_sem.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -169,17 +170,19 @@ static void automation_fire(uint64_t rule_id, ha_entity_id_t source_entity)
     meta.source = (uint8_t)DOMAIN_SOURCE_AUTOMATION;
     meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
     meta.value.v.u32 = command.action;
+    const int64_t t_post = esp_timer_get_time();
     const sys_error_t err =
         domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, &meta);
+    const int64_t post_us = esp_timer_get_time() - t_post;
     if (sys_failed(err)) {
-        ESP_LOGW(TAG, "rule %llu command not posted: entity=%llx err=%u",
+        ESP_LOGW(TAG, "rule %llu command not posted: entity=%llx err=%u post=%lldus",
                  (unsigned long long)rule_id, (unsigned long long)command.entity,
-                 (unsigned)err.code);
+                 (unsigned)err.code, (long long)post_us);
         return;
     }
-    ESP_LOGI(TAG, "rule %llu fired: entity=%llx property=%u action=%u",
+    ESP_LOGW(TAG, "rule %llu fired: entity=%llx property=%u action=%u post=%lldus",
              (unsigned long long)rule_id, (unsigned long long)command.entity,
-             (unsigned)command.property, (unsigned)command.action);
+             (unsigned)command.property, (unsigned)command.action, (long long)post_us);
 }
 
 /* --- кэш предыдущих значений (для edge) ---------------------------------- */
@@ -336,6 +339,9 @@ static void automation_task(void *arg)
             continue;
         }
 
+        const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+        const uint64_t lag_ms = (event.ts != 0 && now_ms >= event.ts) ? (now_ms - event.ts) : 0;
+
         if (event.kind == (uint8_t)DOMAIN_FACT_EVENT) {
             if (event.entity != (uint32_t)HA_ENTITY_ENTITY ||
                 event.key_size != sizeof(ha_entity_id_t)) {
@@ -346,12 +352,16 @@ static void automation_task(void *arg)
                 sys_failed(domain_payload_get(s_domain, event.payload_ref, &ev, sizeof(ev)))) {
                 continue; /* payload вытеснен — событие пропущено */
             }
+            ESP_LOGW(TAG, "lat EVENT src=%llx ev=%u lag=%llums",
+                     (unsigned long long)ev.source_entity, (unsigned)ev.id, (unsigned long long)lag_ms);
             automation_event_trigger(ev.source_entity, ev.id);
         } else if (event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED &&
                    event.entity == (uint32_t)HA_ENTITY_PROPERTY_STATE &&
                    event.key_size == sizeof(ha_state_key_t)) {
             ha_state_key_t key = {0};
             memcpy(&key, event.key, sizeof(key));
+            ESP_LOGW(TAG, "lat STATE entity=%llx property=%u lag=%llums",
+                     (unsigned long long)key.entity, (unsigned)key.property, (unsigned long long)lag_ms);
             automation_state_trigger(&key);
         } else if (event.entity == (uint32_t)HA_ENTITY_AUTOMATION &&
                    (event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED ||

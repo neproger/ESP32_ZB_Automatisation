@@ -3,8 +3,10 @@
 #include <string.h>
 
 #include "automation/automation.h"
+#include "claw_ha/claw_ha.h"
 #include "display_p4/display_p4.h"
 #include "domain/domain.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
@@ -313,6 +315,21 @@ static void erase_legacy_mstore_once(void)
     nvs_close(handle);
 }
 
+#if CONFIG_HA_DEBUG_HEAP_PROBE
+static void heap_probe_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(15000));
+        ESP_LOGW(TAG, "heap: internal=%u min=%u largest=%u psram=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    }
+}
+#endif
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "HA on ESP32-P4: bootstrap");
@@ -405,8 +422,17 @@ void app_main(void)
         return;
     }
 
+    /* Claw: локальный AI-агент поверх Domain (framework esp-claw без их shell). */
+    if (!start_step(claw_ha_start(&s_domain), "claw start")) {
+        return;
+    }
+
     /* Порт Display: панель ST7701 (DSI) + тач GT911, запускает UI под LVGL. */
     display_p4_start(&s_domain);
+
+#if CONFIG_HA_DEBUG_HEAP_PROBE
+    (void)xTaskCreate(heap_probe_task, "heap_probe", 3072, NULL, 1, NULL);
+#endif
 
     ESP_LOGI(TAG, "bootstrap done");
 }

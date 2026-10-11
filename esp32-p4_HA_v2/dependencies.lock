@@ -1,4 +1,20 @@
 dependencies:
+  claw_utils:
+    dependencies: []
+    source:
+      path: third_party/esp-claw/components/claw_modules/claw_utils
+      type: local
+    version: '*'
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/esp-zigbee-lib:
     component_hash: d508f9b91c4b1973e6563fe840923fad2f15b23637f3d743dba1f5a719e1baab
     dependencies:
@@ -106,12 +122,14 @@ dependencies:
       type: service
     version: 9.6.0~1
 direct_dependencies:
+- claw_utils
+- espressif/cjson
 - espressif/esp-zigbee-lib
 - espressif/esp_hosted
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_port
 - idf
 - lvgl/lvgl
-manifest_hash: 090159d77dd9ff95d3dc7d84d2add7f51fd29a2c59bdd7129dd997603d68a1dc
+manifest_hash: f01ca42d1ebe791ceea50df71178f3eefd799b4e9c1f3881b63bb55a01aa307f
 target: esp32p4
 version: 3.0.0
