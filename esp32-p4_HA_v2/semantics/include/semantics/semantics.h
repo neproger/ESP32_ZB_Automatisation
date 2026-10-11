@@ -62,8 +62,9 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
 size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out, size_t max);
 
 /*
- * Canonical capabilities entity из endpoint-записи: server-кластеры → список свойств/действий
- * (cluster/attr не сохраняются). Adapter зовёт при интервью и пишет по entity_id.
+ * Canonical interface endpoint'а: server-кластеры → свойства/действия, client-кластеры →
+ * события. Bridge сам собирает обе части; adapter не разбирает кластеры (cluster/attr не
+ * сохраняются). Adapter зовёт при интервью и пишет по entity_id.
  */
 bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
                                      ha_entity_capabilities_record_t *out);

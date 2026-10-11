@@ -86,7 +86,8 @@ typedef enum {
  *   PROPERTY_STATE (15):        u64 entity_id @0, u16 property @8, u8 value_kind @10, u32 bits @11
  *   PROPERTY_STATE_REMOVE (10): u64 entity_id @0, u16 property @8
  *   CAPABILITIES (перем.):      u64 entity_id @0, u8 count @8,
- *                               props[]{ u16 property, u8 action_count, u8 actions[] }
+ *                               props[]{ u16 property, u8 action_count, u8 actions[] },
+ *                               u8 event_count, u8 events[]
  *   CAPABILITIES_REMOVE (8):    u64 entity_id @0
  */
 typedef enum {

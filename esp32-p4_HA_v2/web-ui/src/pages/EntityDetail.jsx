@@ -3,7 +3,7 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { entityRename } from '../proto.js'
 import EntityWidgets from '../components/EntityWidgets.jsx'
-import { propertyName, propertyUnit } from '../semantics.js'
+import { propertyName, propertyUnit, eventName } from '../semantics.js'
 
 // Детали логической Entity: имя + управление по capabilities + значения свойств.
 
@@ -31,6 +31,7 @@ export default function EntityDetail({ id }) {
   }
 
   const props = store.entityProperties(target)
+  const events = store.entityEvents(target)
 
   return (
     <section>
@@ -50,6 +51,17 @@ export default function EntityDetail({ id }) {
 
         <h3>Управление</h3>
         <EntityWidgets entity={target} />
+
+        {events.length > 0 && (
+          <>
+            <h3>События</h3>
+            <div className="attrs">
+              {events.map((e) => (
+                <span className="attr small" key={e}>{eventName(e)}</span>
+              ))}
+            </div>
+          </>
+        )}
 
         {props.length > 0 && (
           <>

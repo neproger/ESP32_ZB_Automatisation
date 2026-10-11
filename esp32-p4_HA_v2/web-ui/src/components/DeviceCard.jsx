@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { store } from '../store.js'
 import { deviceRename, deviceRemove, entityRename } from '../proto.js'
 import EntityWidgets from './EntityWidgets.jsx'
-import { propertyName, propertyUnit } from '../semantics.js'
+import { propertyName, propertyUnit, eventName } from '../semantics.js'
 
 // Карточка-устройство (Logical Device): имя сверху, внутри — его Entity (контролы/значения),
 // затем дочерние устройства (дерево). Ordinary UI — на canonical device_id/entity_id.
@@ -17,6 +17,7 @@ function EntitySection({ ent }) {
   const [name, setName] = useState(ent.name || '')
   useEffect(() => setName(ent.name || ''), [ent.name])
   const props = store.entityProperties(ent.id)
+  const events = store.entityEvents(ent.id)
 
   return (
     <div className="entity">
@@ -29,6 +30,11 @@ function EntitySection({ ent }) {
         onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
       />
       <EntityWidgets entity={ent.id} />
+      {events.length > 0 && (
+        <div className="attrs">
+          <span className="attr small muted">события: {events.map((e) => eventName(e)).join(', ')}</span>
+        </div>
+      )}
       {props.length > 0 && (
         <div className="attrs">
           {props.map((st) => (

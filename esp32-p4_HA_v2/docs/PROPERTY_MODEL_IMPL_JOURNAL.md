@@ -691,6 +691,15 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step D, D1..D4 — полный semantic interface Entity. Canonical capabilities теперь
+            две независимые части: properties[] (property+actions) и events[] (press-события).
+            semantics.endpoint_capabilities сам собирает обе: server-кластеры → properties,
+            client-кластеры → events (cluster_events — внутренняя деталь, наружу не торчит).
+            WS CAPABILITIES DTO расширен (u8 property_count, props[], u8 event_count, events[]).
+            UI: Actions/Properties и Events берутся из capabilities Entity (fallback к словарю
+            только пока caps неизвестны); словари остаются лишь как labels. Smoke: ep1
+            ESP32C6-DISPLAY (client OnOff) → events=[SINGLE]; лампа ep2 → events=[].
+            Словарь ZB-кластеров не расширялся (отдельный шаг).
 2026-10-11  Step C, C3+C4+C5+C7 (один связный коммит) — граница Zigbee замкнута.
             Диагностика удалена целиком (ZB_DIAG_DEVICE/STATE, ENDPOINT, WEB_MSG_DIAG_ZB_*,
             страница Diagnostics, zcl.js, store-map'ы). Raw адаптера (имя/модель +

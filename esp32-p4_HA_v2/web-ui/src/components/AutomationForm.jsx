@@ -6,17 +6,12 @@ import {
   TRIGGER_KINDS, TRIGGER_OPS, TRIGGER_EDGES, CONDITION_OPS, WEEKDAY_LABELS,
   SYSTEM_EVENT_OPTIONS, ACTION_PROPERTIES, minutesToHHMM, hhmmToMinutes,
 } from '../automation.js'
-import { PROPERTY, ACTION, COMMAND_VALUE, EVENT, propertyName, actionName } from '../semantics.js'
+import { PROPERTY, ACTION, COMMAND_VALUE, propertyName, actionName, eventName } from '../semantics.js'
 import { rgbHexToXy } from '../color.js'
+import { ENTITY_SYSTEM } from '../system.js'
 
 const MAX_CONDITIONS = 4
 const SRC = 'src' // UI-сентинел для HA_ENTITY_ID_SOURCE
-
-const DEVICE_EVENT_OPTIONS = [
-  [EVENT.SINGLE_PRESS, 'одиночное нажатие'],
-  [EVENT.DOUBLE_PRESS, 'двойное нажатие'],
-  [EVENT.HOLD, 'удержание'],
-]
 
 function nextId(automations) {
   let max = 0n
@@ -109,11 +104,26 @@ export default function AutomationForm({ id, automations, onClose }) {
   const [actionColor, setActionColor] = useState('#ffcc88')
 
   const trigProps = propsOf(triggerEntity)
-  const propDef = ACTION_PROPERTIES.find((p) => p.id === actionProperty) || ACTION_PROPERTIES[0]
+
+  // События триггера — только те, что Entity заявила в capabilities (system — свои).
+  const triggerEntityId = triggerEntity === SRC ? null : BigInt(triggerEntity)
+  const triggerEvents = triggerEntityId == null
+    ? []
+    : triggerEntityId === ENTITY_SYSTEM
+      ? SYSTEM_EVENT_OPTIONS.map(([v]) => [v, eventName(v)])
+      : store.entityEvents(triggerEntityId).map((v) => [v, eventName(v)])
+
+  // Действия — из capabilities выбранной Entity; ACTION_PROPERTIES — только fallback, пока
+  // capabilities неизвестны (UI-сентинел «то же, что триггер» не резолвится).
+  const actionCaps = actionEntity === SRC ? null : propsOf(actionEntity)
+  const actionOptions = actionCaps ?? ACTION_PROPERTIES.map((p) => ({ property: p.id, actions: p.actions }))
+  const actionActions = (actionOptions.find((p) => p.property === actionProperty) || {}).actions || []
+  const actionValueShape = (ACTION_PROPERTIES.find((p) => p.id === actionProperty) || {}).value
   const pickProperty = (v) => {
-    const p = ACTION_PROPERTIES.find((x) => x.id === Number(v)) || ACTION_PROPERTIES[0]
-    setActionProperty(p.id)
-    setActionAction(p.actions[0])
+    const property = Number(v)
+    setActionProperty(property)
+    const opt = actionOptions.find((p) => p.property === property)
+    setActionAction(opt?.actions?.[0] ?? ACTION.SET)
   }
 
   const updateCondition = (i, patch) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
@@ -133,7 +143,7 @@ export default function AutomationForm({ id, automations, onClose }) {
           : { kind: 2, entity: toEntity(triggerEntity), property: Number(stateProperty), op: Number(stateOp), edge: Number(stateEdge), value: Number(stateValue) || 0 }
 
     let action
-    if (actionAction === ACTION.SET && propDef.value === 'color') {
+    if (actionAction === ACTION.SET && actionValueShape === 'color') {
       const { x, y } = rgbHexToXy(actionColor)
       action = { entity: toEntity(actionEntity), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.XY, x: x / 65535, y: y / 65535 }
     } else if (actionAction === ACTION.SET) {
@@ -194,7 +204,9 @@ export default function AutomationForm({ id, automations, onClose }) {
               {entityOptions(false)}
             </select>
             <select value={eventId} onChange={(e) => setEventId(Number(e.target.value))}>
-              {[...DEVICE_EVENT_OPTIONS, ...SYSTEM_EVENT_OPTIONS].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              {triggerEvents.length === 0
+                ? <option value="">(нет событий)</option>
+                : triggerEvents.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </>
         ) : (
@@ -222,20 +234,20 @@ export default function AutomationForm({ id, automations, onClose }) {
           {entityOptions(true, 'то же, что триггер')}
         </select>
         <select value={actionProperty} onChange={(e) => pickProperty(e.target.value)}>
-          {ACTION_PROPERTIES.map((p) => <option key={p.id} value={p.id}>{propertyName(p.id)}</option>)}
+          {actionOptions.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
         </select>
         <select value={actionAction} onChange={(e) => setActionAction(Number(e.target.value))}>
-          {propDef.actions.map((a) => <option key={a} value={a}>{actionName(a)}</option>)}
+          {actionActions.map((a) => <option key={a} value={a}>{actionName(a)}</option>)}
         </select>
       </label>
 
-      {actionAction === ACTION.SET && propDef.value === 'color' && (
+      {actionAction === ACTION.SET && actionValueShape === 'color' && (
         <label className="af-line">Цвет: <input type="color" value={actionColor} onChange={(e) => setActionColor(e.target.value)} /></label>
       )}
-      {actionAction === ACTION.SET && propDef.value && propDef.value !== 'color' && (
+      {actionAction === ACTION.SET && actionValueShape && actionValueShape !== 'color' && (
         <label className="af-line">Значение:
           <input className="ep" type="number" step="any" value={actionValue} onChange={(e) => setActionValue(e.target.value)} />
-          <span className="muted">{propDef.value === 'percent' ? '%' : propDef.value === 'kelvin' ? 'K' : '°'}</span>
+          <span className="muted">{actionValueShape === 'percent' ? '%' : actionValueShape === 'kelvin' ? 'K' : '°'}</span>
         </label>
       )}
 

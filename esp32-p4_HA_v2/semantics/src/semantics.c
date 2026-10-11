@@ -509,6 +509,40 @@ size_t semantics_cluster_capabilities(uint16_t cluster_id, ha_capability_t *out,
     return (n < max) ? n : max;
 }
 
+/*
+ * Внутренняя деталь моста: события client-кластера (кнопки/пульты). Источник — тот же
+ * ZB_EVENT_MAP, что и при декодировании; берём уникальные event id кластера. Наружу
+ * bridge отвечает одним вопросом «какой интерфейс у endpoint'а».
+ */
+static size_t cluster_events(uint16_t cluster_id, ha_event_id_t *out, size_t max)
+{
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    size_t n = 0;
+    const size_t count = sizeof(ZB_EVENT_MAP) / sizeof(ZB_EVENT_MAP[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (ZB_EVENT_MAP[i].cluster_id != cluster_id) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t j = 0; j < n; j++) {
+            if (out[j] == ZB_EVENT_MAP[i].event) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+        if (n < max) {
+            out[n] = ZB_EVENT_MAP[i].event;
+        }
+        n++;
+    }
+    return (n < max) ? n : max;
+}
+
 bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
                                      ha_entity_capabilities_record_t *out)
 {
@@ -517,18 +551,36 @@ bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
     }
     ha_entity_capabilities_record_t record = {0};
     uint8_t count = 0;
+    uint8_t events = 0;
     for (uint8_t i = 0; i < endpoint->cluster_count && i < HA_ENDPOINT_CLUSTERS_MAX; i++) {
-        if (endpoint->clusters[i].role != HA_ZB_ROLE_SERVER) {
+        const uint16_t cluster = endpoint->clusters[i].cluster_id;
+        if (endpoint->clusters[i].role == HA_ZB_ROLE_SERVER) {
+            ha_capability_t caps[HA_ENTITY_CAPABILITIES_MAX];
+            const size_t n = semantics_cluster_capabilities(cluster, caps,
+                                                            HA_ENTITY_CAPABILITIES_MAX);
+            for (size_t j = 0; j < n && count < HA_ENTITY_CAPABILITIES_MAX; j++) {
+                record.properties[count++] = caps[j];
+            }
             continue;
         }
-        ha_capability_t caps[HA_ENTITY_CAPABILITIES_MAX];
-        const size_t n = semantics_cluster_capabilities(endpoint->clusters[i].cluster_id, caps,
-                                                        HA_ENTITY_CAPABILITIES_MAX);
-        for (size_t j = 0; j < n && count < HA_ENTITY_CAPABILITIES_MAX; j++) {
-            record.caps[count++] = caps[j];
+        /* client-кластер: устройство шлёт через него команды → события (кнопки/пульты). */
+        ha_event_id_t ev[HA_ENTITY_EVENTS_MAX];
+        const size_t n = cluster_events(cluster, ev, HA_ENTITY_EVENTS_MAX);
+        for (size_t j = 0; j < n && events < HA_ENTITY_EVENTS_MAX; j++) {
+            bool dup = false;
+            for (uint8_t k = 0; k < events; k++) {
+                if (record.events[k] == ev[j]) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                record.events[events++] = ev[j];
+            }
         }
     }
-    record.count = count;
+    record.property_count = count;
+    record.event_count = events;
     *out = record;
     return true;
 }

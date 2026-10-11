@@ -344,7 +344,7 @@ static void test_cluster_capabilities(void)
     CHECK(semantics_cluster_capabilities(0x1234, caps, 8) == 0);
 }
 
-/* A6.1b: canonical capabilities Entity из endpoint-записи (server-кластеры). */
+/* A6.1b/D: canonical interface endpoint'а — server-кластеры → properties, client → events. */
 static void test_endpoint_capabilities(void)
 {
     ha_endpoint_record_t endpoint = {0};
@@ -353,19 +353,30 @@ static void test_endpoint_capabilities(void)
     endpoint.clusters[0].role = HA_ZB_ROLE_SERVER;
     endpoint.clusters[1].cluster_id = HA_ZB_CLUSTER_TEMPERATURE_MEASUREMENT;
     endpoint.clusters[1].role = HA_ZB_ROLE_SERVER;
-    endpoint.clusters[2].cluster_id = HA_ZB_CLUSTER_LEVEL_CONTROL; /* client — игнорируется */
+    endpoint.clusters[2].cluster_id = HA_ZB_CLUSTER_ON_OFF; /* client — кнопка шлёт команды */
     endpoint.clusters[2].role = HA_ZB_ROLE_CLIENT;
 
     ha_entity_capabilities_record_t caps = {0};
     CHECK(semantics_endpoint_capabilities(&endpoint, &caps));
-    CHECK(caps.count == 2);
+    CHECK(caps.property_count == 2);
+    CHECK(caps.event_count == 1 && caps.events[0] == HA_EVENT_SINGLE_PRESS);
 
     bool has_power = false, has_temp = false;
-    for (uint8_t i = 0; i < caps.count; i++) {
-        if (caps.caps[i].property == HA_PROPERTY_POWER) has_power = true;
-        if (caps.caps[i].property == HA_PROPERTY_TEMPERATURE) has_temp = true;
+    for (uint8_t i = 0; i < caps.property_count; i++) {
+        if (caps.properties[i].property == HA_PROPERTY_POWER) has_power = true;
+        if (caps.properties[i].property == HA_PROPERTY_TEMPERATURE) has_temp = true;
     }
     CHECK(has_power && has_temp);
+
+    /* Чистая кнопка: только client-кластер → properties пусто, события есть. */
+    ha_endpoint_record_t button = {0};
+    button.cluster_count = 1;
+    button.clusters[0].cluster_id = HA_ZB_CLUSTER_ON_OFF;
+    button.clusters[0].role = HA_ZB_ROLE_CLIENT;
+    ha_entity_capabilities_record_t bcaps = {0};
+    CHECK(semantics_endpoint_capabilities(&button, &bcaps));
+    CHECK(bcaps.property_count == 0);
+    CHECK(bcaps.event_count == 1 && bcaps.events[0] == HA_EVENT_SINGLE_PRESS);
 
     CHECK(!semantics_endpoint_capabilities(NULL, &caps));
 }

@@ -282,22 +282,29 @@ static bool web3_property_state_remove_payload(ha_entity_id_t entity_id, ha_prop
     return true;
 }
 
-/* CAPABILITIES (перем.): u64 entity_id @0, u8 count @8, props[]{u16 property,u8 n,u8 actions[]}. */
+/*
+ * CAPABILITIES (перем.): u64 entity_id @0; u8 count @8; props[]{u16 property,u8 n,u8 actions[]};
+ * затем u8 event_count + u8 events[] (press-события client-кластеров).
+ */
 static bool web3_capabilities_payload(ha_entity_id_t entity_id,
                                       const ha_entity_capabilities_record_t *record, uint8_t *out,
                                       uint16_t *out_len)
 {
     put_u64(out, entity_id);
     size_t o = 8;
-    out[o++] = record->count;
-    for (uint8_t i = 0; i < record->count && i < HA_ENTITY_CAPABILITIES_MAX; i++) {
-        const ha_capability_t *cap = &record->caps[i];
+    out[o++] = record->property_count;
+    for (uint8_t i = 0; i < record->property_count && i < HA_ENTITY_CAPABILITIES_MAX; i++) {
+        const ha_capability_t *cap = &record->properties[i];
         put_u16(out + o, (uint16_t)cap->property);
         o += 2;
         out[o++] = cap->action_count;
         for (uint8_t a = 0; a < cap->action_count && a < HA_CAPABILITY_ACTIONS_MAX; a++) {
             out[o++] = (uint8_t)cap->actions[a];
         }
+    }
+    out[o++] = record->event_count;
+    for (uint8_t e = 0; e < record->event_count && e < HA_ENTITY_EVENTS_MAX; e++) {
+        out[o++] = (uint8_t)record->events[e];
     }
     *out_len = (uint16_t)o;
     return true;

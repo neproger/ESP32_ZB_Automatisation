@@ -24,6 +24,7 @@ const semEntities = new Map()      // entityStr → { id, deviceId, name }
 const semDevices = new Map()       // deviceStr → { id, parentId, name }
 const propStates = new Map()       // `${entity}:${property}` → { entity, property, kind, value }
 const propCapabilities = new Map() // entityStr → [{ property, actions }]
+const propEvents = new Map()       // entityStr → [eventId] (press-события client-кластеров)
 const dec = new TextDecoder()
 const textAt = (payload, off, len) => {
   const tb = new Uint8Array(payload.buffer, payload.byteOffset + off, len)
@@ -125,6 +126,7 @@ function onFrame(buf) {
     semDevices.clear()
     propStates.clear()
     propCapabilities.clear()
+    propEvents.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
@@ -220,6 +222,7 @@ function onFrame(buf) {
     const key = payload.getBigUint64(0, true).toString()
     if (frame.type === MSG3.CAPABILITIES_REMOVE) {
       propCapabilities.delete(key)
+      propEvents.delete(key)
     } else {
       const count = payload.getUint8(8)
       let o = 9
@@ -231,7 +234,11 @@ function onFrame(buf) {
         for (let j = 0; j < ac; j++) actions.push(payload.getUint8(o++))
         caps.push({ property, actions })
       }
+      const ec = payload.getUint8(o); o += 1
+      const events = []
+      for (let i = 0; i < ec; i++) events.push(payload.getUint8(o++))
       propCapabilities.set(key, caps)
+      propEvents.set(key, events)
     }
     emit()
     return
@@ -344,6 +351,10 @@ export const store = {
   },
   capabilities(entity) {
     return propCapabilities.get(entity.toString()) || []
+  },
+  // Press-события Entity (пусто — устройство их не шлёт).
+  entityEvents(entity) {
+    return propEvents.get(entity.toString()) || []
   },
   send(frame) {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(frame.bytes)
