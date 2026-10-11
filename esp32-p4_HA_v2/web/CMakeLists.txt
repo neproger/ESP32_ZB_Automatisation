@@ -14,6 +14,7 @@ idf_component_register(
         "src/web_sessions.c"
         "src/web_projection.c"
         "src/web_commands.c"
+        "src/web_model_file.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

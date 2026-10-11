@@ -29,6 +29,15 @@
 #define WEB_PROTO_MAX_PAYLOAD 256u
 #define WEB_PROTO_MAX_FRAME (WEB_PROTO_HDR_SIZE + WEB_PROTO_MAX_PAYLOAD)
 
+/*
+ * Bulk-файлы/снапшоты: заголовок + поток записей [type u8][key][record] (canonical verbatim).
+ *   /snapshot.bin (fallback, всё): magic 'HAS1'
+ *   /model.bin    (MODEL-часть, флеш): magic 'HASM'
+ * hdr: magic[4], ver u8, flags u8, reserved u16, record_count u32 (LE).
+ */
+#define WEB_SNAPSHOT_VER 1u
+#define WEB_SNAPSHOT_HDR_SIZE 12u
+
 typedef enum {
     WEB_MSG_SYNC_BEGIN = 0x01,
     WEB_MSG_SYNC_END = 0x02,
@@ -58,6 +67,8 @@ typedef enum {
  */
 typedef enum {
     WEB_CMD_SNAPSHOT = 1,
+    /* browser → device: STATE-only snapshot (SYNC_BEGIN…records…SYNC_END). */
+    WEB_CMD_SNAPSHOT_STATE = 2,
     WEB_CMD_AUTOMATION_PUT = 4,
     WEB_CMD_AUTOMATION_REMOVE = 5,
     WEB_CMD_DISCOVERY = 8,

@@ -20,26 +20,29 @@
 
 /*
  * Типы, отдаваемые браузеру. Список явный: key/record — canonical struct sizes.
+ * `model` = статическая часть (редко меняется → файл/GET); иначе — volatile state.
  */
 typedef struct {
     ha_entity_t type;
     uint16_t key_size;
     uint16_t rec_size;
+    bool model;
 } web_schema_t;
 
 static const web_schema_t SCHEMA[] = {
     {HA_ENTITY_LOGICAL_DEVICE, sizeof(ha_logical_device_key_t),
-     sizeof(ha_logical_device_record_t)},
-    {HA_ENTITY_ENTITY, sizeof(ha_entity_key_t), sizeof(ha_entity_record_t)},
-    {HA_ENTITY_PROPERTY_STATE, sizeof(ha_state_key_t), sizeof(ha_state_record_t)},
-    {HA_ENTITY_CAPABILITIES, sizeof(ha_entity_key_t), sizeof(ha_entity_capabilities_record_t)},
-    {HA_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_rule_t)},
-    {HA_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t)},
-    {HA_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t)},
-    {HA_ENTITY_LOCATION, sizeof(ha_device_id_t), sizeof(ha_location_record_t)},
-    {HA_ENTITY_WEATHER, sizeof(ha_device_id_t), sizeof(ha_weather_record_t)},
-    {HA_ENTITY_WIFI_STATUS, sizeof(ha_device_id_t), sizeof(ha_wifi_status_record_t)},
-    {HA_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t)},
+     sizeof(ha_logical_device_record_t), true},
+    {HA_ENTITY_ENTITY, sizeof(ha_entity_key_t), sizeof(ha_entity_record_t), true},
+    {HA_ENTITY_PROPERTY_STATE, sizeof(ha_state_key_t), sizeof(ha_state_record_t), false},
+    {HA_ENTITY_CAPABILITIES, sizeof(ha_entity_key_t), sizeof(ha_entity_capabilities_record_t),
+     true},
+    {HA_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_rule_t), true},
+    {HA_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t), true},
+    {HA_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t), true},
+    {HA_ENTITY_LOCATION, sizeof(ha_device_id_t), sizeof(ha_location_record_t), true},
+    {HA_ENTITY_WEATHER, sizeof(ha_device_id_t), sizeof(ha_weather_record_t), false},
+    {HA_ENTITY_WIFI_STATUS, sizeof(ha_device_id_t), sizeof(ha_wifi_status_record_t), false},
+    {HA_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t), true},
 };
 #define SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
 
@@ -115,6 +118,98 @@ void web_projection_snapshot(int fd)
     }
 
     put_u32(word, sent);
+    web_sessions_send(fd, WEB_MSG_SYNC_END, word, sizeof(word));
+}
+
+/* --- классификация типов + MODEL-блоб + STATE-snapshot ------------------- */
+
+bool web_projection_is_model(domain_entity_t type)
+{
+    for (size_t i = 0; i < SCHEMA_COUNT; i++) {
+        if ((uint32_t)SCHEMA[i].type == (uint32_t)type) {
+            return SCHEMA[i].model;
+        }
+    }
+    return false;
+}
+
+typedef struct {
+    uint8_t *buf;
+    size_t cap;
+    size_t off;
+    uint8_t type;
+    uint16_t key_size;
+    uint16_t rec_size;
+    uint32_t count;
+    bool overflow;
+} blob_ctx_t;
+
+static bool blob_emit(const void *key, const void *record, void *ctx)
+{
+    blob_ctx_t *w = (blob_ctx_t *)ctx;
+    const size_t need = (size_t)1 + w->key_size + w->rec_size;
+    if (w->off + need > w->cap) {
+        w->overflow = true;
+        return false;
+    }
+    w->buf[w->off++] = w->type;
+    memcpy(w->buf + w->off, key, w->key_size);
+    w->off += w->key_size;
+    memcpy(w->buf + w->off, record, w->rec_size);
+    w->off += w->rec_size;
+    w->count++;
+    return true;
+}
+
+size_t web_projection_build_model(uint8_t *buf, size_t cap, uint32_t *out_count)
+{
+    blob_ctx_t w = {.buf = buf, .cap = cap, .off = 0, .count = 0, .overflow = false};
+    for (size_t i = 0; i < SCHEMA_COUNT; i++) {
+        if (!SCHEMA[i].model) {
+            continue;
+        }
+        w.type = (uint8_t)SCHEMA[i].type;
+        w.key_size = SCHEMA[i].key_size;
+        w.rec_size = SCHEMA[i].rec_size;
+        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, blob_emit, &w);
+        if (w.overflow) {
+            break;
+        }
+    }
+    if (out_count != NULL) {
+        *out_count = w.count;
+    }
+    return w.overflow ? 0 : w.off;
+}
+
+static bool state_emit(const void *key, const void *record, void *ctx)
+{
+    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    memcpy(out, key, s->key_size);
+    memcpy(out + s->key_size, record, s->rec_size);
+    web_sessions_send(s->fd, s->type, out, (uint16_t)(s->key_size + s->rec_size));
+    s->sent++;
+    return true;
+}
+
+void web_projection_send_state(int fd)
+{
+    uint8_t word[4];
+    put_u32(word, 0);
+    web_sessions_send(fd, WEB_MSG_SYNC_BEGIN, word, sizeof(word));
+    for (size_t i = 0; i < SCHEMA_COUNT; i++) {
+        if (SCHEMA[i].model) {
+            continue;
+        }
+        snapshot_ctx_t ctx = {.fd = fd,
+                              .type = (uint8_t)SCHEMA[i].type,
+                              .key_size = SCHEMA[i].key_size,
+                              .rec_size = SCHEMA[i].rec_size,
+                              .sent = 0};
+        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, state_emit, &ctx);
+    }
+    put_u32(word, 0);
     web_sessions_send(fd, WEB_MSG_SYNC_END, word, sizeof(word));
 }
 

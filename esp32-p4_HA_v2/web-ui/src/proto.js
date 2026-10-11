@@ -35,6 +35,7 @@ export const ENTITY = {
 
 export const CMD = {
   SNAPSHOT: 1,
+  SNAPSHOT_STATE: 2,
   AUTOMATION_PUT: 4,
   AUTOMATION_REMOVE: 5,
   DISCOVERY: 8,
@@ -51,6 +52,47 @@ export const CMD = {
 
 export const HDR = 8
 export const VER = 3
+
+// Размеры canonical форм (ключ+запись, verbatim layout ha_model) для bulk-файлов.
+export const SIZES = {
+  17: { key: 8, rec: 80 },   // LOGICAL_DEVICE
+  14: { key: 8, rec: 40 },   // ENTITY
+  15: { key: 16, rec: 8 },   // PROPERTY_STATE
+  16: { key: 8, rec: 216 },  // CAPABILITIES
+  4: { key: 8, rec: 192 },   // AUTOMATION
+  8: { key: 24, rec: 36 },   // GROUP_ITEM
+  7: { key: 8, rec: 32 },    // GROUP
+  6: { key: 8, rec: 60 },    // LOCATION
+  9: { key: 8, rec: 16 },    // WEATHER
+  12: { key: 8, rec: 36 },   // WIFI_STATUS
+  13: { key: 1, rec: 8 },    // SETTINGS
+}
+
+// HTTP bulk-файл: 'HASM' (model) или 'HAS1' (полный) + ver u8 + flags u8 + reserved u16 +
+// count u32, затем count × [type u8][key][record]. Возвращает [{ type, view }] или null.
+export function parseSnapshot(buffer) {
+  const dv = new DataView(buffer)
+  if (dv.byteLength < 12) return null
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3))
+  if ((magic !== 'HASM' && magic !== 'HAS1') || dv.getUint8(4) !== 1) return null
+  const count = dv.getUint32(8, true)
+  const out = []
+  let off = 12
+  for (let i = 0; i < count; i++) {
+    if (off + 1 > dv.byteLength) return null
+    const type = dv.getUint8(off)
+    off += 1
+    const s = SIZES[type]
+    if (!s || off + s.key + s.rec > dv.byteLength) return null
+    out.push({ type, view: new DataView(dv.buffer, dv.byteOffset + off, s.key + s.rec) })
+    off += s.key + s.rec
+  }
+  return out
+}
+
+export function snapshotState() {
+  return encodeCommand(CMD.SNAPSHOT_STATE)
+}
 
 export function decodeFrame(buf) {
   const dv = new DataView(buf)

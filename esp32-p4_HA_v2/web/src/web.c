@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "web/web_commands.h"
+#include "web/web_model_file.h"
 #include "web/web_projection.h"
 #include "web/web_proto.h"
 #include "web/web_sessions.h"
@@ -31,14 +32,12 @@ static httpd_handle_t s_server;
 static QueueHandle_t s_inbox;
 
 /*
- * Элемент inbox. Все обращения к таблице клиентов (open/ack/snapshot) делает задача
- * web — она же отвечает за отправку; httpd-задача лишь кладёт запрос. Это исключает
- * гонку за очередь клиента между задачами (httpd open/ack vs web send/step/kill).
+ * Элемент inbox: факт Domain (kind 0) либо запрос снапшота задачи web (kind 1 — полный,
+ * kind 2 — STATE). open/ack идут синхронно в httpd-задаче (транспорт под мьютексом).
  */
 typedef struct {
-    uint8_t kind; /* 0 — факт, 1 — snapshot, 2 — open, 3 — ack */
+    uint8_t kind; /* 0 — факт, 1 — snapshot(full), 2 — snapshot_state */
     int fd;
-    uint16_t seq;
     domain_event_t event;
 } web_inbox_item_t;
 
@@ -48,15 +47,9 @@ static void web_request_snapshot(int fd)
     xQueueSend(s_inbox, &item, 0);
 }
 
-static void web_request_open(int fd)
+static void web_request_state(int fd)
 {
     const web_inbox_item_t item = {.kind = 2, .fd = fd};
-    xQueueSend(s_inbox, &item, 0);
-}
-
-static void web_request_ack(int fd, uint16_t seq)
-{
-    const web_inbox_item_t item = {.kind = 3, .fd = fd, .seq = seq};
     xQueueSend(s_inbox, &item, 0);
 }
 
@@ -115,8 +108,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     const int fd = httpd_req_to_sockfd(req);
 
     if (req->method == HTTP_GET) {
-        /* Сессию регистрирует задача web (таблица клиентов — её собственность). */
-        web_request_open(fd);
+        web_sessions_open(fd); /* регистрация синхронно (транспорт под мьютексом) */
         ESP_LOGI(TAG, "WS client connected (fd=%d)", fd);
         return ESP_OK;
     }
@@ -142,10 +134,12 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (frame.len >= WEB_PROTO_HDR_SIZE &&
         web_frame_decode(frame.payload, frame.len, &hdr, &payload, &payload_len)) {
         if (hdr.type == (uint8_t)WEB_MSG_ACK) {
-            web_request_ack(fd, hdr.seq);
+            web_sessions_ack(fd, hdr.seq);
         } else if (hdr.type == (uint8_t)WEB_MSG_COMMAND && payload_len >= 1) {
             if (payload[0] == (uint8_t)WEB_CMD_SNAPSHOT) {
-                web_request_snapshot(fd); /* snapshot — read-path, через задачу web */
+                web_request_snapshot(fd); /* полный snapshot (fallback) */
+            } else if (payload[0] == (uint8_t)WEB_CMD_SNAPSHOT_STATE) {
+                web_request_state(fd); /* только состояния */
             } else {
                 web_commands_handle(payload[0], payload + 1, payload_len - 1);
             }
@@ -178,6 +172,12 @@ static sys_error_t server_start(void)
         .is_websocket = true,
     };
     httpd_register_uri_handler(s_server, &root);
+    const httpd_uri_t model = {
+        .uri = "/model.bin",
+        .method = HTTP_GET,
+        .handler = web_model_file_serve,
+    };
+    httpd_register_uri_handler(s_server, &model);
 #ifdef WEB_UI_EMBEDDED
     const httpd_uri_t app_js = {
         .uri = "/app.js",
@@ -235,6 +235,7 @@ static void web_task(void *arg)
     s_domain = (domain_t *)arg;
     web_projection_init(s_domain);
     web_commands_init(s_domain);
+    web_model_file_init();
 
     if (sys_failed(server_start())) {
         ESP_LOGE(TAG, "HTTP server not started");
@@ -255,20 +256,23 @@ static void web_task(void *arg)
             switch (item.kind) {
             case 0:
                 web_projection_on_event(&item.event);
+                if ((item.event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED ||
+                     item.event.kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) &&
+                    web_projection_is_model(item.event.entity)) {
+                    web_model_file_mark_dirty();
+                }
                 break;
             case 1:
                 web_projection_snapshot(item.fd);
                 break;
             case 2:
-                web_sessions_open(item.fd);
-                break;
-            case 3:
-                web_sessions_ack(item.fd, item.seq);
+                web_projection_send_state(item.fd);
                 break;
             default:
                 break;
             }
         }
+        web_model_file_step();
         web_sessions_step();
         if (!got) {
             vTaskDelay(pdMS_TO_TICKS(5));

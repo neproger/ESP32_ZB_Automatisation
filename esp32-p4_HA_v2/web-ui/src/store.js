@@ -1,29 +1,30 @@
-import { MSG, ENTITY, decodeFrame, snapshot, ack } from './proto.js'
+import { MSG, ENTITY, SIZES, parseSnapshot, decodeFrame, snapshot, snapshotState, ack } from './proto.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 
-// Единый стор: WS-соединение + канонические сущности Domain. React читает через
-// useSyncExternalStore(store.subscribe, store.getVersion). Wire v3 — canonical structs
-// verbatim (layout ha_model): type = ha_entity_t, payload = [key][record].
+// Стор: WS (live deltas + STATE-снапшот) + HTTP bulk MODEL-файл (/model.bin). React читает
+// через useSyncExternalStore(store.subscribe, store.getVersion).
+//
+// Порядок (не теряем изменения):
+//   1) WS open → буферизуем кадры
+//   2) GET /model.bin → применяем MODEL
+//   3) WS SNAPSHOT_STATE → применяем STATE (актуальнее буфера)
+//   4) проигрываем буфер → live
+// MODEL-изменения живых клиентов приходят дельтами (ре-GET не нужен); файл сервер
+// пересобирает в фоне для новых подключений. Fallback: полный WS-snapshot.
 
-// Generic-сущности (identity — device_id или id; record как есть).
-const locations = new Map()   // `loc:${id}`      → { key: { id }, record }
-const weatherMap = new Map()  // `weather:${id}`  → { key: { id }, record }
-const wifiStatusMap = new Map() // `wifi:${id}`   → { key: { id }, record }
-const settingsMap = new Map() // `set:${id}`      → { key: { id }, record }
-const groups = new Map()      // `grp:${id}`      → { key: { id }, record }
-
-// Семантические правила: ключ — id. { id, rule }.
+const locations = new Map()
+const weatherMap = new Map()
+const wifiStatusMap = new Map()
+const settingsMap = new Map()
+const groups = new Map()
 const semAutomations = new Map()
-// Canonical group items: ключ "group:entity:property".
 const semGroupItems = new Map()
-
-// Canonical v3: identity = entity_id. Это карты обычного UI.
-const semEntities = new Map()      // entityStr → { id, deviceId, name }
-const semDevices = new Map()       // deviceStr → { id, parentId, name }
-const propStates = new Map()       // `${entity}:${property}` → { entity, property, kind, value }
-const propCapabilities = new Map() // entityStr → [{ property, actions }]
-const propEvents = new Map()       // entityStr → [eventId] (press-события client-кластеров)
+const semEntities = new Map()
+const semDevices = new Map()
+const propStates = new Map()
+const propCapabilities = new Map()
+const propEvents = new Map()
 
 const dec = new TextDecoder()
 function cstr(dv, off, len) {
@@ -33,7 +34,6 @@ function cstr(dv, off, len) {
 }
 const textAt = (dv, off, len) => cstr(dv, off, len)
 
-// --- record-декодеры (entity-native layout, без числового типа) --------------
 function decodeLocation(dv, o) {
   const flags = dv.getUint8(o + 10)
   return {
@@ -58,11 +58,9 @@ function decodeSettings(dv, o) {
 }
 const decodeGroup = (dv, o) => ({ title: cstr(dv, o, 32) })
 
-// Декод canonical ha_rule_t (192) verbatim (layout ha_rule.h). Без ZCL.
 const RULE_OFF_CONDITIONS_COUNT = 189
 const RULE_OFF_ACTION = 190
 const CONDITION_SIZE = 32
-
 function decodeRule(dv, base) {
   const kind = dv.getUint8(base + 26)
   const trigger = {
@@ -95,20 +93,16 @@ function decodeRule(dv, base) {
     action: dv.getUint8(base + RULE_OFF_ACTION),
     valueKind: dv.getInt32(base + 176, true),
   }
-  if (action.valueKind === 1) { // SCALAR: ha_value_t {kind i32, value}
+  if (action.valueKind === 1) {
     action.scalarKind = dv.getInt32(base + 180, true)
-    action.value = action.scalarKind === 4
-      ? dv.getFloat32(base + 184, true)
-      : dv.getUint32(base + 184, true)
-  } else if (action.valueKind === 2) { // XY
+    action.value = action.scalarKind === 4 ? dv.getFloat32(base + 184, true) : dv.getUint32(base + 184, true)
+  } else if (action.valueKind === 2) {
     action.x = dv.getFloat32(base + 180, true)
     action.y = dv.getFloat32(base + 184, true)
   }
-  const enabled = dv.getUint8(base + 188) !== 0
-  return { enabled, trigger, conditions, action }
+  return { enabled: dv.getUint8(base + 188) !== 0, trigger, conditions, action }
 }
 
-// Значение из canonical DTO (u8 valueKind @k, u32 bits @k+1).
 function decodeValue(payload, atKind, atBits) {
   const kind = payload.getUint8(atKind)
   let value = null
@@ -126,17 +120,17 @@ function decodeValue(payload, atKind, atBits) {
 const EVENT_LOG_MAX = 200
 const events = []
 let eventSeq = 0
-let syncing = false
+let phase = 'live' // 'model' | 'state' | 'fallback' | 'live'
+let pending = []
 let version = 0
 let status = 'connecting'
 let socket = null
+let session = 0
 const listeners = new Set()
-// Stop-and-wait транспорт: seq сервер-присвоенный; дубликат (retry) применяем один раз.
 let lastSeq = -1
 
-// Журнал: одна typed-запись (kind + канонические поля). Snapshot (syncing) не логируется.
 function pushEvent(ev) {
-  if (syncing) return
+  if (phase !== 'live') return
   events.push({ seq: ++eventSeq, ts: Date.now(), ...ev })
   if (events.length > EVENT_LOG_MAX) events.splice(0, events.length - EVENT_LOG_MAX)
 }
@@ -144,6 +138,93 @@ function pushEvent(ev) {
 const emit = () => {
   version++
   for (const l of listeners) l()
+}
+
+function clearModel() {
+  for (const m of [semDevices, semEntities, propCapabilities, semAutomations, semGroupItems, groups, locations, settingsMap]) m.clear()
+}
+function clearState() {
+  for (const m of [propStates, weatherMap, wifiStatusMap]) m.clear()
+}
+function clearAll() {
+  clearModel()
+  clearState()
+}
+
+// Применить один canonical record [key][record] по типу (без emit).
+function applyEntity(type, p) {
+  if (type === ENTITY.LOGICAL_DEVICE) {
+    const id = p.getBigUint64(0, true)
+    semDevices.set(id.toString(), { id, parentId: p.getBigUint64(8, true), name: textAt(p, 52, 32) })
+  } else if (type === ENTITY.ENTITY) {
+    const id = p.getBigUint64(0, true)
+    semEntities.set(id.toString(), { id, deviceId: p.getBigUint64(8, true), name: textAt(p, 16, 32) })
+  } else if (type === ENTITY.PROPERTY_STATE) {
+    const entity = p.getBigUint64(0, true)
+    const property = p.getInt32(8, true)
+    const key = `${entity}:${property}`
+    const prev = propStates.get(key)
+    const { kind, value } = decodeValue(p, 16, 20)
+    propStates.set(key, { entity, property, kind, value })
+    if (entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
+      pushEvent({ kind: 'state', entity, property, valueKind: kind, value })
+    }
+  } else if (type === ENTITY.CAPABILITIES) {
+    const key = p.getBigUint64(0, true).toString()
+    const count = p.getUint8(8)
+    const caps = []
+    for (let i = 0; i < count; i++) {
+      const property = p.getInt32(12 + i * 24, true)
+      const ac = p.getUint8(16 + i * 24)
+      const actions = []
+      for (let j = 0; j < ac; j++) actions.push(p.getInt32(20 + i * 24 + j * 4, true))
+      caps.push({ property, actions })
+    }
+    const ec = p.getUint8(204)
+    const evs = []
+    for (let i = 0; i < ec; i++) evs.push(p.getInt32(208 + i * 4, true))
+    propCapabilities.set(key, caps)
+    propEvents.set(key, evs)
+  } else if (type === ENTITY.AUTOMATION) {
+    const id = p.getBigUint64(0, true)
+    semAutomations.set(id.toString(), { id, rule: decodeRule(p, 8) })
+  } else if (type === ENTITY.GROUP_ITEM) {
+    const groupId = p.getBigUint64(0, true)
+    const entity = p.getBigUint64(8, true)
+    const property = p.getInt32(16, true)
+    semGroupItems.set(`${groupId}:${entity}:${property}`, {
+      groupId, entity, property, order: p.getUint16(24, true), title: textAt(p, 28, 32),
+    })
+  } else if (type === ENTITY.GROUP) {
+    const id = p.getBigUint64(0, true)
+    groups.set(`grp:${id}`, { key: { id }, record: decodeGroup(p, 8) })
+  } else if (type === ENTITY.LOCATION) {
+    const id = p.getBigUint64(0, true)
+    locations.set(`loc:${id}`, { key: { id }, record: decodeLocation(p, 8) })
+  } else if (type === ENTITY.WEATHER) {
+    const id = p.getBigUint64(0, true)
+    weatherMap.set(`weather:${id}`, { key: { id }, record: decodeWeather(p, 8) })
+  } else if (type === ENTITY.WIFI_STATUS) {
+    const id = p.getBigUint64(0, true)
+    wifiStatusMap.set(`wifi:${id}`, { key: { id }, record: decodeWifiStatus(p, 8) })
+  } else if (type === ENTITY.SETTINGS) {
+    const id = p.getUint8(0)
+    settingsMap.set(`set:${id}`, { key: { id }, record: decodeSettings(p, 1) })
+  }
+}
+
+function applyEvent(p) {
+  const ev = decodeValue(p, 16, 20)
+  pushEvent({ kind: 'event', entity: p.getBigUint64(8, true), eventId: p.getInt32(0, true), valueKind: ev.kind, value: ev.value })
+}
+
+function applyFrame(type, p) {
+  if (type === MSG.EVENT) applyEvent(p)
+  else if (SIZES[type]) applyEntity(type, p)
+}
+
+function copyPayload(ds) {
+  return new Uint8Array(ds.buffer, ds.byteOffset, ds.byteLength).slice()
 }
 
 function wsUrl() {
@@ -157,127 +238,51 @@ function wsUrl() {
 function onFrame(buf) {
   const frame = decodeFrame(buf)
   if (!frame) return
-  // Подтверждаем каждый серверный кадр (at-least-once + dedup по seq = effective-once).
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(ack(frame.seq).bytes)
   }
-  if (frame.seq === lastSeq) {
-    return // дубликат после retry: ACK уже отправлен, payload не применяем
-  }
+  if (frame.seq === lastSeq) return
   lastSeq = frame.seq
-  const { payload } = frame
+
   if (frame.type === MSG.SYNC_BEGIN) {
-    syncing = true
-    for (const m of [locations, weatherMap, wifiStatusMap, settingsMap, groups, semAutomations,
-      semGroupItems, semEntities, semDevices, propStates, propCapabilities, propEvents]) m.clear()
+    if (phase === 'state') clearState()
+    else clearAll()
     return
   }
   if (frame.type === MSG.SYNC_END) {
-    syncing = false
+    for (const e of pending) applyFrame(e.type, new DataView(e.bytes.buffer))
+    pending = []
+    phase = 'live'
     emit()
     return
   }
-  if (frame.type === MSG.EVENT) {
-    const ev = decodeValue(payload, 16, 20)
-    pushEvent({ kind: 'event', entity: payload.getBigUint64(8, true), eventId: payload.getInt32(0, true), valueKind: ev.kind, value: ev.value })
-    emit()
+  if (phase !== 'live') {
+    pending.push({ type: frame.type, bytes: copyPayload(frame.payload) })
     return
   }
-  if (frame.type === ENTITY.AUTOMATION) {
-    const id = payload.getBigUint64(0, true)
-    semAutomations.set(id.toString(), { id, rule: decodeRule(payload, 8) })
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.ENTITY) {
-    const id = payload.getBigUint64(0, true)
-    semEntities.set(id.toString(), { id, deviceId: payload.getBigUint64(8, true), name: textAt(payload, 16, 32) })
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.LOGICAL_DEVICE) {
-    const id = payload.getBigUint64(0, true)
-    semDevices.set(id.toString(), { id, parentId: payload.getBigUint64(8, true), name: textAt(payload, 52, 32) })
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.PROPERTY_STATE) {
-    const entity = payload.getBigUint64(0, true)
-    const property = payload.getInt32(8, true)
-    const key = `${entity}:${property}`
-    const prev = propStates.get(key)
-    const { kind, value } = decodeValue(payload, 16, 20)
-    propStates.set(key, { entity, property, kind, value })
-    // Журнал: только реальные изменения, system исключён (минутные тики забили бы лог).
-    if (entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
-      pushEvent({ kind: 'state', entity, property, valueKind: kind, value })
-    }
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.CAPABILITIES) {
-    const key = payload.getBigUint64(0, true).toString()
-    const count = payload.getUint8(8)
-    const caps = []
-    for (let i = 0; i < count; i++) {
-      const property = payload.getInt32(12 + i * 24, true)
-      const ac = payload.getUint8(16 + i * 24)
-      const actions = []
-      for (let j = 0; j < ac; j++) actions.push(payload.getInt32(20 + i * 24 + j * 4, true))
-      caps.push({ property, actions })
-    }
-    const ec = payload.getUint8(204)
-    const evs = []
-    for (let i = 0; i < ec; i++) evs.push(payload.getInt32(208 + i * 4, true))
-    propCapabilities.set(key, caps)
-    propEvents.set(key, evs)
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.GROUP_ITEM) {
-    const groupId = payload.getBigUint64(0, true)
-    const entity = payload.getBigUint64(8, true)
-    const property = payload.getInt32(16, true)
-    semGroupItems.set(`${groupId}:${entity}:${property}`, {
-      groupId, entity, property,
-      order: payload.getUint16(24, true),
-      title: textAt(payload, 28, 32),
+  applyFrame(frame.type, frame.payload)
+  emit()
+}
+
+function startSync() {
+  phase = 'model'
+  pending = []
+  fetch(`${location.origin}/model.bin`, { cache: 'no-store' })
+    .then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.arrayBuffer() })
+    .then((buf) => {
+      const recs = parseSnapshot(buf)
+      if (!recs) throw new Error('bad model')
+      clearModel()
+      for (const r of recs) applyEntity(r.type, r.view)
+      phase = 'state'
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshotState().bytes)
     })
-    emit()
-    return
-  }
-  if (frame.type === ENTITY.LOCATION) {
-    const id = payload.getBigUint64(0, true)
-    const record = decodeLocation(payload, 8)
-    locations.set(`loc:${id}`, { key: { id }, record })
-    pushEvent({ kind: 'location', id, name: record.name })
-    emit(); return
-  }
-  if (frame.type === ENTITY.WEATHER) {
-    const id = payload.getBigUint64(0, true)
-    weatherMap.set(`weather:${id}`, { key: { id }, record: decodeWeather(payload, 8) })
-    pushEvent({ kind: 'weather', id })
-    emit(); return
-  }
-  if (frame.type === ENTITY.WIFI_STATUS) {
-    const id = payload.getBigUint64(0, true)
-    wifiStatusMap.set(`wifi:${id}`, { key: { id }, record: decodeWifiStatus(payload, 8) })
-    pushEvent({ kind: 'wifi', id })
-    emit(); return
-  }
-  if (frame.type === ENTITY.SETTINGS) {
-    const id = payload.getUint8(0)
-    settingsMap.set(`set:${id}`, { key: { id }, record: decodeSettings(payload, 1) })
-    pushEvent({ kind: 'settings', id })
-    emit(); return
-  }
-  if (frame.type === ENTITY.GROUP) {
-    const id = payload.getBigUint64(0, true)
-    const record = decodeGroup(payload, 8)
-    groups.set(`grp:${id}`, { key: { id }, record })
-    pushEvent({ kind: 'group', id, name: record.title })
-    emit(); return
-  }
+    .catch((err) => {
+      console.warn('model.bin unavailable, full WS snapshot:', err)
+      phase = 'fallback'
+      pending = []
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshot().bytes)
+    })
 }
 
 let reconnectDelay = 500
@@ -287,16 +292,17 @@ function connect() {
   socket.binaryType = 'arraybuffer'
   socket.onopen = () => {
     status = 'online'
-    lastSeq = -1 // новая сессия: seq сервера снова с 0
+    lastSeq = -1
     reconnectDelay = 500
     emit()
-    socket.send(snapshot().bytes)
+    startSync()
   }
   socket.onclose = () => {
     status = 'offline'
+    phase = 'live'
     emit()
     setTimeout(connect, reconnectDelay)
-    reconnectDelay = Math.min(reconnectDelay * 2, 5000) // backoff против reconnect-шторма
+    reconnectDelay = Math.min(reconnectDelay * 2, 5000)
   }
   socket.onerror = () => socket.close()
   socket.onmessage = (ev) => onFrame(ev.data)
@@ -339,8 +345,6 @@ export const store = {
   get semGroupItems() {
     return semGroupItems
   },
-
-  // --- canonical: обычный UI работает только с entity_id -----------------------
   get semEntities() {
     return semEntities
   },
@@ -353,13 +357,11 @@ export const store = {
   deviceName(device) {
     return semDevices.get(device.toString())?.name ?? ''
   },
-  // Entity, принадлежащие Device (device_id == device).
   entitiesOfDevice(device) {
     const out = []
     for (const e of semEntities.values()) if (e.deviceId === device) out.push(e)
     return out
   },
-  // Свойства Entity (с известным значением): [{ entity, property, kind, value }].
   entityProperties(entity) {
     const prefix = `${entity}:`
     const out = []
@@ -367,14 +369,12 @@ export const store = {
     out.sort((a, b) => a.property - b.property)
     return out
   },
-  // { entity, property, kind, value } | undefined.
   semState(entity, property) {
     return propStates.get(`${entity}:${property}`)
   },
   capabilities(entity) {
     return propCapabilities.get(entity.toString()) || []
   },
-  // Press-события Entity (пусто — устройство их не шлёт).
   entityEvents(entity) {
     return propEvents.get(entity.toString()) || []
   },
