@@ -405,6 +405,11 @@ static void interview_on_simple_desc(const ezb_zdo_simple_desc_req_result_t *res
     }
 
     const ezb_zdp_simple_desc_rsp_field_t *rsp = result->rsp;
+    if (result->error != EZB_ERR_NONE || rsp == NULL || rsp->status != EZB_ZDP_STATUS_SUCCESS) {
+        ESP_LOGW(TAG, "simple desc failed: uid=%llx err=%d status=0x%02x",
+                 (unsigned long long)device->uid, (int)result->error,
+                 (unsigned)(rsp != NULL ? rsp->status : 0));
+    }
     if (result->error == EZB_ERR_NONE && rsp != NULL && rsp->status == EZB_ZDP_STATUS_SUCCESS &&
         device->endpoint_count < ZIGBEE_INTERVIEW_ENDPOINTS_MAX) {
         const ezb_af_simple_desc_t *desc = &rsp->desc;
