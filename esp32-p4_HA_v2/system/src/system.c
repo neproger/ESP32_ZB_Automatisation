@@ -122,19 +122,16 @@ static void put_location(const char *name, double lat, double lon, int32_t tz_of
  */
 static void publish_event(uint8_t event_id)
 {
-    const uint8_t payload = event_id;
-
     const ha_entity_id_t source = ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM);
-    const domain_fact_target_t etarget = {
+    const domain_fact_target_t target = {
         .entity = (domain_entity_t)HA_ENTITY_ENTITY,
         .key = &source,
     };
-    domain_fact_meta_t emeta = {0};
-    emeta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
-    emeta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    emeta.value.v.u32 = event_id;
-    domain_payload_ref_t eref = 0;
-    (void)domain_payload_put(s_domain, &etarget, &emeta, &payload, sizeof(payload), &eref);
+    const ha_event_t event = {.id = (ha_event_id_t)event_id, .source_entity = source, .value = {0}};
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_SYSTEM;
+    domain_payload_ref_t ref = 0;
+    (void)domain_payload_put(s_domain, &target, &meta, &event, sizeof(event), &ref);
 }
 
 /* --- сеть / время ------------------------------------------------------- */

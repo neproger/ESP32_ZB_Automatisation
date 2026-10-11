@@ -1,37 +1,62 @@
 import { MSG, MSG3, decodeFrame, snapshot } from './proto.js'
-import { ENTITY, SCHEMA, decodeKey, decodeRecord, entityId } from './schema.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 
-// Единый стор: WS-соединение + сырые сущности Domain. React читает через
-// useSyncExternalStore(store.subscribe, store.getVersion).
+// Единый стор: WS-соединение + канонические сущности Domain (entity-native). React читает
+// через useSyncExternalStore(store.subscribe, store.getVersion). Никаких числовых Domain-
+// типов/сырых записей: каждая запись — entity-native сообщение v3.
 
-const maps = {
-  [ENTITY.AUTOMATION]: new Map(),
-  [ENTITY.LOCATION]: new Map(),
-  [ENTITY.GROUP]: new Map(),
-  [ENTITY.WEATHER]: new Map(),
-  [ENTITY.WIFI_STATUS]: new Map(),
-  [ENTITY.SETTINGS]: new Map(),
-}
+// Generic-сущности (identity — device_id или id; record как есть).
+const locations = new Map()   // `loc:${id}`      → { key: { id }, record }
+const weatherMap = new Map()  // `weather:${id}`  → { key: { id }, record }
+const wifiStatusMap = new Map() // `wifi:${id}`   → { key: { id }, record }
+const settingsMap = new Map() // `set:${id}`      → { key: { id }, record }
+const groups = new Map()      // `grp:${id}`      → { key: { id }, record }
 
 // Семантические правила: ключ — id. { id, rule }.
 const semAutomations = new Map()
 // Canonical group items: ключ "group:entity:property".
 const semGroupItems = new Map()
 
-// Canonical v3 (Шаг A, A6.1c): identity = entity_id. Это карты обычного UI.
+// Canonical v3: identity = entity_id. Это карты обычного UI.
 const semEntities = new Map()      // entityStr → { id, deviceId, name }
 const semDevices = new Map()       // deviceStr → { id, parentId, name }
 const propStates = new Map()       // `${entity}:${property}` → { entity, property, kind, value }
 const propCapabilities = new Map() // entityStr → [{ property, actions }]
 const propEvents = new Map()       // entityStr → [eventId] (press-события client-кластеров)
+
 const dec = new TextDecoder()
-const textAt = (payload, off, len) => {
-  const tb = new Uint8Array(payload.buffer, payload.byteOffset + off, len)
-  const end = tb.indexOf(0)
-  return dec.decode(end === -1 ? tb : tb.subarray(0, end))
+function cstr(dv, off, len) {
+  const bytes = new Uint8Array(dv.buffer, dv.byteOffset + off, len)
+  const end = bytes.indexOf(0)
+  return dec.decode(end === -1 ? bytes : bytes.subarray(0, end))
 }
+const textAt = (dv, off, len) => cstr(dv, off, len)
+
+// --- record-декодеры (entity-native layout, без числового типа) --------------
+function decodeLocation(dv, o) {
+  const flags = dv.getUint8(o + 10)
+  return {
+    latitude: dv.getFloat32(o, true), longitude: dv.getFloat32(o + 4, true),
+    tzOffsetMin: dv.getInt16(o + 8, true), tzAuto: (flags & 1) !== 0, posAuto: (flags & 2) !== 0,
+    name: cstr(dv, o + 12, 48),
+  }
+}
+function decodeWeather(dv, o) {
+  return {
+    condition: dv.getUint8(o), cloudPct: dv.getUint8(o + 1),
+    temperatureC: dv.getInt16(o + 2, true) / 100, humidityPct: dv.getUint16(o + 4, true) / 100,
+    pressureHpa: dv.getUint16(o + 6, true), windKmh: dv.getUint16(o + 8, true) / 10,
+    windDirDeg: dv.getUint16(o + 10, true),
+  }
+}
+function decodeWifiStatus(dv, o) {
+  return { state: dv.getUint8(o), connected: dv.getUint8(o + 1), rssi: dv.getInt8(o + 2), ssid: cstr(dv, o + 4, 32) }
+}
+function decodeSettings(dv, o) {
+  return { screensaverTimeoutMs: dv.getUint32(o, true), brightnessPct: dv.getUint8(o + 4) }
+}
+const decodeGroup = (dv, o) => ({ title: cstr(dv, o, 32) })
 
 // Декод entity-native rule-wire (зеркало web.c:web_rule_encode). Без ZCL.
 function decodeRule(dv, base) {
@@ -85,6 +110,21 @@ function decodeRule(dv, base) {
   return { enabled, trigger, conditions, action }
 }
 
+// Значение из canonical DTO (u8 valueKind @k, u32 bits @k+1).
+function decodeValue(payload, atKind, atBits) {
+  const kind = payload.getUint8(atKind)
+  let value = null
+  switch (kind) {
+    case VALUE_KIND.BOOL: value = payload.getUint32(atBits, true) !== 0; break
+    case VALUE_KIND.I32: value = payload.getInt32(atBits, true); break
+    case VALUE_KIND.U32:
+    case VALUE_KIND.ENUM: value = payload.getUint32(atBits, true); break
+    case VALUE_KIND.FLOAT: value = payload.getFloat32(atBits, true); break
+    default: value = null
+  }
+  return { kind, value }
+}
+
 const EVENT_LOG_MAX = 200
 const events = []
 let eventSeq = 0
@@ -94,19 +134,11 @@ let status = 'connecting'
 let socket = null
 const listeners = new Set()
 
-function logEvent(action, entityType, key, record) {
-  events.push({ seq: ++eventSeq, ts: Date.now(), action, entityType, key, record })
-  if (events.length > EVENT_LOG_MAX) {
-    events.splice(0, events.length - EVENT_LOG_MAX)
-  }
-}
-
-// Журнал: событие уже в готовом виде (semantic event / canonical state change).
+// Журнал: одна typed-запись (kind + канонические поля). Snapshot (syncing) не логируется.
 function pushEvent(ev) {
+  if (syncing) return
   events.push({ seq: ++eventSeq, ts: Date.now(), ...ev })
-  if (events.length > EVENT_LOG_MAX) {
-    events.splice(0, events.length - EVENT_LOG_MAX)
-  }
+  if (events.length > EVENT_LOG_MAX) events.splice(0, events.length - EVENT_LOG_MAX)
 }
 
 const emit = () => {
@@ -128,14 +160,8 @@ function onFrame(buf) {
   const { payload } = frame
   if (frame.type === MSG.SYNC_BEGIN) {
     syncing = true
-    for (const k in maps) maps[k].clear()
-    semAutomations.clear()
-    semGroupItems.clear()
-    semEntities.clear()
-    semDevices.clear()
-    propStates.clear()
-    propCapabilities.clear()
-    propEvents.clear()
+    for (const m of [locations, weatherMap, wifiStatusMap, settingsMap, groups, semAutomations,
+      semGroupItems, semEntities, semDevices, propStates, propCapabilities, propEvents]) m.clear()
     return
   }
   if (frame.type === MSG.SYNC_END) {
@@ -161,11 +187,8 @@ function onFrame(buf) {
     return
   }
   if (frame.type === MSG3.EVENT) {
-    pushEvent({
-      kind: 'event',
-      sourceEntity: payload.getBigUint64(0, true),
-      eventId: payload.getUint8(8),
-    })
+    const ev = decodeValue(payload, 9, 10)
+    pushEvent({ kind: 'event', entity: payload.getBigUint64(0, true), eventId: payload.getUint8(8), valueKind: ev.kind, value: ev.value })
     emit()
     return
   }
@@ -209,24 +232,13 @@ function onFrame(buf) {
     const prev = propStates.get(key)
     if (frame.type === MSG3.PROPERTY_STATE_REMOVE) {
       propStates.delete(key)
-      if (!syncing && prev) pushEvent({ kind: 'property', entity, property, removed: true })
+      if (prev) pushEvent({ kind: 'state', entity, property, removed: true })
     } else {
-      const kind = payload.getUint8(10)
-      let value = null
-      switch (kind) {
-        case VALUE_KIND.BOOL: value = payload.getUint32(11, true) !== 0; break
-        case VALUE_KIND.I32: value = payload.getInt32(11, true); break
-        case VALUE_KIND.U32:
-        case VALUE_KIND.ENUM: value = payload.getUint32(11, true); break
-        case VALUE_KIND.FLOAT: value = payload.getFloat32(11, true); break
-        default: value = null
-      }
+      const { kind, value } = decodeValue(payload, 10, 11)
       propStates.set(key, { entity, property, kind, value })
-      // Журнал состояния: только реальные изменения и не системный девайс (иначе тики
-      // времени забивают лог). Snapshot (syncing) не логируется. valueKind — не `kind`,
-      // чтобы не затереть дискриминатор записи журнала.
-      if (!syncing && entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
-        pushEvent({ kind: 'property', entity, property, valueKind: kind, value })
+      // Журнал: только реальные изменения, system исключён (минутные тики забили бы лог).
+      if (entity !== ENTITY_SYSTEM && (!prev || prev.value !== value)) {
+        pushEvent({ kind: 'state', entity, property, valueKind: kind, value })
       }
     }
     emit()
@@ -249,32 +261,66 @@ function onFrame(buf) {
         caps.push({ property, actions })
       }
       const ec = payload.getUint8(o); o += 1
-      const events = []
-      for (let i = 0; i < ec; i++) events.push(payload.getUint8(o++))
+      const evs = []
+      for (let i = 0; i < ec; i++) evs.push(payload.getUint8(o++))
       propCapabilities.set(key, caps)
-      propEvents.set(key, events)
+      propEvents.set(key, evs)
     }
     emit()
     return
   }
-  if (frame.type !== MSG.ENTITY && frame.type !== MSG.ENTITY_REMOVE) return
-
-  const type = payload.getUint8(0)
-  const schema = SCHEMA[type]
-  if (!schema) return
-  const keyDv = new DataView(payload.buffer, payload.byteOffset + 1, schema.keySize)
-  const key = decodeKey(type, keyDv)
-  const id = entityId(type, key)
-  if (frame.type === MSG.ENTITY_REMOVE) {
-    maps[type].delete(id)
-    if (!syncing) logEvent('remove', type, key, null)
-  } else {
-    const recDv = new DataView(payload.buffer, payload.byteOffset + 1 + schema.keySize, schema.recSize)
-    const record = decodeRecord(type, recDv)
-    maps[type].set(id, { key, record })
-    if (!syncing) logEvent('upsert', type, key, record)
+  if (frame.type === MSG3.LOCATION || frame.type === MSG3.LOCATION_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = `loc:${id}`
+    if (frame.type === MSG3.LOCATION_REMOVE) locations.delete(key)
+    else {
+      const record = decodeLocation(payload, 8)
+      locations.set(key, { key: { id }, record })
+      pushEvent({ kind: 'location', id, name: record.name })
+    }
+    emit(); return
   }
-  emit()
+  if (frame.type === MSG3.WEATHER || frame.type === MSG3.WEATHER_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = `weather:${id}`
+    if (frame.type === MSG3.WEATHER_REMOVE) weatherMap.delete(key)
+    else {
+      weatherMap.set(key, { key: { id }, record: decodeWeather(payload, 8) })
+      pushEvent({ kind: 'weather', id })
+    }
+    emit(); return
+  }
+  if (frame.type === MSG3.WIFI_STATUS || frame.type === MSG3.WIFI_STATUS_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = `wifi:${id}`
+    if (frame.type === MSG3.WIFI_STATUS_REMOVE) wifiStatusMap.delete(key)
+    else {
+      wifiStatusMap.set(key, { key: { id }, record: decodeWifiStatus(payload, 8) })
+      pushEvent({ kind: 'wifi', id })
+    }
+    emit(); return
+  }
+  if (frame.type === MSG3.SETTINGS || frame.type === MSG3.SETTINGS_REMOVE) {
+    const id = payload.getUint8(0)
+    const key = `set:${id}`
+    if (frame.type === MSG3.SETTINGS_REMOVE) settingsMap.delete(key)
+    else {
+      settingsMap.set(key, { key: { id }, record: decodeSettings(payload, 1) })
+      pushEvent({ kind: 'settings', id })
+    }
+    emit(); return
+  }
+  if (frame.type === MSG3.GROUP || frame.type === MSG3.GROUP_REMOVE) {
+    const id = payload.getBigUint64(0, true)
+    const key = `grp:${id}`
+    if (frame.type === MSG3.GROUP_REMOVE) groups.delete(key)
+    else {
+      const record = decodeGroup(payload, 8)
+      groups.set(key, { key: { id }, record })
+      pushEvent({ kind: 'group', id, name: record.title })
+    }
+    emit(); return
+  }
 }
 
 function connect() {
@@ -308,19 +354,19 @@ export const store = {
     return status
   },
   get locations() {
-    return maps[ENTITY.LOCATION]
+    return locations
   },
   get groups() {
-    return maps[ENTITY.GROUP]
+    return groups
   },
   get weather() {
-    return maps[ENTITY.WEATHER]
+    return weatherMap
   },
   get wifiStatus() {
-    return maps[ENTITY.WIFI_STATUS]
+    return wifiStatusMap
   },
   get settings() {
-    return maps[ENTITY.SETTINGS]
+    return settingsMap
   },
   get events() {
     return events
@@ -332,7 +378,7 @@ export const store = {
     return semGroupItems
   },
 
-  // --- canonical v3: обычный UI работает только с entity_id ---------------------
+  // --- canonical: обычный UI работает только с entity_id -----------------------
   get semEntities() {
     return semEntities
   },

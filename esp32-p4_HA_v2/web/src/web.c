@@ -46,46 +46,6 @@ static const char *TAG = "web";
 /* Максимальный входящий кадр целиком (заголовок + payload), не только команда. */
 #define WEB_CMD_BUF WEB_PROTO_MAX_FRAME
 
-_Static_assert(WEB_ENTITY_AUTOMATION == (uint32_t)HA_ENTITY_AUTOMATION, "entity id: automation");
-_Static_assert(WEB_ENTITY_LOCATION == (uint32_t)HA_ENTITY_LOCATION, "entity id: location");
-_Static_assert(WEB_ENTITY_GROUP == (uint32_t)HA_ENTITY_GROUP, "entity id: group");
-_Static_assert(WEB_ENTITY_GROUP_ITEM == (uint32_t)HA_ENTITY_GROUP_ITEM, "entity id: group-item");
-_Static_assert(WEB_ENTITY_WEATHER == (uint32_t)HA_ENTITY_WEATHER, "entity id: weather");
-_Static_assert(WEB_ENTITY_WIFI_STATUS == (uint32_t)HA_ENTITY_WIFI_STATUS, "entity id: wifi-status");
-_Static_assert(WEB_ENTITY_SETTINGS == (uint32_t)HA_ENTITY_SETTINGS, "entity id: settings");
-
-/* Схема записи: браузер знает те же размеры (web-ui/src/schema.js). */
-typedef struct {
-    uint8_t type;
-    uint16_t key_size;
-    uint16_t rec_size;
-} web_schema_t;
-
-/*
- * Список типов на проводе задан один раз (X-macro): из него генерируются и строки
- * таблицы, и компайл-тайм проверка, что запись (1 байт типа + key + record) влезает в
- * один кадр. Без неё рост записи молча переполнил бы буфер snapshot/дельты (так было,
- * когда automation вырос до 144 при буфере под endpoint 72).
- */
-#define WEB_SCHEMA_LIST(X)                                                                  \
-    X(WEB_ENTITY_LOCATION, sizeof(ha_device_id_t), sizeof(ha_location_record_t))           \
-    X(WEB_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t))                  \
-    X(WEB_ENTITY_WEATHER, sizeof(ha_device_id_t), sizeof(ha_weather_record_t))             \
-    X(WEB_ENTITY_WIFI_STATUS, sizeof(ha_device_id_t), sizeof(ha_wifi_status_record_t))     \
-    X(WEB_ENTITY_SETTINGS, sizeof(ha_settings_key_t), sizeof(ha_settings_record_t))
-
-#define WEB_SCHEMA_FITS(type, key_size, rec_size)                                  \
-    _Static_assert((1u + (key_size) + (rec_size)) <= WEB_PROTO_MAX_PAYLOAD,        \
-                   "web schema record exceeds WEB_PROTO_MAX_PAYLOAD: " #type);
-WEB_SCHEMA_LIST(WEB_SCHEMA_FITS)
-
-#define WEB_SCHEMA_ROW(type, key_size, rec_size) \
-    { (type), (uint16_t)(key_size), (uint16_t)(rec_size) },
-static const web_schema_t SCHEMA[] = {WEB_SCHEMA_LIST(WEB_SCHEMA_ROW)};
-#undef WEB_SCHEMA_ROW
-
-#define WEB_SCHEMA_COUNT (sizeof(SCHEMA) / sizeof(SCHEMA[0]))
-
 /* Элемент inbox задачи: факт от Domain либо запрос snapshot конкретному fd. */
 typedef struct {
     uint8_t kind; /* 0 — факт, 1 — snapshot */
@@ -96,16 +56,6 @@ typedef struct {
 static domain_t *s_domain;
 static httpd_handle_t s_server;
 static QueueHandle_t s_inbox;
-
-static const web_schema_t *schema_for(uint8_t type)
-{
-    for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
-        if (SCHEMA[i].type == type) {
-            return &SCHEMA[i];
-        }
-    }
-    return NULL;
-}
 
 static void put_u16(uint8_t *out, uint16_t value)
 {
@@ -350,22 +300,38 @@ static bool snapshot_count(const void *key, const void *record, void *ctx)
 
 typedef struct {
     int fd;
-    const web_schema_t *schema;
     uint32_t *count;
 } snapshot_ctx_t;
 
-static bool snapshot_emit(const void *key, const void *record, void *ctx)
+/* Generic-сущность (entity-native): key + record как есть, без числового типа. */
+static void snapshot_emit_generic(const snapshot_ctx_t *s, uint8_t type, const void *key,
+                                  const void *record, uint16_t key_size, uint16_t rec_size)
 {
-    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
-    uint8_t payload[WEB_PROTO_MAX_PAYLOAD];
-    payload[0] = s->schema->type;
-    memcpy(payload + 1, key, s->schema->key_size);
-    memcpy(payload + 1 + s->schema->key_size, record, s->schema->rec_size);
-    web_send_frame(s->fd, WEB_MSG_ENTITY, 0, payload,
-                   (uint16_t)(1 + s->schema->key_size + s->schema->rec_size));
-    (*s->count)++;
-    return true;
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    memcpy(out, key, key_size);
+    memcpy(out + key_size, record, rec_size);
+    web_send_frame(s->fd, type, 0, out, (uint16_t)(key_size + rec_size));
 }
+
+#define SNAPSHOT_EMITTER(name, msg, key_t, rec_t)                                  \
+    static bool name(const void *key, const void *record, void *ctx)               \
+    {                                                                              \
+        snapshot_emit_generic((const snapshot_ctx_t *)ctx, (msg), key, record,     \
+                              (uint16_t)sizeof(key_t), (uint16_t)sizeof(rec_t));   \
+        ((snapshot_ctx_t *)ctx)->count[0]++;                                       \
+        return true;                                                               \
+    }
+
+SNAPSHOT_EMITTER(snapshot_emit_location3, WEB_MSG3_LOCATION, ha_device_id_t,
+                 ha_location_record_t)
+SNAPSHOT_EMITTER(snapshot_emit_weather3, WEB_MSG3_WEATHER, ha_device_id_t,
+                 ha_weather_record_t)
+SNAPSHOT_EMITTER(snapshot_emit_wifi_status3, WEB_MSG3_WIFI_STATUS, ha_device_id_t,
+                 ha_wifi_status_record_t)
+SNAPSHOT_EMITTER(snapshot_emit_settings3, WEB_MSG3_SETTINGS, ha_settings_key_t,
+                 ha_settings_record_t)
+SNAPSHOT_EMITTER(snapshot_emit_group3, WEB_MSG3_GROUP, ha_group_key_t, ha_group_record_t)
+#undef SNAPSHOT_EMITTER
 
 /* canonical group_item (A4): identity = (group, entity, property). */
 static bool snapshot_emit_group_item(const void *key, const void *record, void *ctx)
@@ -452,28 +418,24 @@ static bool snapshot_emit_automation3(const void *key, const void *record, void 
 static void web_send_snapshot(int fd)
 {
     uint32_t total = 0;
-    for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
-        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_count, &total);
-    }
-    /* canonical v3 */
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, snapshot_count, &total);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WEATHER, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_STATUS, snapshot_count, &total);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_SETTINGS, snapshot_count, &total);
 
     uint8_t word[4];
     put_u32(word, total);
     web_send_frame(fd, WEB_MSG_SYNC_BEGIN, 0, word, sizeof(word));
 
     uint32_t sent = 0;
-    for (size_t i = 0; i < WEB_SCHEMA_COUNT; i++) {
-        snapshot_ctx_t ctx = {.fd = fd, .schema = &SCHEMA[i], .count = &sent};
-        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, snapshot_emit, &ctx);
-    }
-
-    snapshot_ctx_t v3 = {.fd = fd, .schema = NULL, .count = &sent};
+    snapshot_ctx_t v3 = {.fd = fd, .count = &sent};
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, snapshot_emit_entity3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOGICAL_DEVICE, snapshot_emit_device3,
                        &v3);
@@ -485,6 +447,12 @@ static void web_send_snapshot(int fd)
                        snapshot_emit_automation3, &v3);
     domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_ITEM, snapshot_emit_group_item,
                        &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_LOCATION, snapshot_emit_location3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP, snapshot_emit_group3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WEATHER, snapshot_emit_weather3, &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_STATUS, snapshot_emit_wifi_status3,
+                       &v3);
+    domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_SETTINGS, snapshot_emit_settings3, &v3);
 
     put_u32(word, sent);
     web_send_frame(fd, WEB_MSG_SYNC_END, 0, word, sizeof(word));
@@ -503,12 +471,36 @@ static void web_send_event(const domain_event_t *event)
         event->key_size != sizeof(ha_entity_id_t)) {
         return;
     }
+    ha_event_t ev = {0};
+    if (event->payload_ref == 0 || event->payload_size != sizeof(ev) ||
+        sys_failed(domain_payload_get(s_domain, event->payload_ref, &ev, sizeof(ev)))) {
+        return; /* payload события вытеснен — событие не несём (редкое, best-effort) */
+    }
     uint8_t out[14] = {0};
-    memcpy(out, event->key, sizeof(ha_entity_id_t));
-    out[8] = (event->value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (uint8_t)event->value.v.u32
-                                                               : (uint8_t)HA_EVENT_NONE;
-    out[9] = (uint8_t)HA_VALUE_NONE; /* payload события пока не несём */
+    memcpy(out, &ev.source_entity, sizeof(ha_entity_id_t));
+    out[8] = (uint8_t)ev.id;
+    out[9] = (uint8_t)ev.value.kind;
+    put_u32(out + 10, value_to_bits(&ev.value));
     web_broadcast(WEB_MSG3_EVENT, 0, out, sizeof(out));
+}
+
+/* Generic-сущность Domain → entity-native v3 (key + record, без числового типа). */
+static void web_generic_entity_delta(const domain_event_t *event, uint8_t upsert_type,
+                                     uint8_t remove_type, uint16_t key_size, uint16_t rec_size)
+{
+    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
+    if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
+        uint8_t record[WEB_PROTO_MAX_PAYLOAD];
+        if (sys_failed(domain_entity_get(s_domain, event->entity, event->key, record))) {
+            return;
+        }
+        memcpy(out, event->key, key_size);
+        memcpy(out + key_size, record, rec_size);
+        web_broadcast(upsert_type, 0, out, (uint16_t)(key_size + rec_size));
+    } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
+        memcpy(out, event->key, key_size);
+        web_broadcast(remove_type, 0, out, key_size);
+    }
 }
 
 static void web_send_fact(const domain_event_t *event)
@@ -629,25 +621,35 @@ static void web_send_fact(const domain_event_t *event)
         return;
     }
 
-    const web_schema_t *schema = schema_for((uint8_t)event->entity);
-    if (schema == NULL || event->key_size != schema->key_size) {
+    if (event->entity == (uint32_t)HA_ENTITY_LOCATION &&
+        event->key_size == sizeof(ha_device_id_t)) {
+        web_generic_entity_delta(event, WEB_MSG3_LOCATION, WEB_MSG3_LOCATION_REMOVE,
+                                 sizeof(ha_device_id_t), sizeof(ha_location_record_t));
         return;
     }
-
-    uint8_t payload[WEB_PROTO_MAX_PAYLOAD];
-    payload[0] = schema->type;
-    memcpy(payload + 1, event->key, schema->key_size);
-
-    if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED) {
-        uint8_t record[WEB_PROTO_MAX_PAYLOAD];
-        if (sys_failed(domain_entity_get(s_domain, event->entity, event->key, record))) {
-            return;
-        }
-        memcpy(payload + 1 + schema->key_size, record, schema->rec_size);
-        web_broadcast(WEB_MSG_ENTITY, 0, payload,
-                      (uint16_t)(1 + schema->key_size + schema->rec_size));
-    } else if (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED) {
-        web_broadcast(WEB_MSG_ENTITY_REMOVE, 0, payload, (uint16_t)(1 + schema->key_size));
+    if (event->entity == (uint32_t)HA_ENTITY_WEATHER &&
+        event->key_size == sizeof(ha_device_id_t)) {
+        web_generic_entity_delta(event, WEB_MSG3_WEATHER, WEB_MSG3_WEATHER_REMOVE,
+                                 sizeof(ha_device_id_t), sizeof(ha_weather_record_t));
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_WIFI_STATUS &&
+        event->key_size == sizeof(ha_device_id_t)) {
+        web_generic_entity_delta(event, WEB_MSG3_WIFI_STATUS, WEB_MSG3_WIFI_STATUS_REMOVE,
+                                 sizeof(ha_device_id_t), sizeof(ha_wifi_status_record_t));
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_SETTINGS &&
+        event->key_size == sizeof(ha_settings_key_t)) {
+        web_generic_entity_delta(event, WEB_MSG3_SETTINGS, WEB_MSG3_SETTINGS_REMOVE,
+                                 sizeof(ha_settings_key_t), sizeof(ha_settings_record_t));
+        return;
+    }
+    if (event->entity == (uint32_t)HA_ENTITY_GROUP &&
+        event->key_size == sizeof(ha_group_key_t)) {
+        web_generic_entity_delta(event, WEB_MSG3_GROUP, WEB_MSG3_GROUP_REMOVE,
+                                 sizeof(ha_group_key_t), sizeof(ha_group_record_t));
+        return;
     }
 }
 

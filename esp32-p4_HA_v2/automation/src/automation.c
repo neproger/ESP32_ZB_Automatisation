@@ -329,12 +329,12 @@ static void automation_task(void *arg)
                 event.key_size != sizeof(ha_entity_id_t)) {
                 continue;
             }
-            ha_entity_id_t source_entity = HA_ENTITY_ID_NONE;
-            memcpy(&source_entity, event.key, sizeof(source_entity));
-            const ha_event_id_t event_id =
-                (event.value.type == (uint8_t)DOMAIN_VALUE_ENUM) ? (ha_event_id_t)event.value.v.u32
-                                                                 : HA_EVENT_NONE;
-            automation_event_trigger(source_entity, event_id);
+            ha_event_t ev = {0};
+            if (event.payload_ref == 0 || event.payload_size != sizeof(ev) ||
+                sys_failed(domain_payload_get(s_domain, event.payload_ref, &ev, sizeof(ev)))) {
+                continue; /* payload вытеснен — событие пропущено */
+            }
+            automation_event_trigger(ev.source_entity, ev.id);
         } else if (event.kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED &&
                    event.entity == (uint32_t)HA_ENTITY_PROPERTY_STATE &&
                    event.key_size == sizeof(ha_state_key_t)) {

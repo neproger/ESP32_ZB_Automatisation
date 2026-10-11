@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 /*
- * Web transport protocol v2 (docs/services/WEB_PROTOCOL.md): binary, little-endian,
- * сырые записи Domain в payload. Тут — только раскладка кадра и дискриминаторы;
- * семантику и схемы записей знает вызывающий (web.c) и браузер.
+ * Web transport protocol: binary, little-endian. Кадр несёт дискриминатор типа и
+ * entity-native payload (без сырых записей Domain/числовых типов). Тут — только раскладка
+ * кадра и дискриминаторы; семантику знает вызывающий (web.c) и браузер.
  */
 
 #define WEB_PROTO_VER 2u
@@ -17,22 +17,9 @@
 #define WEB_PROTO_MAX_PAYLOAD 256u
 #define WEB_PROTO_MAX_FRAME (WEB_PROTO_HDR_SIZE + WEB_PROTO_MAX_PAYLOAD)
 
-/* Совпадает с ha_entity_t (ha_model/ha_entities.h); проверяется static_assert в web.c. */
-#define WEB_ENTITY_AUTOMATION 4u
-#define WEB_ENTITY_LOCATION 6u
-#define WEB_ENTITY_GROUP 7u
-#define WEB_ENTITY_GROUP_ITEM 8u
-#define WEB_ENTITY_WEATHER 9u
-/* wifi_scan (10) и wifi_known (11) в браузер не отдаются: первая слишком велика
- * (16 AP), вторая содержит пароли. Их читает Display напрямую из Domain. */
-#define WEB_ENTITY_WIFI_STATUS 12u
-#define WEB_ENTITY_SETTINGS 13u
-
 typedef enum {
     WEB_MSG_SYNC_BEGIN = 0x01,
     WEB_MSG_SYNC_END = 0x02,
-    WEB_MSG_ENTITY = 0x10,
-    WEB_MSG_ENTITY_REMOVE = 0x11,
     /*
      * Canonical group item (A4): identity = (group_id, entity_id, property_id). Хранимая
      * запись уже entity-native, мост не нужен.
@@ -119,6 +106,22 @@ typedef enum {
      */
     WEB_MSG3_DEVICE = 0x39,
     WEB_MSG3_DEVICE_REMOVE = 0x3A,
+    /*
+     * Прочие generic-сущности Domain — entity-native, без числового raw-типа в payload:
+     *   LOCATION/WEATHER/WIFI_STATUS: u64 device_id @0 + record; REMOVE: u64 device_id.
+     *   SETTINGS: u8 id @0 + record; REMOVE: u8 id.
+     *   GROUP: u64 id @0 + char title[32]; REMOVE: u64 id.
+     */
+    WEB_MSG3_LOCATION = 0x3B,
+    WEB_MSG3_LOCATION_REMOVE = 0x3C,
+    WEB_MSG3_WEATHER = 0x3D,
+    WEB_MSG3_WEATHER_REMOVE = 0x3E,
+    WEB_MSG3_WIFI_STATUS = 0x3F,
+    WEB_MSG3_WIFI_STATUS_REMOVE = 0x40,
+    WEB_MSG3_SETTINGS = 0x41,
+    WEB_MSG3_SETTINGS_REMOVE = 0x42,
+    WEB_MSG3_GROUP = 0x43,
+    WEB_MSG3_GROUP_REMOVE = 0x44,
 } web_msg3_t;
 
 #define WEB_MSG3_ENTITY_SIZE 48u /* u64 entity_id + u64 device_id + char name[32] */

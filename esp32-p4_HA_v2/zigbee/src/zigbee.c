@@ -185,13 +185,11 @@ static void zigbee_publish_entity_event(ha_entity_id_t source_entity, ha_event_i
         .entity = (domain_entity_t)HA_ENTITY_ENTITY,
         .key = &source_entity,
     };
+    const ha_event_t event = {.id = event_id, .source_entity = source_entity, .value = {0}};
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_ZIGBEE;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = (uint32_t)event_id;
-    const uint8_t payload = (uint8_t)event_id;
     domain_payload_ref_t ref = 0;
-    (void)domain_payload_put(s_domain, &target, &meta, &payload, sizeof(payload), &ref);
+    (void)domain_payload_put(s_domain, &target, &meta, &event, sizeof(event), &ref);
 }
 
 static void zigbee_event_publish(const zigbee_event_t *event)

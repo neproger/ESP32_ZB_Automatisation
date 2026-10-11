@@ -5,8 +5,6 @@ import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
-  ENTITY: 0x10,
-  ENTITY_REMOVE: 0x11,
   GROUP_ITEM: 0x19,
   GROUP_ITEM_REMOVE: 0x1A,
   COMMAND: 0x20,
@@ -42,6 +40,17 @@ export const MSG3 = {
   EVENT: 0x38,
   DEVICE: 0x39,
   DEVICE_REMOVE: 0x3A,
+  // Generic-сущности Domain (entity-native): device_id/group_id + record.
+  LOCATION: 0x3B,
+  LOCATION_REMOVE: 0x3C,
+  WEATHER: 0x3D,
+  WEATHER_REMOVE: 0x3E,
+  WIFI_STATUS: 0x3F,
+  WIFI_STATUS_REMOVE: 0x40,
+  SETTINGS: 0x41,
+  SETTINGS_REMOVE: 0x42,
+  GROUP: 0x43,
+  GROUP_REMOVE: 0x44,
 }
 
 export const HDR = 8

@@ -691,6 +691,15 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Step E (E1–E4) — все клиентские/транспортные абстракции переведены на device-domain.
+            E1: событие — канонический факт (payload = ha_event_t), убрано дублирование
+            event_id (meta.value + u8 payload); web/automation читают payload. E2: EVENT DTO
+            несёт канонический value (kind+bits). E3: ретайр v2-канала — LOCATION/WEATHER/
+            WIFI_STATUS/SETTINGS/GROUP идут новыми entity-native v3-сообщениями (0x3B..0x44);
+            удалены WEB_ENTITY_*, WEB_MSG_ENTITY(_REMOVE), web.c SCHEMA/schema_for, web-ui
+            schema.js. E4: журнал «События» — одна typed-модель (kind + канонические поля),
+            без entityType/action/record. IDF + web-ui собираются, все host-тесты зелёные,
+            wire подтверждён (LOCATION/WEATHER/WIFI/GROUP).
 2026-10-11  Fix — журнал показывал «объект типа undefined» для изменений состояния.
             Причина: pushEvent-объект имел два ключа `kind` ({kind:'property',…,kind,value}),
             числовой value_kind перезатирал строку 'property', describe не распознавал

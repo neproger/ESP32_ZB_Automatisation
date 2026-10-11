@@ -1,47 +1,47 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
-import { ENTITY } from '../schema.js'
 import { eventName, propertyName, propertyUnit } from '../semantics.js'
 import { ENTITY_SYSTEM } from '../system.js'
 
-// Журнал: семантические события (HA_EVENT_*) + изменения generic-сущностей. Snapshot не
-// логируется. Raw Zigbee в Domain больше не попадает (Шаг C), поэтому журнал entity-native.
-
-const TYPE_LABEL = {
-  [ENTITY.AUTOMATION]: 'правило',
-  [ENTITY.LOCATION]: 'локация',
-  [ENTITY.GROUP]: 'экран',
-  [ENTITY.WEATHER]: 'погода',
-  [ENTITY.WIFI_STATUS]: 'wifi-статус',
-  [ENTITY.SETTINGS]: 'настройки',
-}
+// Журнал: канонические записи (typed). Snapshot не логируется. Никаких числовых Domain-
+// типов/сырых записей — каждая запись несёт готовый kind и канонические поля.
 
 function entityLabel(s, entity) {
   if (BigInt(entity) === ENTITY_SYSTEM) return 'Система'
   return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
 }
 
+function formatValue(value, property) {
+  if (typeof value === 'boolean') return value ? 'да' : 'нет'
+  if (value == null) return '—'
+  const unit = property != null ? propertyUnit(property) : ''
+  return `${Number(value).toFixed(1)}${unit ? ' ' + unit : ''}`
+}
+
 function describe(ev, s) {
-  if (ev.kind === 'event') {
-    return `${entityLabel(s, ev.sourceEntity)}: ${eventName(ev.eventId)}`
+  switch (ev.kind) {
+    case 'event': {
+      const base = `${entityLabel(s, ev.entity)}: ${eventName(ev.eventId)}`
+      return ev.valueKind && ev.valueKind !== 0 ? `${base} (${ev.value})` : base
+    }
+    case 'state': {
+      const who = entityLabel(s, ev.entity)
+      if (ev.removed) return `${who}: ${propertyName(ev.property)} — сброшено`
+      return `${who}: ${propertyName(ev.property)} = ${formatValue(ev.value, ev.property)}`
+    }
+    case 'location':
+      return `локация${ev.name ? ` «${ev.name}»` : ''}`
+    case 'weather':
+      return 'погода'
+    case 'wifi':
+      return 'wifi-статус'
+    case 'settings':
+      return 'настройки'
+    case 'group':
+      return `экран${ev.name ? ` «${ev.name}»` : ` #${ev.id}`}`
+    default:
+      return '—'
   }
-  if (ev.kind === 'property') {
-    const who = entityLabel(s, ev.entity)
-    if (ev.removed) return `${who}: ${propertyName(ev.property)} — сброшено`
-    const v = ev.value
-    const shown =
-      typeof v === 'boolean' ? (v ? 'да' : 'нет') : v == null ? '—'
-        : `${Number(v).toFixed(1)}${propertyUnit(ev.property) ? ' ' + propertyUnit(ev.property) : ''}`
-    return `${who}: ${propertyName(ev.property)} = ${shown}`
-  }
-  // General-сущность (location/group/weather/wifi/settings/automation): показываем тип и
-  // доступный идентификатор (title/name из записи или #id из ключа). Нет подписи — не
-  // выдумываем, а показываем номер типа.
-  const label = TYPE_LABEL[ev.entityType] || `объект типа ${ev.entityType}`
-  const title = ev.record?.title || ev.record?.name
-  const id = ev.key?.id != null ? ` #${ev.key.id}` : ''
-  const what = title ? ` «${title}»` : id
-  return `${ev.action === 'remove' ? 'удалено' : 'изменено'}: ${label}${what}`
 }
 
 export default function Events() {
@@ -80,7 +80,7 @@ export default function Events() {
           {shown.map((e) => (
             <li key={e.seq}>
               <span className="time">{new Date(e.ts).toLocaleTimeString()}</span>
-              <span className={`kind ${e.action || e.kind}`}>{e.removed || e.action === 'remove' ? '−' : '+'}</span>
+              <span className={`kind ${e.kind}`}>{e.removed ? '−' : '+'}</span>
               <span>{describe(e, s)}</span>
             </li>
           ))}
