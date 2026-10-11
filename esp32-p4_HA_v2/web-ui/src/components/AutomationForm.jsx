@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { automationPut, ENTITY_SOURCE } from '../proto.js'
@@ -57,20 +57,30 @@ export default function AutomationForm({ id, automations, onClose }) {
     const hint = caps.length > 0 ? ` · ${propertyName(caps[0].property)}` : ''
     return `#${e.id.toString().slice(-4)}${hint}`
   }
-  const entityOptions = (includeSource, sourceLabel) => {
+  // Наборы Entity под тип триггера: «событие» — только те, что шлют события; «состояние» —
+  // только те, у кого есть свойства. Неподходящие endpoint'ы в списке не показываются.
+  const hasEvents = (e) => store.entityEvents(e.id).length > 0
+  const hasProperties = (e) =>
+    store.capabilities(e.id).length > 0 || store.entityProperties(e.id).length > 0
+  const hasActions = (e) => store.capabilities(e.id).some((c) => (c.actions?.length ?? 0) > 0)
+  const eventEntities = ents.filter(hasEvents)
+  const stateEntities = ents.filter(hasProperties)
+  const actionEntities = ents.some(hasActions) ? ents.filter(hasActions) : ents
+
+  const entityOptions = (list, includeSource, sourceLabel) => {
     const nodes = []
     if (includeSource) nodes.push(<option key="src" value={SRC}>{sourceLabel}</option>)
     const groups = new Map()
-    for (const e of ents) {
+    for (const e of list) {
       const dk = e.deviceId?.toString() ?? ''
       if (!groups.has(dk)) groups.set(dk, [])
       groups.get(dk).push(e)
     }
-    for (const [dk, list] of groups) {
+    for (const [dk, group] of groups) {
       const dn = s.semDevices.get(dk)?.name || (dk ? 'устройство ' + dk.slice(-6) : 'без устройства')
       nodes.push(
         <optgroup key={'g' + dk} label={dn}>
-          {list.map((e) => (
+          {group.map((e) => (
             <option key={e.id.toString()} value={e.id.toString()}>{entityLabel(e)}</option>
           ))}
         </optgroup>,
@@ -112,6 +122,16 @@ export default function AutomationForm({ id, automations, onClose }) {
     : triggerEntityId === ENTITY_SYSTEM
       ? SYSTEM_EVENT_OPTIONS.map(([v]) => [v, eventName(v)])
       : store.entityEvents(triggerEntityId).map((v) => [v, eventName(v)])
+
+  // Держим выбранную Entity внутри допустимого набора текущего типа триггера.
+  const triggerList =
+    Number(triggerKind) === 0 ? eventEntities : Number(triggerKind) === 2 ? stateEntities : []
+  useEffect(() => {
+    if (Number(triggerKind) === 1 || triggerList.length === 0) return
+    if (!triggerList.some((e) => e.id.toString() === triggerEntity)) {
+      setTriggerEntity(triggerList[0].id.toString())
+    }
+  }, [triggerKind, triggerEntity]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Действия — из capabilities выбранной Entity; ACTION_PROPERTIES — только fallback, пока
   // capabilities неизвестны (UI-сентинел «то же, что триггер» не резолвится).
@@ -201,7 +221,7 @@ export default function AutomationForm({ id, automations, onClose }) {
         ) : Number(triggerKind) === 0 ? (
           <>
             <select value={triggerEntity} onChange={(e) => setTriggerEntity(e.target.value)}>
-              {entityOptions(false)}
+              {entityOptions(eventEntities, false)}
             </select>
             <select value={eventId} onChange={(e) => setEventId(Number(e.target.value))}>
               {triggerEvents.length === 0
@@ -212,7 +232,7 @@ export default function AutomationForm({ id, automations, onClose }) {
         ) : (
           <>
             <select value={triggerEntity} onChange={(e) => { setTriggerEntity(e.target.value); setStateProperty(0) }}>
-              {entityOptions(false)}
+              {entityOptions(stateEntities, false)}
             </select>
             <select value={stateProperty || ''} onChange={(e) => setStateProperty(Number(e.target.value))}>
               <option value="">(свойство)</option>
@@ -231,7 +251,7 @@ export default function AutomationForm({ id, automations, onClose }) {
 
       <label className="af-line">Действие:
         <select value={actionEntity} onChange={(e) => setActionEntity(e.target.value)}>
-          {entityOptions(true, 'то же, что триггер')}
+          {entityOptions(actionEntities, true, 'то же, что триггер')}
         </select>
         <select value={actionProperty} onChange={(e) => pickProperty(e.target.value)}>
           {actionOptions.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
@@ -262,7 +282,7 @@ export default function AutomationForm({ id, automations, onClose }) {
           return (
             <div className="af-cond" key={i}>
               <select value={c.entity} onChange={(e) => updateCondition(i, { entity: e.target.value, property: 0 })}>
-                {entityOptions(true, 'то же, что триггер')}
+                {entityOptions(stateEntities, true, 'то же, что триггер')}
               </select>
               <select value={c.property || ''} onChange={(e) => updateCondition(i, { property: Number(e.target.value) })}>
                 <option value="">(свойство)</option>
