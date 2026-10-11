@@ -199,8 +199,6 @@ static void zigbee_event_publish(const zigbee_event_t *event)
     physical.endpoint = event->endpoint;
     physical.cluster_id = event->cluster_id;
     physical.command_id = event->command_id;
-    physical.payload_len = event->payload_length;
-    memcpy(physical.payload, event->payload, event->payload_length);
 
     ha_device_record_t device = {0};
     const bool has_device = zigbee_device_get(event->device_uid, &device);

@@ -49,22 +49,6 @@ static zb_device_slot_t *device_alloc(ha_device_uid_t uid)
     return NULL;
 }
 
-sys_error_t zigbee_device_ensure(ha_device_uid_t uid, bool *out_changed)
-{
-    if (out_changed == NULL) {
-        return zigbee_fail(SYS_CODE_INVALID_ARG);
-    }
-    *out_changed = false;
-    if (device_find(uid) != NULL) {
-        return SYS_OK;
-    }
-    if (device_alloc(uid) == NULL) {
-        return zigbee_fail(SYS_CODE_NO_MEM);
-    }
-    *out_changed = true;
-    return SYS_OK;
-}
-
 sys_error_t zigbee_device_set_model(ha_device_uid_t uid, const char *model, bool *out_changed)
 {
     if (model == NULL || out_changed == NULL) {

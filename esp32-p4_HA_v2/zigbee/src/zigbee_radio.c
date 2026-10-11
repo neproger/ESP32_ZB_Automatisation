@@ -617,14 +617,6 @@ static bool raw_frame_handler(const ezb_zcl_raw_frame_t *raw)
     event.command_id = header->cmd_id;
     event.endpoint = header->src_ep;
 
-    const uint16_t length = (raw->payload_length > ZIGBEE_EVENT_PAYLOAD_MAX)
-                                ? (uint16_t)ZIGBEE_EVENT_PAYLOAD_MAX
-                                : raw->payload_length;
-    event.payload_length = (uint8_t)length;
-    if (length > 0 && raw->payload != NULL) {
-        memcpy(event.payload, raw->payload, length);
-    }
-
     const sys_error_t err = zigbee_submit_event(&event);
     if (sys_failed(err)) {
         ESP_LOGW(TAG, "event not queued: uid=%llx cluster=%04x err=%u",

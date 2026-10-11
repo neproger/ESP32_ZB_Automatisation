@@ -691,6 +691,11 @@ TLV / самоописание приложения              — запре�
             id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
             Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
             даже когда у Entity своего имени нет.
+2026-10-11  Zigbee/semantics audit — найден и убран мёртвый код/костыли: zb_device_id
+            (derivation перенесена в device_register), zigbee_device_ensure (device создаёт
+            zigbee_topology_apply), zigbee_diag_snapshot+counters (диагностика удалена в C),
+            и мёртвая обвязка payload события (zigbee_event_t.payload / ha_zb_event_t.payload —
+            semantics_decode_event их не читает). Adapter пишет только канонические сущности.
 2026-10-11  Step E, E5 — убран мёртвый zigbee_value_compact (оставался от удалённого
             zigbee_state_apply); граница value-типов зафиксирована комментарием: Domain
             domain_value_t (журнал) и canonical ha_value_t — один vocabulary (совпадающие

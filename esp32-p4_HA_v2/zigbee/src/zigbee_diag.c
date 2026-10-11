@@ -11,7 +11,7 @@
 
 static const char *TAG = "zigbee.diag";
 
-static zigbee_diag_counters_t s_counters;
+static zigbee_diag_entry_t s_counters[ZIGBEE_DIAG_KIND_COUNT];
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static const char *kind_name(zigbee_diag_kind_t kind)
@@ -35,7 +35,7 @@ void zigbee_diag_record(zigbee_diag_kind_t kind, sys_error_t err)
 
     uint32_t total = 0;
     portENTER_CRITICAL(&s_lock);
-    zigbee_diag_entry_t *entry = &s_counters.entries[kind];
+    zigbee_diag_entry_t *entry = &s_counters[kind];
     entry->total++;
     entry->last_layer = err.layer;
     entry->last_code = err.code;
@@ -44,15 +44,4 @@ void zigbee_diag_record(zigbee_diag_kind_t kind, sys_error_t err)
 
     ESP_LOGW(TAG, "%s: layer=%u code=%u (total=%lu)", kind_name(kind), (unsigned)err.layer,
              (unsigned)err.code, (unsigned long)total);
-}
-
-void zigbee_diag_snapshot(zigbee_diag_counters_t *out)
-{
-    if (out == NULL) {
-        return;
-    }
-
-    portENTER_CRITICAL(&s_lock);
-    *out = s_counters;
-    portEXIT_CRITICAL(&s_lock);
 }

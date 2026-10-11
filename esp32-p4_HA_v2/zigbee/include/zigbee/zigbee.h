@@ -24,17 +24,13 @@ typedef struct {
 
 /*
  * Событие от устройства: команда/нажатие, из которого состояние не следует
- * (docs/services/ZIGBEE.md §4). Публикуется как EVENT с payload.
+ * (docs/services/ZIGBEE.md §4). Публикуется как canonical EVENT (source Entity + event id).
  */
-#define ZIGBEE_EVENT_PAYLOAD_MAX 16
-
 typedef struct {
     ha_device_uid_t device_uid;
     uint16_t cluster_id;
     uint8_t command_id;
     uint8_t endpoint;
-    uint8_t payload_length;
-    uint8_t payload[ZIGBEE_EVENT_PAYLOAD_MAX];
 } zigbee_event_t;
 
 /* Поднимает задачу сервиса. Вызывается из bootstrap после domain_init(). */

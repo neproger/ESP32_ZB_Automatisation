@@ -31,9 +31,6 @@ typedef struct {
     const ha_cluster_entry_t *clusters;
 } zigbee_endpoint_desc_t;
 
-/* Создать запись устройства, если её ещё нет. out_changed — создали. */
-sys_error_t zigbee_device_ensure(ha_device_uid_t uid, bool *out_changed);
-
 /* Записать модель из Basic-кластера, сохранив имя. out_changed — модель изменилась. */
 sys_error_t zigbee_device_set_model(ha_device_uid_t uid, const char *model, bool *out_changed);
 

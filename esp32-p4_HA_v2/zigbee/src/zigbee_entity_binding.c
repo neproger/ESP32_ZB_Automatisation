@@ -148,19 +148,6 @@ bool zb_entity_binding_remove_uid(zb_entity_binding_t *list, size_t *count, ha_d
     return removed;
 }
 
-/*
- * Детерминированный Logical Device id из EUI64: канонический native_id → единая generic
- * derivation ha_device_id_derive (источник — adapter, формула — одна).
- */
-ha_device_id_t zb_device_id(ha_device_uid_t uid)
-{
-    char native_id[HA_NATIVE_ID_MAX];
-    if (!zb_device_native_id(uid, native_id, sizeof(native_id))) {
-        return HA_DEVICE_ID_NONE;
-    }
-    return ha_device_id_derive(HA_SOURCE_ZIGBEE, native_id);
-}
-
 void zb_entity_initial_name(ha_device_uid_t uid, uint8_t endpoint, uint8_t endpoint_total,
                             char *out, size_t out_size)
 {

@@ -27,12 +27,5 @@ typedef struct {
     uint16_t last_code;
 } zigbee_diag_entry_t;
 
-typedef struct {
-    zigbee_diag_entry_t entries[ZIGBEE_DIAG_KIND_COUNT];
-} zigbee_diag_counters_t;
-
 /* Записать сбой и напечатать его в консоль своим тегом. */
 void zigbee_diag_record(zigbee_diag_kind_t kind, sys_error_t err);
-
-/* Снимок счётчиков: copy-out, как и любое чтение состояния в проекте. */
-void zigbee_diag_snapshot(zigbee_diag_counters_t *out);

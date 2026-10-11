@@ -72,9 +72,6 @@ bool zb_uid_from_native_id(const char *native_id, ha_device_uid_t *out);
 /* Удалить все привязки устройства из списка (device ушёл). true — что-то удалено. */
 bool zb_entity_binding_remove_uid(zb_entity_binding_t *list, size_t *count, ha_device_uid_t uid);
 
-/* EUI64 → детерминированный Logical Device id; Domain EUI64 не знает. */
-ha_device_id_t zb_device_id(ha_device_uid_t uid);
-
 /*
  * Детерминированное initial-имя Entity: basename — имя DEVICE. Одна Entity у устройства →
  * basename; несколько → "<basename> - <endpoint>". basename пустой → пустая строка (имя не
