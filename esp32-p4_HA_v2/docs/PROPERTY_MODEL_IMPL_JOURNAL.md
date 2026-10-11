@@ -687,6 +687,10 @@ TLV / самоописание приложения              — запре�
             (напр. ESP32C6-DISPLAY/SNZB-01P). Заодно подтверждён re-pair: тот же device_id
             (ad8745aca6c843cb) и entity_id (274002a78a9cd8bb) после rejoin. Зафиксирован
             docs/STEP_C_PLAN.md (план Step C; diagnostics отложены). IDF + web-ui зелёные.
+2026-10-11  UI: списки Entity (AutomationForm, Groups WidgetForm) больше не показывают голые
+            id — Entity сгруппированы по устройству (optgroup: имя устройства), внутри — имя
+            Entity либо короткий id + подсказка по capability. Понятно, что за что отвечает,
+            даже когда у Entity своего имени нет.
 ```
 
 ## 7. Открытые вопросы

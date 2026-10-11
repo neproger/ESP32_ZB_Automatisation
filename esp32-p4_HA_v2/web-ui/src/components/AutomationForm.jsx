@@ -54,12 +54,35 @@ export default function AutomationForm({ id, automations, onClose }) {
     )
   }
 
-  const entityOptions = (includeSource, sourceLabel) => [
-    ...(includeSource ? [<option key="src" value={SRC}>{sourceLabel}</option>] : []),
-    ...ents.map((e) => (
-      <option key={e.id.toString()} value={e.id.toString()}>{e.name || e.id.toString().slice(-6)}</option>
-    )),
-  ]
+  // Опции Entity, сгруппированные по устройству (имя устройства видно, даже если у Entity
+  // имени нет). Внутри группы — имя Entity, иначе короткий id + подсказка по capability.
+  const entityLabel = (e) => {
+    if (e.name) return e.name
+    const caps = store.capabilities(e.id)
+    const hint = caps.length > 0 ? ` · ${propertyName(caps[0].property)}` : ''
+    return `#${e.id.toString().slice(-4)}${hint}`
+  }
+  const entityOptions = (includeSource, sourceLabel) => {
+    const nodes = []
+    if (includeSource) nodes.push(<option key="src" value={SRC}>{sourceLabel}</option>)
+    const groups = new Map()
+    for (const e of ents) {
+      const dk = e.deviceId?.toString() ?? ''
+      if (!groups.has(dk)) groups.set(dk, [])
+      groups.get(dk).push(e)
+    }
+    for (const [dk, list] of groups) {
+      const dn = s.semDevices.get(dk)?.name || (dk ? 'устройство ' + dk.slice(-6) : 'без устройства')
+      nodes.push(
+        <optgroup key={'g' + dk} label={dn}>
+          {list.map((e) => (
+            <option key={e.id.toString()} value={e.id.toString()}>{entityLabel(e)}</option>
+          ))}
+        </optgroup>,
+      )
+    }
+    return nodes
+  }
 
   const toEntity = (v) => (v === SRC ? ENTITY_SOURCE : BigInt(v))
   const fromEntity = (e) => (e == null || BigInt(e) === ENTITY_SOURCE ? SRC : BigInt(e).toString())

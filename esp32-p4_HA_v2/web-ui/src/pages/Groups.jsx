@@ -25,7 +25,10 @@ function entitiesWithProps(s) {
   const out = []
   for (const e of s.semEntities.values()) {
     const props = propsOf(e.id)
-    if (props.length > 0) out.push({ id: e.id, name: e.name || e.id.toString().slice(-6), props })
+    if (props.length === 0) continue
+    const dn = s.semDevices.get(e.deviceId?.toString())?.name || ''
+    const name = e.name || (dn ? `${dn} · ${e.id.toString().slice(-4)}` : '#' + e.id.toString().slice(-6))
+    out.push({ id: e.id, name, props })
   }
   out.sort((a, b) => a.name.localeCompare(b.name))
   return out
