@@ -1,5 +1,6 @@
 #include "ui_page.h"
 
+#include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_state.h"
 #include "ui_compat.h"
@@ -10,9 +11,11 @@
 #define UI_LIST_W 456
 #define UI_LIST_H 616
 
+/* Плитка = Entity: по одному виджету на capability (не больше HA_ENTITY_CAPABILITIES_MAX). */
 typedef struct {
-    ui_widget_t *widget;
-    ha_state_key_t state;
+    ui_widget_t *widgets[HA_ENTITY_CAPABILITIES_MAX];
+    ha_state_key_t states[HA_ENTITY_CAPABILITIES_MAX];
+    size_t count;
 } ui_page_entry_t;
 
 struct ui_page {
@@ -62,6 +65,43 @@ static void on_root_deleted(lv_event_t *event)
     }
 }
 
+/* Есть ли свойство в capability (для свёртки составного виджета цвета). */
+static bool has_property(const ha_entity_capabilities_record_t *caps, ha_property_id_t property)
+{
+    for (uint8_t i = 0; i < caps->property_count; i++) {
+        if (caps->properties[i].property == property) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Свойства Entity — из её capability. Порядок как в записи (form задаёт потребитель). */
+static size_t entity_properties(domain_t *domain, ha_entity_id_t entity, ha_property_id_t *out,
+                                size_t max)
+{
+    const ha_entity_key_t key = {.id = entity};
+    ha_entity_capabilities_record_t caps = {0};
+    if (sys_failed(domain_entity_get(domain, (domain_entity_t)HA_ENTITY_CAPABILITIES, &key,
+                                     &caps))) {
+        return 0;
+    }
+    /* Виджет цвета — составной (свотч + оттенок + насыщенность + яркость). Отдельные
+     * BRIGHTNESS/COLOR_TEMPERATURE не строим: иначе яркость дублируется, а слайдер
+     * температуры часто не поддержан устройством и «залипает». */
+    const bool has_color = has_property(&caps, HA_PROPERTY_COLOR);
+    size_t n = 0;
+    for (uint8_t i = 0; i < caps.property_count && n < max; i++) {
+        const ha_property_id_t property = caps.properties[i].property;
+        if (has_color && (property == HA_PROPERTY_BRIGHTNESS ||
+                          property == HA_PROPERTY_COLOR_TEMPERATURE)) {
+            continue;
+        }
+        out[n++] = property;
+    }
+    return n;
+}
+
 static lv_obj_t *make_item_card(domain_t *domain, lv_obj_t *list, const ui_page_item_t *item,
                                 ui_page_entry_t *entry)
 {
@@ -83,8 +123,13 @@ static lv_obj_t *make_item_card(domain_t *domain, lv_obj_t *list, const ui_page_
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COL_MUTED), 0);
     lv_label_set_text(title, (item->title != NULL) ? item->title : "");
 
-    entry->state = (item->state != NULL) ? *item->state : (ha_state_key_t){0};
-    entry->widget = ui_widget_create(domain, card, &entry->state);
+    ha_property_id_t props[HA_ENTITY_CAPABILITIES_MAX];
+    const size_t n = entity_properties(domain, item->entity, props, HA_ENTITY_CAPABILITIES_MAX);
+    entry->count = n;
+    for (size_t i = 0; i < n; i++) {
+        entry->states[i] = (ha_state_key_t){.entity = item->entity, .property = props[i]};
+        entry->widgets[i] = ui_widget_create(domain, card, &entry->states[i]);
+    }
     return card;
 }
 
@@ -156,11 +201,14 @@ void ui_page_apply(ui_page_t *page)
         return;
     }
     for (size_t i = 0; i < page->count; ++i) {
-        ha_state_record_t record = {0};
-        const bool present = sys_ok(domain_entity_get(page->domain,
-                                                      (domain_entity_t)HA_ENTITY_PROPERTY_STATE,
-                                                      &page->entries[i].state, &record));
-        ui_widget_apply(page->entries[i].widget, &record.value, present);
+        ui_page_entry_t *entry = &page->entries[i];
+        for (size_t w = 0; w < entry->count; ++w) {
+            ha_state_record_t record = {0};
+            const bool present = sys_ok(domain_entity_get(
+                page->domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &entry->states[w],
+                &record));
+            ui_widget_apply(entry->widgets[w], &record.value, present);
+        }
     }
 }
 

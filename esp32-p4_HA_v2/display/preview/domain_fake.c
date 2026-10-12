@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "domain/domain.h"
+#include "ha_model/ha_capabilities.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
 #include "ha_model/ha_groups.h"
@@ -48,6 +49,11 @@ typedef struct {
 } fake_item_t;
 
 typedef struct {
+    ha_entity_key_t key;
+    ha_entity_capabilities_record_t record;
+} fake_caps_t;
+
+typedef struct {
     ha_device_id_t uid;
     ha_location_record_t record;
 } fake_location_t;
@@ -61,6 +67,12 @@ static const fake_state_t s_states[] = {
     {{ENT_LIGHT, HA_PROPERTY_POWER, 0}, {.value = {.kind = HA_VALUE_BOOL, .value = {.b = true}}}},
     {{ENT_LIGHT, HA_PROPERTY_BRIGHTNESS, 0},
      {.value = {.kind = HA_VALUE_FLOAT, .value = {.f32 = 75.0f}}}},
+    {{ENT_LIGHT, HA_PROPERTY_COLOR_X, 0},
+     {.value = {.kind = HA_VALUE_FLOAT, .value = {.f32 = 0.42f}}}},
+    {{ENT_LIGHT, HA_PROPERTY_COLOR_Y, 0},
+     {.value = {.kind = HA_VALUE_FLOAT, .value = {.f32 = 0.38f}}}},
+    {{ENT_LIGHT, HA_PROPERTY_COLOR_TEMPERATURE, 0},
+     {.value = {.kind = HA_VALUE_FLOAT, .value = {.f32 = 3200.0f}}}},
     {{ENT_SENSOR, HA_PROPERTY_TEMPERATURE, 0},
      {.value = {.kind = HA_VALUE_FLOAT, .value = {.f32 = 23.4f}}}},
     {{ENT_SENSOR, HA_PROPERTY_HUMIDITY, 0},
@@ -115,10 +127,30 @@ static const fake_group_t s_groups[] = {
 };
 
 static const fake_item_t s_items[] = {
-    {{1, {ENT_LIGHT, HA_PROPERTY_POWER, 0}}, {.order = 1, .title = "Люстра"}},
-    {{1, {ENT_LIGHT, HA_PROPERTY_BRIGHTNESS, 0}}, {.order = 2, .title = "Яркость"}},
-    {{2, {ENT_SENSOR, HA_PROPERTY_TEMPERATURE, 0}}, {.order = 1, .title = "Температура"}},
-    {{2, {ENT_SENSOR, HA_PROPERTY_HUMIDITY, 0}}, {.order = 2, .title = "Влажность"}},
+    {{1, ENT_LIGHT}, {.order = 1, .title = "Люстра"}},
+    {{2, ENT_SENSOR}, {.order = 1, .title = "Датчик"}},
+};
+
+static const fake_caps_t s_caps[] = {
+    {{ENT_LIGHT},
+     {.property_count = 4,
+      .properties = {
+          {.property = HA_PROPERTY_POWER,
+           .action_count = 3,
+           .actions = {HA_ACTION_ON, HA_ACTION_OFF, HA_ACTION_TOGGLE}},
+          {.property = HA_PROPERTY_BRIGHTNESS, .action_count = 1, .actions = {HA_ACTION_SET}},
+          {.property = HA_PROPERTY_COLOR_TEMPERATURE,
+           .action_count = 1,
+           .actions = {HA_ACTION_SET}},
+          {.property = HA_PROPERTY_COLOR, .action_count = 1, .actions = {HA_ACTION_SET}},
+      }}},
+    {{ENT_SENSOR},
+     {.property_count = 3,
+      .properties = {
+          {.property = HA_PROPERTY_TEMPERATURE, .action_count = 0},
+          {.property = HA_PROPERTY_HUMIDITY, .action_count = 0},
+          {.property = HA_PROPERTY_BATTERY_PERCENT, .action_count = 0},
+      }}},
 };
 
 static sys_error_t not_found(void)
@@ -143,6 +175,16 @@ sys_error_t domain_entity_get(domain_t *domain, domain_entity_t type, const void
         for (size_t i = 0; i < sizeof(s_entities) / sizeof(s_entities[0]); ++i) {
             if (s_entities[i].key.id == id) {
                 *(ha_entity_record_t *)out_record = s_entities[i].record;
+                return SYS_OK;
+            }
+        }
+        return not_found();
+    }
+    if (type == (domain_entity_t)HA_ENTITY_CAPABILITIES) {
+        const ha_entity_id_t id = ((const ha_entity_key_t *)key)->id;
+        for (size_t i = 0; i < sizeof(s_caps) / sizeof(s_caps[0]); ++i) {
+            if (s_caps[i].key.id == id) {
+                *(ha_entity_capabilities_record_t *)out_record = s_caps[i].record;
                 return SYS_OK;
             }
         }

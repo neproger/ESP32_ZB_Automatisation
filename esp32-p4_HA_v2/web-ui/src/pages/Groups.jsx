@@ -2,88 +2,65 @@ import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { groupPut, groupRemove, groupItemPut, groupItemRemove } from '../proto.js'
-import { propertyName, propertyUnit } from '../semantics.js'
 import Modal from '../components/Modal.jsx'
+import EntityWidgets from '../components/EntityWidgets.jsx'
+import WeatherWidget from '../components/WeatherWidget.jsx'
 
-// Экраны Display: group — экран, group_item — виджет. Виджет ссылается на canonical
-// свойство Entity (entity_id, property); identity — entity, а не uid/ep.
+// Экраны Display: group — экран, group_item — плитка. Плитка ссылается на логическую
+// Entity (endpoint), а её виджеты строятся по capability — как в HA v1 («виджеты от типа
+// девайса»). Identity — entity_id, без uid/ep.
 
 function entityName(s, entity) {
   return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
 }
 
-// Свойства Entity: capabilities + известные значения.
-function propsOf(entity) {
-  const set = new Map()
-  for (const cap of store.capabilities(entity)) set.set(cap.property, cap.property)
-  for (const st of store.entityProperties(entity)) set.set(st.property, st.property)
-  return [...set.values()].sort((a, b) => a - b)
-}
-
-// Entity, у которых есть свойства (для выпадающего списка).
+// Entity, у которых есть capability или известные свойства (для выпадающего списка).
 function entitiesWithProps(s) {
   const out = []
   for (const e of s.semEntities.values()) {
-    const props = propsOf(e.id)
-    if (props.length === 0) continue
+    const has = store.capabilities(e.id).length > 0 || store.entityProperties(e.id).length > 0
+    if (!has) continue
     const dn = s.semDevices.get(e.deviceId?.toString())?.name || ''
     const name = e.name || (dn ? `${dn} · ${e.id.toString().slice(-4)}` : '#' + e.id.toString().slice(-6))
-    out.push({ id: e.id, name, props })
+    out.push({ id: e.id, name })
   }
   out.sort((a, b) => a.name.localeCompare(b.name))
   return out
 }
 
-function stateValue(s, entity, property) {
-  const v = store.semState(entity, property)?.value
-  if (v == null) return '—'
-  if (typeof v === 'boolean') return v ? 'да' : 'нет'
-  return `${Number(v).toFixed(1)} ${propertyUnit(property)}`
-}
-
-// Форма виджета: Entity → свойство → подпись.
-function WidgetForm({ s, group, items, item, onClose }) {
+// Плитка: Entity → подпись.
+function TileForm({ s, group, items, item, onClose }) {
   const ents = entitiesWithProps(s)
   const [entity, setEntity] = useState(item ? item.entity.toString() : '')
-  const [property, setProperty] = useState(item ? item.property : 0)
   const [title, setTitle] = useState(item ? item.title : '')
 
   const effEntity = entity || (ents[0]?.id.toString() ?? '')
-  const list = ents.find((g) => g.id.toString() === effEntity)?.props || []
-  const hasProp = list.includes(property)
-  const effProp = hasProp ? property : (list[0] ?? 0)
 
   const save = () => {
-    if (!effEntity || !effProp) return
+    if (!effEntity) return
     const order = item ? item.order : (items.length ? Math.max(...items.map((it) => it.order)) + 1 : 0)
-    if (item && (item.entity.toString() !== effEntity || item.property !== effProp)) {
-      store.send(groupItemRemove(group.key.id, item.entity, item.property))
+    if (item && item.entity.toString() !== effEntity) {
+      store.send(groupItemRemove(group.key.id, item.entity))
     }
-    store.send(groupItemPut(group.key.id, { entity: BigInt(effEntity), property: effProp, order, title: title.trim() }))
+    store.send(groupItemPut(group.key.id, { entity: BigInt(effEntity), order, title: title.trim() }))
     onClose()
   }
 
   return (
     <div className="form-grid">
       <div className="af-line">Сущность:
-        <select value={effEntity} onChange={(e) => { setEntity(e.target.value); setProperty(0) }}>
+        <select value={effEntity} onChange={(e) => setEntity(e.target.value)}>
           {ents.length === 0 && <option value="">(нет сущностей со свойствами)</option>}
           {ents.map((g) => <option key={g.id.toString()} value={g.id.toString()}>{g.name}</option>)}
-        </select>
-      </div>
-      <div className="af-line">Свойство:
-        <select value={effProp} onChange={(e) => setProperty(Number(e.target.value))}>
-          <option value={0}>(свойство)</option>
-          {list.map((p) => <option key={p} value={p}>{propertyName(p)}</option>)}
         </select>
       </div>
       <div className="af-line">Подпись:
         <input type="text" value={title} placeholder="(необязательно)" onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="af-line">
-        <button onClick={save} disabled={!effEntity || !effProp}>Сохранить</button>
+        <button onClick={save} disabled={!effEntity}>Сохранить</button>
         {item && (
-          <button className="ghost danger" onClick={() => { store.send(groupItemRemove(group.key.id, item.entity, item.property)); onClose() }}>Удалить</button>
+          <button className="ghost danger" onClick={() => { store.send(groupItemRemove(group.key.id, item.entity)); onClose() }}>Удалить</button>
         )}
         <button className="ghost" onClick={onClose}>Отмена</button>
       </div>
@@ -105,7 +82,7 @@ function GroupCard({ group, items, s }) {
   }
 
   return (
-    <div className="card">
+    <div className="card screen-tile">
       <div className="card-head">
         <span className="rule-id">{group.record.title || '(без названия)'}</span>
         <span className="spacer" />
@@ -113,23 +90,24 @@ function GroupCard({ group, items, s }) {
         <button className="ghost danger" onClick={() => store.send(groupRemove(group.key.id))}>Удалить экран</button>
       </div>
 
-      {items.length === 0 && <div className="muted">виджетов нет</div>}
-      <div className="item-list">
+      {items.length === 0 && <div className="muted">плиток нет</div>}
+      <div className="screen-tiles">
         {items.map((it, i) => (
-          <div className="flow" key={`${it.entity}:${it.property}`}>
-            <span className="node action">{it.title || propertyName(it.property)}</span>
-            <span className="muted">{entityName(s, it.entity)} · {propertyName(it.property)}</span>
-            <span className="spacer" />
-            <span className="sensor">{stateValue(s, it.entity, it.property)}</span>
-            <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-            <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1}>↓</button>
-            <button className="ghost" onClick={() => setForm({ item: it })}>Изменить</button>
+          <div className="entity-tile" key={it.entity.toString()}>
+            <div className="entity-tile-head">
+              <span className="entity-tile-title">{it.title || entityName(s, it.entity)}</span>
+              <span className="spacer" />
+              <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
+              <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1}>↓</button>
+              <button className="ghost" onClick={() => setForm({ item: it })}>Изменить</button>
+            </div>
+            <EntityWidgets entity={it.entity} />
           </div>
         ))}
       </div>
 
       <div className="af-line">
-        <button onClick={() => setForm({ item: null })}>+ Добавить виджет</button>
+        <button onClick={() => setForm({ item: null })}>+ Добавить плитку</button>
       </div>
 
       {edit && (
@@ -140,8 +118,8 @@ function GroupCard({ group, items, s }) {
         </Modal>
       )}
       {form && (
-        <Modal title={form.item ? 'Изменить виджет' : 'Новый виджет'} onClose={() => setForm(null)}>
-          <WidgetForm s={s} group={group} items={items} item={form.item} onClose={() => setForm(null)} />
+        <Modal title={form.item ? 'Изменить плитку' : 'Новая плитка'} onClose={() => setForm(null)}>
+          <TileForm s={s} group={group} items={items} item={form.item} onClose={() => setForm(null)} />
         </Modal>
       )}
     </div>
@@ -180,20 +158,24 @@ export default function Groups() {
     <section>
       <h2>
         Экраны
+        <span className="spacer" />
+        <WeatherWidget />
         <button className="primary" onClick={() => setNewScreen(true)}>+ Экран</button>
       </h2>
 
       {groups.length === 0 && <p className="muted pad">экранов пока нет</p>}
-      {groups.map((g) => (
-        <GroupCard
-          key={'grp:' + g.key.id}
-          group={g}
-          items={[...s.semGroupItems.values()]
-            .filter((it) => it.groupId === g.key.id)
-            .sort((a, b) => a.order - b.order)}
-          s={s}
-        />
-      ))}
+      <div className="screens-grid">
+        {groups.map((g) => (
+          <GroupCard
+            key={'grp:' + g.key.id}
+            group={g}
+            items={[...s.semGroupItems.values()]
+              .filter((it) => it.groupId === g.key.id)
+              .sort((a, b) => a.order - b.order)}
+            s={s}
+          />
+        ))}
+      </div>
 
       {newScreen && (
         <Modal title="Новый экран" onClose={() => setNewScreen(false)}>

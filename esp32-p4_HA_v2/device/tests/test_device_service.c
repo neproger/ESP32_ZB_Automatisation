@@ -250,8 +250,7 @@ static void test_remove_cascade(void)
                                    &changed)));
     ha_group_item_key_t gi_key = {0};
     gi_key.group_id = 1;
-    gi_key.state.entity = e1;
-    gi_key.state.property = HA_PROPERTY_POWER;
+    gi_key.entity = e1;
     const ha_group_item_record_t gi_rec = {0};
     CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_GROUP_ITEM, &gi_key, &gi_rec,
                                    &meta, &changed)));

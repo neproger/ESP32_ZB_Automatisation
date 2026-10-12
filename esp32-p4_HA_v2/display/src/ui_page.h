@@ -1,9 +1,10 @@
 #pragma once
 
 /*
- * Один экран = одна группа: шапка с названием и ниже скроллируемый список всех
- * виджетов группы сразу (docs/clients/DISPLAY.md). Экран сам себя освобождает при
- * удалении; переходы между группами делаются снаружи через lv_screen_load_anim.
+ * Один экран = одна группа: шапка с названием и ниже скроллируемый список плиток.
+ * Каждая плитка — логическая Entity (endpoint), внутри — по виджету на её capability
+ * (docs/clients/DISPLAY.md). Экран сам себя освобождает при удалении; переходы между
+ * группами делаются снаружи через lv_screen_load_anim.
  */
 
 #include <stddef.h>
@@ -11,15 +12,15 @@
 #include "lvgl.h"
 
 #include "domain/domain.h"
-#include "ha_model/ha_state.h"
+#include "ha_model/ha_entity.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct {
-    const char *title;               /* подпись виджета (копируется в label) */
-    const ha_state_key_t *state; /* какое canonical-свойство показывать */
+    const char *title;      /* подпись плитки (копируется в label) */
+    ha_entity_id_t entity;  /* плитка = Entity; виджеты — по её capability */
 } ui_page_item_t;
 
 typedef struct ui_page ui_page_t;

@@ -60,7 +60,7 @@ export const SIZES = {
   15: { key: 16, rec: 8 },   // PROPERTY_STATE
   16: { key: 8, rec: 216 },  // CAPABILITIES
   4: { key: 8, rec: 192 },   // AUTOMATION
-  8: { key: 24, rec: 36 },   // GROUP_ITEM
+  8: { key: 16, rec: 36 },   // GROUP_ITEM
   7: { key: 8, rec: 32 },    // GROUP
   6: { key: 8, rec: 60 },    // LOCATION
   9: { key: 8, rec: 16 },    // WEATHER
@@ -206,27 +206,24 @@ export function groupRemove(id) {
   return encodeCommand(CMD.GROUP_REMOVE, out)
 }
 
-// GROUP_ITEM_PUT (60) = ha_group_item_key_t (24) + ha_group_item_record_t (36):
-//   group_id u64@0, state.entity u64@8, state.property i32@16, reserved u32@20;
-//   order u16@24, reserved[2]@26, title[32]@28.
+// GROUP_ITEM_PUT (52) = ha_group_item_key_t (16) + ha_group_item_record_t (36):
+//   group_id u64@0, entity u64@8; order u16@16, reserved[2]@18, title[32]@20.
 export function groupItemPut(groupId, item) {
-  const out = new Uint8Array(60)
+  const out = new Uint8Array(52)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
   dv.setBigUint64(8, BigInt(item.entity), true)
-  dv.setInt32(16, Number(item.property) || 0, true)
-  dv.setUint16(24, Number(item.order) || 0, true)
-  putText(out, 28, item.title, 32)
+  dv.setUint16(16, Number(item.order) || 0, true)
+  putText(out, 20, item.title, 32)
   return encodeCommand(CMD.GROUP_ITEM_PUT, out)
 }
 
-// GROUP_ITEM_REMOVE: ha_group_item_key_t (24).
-export function groupItemRemove(groupId, entity, property) {
-  const out = new Uint8Array(24)
+// GROUP_ITEM_REMOVE: ha_group_item_key_t (16): group_id u64@0, entity u64@8.
+export function groupItemRemove(groupId, entity) {
+  const out = new Uint8Array(16)
   const dv = new DataView(out.buffer)
   dv.setBigUint64(0, BigInt(groupId), true)
   dv.setBigUint64(8, BigInt(entity), true)
-  dv.setInt32(16, Number(property) || 0, true)
   return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
 }
 

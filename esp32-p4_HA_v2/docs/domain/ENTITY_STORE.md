@@ -64,7 +64,7 @@ Domain добавляет `event_id / ts / entity / key / op` и не вычис
 
 Domain не знает отношений между сущностями. Связи выражаются данными:
 
-- составные ключи: `state = (entity_id, property_id)`; `group_item = (group_id, entity_id, property_id)`;
+- составные ключи: `state = (entity_id, property_id)`; `group_item = (group_id, entity_id)`;
 - ссылки в полях: `Entity.device_id`, `LogicalDevice.parent_device_id`;
 - списки внутри записи (например `endpoint.clusters[]` — adapter-private).
 

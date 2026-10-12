@@ -28,7 +28,7 @@ Logical Device ── Entity ── Property (состояние)
 | **Event** | `(source_entity, event_id)` | что-то произошло, state не следует (кнопки, тики) |
 | **Action** | `(property_id, action_id)` | намерение; команда адресуется парой `(entity_id, property_id)` |
 | **Automation rule** | `id` (u64) | `ha_rule_t`, entity-адресованное правило |
-| **Group / group_item** | `id` / `(group_id, entity_id, property_id)` | экраны Display и виджеты |
+| **Group / group_item** | `id` / `(group_id, entity_id)` | экраны Display и плитки-Entity |
 
 ## 3. Identity
 

@@ -191,9 +191,8 @@ function applyEntity(type, p) {
   } else if (type === ENTITY.GROUP_ITEM) {
     const groupId = p.getBigUint64(0, true)
     const entity = p.getBigUint64(8, true)
-    const property = p.getInt32(16, true)
-    semGroupItems.set(`${groupId}:${entity}:${property}`, {
-      groupId, entity, property, order: p.getUint16(24, true), title: textAt(p, 28, 32),
+    semGroupItems.set(`${groupId}:${entity}`, {
+      groupId, entity, order: p.getUint16(16, true), title: textAt(p, 20, 32),
     })
   } else if (type === ENTITY.GROUP) {
     const id = p.getBigUint64(0, true)

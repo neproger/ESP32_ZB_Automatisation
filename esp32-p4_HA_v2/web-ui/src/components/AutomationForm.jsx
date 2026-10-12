@@ -9,6 +9,7 @@ import {
 import { PROPERTY, ACTION, COMMAND_VALUE, propertyName, actionName, eventName } from '../semantics.js'
 import { rgbHexToXy } from '../color.js'
 import { ENTITY_SYSTEM } from '../system.js'
+import Switch from './Switch.jsx'
 
 const MAX_CONDITIONS = 4
 const SRC = 'src' // UI-сентинел для HA_ENTITY_ID_SOURCE
@@ -191,7 +192,7 @@ export default function AutomationForm({ id, automations, onClose }) {
 
   return (
     <form className="form-grid" onSubmit={submit}>
-      <label className="af-line"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Включено</label>
+      <label className="af-line">Включено <Switch checked={enabled} onChange={setEnabled} /></label>
 
       <div className="af-line">Триггер:
         <select value={triggerKind} onChange={(e) => setTriggerKind(Number(e.target.value))}>

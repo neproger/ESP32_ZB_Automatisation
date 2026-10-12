@@ -20,7 +20,7 @@ bootstrap как любые другие (`../RECORD_MODEL.md` §1.1):
 
 ```text
 group       — экран/дашборд: числовой ключ id (как у automation), payload — title
-group_item  — виджет на экране: ссылка на состояние + order + title
+group_item  — плитка на экране: ссылка на Entity + order + title
 ```
 
 `title` у экрана и у элемента задаёт пользователь, независимо от имени устройства:
@@ -30,13 +30,14 @@ group_item  — виджет на экране: ссылка на состоян
 Это **не** Zigbee-группы (`0x0004`, `../services/ZIGBEE.md` §8): здесь «группа» —
 раскладка экрана, а не адресация ZCL.
 
-Виджет ссылается на **canonical свойство Entity**, а не на endpoint, и берёт его готовым
-ключом Domain — `ha_state_key_t` (`(entity_id, property_id)`, `ha_model/ha_state.h`).
-Новый ref для состояния не вводится.
+Плитка ссылается на **логическую Entity** (endpoint), а не на одно свойство: форму её
+виджетов выбирает потребитель по capability Entity (properties/actions) — как в HA v1
+(«виджеты от типа девайса»). На каждое свойство capability строится один виджет
+(switch/level/color_temp/color/indicator/value), read-only свойства — sensor-карточкой.
 
-Ключ `group_item` — составной `(group_id, entity_id, property_id)`: **одно свойство можно
-показать на нескольких экранах/дашбордах** (many-to-many). Компоненты числовые и
-фиксированной ширины (`../RECORD_MODEL.md` §5); строк в ключах нет.
+Ключ `group_item` — составной `(group_id, entity_id)`: **одну Entity можно показать на
+нескольких экранах/дашбордах** (many-to-many). Компоненты числовые и фиксированной ширины
+(`../RECORD_MODEL.md` §5); строк в ключах нет.
 
 Display держит только opaque-версии для сравнения и не дублирует данные Domain.
 

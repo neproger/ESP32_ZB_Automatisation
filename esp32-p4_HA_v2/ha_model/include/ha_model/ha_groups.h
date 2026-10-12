@@ -5,9 +5,10 @@
  * `group_item` — виджет на экране. Формы, а не логика: только структуры и числа.
  * Заголовок линкуют сервисы и bootstrap; Domain его не включает и этих имён не знает.
  *
- * Виджет ссылается на canonical-свойство Entity готовым ключом Domain (`ha_state_key_t`),
- * поэтому новый ref для состояния не вводится. Ключ `group_item` — составной
- * `(group_id, state)`: одно свойство может стоять на нескольких экранах.
+ * Плитка экрана ссылается на логическую Entity (endpoint), а не на одно свойство:
+ * форму виджетов задаёт capability Entity (как в HA v1 — «виджеты от типа девайса»).
+ * Ключ `group_item` — составной `(group_id, entity)`: одна Entity может стоять на
+ * нескольких экранах.
  *
  * `title` у экрана и у элемента — пользовательские подписи, независимые от имени
  * устройства. Это canonical state (пользователь меняет осознанно), а не operational
@@ -18,7 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "ha_model/ha_state.h" /* ha_state_key_t: (entity_id, property_id) */
+#include "ha_model/ha_entity.h" /* ha_entity_id_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,13 +38,14 @@ typedef struct {
 } ha_group_record_t;
 
 /*
- * Виджет на экране: ссылка на canonical-свойство + порядок + подпись. Ключ — составной
- * `(group_id, state)`; `state` — entity-адресованное свойство (ha_state.h), без ZCL.
- * `order` задаёт порядок виджетов; `title` — подпись (не зависит от имени Entity).
+ * Плитка на экране: ссылка на логическую Entity + порядок + подпись. Ключ — составной
+ * `(group_id, entity)`; форму виджетов выбирает потребитель по capability Entity
+ * (properties/actions), без ZCL. `order` задаёт порядок плиток; `title` — подпись
+ * (не зависит от имени Entity).
  */
 typedef struct {
     uint64_t group_id;
-    ha_state_key_t state;
+    ha_entity_id_t entity;
 } ha_group_item_key_t;
 
 typedef struct {
@@ -55,15 +57,15 @@ typedef struct {
 #ifdef __cplusplus
 static_assert(sizeof(ha_group_key_t) == 8, "ha_group_key_t: неожиданный размер");
 static_assert(sizeof(ha_group_record_t) == 32, "ha_group_record_t: неожиданный размер");
-static_assert(sizeof(ha_group_item_key_t) == 24, "ha_group_item_key_t: неожиданный размер");
-static_assert(offsetof(ha_group_item_key_t, state) == 8, "ha_group_item_key_t: layout");
+static_assert(sizeof(ha_group_item_key_t) == 16, "ha_group_item_key_t: неожиданный размер");
+static_assert(offsetof(ha_group_item_key_t, entity) == 8, "ha_group_item_key_t: layout");
 static_assert(offsetof(ha_group_item_record_t, title) == 4, "ha_group_item_record_t: layout");
 static_assert(sizeof(ha_group_item_record_t) == 36, "ha_group_item_record_t: неожиданный размер");
 #else
 _Static_assert(sizeof(ha_group_key_t) == 8, "ha_group_key_t: неожиданный размер");
 _Static_assert(sizeof(ha_group_record_t) == 32, "ha_group_record_t: неожиданный размер");
-_Static_assert(sizeof(ha_group_item_key_t) == 24, "ha_group_item_key_t: неожиданный размер");
-_Static_assert(offsetof(ha_group_item_key_t, state) == 8, "ha_group_item_key_t: layout");
+_Static_assert(sizeof(ha_group_item_key_t) == 16, "ha_group_item_key_t: неожиданный размер");
+_Static_assert(offsetof(ha_group_item_key_t, entity) == 8, "ha_group_item_key_t: layout");
 _Static_assert(offsetof(ha_group_item_record_t, title) == 4, "ha_group_item_record_t: layout");
 _Static_assert(sizeof(ha_group_item_record_t) == 36, "ha_group_item_record_t: неожиданный размер");
 #endif

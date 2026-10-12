@@ -3,6 +3,7 @@ import { useStore } from '../useStore.js'
 import { store } from '../store.js'
 import { locationPut } from '../proto.js'
 import { SYSTEM_DEVICE_UID } from '../system.js'
+import Switch from '../components/Switch.jsx'
 
 function tzLabel(min) {
   const v = Number(min) || 0
@@ -116,10 +117,7 @@ export default function Settings() {
           <div className="settings-ctl col">
             <label className="switch-row">
               <span>Авто (GeoIP)</span>
-              <label className="switch">
-                <input type="checkbox" checked={posAuto} onChange={(e) => setPosAuto(e.target.checked)} />
-                <span />
-              </label>
+              <Switch checked={posAuto} onChange={setPosAuto} />
             </label>
 
             {!posAuto && (

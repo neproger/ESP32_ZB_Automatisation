@@ -405,3 +405,17 @@ button.primary:disabled { opacity: 0.45; cursor: default; }
 .modal-title { font-weight: 600; }
 .modal-head button { margin-left: auto; }
 .modal-body { padding: 1rem; }
+
+/* Экраны Display: сетка экранов, плитки-Entity, sensor-карточки, header-погода. */
+.screens-grid { display: flex; flex-direction: column; gap: 1rem; }
+.screen-tile { display: flex; flex-direction: column; gap: 0.6rem; }
+.screen-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; }
+.entity-tile { border: 1px solid #2a2f38; border-radius: 10px; padding: 0.6rem 0.75rem; background: #1b1f27; display: flex; flex-direction: column; gap: 0.4rem; }
+.entity-tile-head { display: flex; align-items: center; gap: 0.4rem; }
+.entity-tile-title { font-weight: 600; }
+.sensor-card { display: flex; flex-direction: column; gap: 0.1rem; border: 1px solid #2a3140; border-radius: 8px; padding: 0.4rem 0.6rem; min-width: 96px; background: #161a21; }
+.sensor-card-label { font-size: 0.72rem; color: #9aa4b2; text-transform: uppercase; letter-spacing: 0.03em; }
+.sensor-card-value { font-size: 1.05rem; font-weight: 600; color: #e6e6e6; font-variant-numeric: tabular-nums; }
+.weather-header-widget { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+.weather-header-widget .weather-location { font-size: 0.78rem; color: #9aa4b2; }
+.weather-header-widget .weather-values { font-size: 0.95rem; color: #90caf9; font-variant-numeric: tabular-nums; }

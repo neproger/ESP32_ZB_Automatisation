@@ -224,7 +224,7 @@ static bool gi_match(const void *key, const void *record, void *ctx)
     (void)record;
     const ha_group_item_key_t *k = (const ha_group_item_key_t *)key;
     gi_ctx_t *find = (gi_ctx_t *)ctx;
-    if (k->state.entity == find->entity) {
+    if (k->entity == find->entity) {
         find->found = *k;
         find->has = true;
         return false;

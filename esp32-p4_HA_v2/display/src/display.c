@@ -145,8 +145,8 @@ static void item_title(size_t index, char *out, size_t out_size)
         snprintf(out, out_size, "%s", record->title);
         return;
     }
-    /* Заголовок виджета — имя Entity (A4: identity — entity_id, не устройство). */
-    const ha_entity_id_t entity = s_items.keys[index].state.entity;
+    /* Заголовок плитки — имя Entity (A4: identity — entity_id, не устройство). */
+    const ha_entity_id_t entity = s_items.keys[index].entity;
     const ha_entity_key_t key = {.id = entity};
     ha_entity_record_t record_entity = {0};
     if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, &key,
@@ -179,7 +179,7 @@ static ui_page_t *build_page(size_t group_index)
         for (size_t i = 0; i < count; ++i) {
             item_title(i, s_titles[i], sizeof(s_titles[i]));
             s_descs[i].title = s_titles[i];
-            s_descs[i].state = &s_items.keys[i].state;
+            s_descs[i].entity = s_items.keys[i].entity;
         }
     }
     return ui_page_create(s_domain, group_title, s_descs, count, on_page_gesture, NULL);

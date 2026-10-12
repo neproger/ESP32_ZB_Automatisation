@@ -107,7 +107,7 @@ region_size     = 2 * bank_size
 | `automation` | 32 | 8 | 144 | 8192 | 16384 |
 | `device_remove` | 32 | 8 | 8 | 4096 | 8192 |
 | `group` | 16 | 8 | 32 | 4096 | 8192 |
-| `group_item` | 128 | 24 | 36 | 16384 | 32768 |
+| `group_item` | 128 | 16 | 36 | 16384 | 32768 |
 
 `state` (256) и `location` (4) — RAM, flash-региона не занимают.
 

@@ -45,10 +45,11 @@ ui_widget_kind_t ui_widget_kind_for(ha_property_id_t property)
         return UI_WIDGET_LEVEL;
     case HA_PROPERTY_COLOR_TEMPERATURE:
         return UI_WIDGET_COLOR_TEMP;
-    case HA_PROPERTY_COLOR_HUE:
-    case HA_PROPERTY_COLOR_SATURATION:
-    case HA_PROPERTY_COLOR_X:
-    case HA_PROPERTY_COLOR_Y:
+    /* Цвет — командная capability (COLOR). Виджет держат и веб (semantics.js
+     * propertyWidget), и Display по одному и тому же свойству; состояние приходит
+     * отдельными COLOR_X/COLOR_Y и читается внутри виджета. HUE/SAT/X/Y — это
+     * состояния, а не capabilities, поэтому по ним виджет не строится. */
+    case HA_PROPERTY_COLOR:
         return UI_WIDGET_COLOR;
     case HA_PROPERTY_OCCUPANCY:
         return UI_WIDGET_INDICATOR;
@@ -440,7 +441,7 @@ static void on_switch_changed(lv_event_t *event)
     }
 }
 
-/* Слайдеры — в семантических единицах (level/яркость: %, цветовая температура: K);
+/* Слайдеры — в семантических единицах (яркость: %, цветовая температура: K);
  * кодировку ZCL делает мост. */
 static void on_slider_released(lv_event_t *event)
 {
@@ -578,6 +579,7 @@ static void apply_absent(ui_widget_t *widget)
     case UI_WIDGET_COLOR:
         lv_obj_set_style_bg_color(widget->swatch, lv_color_hex(UI_COL_CHIP), 0);
         lv_label_set_text(widget->hue_label, "—");
+        lv_label_set_text(widget->sat_label, "—");
         lv_slider_set_value(widget->slider, 0, LV_ANIM_OFF);
         lv_label_set_text(widget->value_label, "—");
         break;
