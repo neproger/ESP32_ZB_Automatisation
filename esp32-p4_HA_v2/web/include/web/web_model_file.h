@@ -12,11 +12,8 @@
 
 void web_model_file_init(void);
 
-/* Пометить файл «грязным» (вызывается при изменении MODEL-типа). */
+/* Пометить файл «грязным» (вызывается при изменении MODEL-типа). Пересборка — в фоне. */
 void web_model_file_mark_dirty(void);
-
-/* Дебаунс + пересборка (вызывается регулярно из задачи web). */
-void web_model_file_step(void);
 
 /* Отдать активный слот по GET /model.bin (chunked). */
 esp_err_t web_model_file_serve(httpd_req_t *req);

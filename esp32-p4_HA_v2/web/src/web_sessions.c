@@ -7,23 +7,25 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "web/web_proto.h"
 
 /*
- * Per-client доставка: очередь + stop-and-wait. Таблицу клиентов и очереди трогают и
- * httpd-задача (open/ack), и задача web (send/step) — доступ под мьютексом.
- * ВАЖНО: httpd-вызовы (send_frame_async / sess_trigger_close / ws_get_fd_info)
- * выполняются ВНЕ мьютекса — иначе возможен дедлок с httpd-lock.
+ * Per-client доставка: bounded-очередь + отправка бэк-ту-бэк (без stop-and-wait).
+ *
+ * WebSocket идёт поверх TCP: порядок и надёжность уже даёт TCP, поэтому пофреймовый
+ * ACK/stop-and-wait был лишним и превращал каждый кадр в round-trip (на медленном линке
+ * — в N×RTT). Очередь ограничена: клиент, не успевающий читать, закрывается.
+ *
+ * Таблицу и очереди трогают httpd-задача (open) и задача web (send/step) — доступ под
+ * мьютексом. httpd-вызовы (send_frame_async / sess_trigger_close / ws_get_fd_info) —
+ * ВНЕ мьютекса (иначе дедлок с httpd-lock).
  */
 
 #define WEB_MAX_CLIENTS 8
 #define WEB_TX_MAX_FRAMES 64
 #define WEB_TX_MAX_BYTES (16u * 1024u)
-#define WEB_TX_ACK_TIMEOUT_MS 1500u
-#define WEB_TX_MAX_RETRY 3u
 #define WEB_OPEN_GRACE_MS 1000u
-
-static const char *TAG = "web_sess";
 
 typedef struct web_tx_node {
     struct web_tx_node *next;
@@ -40,10 +42,6 @@ typedef struct {
     size_t frames;
     size_t bytes;
     uint16_t next_seq;
-    bool waiting;
-    uint16_t waiting_seq;
-    uint8_t retry;
-    TickType_t sent_at;
     TickType_t opened_at;
 } web_client_t;
 
@@ -83,7 +81,6 @@ static void client_clear_locked(web_client_t *c)
     c->fd = fd;
 }
 
-/* Помечает клиента свободным; возвращает fd для закрытия (вне лока) или -1. */
 static int client_drop_locked(web_client_t *c)
 {
     if (!c->used) {
@@ -116,26 +113,6 @@ static web_client_t *client_open_locked(int fd)
     return c;
 }
 
-static void web_tx_ack_locked(int fd, uint16_t seq)
-{
-    web_client_t *c = client_find_locked(fd);
-    if (c == NULL || !c->waiting || c->waiting_seq != seq) {
-        return;
-    }
-    web_tx_node_t *n = c->head;
-    if (n != NULL) {
-        c->head = n->next;
-        if (c->head == NULL) {
-            c->tail = NULL;
-        }
-        c->frames--;
-        c->bytes -= n->len;
-        vPortFree(n);
-    }
-    c->waiting = false;
-    c->retry = 0;
-}
-
 /* Возвращает fd для закрытия (вне лока) при переполнении/OOM, иначе -1. */
 static int web_tx_enqueue_locked(int fd, const uint8_t *frame, uint16_t len)
 {
@@ -150,7 +127,7 @@ static int web_tx_enqueue_locked(int fd, const uint8_t *frame, uint16_t len)
         }
     }
     if (c->frames >= WEB_TX_MAX_FRAMES || c->bytes + len > WEB_TX_MAX_BYTES) {
-        return client_drop_locked(c);
+        return client_drop_locked(c); /* не успевает читать → закрыть (reconnect) */
     }
     web_tx_node_t *n = (web_tx_node_t *)pvPortMalloc(sizeof(web_tx_node_t));
     if (n == NULL) {
@@ -193,12 +170,9 @@ void web_sessions_open(int fd)
 
 void web_sessions_ack(int fd, uint16_t seq)
 {
-    if (s_lock == NULL) {
-        return;
-    }
-    lock();
-    web_tx_ack_locked(fd, seq);
-    unlock();
+    /* TCP уже подтверждает доставку; пофреймовый ACK не нужен. No-op (совместимость). */
+    (void)fd;
+    (void)seq;
 }
 
 void web_sessions_send(int fd, uint8_t type, const void *payload, uint16_t len)
@@ -249,6 +223,7 @@ void web_sessions_broadcast(uint8_t type, const void *payload, uint16_t len)
     }
 }
 
+/* Отправка накопленного бэк-ту-бэк (без ожидания ACK). */
 void web_sessions_step(void)
 {
     if (s_lock == NULL) {
@@ -264,89 +239,68 @@ void web_sessions_step(void)
             continue;
         }
         const int fd = c->fd;
-        const bool head_present = (c->head != NULL);
-        const bool waiting = c->waiting;
-        const uint8_t retry = c->retry;
-        const TickType_t sent_at = c->sent_at;
         const TickType_t opened_at = c->opened_at;
         unlock();
 
+        const bool alive = (httpd_ws_get_fd_info(s_server, fd) == HTTPD_WS_CLIENT_WEBSOCKET);
         const bool past_grace =
             (xTaskGetTickCount() - opened_at) * portTICK_PERIOD_MS >= WEB_OPEN_GRACE_MS;
-        const bool alive = (httpd_ws_get_fd_info(s_server, fd) == HTTPD_WS_CLIENT_WEBSOCKET);
-        if (!alive && !head_present && !past_grace) {
-            continue; /* handshake ещё завершается */
-        }
+
         if (!alive) {
-            lock();
-            const int cf = client_drop_locked(c);
-            unlock();
-            if (cf >= 0) {
-                (void)httpd_sess_trigger_close(s_server, cf);
-            }
-            continue;
-        }
-
-        if (!head_present) {
-            lock();
-            if (c->used && c->fd == fd) {
-                c->waiting = false;
-            }
-            unlock();
-            continue;
-        }
-
-        bool need_send = false;
-        if (!waiting) {
-            need_send = true;
-        } else {
-            const uint32_t elapsed_ms =
-                (uint32_t)(xTaskGetTickCount() - sent_at) * portTICK_PERIOD_MS;
-            if (elapsed_ms >= WEB_TX_ACK_TIMEOUT_MS) {
-                if (retry >= WEB_TX_MAX_RETRY) {
-                    lock();
-                    const int cf = client_drop_locked(c);
-                    unlock();
-                    if (cf >= 0) {
-                        (void)httpd_sess_trigger_close(s_server, cf);
-                    }
-                    continue;
+            if (past_grace) {
+                lock();
+                const int cf = client_drop_locked(c);
+                unlock();
+                if (cf >= 0) {
+                    (void)httpd_sess_trigger_close(s_server, cf);
                 }
-                need_send = true;
             }
+            continue; /* handshake ещё завершается — подождём */
         }
 
-        if (need_send) {
+        int dropped = -1;
+        for (;;) {
             uint8_t local[WEB_PROTO_MAX_FRAME];
-            uint16_t send_len = 0;
+            uint16_t len = 0;
 
             lock();
             if (!c->used || c->fd != fd || c->head == NULL) {
                 unlock();
-                continue;
+                break;
             }
-            if (waiting) {
-                c->retry++;
+            web_tx_node_t *n = c->head;
+            c->head = n->next;
+            if (c->head == NULL) {
+                c->tail = NULL;
             }
-            send_len = c->head->len;
-            memcpy(local, c->head->data, send_len);
-            c->waiting = true;
-            c->waiting_seq = c->head->seq;
-            c->sent_at = xTaskGetTickCount();
+            c->frames--;
+            c->bytes -= n->len;
+            len = n->len;
+            memcpy(local, n->data, len);
+            vPortFree(n);
             unlock();
 
             httpd_ws_frame_t ws = {
                 .type = HTTPD_WS_TYPE_BINARY,
                 .payload = local,
-                .len = send_len,
+                .len = len,
             };
+            /* esp_http_server ставит NODELAY только вокруг HTTP-ответов; для WS включаем
+             * сами, иначе Nagle задерживает мелкие кадры до ACK (~RTT на кадр). */
+            int one = 1;
+            (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
             if (httpd_ws_send_frame_async(s_server, fd, &ws) != ESP_OK) {
-                lock();
-                const int cf = (c->used && c->fd == fd) ? client_drop_locked(c) : -1;
-                unlock();
-                if (cf >= 0) {
-                    (void)httpd_sess_trigger_close(s_server, cf);
-                }
+                dropped = fd;
+                break;
+            }
+        }
+
+        if (dropped >= 0) {
+            lock();
+            const int cf = (c->used && c->fd == fd) ? client_drop_locked(c) : -1;
+            unlock();
+            if (cf >= 0) {
+                (void)httpd_sess_trigger_close(s_server, cf);
             }
         }
     }

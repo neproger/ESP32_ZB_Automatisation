@@ -272,7 +272,6 @@ static void web_task(void *arg)
                 break;
             }
         }
-        web_model_file_step();
         web_sessions_step();
         if (!got) {
             vTaskDelay(pdMS_TO_TICKS(5));

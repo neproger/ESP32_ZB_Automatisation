@@ -14,9 +14,12 @@
 /*
  * Раздел "model": meta (1 сектор) + два слота (двойной буфер). Пересборка пишет в
  * НЕАКТИВНЫЙ слот, затем переключает meta — активный слот всё время цел. Запись/чтение
- * не под Domain-lock (собираем в RAM), httpd-стрим отдельно.
+ * не под Domain-lock (собираем в RAM).
  *
- * meta (20 байт): magic 'W','M','M','T' u32 | rev u32 | active u8 | reserved[3] |
+ * Пересборка — в ОТДЕЛЬНОЙ задаче: flash erase/write не должен стопорить WS-отправку в
+ * web-задаче. Producer (web-задача) только помечает dirty и будит задачу (notify).
+ *
+ * meta (20 байт): magic 'W','M','M','T' | rev u32 | active u8 | reserved[3] |
  *                 slot_len u32 | crc32 u32.
  */
 
@@ -28,11 +31,12 @@ static const char *TAG = "web_model";
 #define SLOT_A_OFF META_SIZE
 #define SLOT_B_OFF (META_SIZE + 0x4000u)
 #define SLOT_SIZE 0x4000u
+#define MODEL_REBUILD_STACK 4096
+#define MODEL_REBUILD_PRIO 2
+#define MODEL_REBUILD_DEBOUNCE_MS 500u
 
 static const esp_partition_t *s_part;
-static uint32_t s_rev;
-static bool s_dirty;
-static TickType_t s_dirty_at;
+static TaskHandle_t s_task;
 static bool s_ready;
 
 static void meta_pack(uint8_t m[20], uint32_t rev, uint8_t active, uint32_t len, uint32_t crc)
@@ -60,8 +64,7 @@ static void meta_pack(uint8_t m[20], uint32_t rev, uint8_t active, uint32_t len,
 static bool meta_read(uint32_t *rev, uint8_t *active, uint32_t *len)
 {
     uint8_t m[20];
-    if (s_part == NULL ||
-        esp_partition_read(s_part, META_OFF, m, sizeof(m)) != ESP_OK) {
+    if (s_part == NULL || esp_partition_read(s_part, META_OFF, m, sizeof(m)) != ESP_OK) {
         return false;
     }
     const uint32_t magic = (uint32_t)m[0] | ((uint32_t)m[1] << 8) | ((uint32_t)m[2] << 16) |
@@ -90,7 +93,7 @@ static esp_err_t model_rebuild(void)
     const size_t payload = web_projection_build_model(buf + WEB_SNAPSHOT_HDR_SIZE,
                                                       SLOT_SIZE - WEB_SNAPSHOT_HDR_SIZE, &count);
     if (payload == 0 && count != 0) {
-        free(buf); /* не влез в слот */
+        free(buf);
         return ESP_ERR_NO_MEM;
     }
     const size_t len = WEB_SNAPSHOT_HDR_SIZE + payload;
@@ -142,6 +145,20 @@ static esp_err_t model_rebuild(void)
     return ESP_OK;
 }
 
+static void model_rebuild_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        vTaskDelay(pdMS_TO_TICKS(MODEL_REBUILD_DEBOUNCE_MS));
+        (void)ulTaskNotifyTake(pdTRUE, 0); /* схлопнуть серию изменений */
+        if (model_rebuild() != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(1000)); /* повторить позже */
+            xTaskNotifyGive(s_task);
+        }
+    }
+}
+
 void web_model_file_init(void)
 {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
@@ -150,41 +167,24 @@ void web_model_file_init(void)
         ESP_LOGW(TAG, "partition 'model' not found; /model.bin disabled");
         return;
     }
+    s_ready = true;
+    if (xTaskCreate(model_rebuild_task, "model_file", MODEL_REBUILD_STACK, NULL,
+                    MODEL_REBUILD_PRIO, &s_task) != pdPASS) {
+        s_task = NULL;
+        return;
+    }
     uint32_t rev = 0;
     uint8_t active = 0;
     uint32_t len = 0;
     if (!meta_read(&rev, &active, &len) || len == 0) {
-        s_dirty = true; /* первый запуск — собрать сразу */
-        s_dirty_at = 0;
-    } else {
-        s_rev = rev;
+        web_model_file_mark_dirty(); /* первый запуск — собрать */
     }
-    s_ready = true;
 }
 
 void web_model_file_mark_dirty(void)
 {
-    if (!s_ready) {
-        return;
-    }
-    s_dirty = true;
-    s_dirty_at = xTaskGetTickCount();
-}
-
-void web_model_file_step(void)
-{
-    if (!s_ready || !s_dirty) {
-        return;
-    }
-    const uint32_t elapsed_ms =
-        (uint32_t)(xTaskGetTickCount() - s_dirty_at) * portTICK_PERIOD_MS;
-    if (elapsed_ms < 500u) {
-        return; /* дебаунс: собрать после затишья изменений */
-    }
-    if (model_rebuild() == ESP_OK) {
-        s_dirty = false;
-    } else {
-        s_dirty_at = xTaskGetTickCount(); /* повторить позже */
+    if (s_ready && s_task != NULL) {
+        xTaskNotifyGive(s_task);
     }
 }
 
@@ -198,11 +198,8 @@ esp_err_t web_model_file_serve(httpd_req_t *req)
     uint8_t active = 0;
     uint32_t len = 0;
     if (!meta_read(&rev, &active, &len) || len == 0) {
-        /* Ещё не собрано — соберём на месте (редкий путь, до первого изменения). */
-        if (model_rebuild() != ESP_OK || !meta_read(&rev, &active, &len) || len == 0) {
-            httpd_resp_send_500(req);
-            return ESP_FAIL;
-        }
+        httpd_resp_send_500(req); /* ещё не собрано (фон) → клиент уйдёт в fallback */
+        return ESP_FAIL;
     }
 
     httpd_resp_set_type(req, "application/octet-stream");
