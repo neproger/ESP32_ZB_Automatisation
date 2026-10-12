@@ -4,6 +4,12 @@
 
 #include <string.h>
 
+#include "esp_log.h"
+#include "esp_partition.h"
+#include "esp_rom_crc.h"
+
+static const char *TAG = "zb_store";
+
 #define ZB_DEVICE_STORE_MAX 32
 #define ZB_ENDPOINT_STORE_MAX 64
 
@@ -184,5 +190,179 @@ sys_error_t zigbee_device_remove(ha_device_uid_t uid)
             s_endpoints[i].used = false;
         }
     }
+    return SYS_OK;
+}
+
+/* --- обход (для restore-прохода) ---------------------------------------- */
+
+void zigbee_device_store_foreach(zigbee_device_visit_fn fn, void *ctx)
+{
+    if (fn == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < ZB_DEVICE_STORE_MAX; i++) {
+        if (s_devices[i].used && !fn(s_devices[i].uid, &s_devices[i].record, ctx)) {
+            return;
+        }
+    }
+}
+
+void zigbee_endpoints_foreach(ha_device_uid_t uid, zigbee_endpoint_visit_fn fn, void *ctx)
+{
+    if (fn == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < ZB_ENDPOINT_STORE_MAX; i++) {
+        if (s_endpoints[i].used && s_endpoints[i].uid == uid &&
+            !fn(s_endpoints[i].endpoint, &s_endpoints[i].record, ctx)) {
+            return;
+        }
+    }
+}
+
+uint8_t zigbee_endpoint_count(ha_device_uid_t uid)
+{
+    uint8_t n = 0;
+    for (size_t i = 0; i < ZB_ENDPOINT_STORE_MAX; i++) {
+        if (s_endpoints[i].used && s_endpoints[i].uid == uid) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* --- persistence (flash, раздел "zb_model") ------------------------------ */
+
+#define ZB_STORE_MAGIC0 'Z'
+#define ZB_STORE_MAGIC1 'M'
+#define ZB_STORE_MAGIC2 'O'
+#define ZB_STORE_MAGIC3 'D'
+#define ZB_STORE_VER 1u
+#define ZB_STORE_HDR 16u
+#define ZB_DEV_SIZE (8u + sizeof(ha_device_record_t))
+#define ZB_EP_SIZE (8u + 4u + sizeof(ha_endpoint_record_t))
+#define ZB_STORE_BLOB_MAX \
+    (ZB_STORE_HDR + ZB_DEVICE_STORE_MAX * ZB_DEV_SIZE + ZB_ENDPOINT_STORE_MAX * ZB_EP_SIZE)
+
+static uint8_t s_blob[ZB_STORE_BLOB_MAX];
+static const esp_partition_t *s_part;
+
+sys_error_t zigbee_device_store_save(void)
+{
+    if (s_part == NULL) {
+        s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+                                          "zb_model");
+    }
+    if (s_part == NULL) {
+        return zigbee_fail(SYS_CODE_NOT_FOUND);
+    }
+
+    memset(s_blob, 0, sizeof(s_blob));
+    size_t off = ZB_STORE_HDR;
+    uint16_t dev_count = 0;
+    uint16_t ep_count = 0;
+    for (size_t i = 0; i < ZB_DEVICE_STORE_MAX; i++) {
+        if (!s_devices[i].used) {
+            continue;
+        }
+        memcpy(s_blob + off, &s_devices[i].uid, 8);
+        memcpy(s_blob + off + 8, &s_devices[i].record, sizeof(ha_device_record_t));
+        off += ZB_DEV_SIZE;
+        dev_count++;
+    }
+    for (size_t i = 0; i < ZB_ENDPOINT_STORE_MAX; i++) {
+        if (!s_endpoints[i].used) {
+            continue;
+        }
+        memcpy(s_blob + off, &s_endpoints[i].uid, 8);
+        s_blob[off + 8] = s_endpoints[i].endpoint;
+        memcpy(s_blob + off + 12, &s_endpoints[i].record, sizeof(ha_endpoint_record_t));
+        off += ZB_EP_SIZE;
+        ep_count++;
+    }
+
+    s_blob[0] = ZB_STORE_MAGIC0;
+    s_blob[1] = ZB_STORE_MAGIC1;
+    s_blob[2] = ZB_STORE_MAGIC2;
+    s_blob[3] = ZB_STORE_MAGIC3;
+    s_blob[4] = (uint8_t)ZB_STORE_VER;
+    s_blob[5] = 0;
+    memcpy(s_blob + 6, &dev_count, 2);
+    memcpy(s_blob + 8, &ep_count, 2);
+    const uint32_t crc = esp_rom_crc32_le(0, s_blob + ZB_STORE_HDR, (uint32_t)(off - ZB_STORE_HDR));
+    memcpy(s_blob + 12, &crc, 4);
+
+    esp_err_t err = esp_partition_erase_range(s_part, 0, s_part->size);
+    if (err == ESP_OK) {
+        err = esp_partition_write(s_part, 0, s_blob, off);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "save failed: %s", esp_err_to_name(err));
+        return zigbee_fail(SYS_CODE_IO);
+    }
+    ESP_LOGI(TAG, "saved: devices=%u endpoints=%u (%u bytes)", (unsigned)dev_count,
+             (unsigned)ep_count, (unsigned)off);
+    return SYS_OK;
+}
+
+sys_error_t zigbee_device_store_load(void)
+{
+    if (s_part == NULL) {
+        s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+                                          "zb_model");
+    }
+    if (s_part == NULL) {
+        ESP_LOGW(TAG, "partition 'zb_model' not found; store not persisted");
+        return SYS_OK; /* пустой store — устройства переоткроются интервью */
+    }
+
+    uint8_t hdr[ZB_STORE_HDR];
+    if (esp_partition_read(s_part, 0, hdr, sizeof(hdr)) != ESP_OK) {
+        return zigbee_fail(SYS_CODE_IO);
+    }
+    if (hdr[0] != ZB_STORE_MAGIC0 || hdr[1] != ZB_STORE_MAGIC1 || hdr[2] != ZB_STORE_MAGIC2 ||
+        hdr[3] != ZB_STORE_MAGIC3 || hdr[4] != (uint8_t)ZB_STORE_VER) {
+        return SYS_OK; /* нет валидного блоба */
+    }
+    uint16_t dev_count = 0;
+    uint16_t ep_count = 0;
+    uint32_t crc_stored = 0;
+    memcpy(&dev_count, hdr + 6, 2);
+    memcpy(&ep_count, hdr + 8, 2);
+    memcpy(&crc_stored, hdr + 12, 4);
+    if (dev_count > ZB_DEVICE_STORE_MAX || ep_count > ZB_ENDPOINT_STORE_MAX) {
+        return SYS_OK;
+    }
+    const size_t len = ZB_STORE_HDR + (size_t)dev_count * ZB_DEV_SIZE +
+                       (size_t)ep_count * ZB_EP_SIZE;
+    if (esp_partition_read(s_part, 0, s_blob, len) != ESP_OK) {
+        return zigbee_fail(SYS_CODE_IO);
+    }
+    const uint32_t crc = esp_rom_crc32_le(0, s_blob + ZB_STORE_HDR, (uint32_t)(len - ZB_STORE_HDR));
+    if (crc != crc_stored) {
+        ESP_LOGW(TAG, "store crc mismatch; ignoring");
+        return SYS_OK;
+    }
+
+    memset(s_devices, 0, sizeof(s_devices));
+    memset(s_endpoints, 0, sizeof(s_endpoints));
+
+    size_t off = ZB_STORE_HDR;
+    for (uint16_t i = 0; i < dev_count; i++) {
+        zb_device_slot_t *slot = &s_devices[i];
+        slot->used = true;
+        memcpy(&slot->uid, s_blob + off, 8);
+        memcpy(&slot->record, s_blob + off + 8, sizeof(ha_device_record_t));
+        off += ZB_DEV_SIZE;
+    }
+    for (uint16_t i = 0; i < ep_count; i++) {
+        zb_endpoint_slot_t *slot = &s_endpoints[i];
+        slot->used = true;
+        memcpy(&slot->uid, s_blob + off, 8);
+        slot->endpoint = s_blob[off + 8];
+        memcpy(&slot->record, s_blob + off + 12, sizeof(ha_endpoint_record_t));
+        off += ZB_EP_SIZE;
+    }
+    ESP_LOGI(TAG, "loaded: devices=%u endpoints=%u", (unsigned)dev_count, (unsigned)ep_count);
     return SYS_OK;
 }

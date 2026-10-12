@@ -20,5 +20,7 @@ idf_component_register(
         device
         sys
         nvs_flash
+        esp_partition
+        esp_rom
         esp-zigbee-lib
 )

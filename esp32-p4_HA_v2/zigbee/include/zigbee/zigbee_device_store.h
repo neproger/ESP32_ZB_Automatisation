@@ -52,6 +52,25 @@ bool zigbee_topology_get(ha_device_uid_t uid, uint8_t endpoint, ha_endpoint_reco
  */
 sys_error_t zigbee_device_remove(ha_device_uid_t uid);
 
+/* --- persistence (flash) ------------------------------------------------- */
+
+/*
+ * Топология/модель устройств переживает reboot: сохраняем в раздел flash "zb_model"
+ * (блоб + magic/crc). После загрузки адаптер восстанавливает устройства без интервью.
+ */
+sys_error_t zigbee_device_store_load(void);
+sys_error_t zigbee_device_store_save(void);
+
+typedef bool (*zigbee_device_visit_fn)(ha_device_uid_t uid, const ha_device_record_t *record,
+                                       void *ctx);
+void zigbee_device_store_foreach(zigbee_device_visit_fn fn, void *ctx);
+
+typedef bool (*zigbee_endpoint_visit_fn)(uint8_t endpoint, const ha_endpoint_record_t *record,
+                                         void *ctx);
+void zigbee_endpoints_foreach(ha_device_uid_t uid, zigbee_endpoint_visit_fn fn, void *ctx);
+
+uint8_t zigbee_endpoint_count(ha_device_uid_t uid);
+
 #ifdef __cplusplus
 }
 #endif

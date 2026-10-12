@@ -19,6 +19,7 @@
 #include "ezbee/zdo/zdo_nwk_mgmt.h"
 #include "zigbee/zigbee.h"
 #include "zigbee/zigbee_binding.h"
+#include "zigbee/zigbee_device_store.h"
 #include "zigbee/zigbee_interview.h"
 #include "zigbee/zigbee_remove_mark.h"
 #include "ezbee/zcl/cluster/basic_desc.h"
@@ -527,6 +528,12 @@ static void interview_on_read_attr(const ezb_zcl_cmd_read_attr_rsp_message_t *me
 /* Устройство появилось в сети (announce или rejoin): запускаем интервью. */
 static void interview_begin(ha_device_uid_t uid, uint16_t short_addr)
 {
+    /* Устройство уже известно адаптеру (восстановлено из флеша) — топология есть,
+     * интервью не требуется. Устройство шлёт репорты по сохранённой на его стороне
+     * конфигурации; состояние прилетит как обычно. */
+    if (zigbee_device_has(uid)) {
+        return;
+    }
     interview_device_t *device = interview_slot(uid, short_addr);
     if (device == NULL) {
         ESP_LOGW(TAG, "interview table full: uid=%llx", (unsigned long long)uid);
@@ -595,11 +602,14 @@ static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, v
             continue;
         }
 
-        /* Первый репорт от устройства после старта хоста: заново применить reporting. */
+        /* Первый репорт от устройства после старта хоста. Если устройство уже известно
+         * (восстановлено из флеша) — интервью не нужно: оно шлёт репорты по сохранённой
+         * на его стороне конфигурации. Интервью — только для неизвестных. */
         if (!configured_seen(zcl_report.device_uid)) {
             configured_add(zcl_report.device_uid);
-            if (report->in.header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
-                ESP_LOGI(TAG, "reconfigure reporting: re-interview uid=%llx",
+            if (!zigbee_device_has(zcl_report.device_uid) &&
+                report->in.header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+                ESP_LOGI(TAG, "unknown device reported: interview uid=%llx",
                          (unsigned long long)zcl_report.device_uid);
                 interview_begin(zcl_report.device_uid, report->in.header->src_addr.u.short_addr);
             }

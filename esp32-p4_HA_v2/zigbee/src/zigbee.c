@@ -267,6 +267,69 @@ static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
     }
 }
 
+typedef struct {
+    ha_device_uid_t uid;
+    ha_device_id_t device_id;
+    uint8_t endpoint_total;
+} zigbee_publish_ctx_t;
+
+static bool zigbee_publish_endpoint(uint8_t endpoint, const ha_endpoint_record_t *record, void *ctx)
+{
+    (void)record;
+    zigbee_publish_ctx_t *c = (zigbee_publish_ctx_t *)ctx;
+    ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
+    if (!sys_ok(zigbee_entity_ensure(s_domain, c->uid, endpoint, c->endpoint_total, &entity_id))) {
+        return true;
+    }
+    if (c->device_id != HA_DEVICE_ID_NONE) {
+        (void)device_bind_entity(s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, c->device_id, entity_id);
+    }
+    zigbee_publish_capabilities(c->uid, endpoint, entity_id);
+    return true;
+}
+
+/*
+ * Публикует canonical Device + его Entity/capabilities из adapter-модели (store). Единый
+ * путь и для завершённого интервью, и для restore из флеша на старте (без радио).
+ */
+static void zigbee_publish_device(ha_device_uid_t uid)
+{
+    ha_device_record_t device = {0};
+    (void)zigbee_device_get(uid, &device);
+
+    ha_device_id_t device_id = HA_DEVICE_ID_NONE;
+    ha_device_desc_t desc = {0};
+    desc.source = ZIGBEE_SOURCE_ID;
+    (void)zb_device_native_id(uid, desc.native_id, sizeof(desc.native_id));
+    const char *label = device.name[0] != '\0' ? device.name : device.model;
+    size_t n = strlen(label);
+    if (n >= sizeof(desc.name)) {
+        n = sizeof(desc.name) - 1;
+    }
+    memcpy(desc.name, label, n);
+    if (sys_failed(device_register(s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, &desc, &device_id))) {
+        ESP_LOGW(TAG, "device register failed uid=%llx", (unsigned long long)uid);
+    }
+
+    zigbee_publish_ctx_t ctx = {
+        .uid = uid,
+        .device_id = device_id,
+        .endpoint_total = zigbee_endpoint_count(uid),
+    };
+    zigbee_endpoints_foreach(uid, zigbee_publish_endpoint, &ctx);
+}
+
+static bool zigbee_restore_device(ha_device_uid_t uid, const ha_device_record_t *record, void *ctx)
+{
+    (void)record;
+    (void)ctx;
+    if (zigbee_remove_mark_has(uid)) {
+        return true; /* помечено на удаление — не восстанавливаем */
+    }
+    zigbee_publish_device(uid);
+    return true;
+}
+
 static void zigbee_task(void *arg)
 {
     (void)arg;
@@ -314,53 +377,8 @@ static void zigbee_task(void *arg)
                 } else {
                     ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u",
                              (unsigned long long)result.uid, (unsigned)result.endpoint_count);
-
-                    /*
-                     * B4': Zigbee описывает нормализованный Device (root) и подаёт его в Device
-                     * service; ownership Entity задаёт Device service, не adapter. Пока —
-                     * плоский root без child Device.
-                     */
-                    ha_device_id_t device_id = HA_DEVICE_ID_NONE;
-                    ha_device_desc_t desc = {0};
-                    desc.source = ZIGBEE_SOURCE_ID;
-                    (void)zb_device_native_id(result.uid, desc.native_id, sizeof(desc.native_id));
-                    ha_device_record_t device = {0};
-                    if (zigbee_device_get(result.uid, &device)) {
-                        /* initial name: пользовательское имя, иначе модель (напр. ESP32C6-DISPLAY) */
-                        const char *label = device.name[0] != '\0' ? device.name : device.model;
-                        size_t n = strlen(label);
-                        if (n >= sizeof(desc.name)) {
-                            n = sizeof(desc.name) - 1;
-                        }
-                        memcpy(desc.name, label, n);
-                    }
-                    if (sys_failed(device_register(s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, &desc,
-                                                   &device_id))) {
-                        ESP_LOGW(TAG, "device register failed uid=%llx",
-                                 (unsigned long long)result.uid);
-                    } else {
-                        ESP_LOGI(TAG, "device: uid=%llx id=%llx native=%s",
-                                 (unsigned long long)result.uid, (unsigned long long)device_id,
-                                 desc.native_id);
-                    }
-
-                    /* A0.4/A6.1b/B4': endpoint → логическая Entity + ownership + capabilities. */
-                    for (uint8_t i = 0; i < result.endpoint_count; i++) {
-                        ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
-                        const uint8_t endpoint = result.endpoints[i].endpoint;
-                        if (sys_ok(zigbee_entity_ensure(s_domain, result.uid, endpoint,
-                                                        result.endpoint_count, &entity_id))) {
-                            if (device_id != HA_DEVICE_ID_NONE) {
-                                const sys_error_t bind = device_bind_entity(
-                                    s_domain, (uint8_t)ZIGBEE_DOMAIN_SOURCE, device_id, entity_id);
-                                ESP_LOGI(TAG, "entity->device: uid=%llx ep=%u entity=%llx device=%llx ok=%d",
-                                         (unsigned long long)result.uid, (unsigned)endpoint,
-                                         (unsigned long long)entity_id,
-                                         (unsigned long long)device_id, (int)sys_ok(bind));
-                            }
-                            zigbee_publish_capabilities(result.uid, endpoint, entity_id);
-                        }
-                    }
+                    zigbee_publish_device(result.uid);
+                    (void)zigbee_device_store_save();
                 }
             }
             continue;
@@ -386,6 +404,7 @@ static void zigbee_task(void *arg)
                     ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
                     zigbee_entity_forget(uid); /* adapter-private bindings больше не нужны */
                     zigbee_remove_mark_clear(uid); /* устройство ушло — снимаем пометку */
+                    (void)zigbee_device_store_save();
                 }
             }
             continue;
@@ -461,7 +480,20 @@ sys_error_t zigbee_start(domain_t *domain)
     }
     (void)device_register_remover(ZIGBEE_SOURCE_ID, zigbee_device_remover, NULL);
     /* Generic discovery → permit join: конкретику транспорта решает adapter. */
-    return domain_register_command(domain, HA_CMD_DISCOVERY, zigbee_permit_execute, NULL);
+    const sys_error_t permit =
+        domain_register_command(domain, HA_CMD_DISCOVERY, zigbee_permit_execute, NULL);
+    if (sys_failed(permit)) {
+        return permit;
+    }
+
+    /*
+     * Восстановить топологию/модель устройств из флеша: canonical Device/Entity/
+     * capabilities появляются сразу, без интервью (радио стартует позже). Известные
+     * устройства радио реинтервьюировать не будет.
+     */
+    (void)zigbee_device_store_load();
+    zigbee_device_store_foreach(zigbee_restore_device, NULL);
+    return SYS_OK;
 }
 
 sys_error_t zigbee_submit_report(const zigbee_report_t *report)
