@@ -1,7 +1,6 @@
 idf_component_register(
     SRCS
         "app_main.c"
-        "journal_console.c"
     INCLUDE_DIRS
         "."
     REQUIRES

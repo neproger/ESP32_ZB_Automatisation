@@ -52,6 +52,10 @@ static size_t s_group_index;
 static group_list_t s_groups;
 static item_list_t s_items;
 
+/* Отпечаток текущего экрана (состав/порядок/подписи). Меняется → пересобрать экран. */
+static uint32_t s_built_sig;
+static bool s_built_valid;
+
 /* Буферы под дескрипторы виджетов экрана: строятся в build_page и скопированы
  * ui_page_create (labels + entries). Живут статически — экран один, вызов один. */
 static ui_page_item_t s_descs[UI_MAX_ITEMS];
@@ -162,10 +166,39 @@ static void item_title(size_t index, char *out, size_t out_size)
 
 static void on_page_gesture(void *ctx, lv_dir_t dir);
 
+static uint32_t hash_update(uint32_t h, const void *data, size_t n)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    for (size_t i = 0; i < n; ++i) {
+        h = (h ^ p[i]) * 16777619u;
+    }
+    return h;
+}
+
+/* Отпечаток экрана: id/заголовок группы + состав, порядок и подписи плиток. Domain не шлёт
+ * нам событий об экранах — Display сам ловит правки из веба сравнением отпечатка. */
+static uint32_t screen_signature(size_t group_index)
+{
+    uint32_t h = 2166136261u;
+    if (group_index < s_groups.count) {
+        h = hash_update(h, &s_groups.ids[group_index].id, sizeof(s_groups.ids[group_index].id));
+        ha_group_record_t group = {0};
+        if (read_group(group_index, &group)) {
+            h = hash_update(h, group.title, strnlen(group.title, sizeof(group.title)));
+        }
+    }
+    for (size_t i = 0; i < s_items.count; ++i) {
+        h = hash_update(h, &s_items.keys[i].entity, sizeof(s_items.keys[i].entity));
+        h = hash_update(h, &s_items.recs[i].order, sizeof(s_items.recs[i].order));
+        h = hash_update(h, s_items.recs[i].title,
+                        strnlen(s_items.recs[i].title, sizeof(s_items.recs[i].title)));
+    }
+    return h;
+}
+
 static ui_page_t *build_page(size_t group_index)
 {
     char group_title[HA_GROUP_TITLE_MAX] = "Нет экранов";
-    size_t count = 0;
 
     if (group_index < s_groups.count) {
         ha_group_record_t group = {0};
@@ -174,14 +207,16 @@ static ui_page_t *build_page(size_t group_index)
         } else {
             snprintf(group_title, sizeof(group_title), "Экран");
         }
-        collect_items(group_index);
-        count = s_items.count;
-        for (size_t i = 0; i < count; ++i) {
-            item_title(i, s_titles[i], sizeof(s_titles[i]));
-            s_descs[i].title = s_titles[i];
-            s_descs[i].entity = s_items.keys[i].entity;
-        }
     }
+    collect_items(group_index); /* невалидный индекс → пустой список */
+    const size_t count = s_items.count;
+    for (size_t i = 0; i < count; ++i) {
+        item_title(i, s_titles[i], sizeof(s_titles[i]));
+        s_descs[i].title = s_titles[i];
+        s_descs[i].entity = s_items.keys[i].entity;
+    }
+    s_built_sig = screen_signature(group_index);
+    s_built_valid = true;
     return ui_page_create(s_domain, group_title, s_descs, count, on_page_gesture, NULL);
 }
 
@@ -414,17 +449,20 @@ void display_poll(void)
         ui_settings_apply();
         return;
     }
-    if (s_page == NULL) {
-        return;
-    }
     collect_groups();
     if (s_groups.count > 0 && s_group_index >= s_groups.count) {
         s_group_index = s_groups.count - 1;
+    }
+    collect_items(s_group_index);
+    /* Domain не шлёт событий об экранах: ловим правки состава/порядка/подписей из веба
+     * сравнением отпечатка и пересобираем экран (иначе новое видно только после свайпа). */
+    const bool changed = !s_built_valid || screen_signature(s_group_index) != s_built_sig;
+    if (changed || s_page == NULL) {
         load_page_now();
     } else {
         ui_page_apply(s_page);
     }
-    ui_nav_dots_update(s_groups.count, s_group_index);
+    ui_nav_dots_update(s_groups.count, (s_groups.count > 0) ? s_group_index : 0);
 }
 
 /* Семантическая команда по entity: adapter резолвит entity→addr и кодирует (HA_CMD_PROPERTY). */

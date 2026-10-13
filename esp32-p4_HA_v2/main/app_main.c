@@ -20,7 +20,6 @@
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_weather.h"
 #include "ha_model/ha_wifi.h"
-#include "journal_console.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "system/system.h"
@@ -368,9 +367,6 @@ void app_main(void)
     if (!start_step(domain_register_command(&s_domain, HA_CMD_ENTITY_RENAME,
                                             entity_rename_execute, NULL),
                     "register entity-rename")) {
-        return;
-    }
-    if (!start_step(journal_console_subscribe(&s_domain), "journal console")) {
         return;
     }
 
