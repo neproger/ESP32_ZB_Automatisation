@@ -31,6 +31,7 @@
 typedef enum {
     WIFI_REQ_SCAN = 0,
     WIFI_REQ_CONNECT = 1,
+    WIFI_REQ_RECONNECT = 2,
 } wifi_req_kind_t;
 
 typedef struct {
@@ -47,6 +48,8 @@ static domain_t *s_domain;
 static QueueHandle_t s_queue;
 /* Глушит автопереподключение на время скана: STA должен быть свободен. */
 static volatile bool s_reconnect_enabled = true;
+/* Счётчик подряд неудачных переподключений — задаёт backoff (AP отбивает частые ретраи). */
+static uint32_t s_fail_count = 0;
 
 static sys_error_t wifi_fail(sys_code_t code)
 {
@@ -258,6 +261,9 @@ static void do_connect(const char *ssid, const char *password)
     copy_str((char *)config.sta.password, sizeof(config.sta.password), password);
     /* Как в старом рабочем web-сервисе: порог WPA2. */
     config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    /* PMF не обязателен, но заявляем поддержку: часть AP иначе рвёт ассоциацию. */
+    config.sta.pmf_cfg.capable = true;
+    config.sta.pmf_cfg.required = false;
 
     put_status(HA_WIFI_STATE_CONNECTING, 0, 0, ssid);
     if (esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK) {
@@ -303,10 +309,14 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "disconnected");
+        const wifi_event_sta_disconnected_t *event =
+            (const wifi_event_sta_disconnected_t *)data;
+        ESP_LOGW(TAG, "disconnected: reason=%d rssi=%d", event ? (int)event->reason : -1,
+                 event ? (int)event->rssi : 0);
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
-        if (s_reconnect_enabled) {
-            esp_wifi_connect(); /* переподключение к текущей конфигурации */
+        if (s_reconnect_enabled && s_queue != NULL) {
+            wifi_request_t request = {.kind = WIFI_REQ_RECONNECT};
+            (void)xQueueSend(s_queue, &request, 0); /* backoff — в задаче, чтобы не долбить AP */
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
@@ -319,6 +329,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             rssi = ap.rssi;
         }
         put_status(HA_WIFI_STATE_CONNECTED, 1, rssi, ssid);
+        s_fail_count = 0; /* связь есть — сбрасываем backoff */
         clear_scan(); /* скан больше не нужен — подключение состоялось */
     }
 }
@@ -379,6 +390,25 @@ static sys_error_t cmd_connect(domain_command_t type, const void *args, size_t a
 
 /* --- Задача ------------------------------------------------------------- */
 
+/* Переподключение с экспоненциальным backoff (1,2,4,8,16 c): мгновенные ретраи AP
+ * воспринимает как флуд и отвечает reason=2 (AUTH_EXPIRE) даже при сильном сигнале. */
+static void do_reconnect(void)
+{
+    uint32_t shift = s_fail_count;
+    if (shift > 4) {
+        shift = 4;
+    }
+    const uint32_t delay_ms = 1000u << shift;
+    if (s_fail_count < UINT32_MAX) {
+        s_fail_count++;
+    }
+    ESP_LOGI(TAG, "reconnect in %u ms (attempt %u)", (unsigned)delay_ms, (unsigned)s_fail_count);
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    if (s_reconnect_enabled) {
+        esp_wifi_connect();
+    }
+}
+
 static void wifi_task(void *arg)
 {
     s_domain = (domain_t *)arg;
@@ -396,6 +426,8 @@ static void wifi_task(void *arg)
         }
         if (request.kind == WIFI_REQ_SCAN) {
             do_scan();
+        } else if (request.kind == WIFI_REQ_RECONNECT) {
+            do_reconnect();
         } else {
             do_connect(request.args.ssid, request.args.password);
         }
