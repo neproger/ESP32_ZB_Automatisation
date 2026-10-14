@@ -206,7 +206,7 @@ static const domain_entity_desc_t automation_desc = {
     .payload_size = sizeof(ha_rule_t),
     .capacity = APP_AUTOMATION_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "automation_v2", /* новая раскладка: старый ключ не читаем */
+    .persist_key = "automation_v3", /* новая раскладка (триггеры/действия списками): старый ключ не читаем */
 };
 
 /*
