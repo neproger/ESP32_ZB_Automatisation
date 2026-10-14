@@ -64,3 +64,8 @@ CONFIG_LV_GRADIENT_MAX_STOPS=8
 # SPI к C3: больше очереди, чтобы гасить всплески (Display/PSRAM).
 CONFIG_ESP_HOSTED_HOST_SPI_TX_Q_SIZE=24
 CONFIG_ESP_HOSTED_HOST_SPI_RX_Q_SIZE=24
+
+# Приоритет host-задач esp_hosted (default 22) под нагрузкой Wi-Fi вытеснял
+# Dispatcher(6)/zigbee(5) → задержки событий на всех потребителях. Держим его
+# не выше критичных задач (понижаем до уровня zigbee).
+CONFIG_ESP_HOSTED_HOST_DEFLT_TASK_PRIORITY=5

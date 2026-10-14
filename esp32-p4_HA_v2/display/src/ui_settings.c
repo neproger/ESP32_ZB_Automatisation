@@ -5,6 +5,7 @@
 
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_settings.h"
+#include "display/display.h"
 #include "ui_compat.h"
 #include "ui_icons.h"
 #include "ui_palette.h"
@@ -73,6 +74,7 @@ static void on_brightness(lv_event_t *event)
     (void)read_settings(&settings); /* нет записи (напр. после wipe) — стартуем с нулей */
     settings.brightness_pct = (uint8_t)lv_slider_get_value(s_brightness);
     write_settings(&settings);
+    display_set_brightness(settings.brightness_pct); /* сразу, без чтения settings в опросе */
 }
 
 static void on_timeout(lv_event_t *event)
@@ -185,7 +187,7 @@ lv_obj_t *ui_settings_create(domain_t *domain, ui_settings_back_cb back,
     /* Подсветка: подпись + слайдер + значение. */
     lv_obj_t *brightness_row = make_row(card);
     make_row_label(brightness_row, "Подсветка");
-    s_brightness = ui_slider_create_styled(brightness_row, 0, 100);
+    s_brightness = ui_slider_create_styled(brightness_row, 10, 100);
     lv_obj_set_flex_grow(s_brightness, 1);
     lv_obj_add_event_cb(s_brightness, on_brightness, LV_EVENT_RELEASED, NULL);
     s_brightness_value = lv_label_create(brightness_row);

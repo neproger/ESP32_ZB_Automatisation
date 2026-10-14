@@ -212,6 +212,31 @@ void ui_page_apply(ui_page_t *page)
     }
 }
 
+void ui_page_apply_key(ui_page_t *page, const ha_state_key_t *key, const ha_value_t *value,
+                       bool present)
+{
+    if (page == NULL || key == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < page->count; ++i) {
+        ui_page_entry_t *entry = &page->entries[i];
+        for (size_t w = 0; w < entry->count; ++w) {
+            const ha_state_key_t *state = &entry->states[w];
+            if (state->entity != key->entity) {
+                continue;
+            }
+            const bool color = (ui_widget_kind_for(state->property) == UI_WIDGET_COLOR);
+            const bool matches = (state->property == key->property) ||
+                                 (color && (key->property == HA_PROPERTY_COLOR_X ||
+                                            key->property == HA_PROPERTY_COLOR_Y ||
+                                            key->property == HA_PROPERTY_BRIGHTNESS));
+            if (matches) {
+                ui_widget_apply(entry->widgets[w], value, present);
+            }
+        }
+    }
+}
+
 lv_obj_t *ui_page_root(const ui_page_t *page)
 {
     return (page != NULL) ? page->root : NULL;

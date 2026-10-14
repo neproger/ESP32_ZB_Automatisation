@@ -13,6 +13,7 @@
 
 #include "domain/domain.h"
 #include "ha_model/ha_entity.h"
+#include "ha_model/ha_state.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,13 @@ ui_page_t *ui_page_create(domain_t *domain, const char *group_title,
 
 /* Прочитать состояния всех виджетов и применить. */
 void ui_page_apply(ui_page_t *page);
+
+/*
+ * Применить одно canonical-состояние (по факту Domain): виджетам экрана с этим
+ * (entity, property); цветные виджеты — также по X/Y/яркости.
+ */
+void ui_page_apply_key(ui_page_t *page, const ha_state_key_t *key, const ha_value_t *value,
+                       bool present);
 
 lv_obj_t *ui_page_root(const ui_page_t *page);
 

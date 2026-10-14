@@ -327,3 +327,15 @@ sys_error_t domain_post(domain_t *domain, domain_command_t type, const void *arg
     (void)meta;
     return SYS_OK;
 }
+
+/* Превью: подписка не реализована — Display один раз рисует мок-данные. */
+sys_error_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t *desc,
+                             domain_subscription_t **out_sub)
+{
+    (void)domain;
+    (void)desc;
+    if (out_sub != NULL) {
+        *out_sub = NULL;
+    }
+    return SYS_OK;
+}

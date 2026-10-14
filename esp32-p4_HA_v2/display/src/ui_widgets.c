@@ -33,6 +33,11 @@ struct ui_widget {
     lv_timer_t *cooldown; /* SWITCH: снять DISABLED после нажатия/таймаута */
     bool has_last; /* SWITCH: есть сохранённое значение */
     uint32_t last_bits;
+
+    /* Последнее применённое значение — пропускаем apply без изменений (экономим редраа). */
+    bool applied_valid;
+    bool applied_present;
+    uint32_t applied_bits;
 };
 
 /* Форма виджета — по семантике свойства, а не по ZCL-координате. */
@@ -647,6 +652,23 @@ static bool widget_control_pressed(const ui_widget_t *widget)
     return false;
 }
 
+/* Комбинированный отпечаток цвета (X/Y + яркость) — чтобы не перерисовывать цвет зря. */
+static uint32_t color_bits(ui_widget_t *widget)
+{
+    ha_value_t value = {0};
+    uint32_t h = 2166136261u;
+    if (read_property(widget->domain, widget->state.entity, HA_PROPERTY_COLOR_X, &value)) {
+        h = h * 16777619u ^ value_bits(&value);
+    }
+    if (read_property(widget->domain, widget->state.entity, HA_PROPERTY_COLOR_Y, &value)) {
+        h = h * 16777619u ^ value_bits(&value);
+    }
+    if (read_property(widget->domain, widget->state.entity, HA_PROPERTY_BRIGHTNESS, &value)) {
+        h = h * 16777619u ^ value_bits(&value);
+    }
+    return h;
+}
+
 void ui_widget_apply(ui_widget_t *widget, const ha_value_t *value, bool present)
 {
     if (widget == NULL || widget->obj == NULL) {
@@ -656,6 +678,19 @@ void ui_widget_apply(ui_widget_t *widget, const ha_value_t *value, bool present)
      * между пальцем и последним отчётом. */
     if (widget_control_pressed(widget)) {
         return;
+    }
+    /* Без изменений — не инвалидируем: иначе при avoid_tearing полный редраа каждый тик. */
+    if (widget->kind != UI_WIDGET_SWITCH) {
+        const uint32_t bits = (widget->kind == UI_WIDGET_COLOR)
+                                  ? color_bits(widget)
+                                  : ((present && value != NULL) ? value_bits(value) : 0);
+        if (widget->applied_valid && widget->applied_present == present &&
+            widget->applied_bits == bits) {
+            return;
+        }
+        widget->applied_valid = true;
+        widget->applied_present = present;
+        widget->applied_bits = bits;
     }
     if (widget->kind == UI_WIDGET_COLOR) {
         apply_color(widget);

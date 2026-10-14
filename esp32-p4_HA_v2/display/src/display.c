@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
+#include "domain/domain.h"
+#include "domain/domain_event.h"
 #include "lvgl.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
@@ -22,8 +27,9 @@
 #include "ui_style.h"
 #include "ui_wifi.h"
 
-#define DISPLAY_POLL_PERIOD_MS 250
+#define DISPLAY_DRAIN_PERIOD_MS 50
 #define DISPLAY_ANIM_MS 220
+#define DISPLAY_INBOX_LEN 32
 #define UI_MAX_GROUPS 24
 #define UI_MAX_ITEMS 128
 #define UI_ITEM_TITLE_MAX 64
@@ -52,9 +58,13 @@ static size_t s_group_index;
 static group_list_t s_groups;
 static item_list_t s_items;
 
-/* Отпечаток текущего экрана (состав/порядок/подписи). Меняется → пересобрать экран. */
-static uint32_t s_built_sig;
-static bool s_built_valid;
+/* Подписка Domain: факты приходят в inbox, обрабатываем в задаче LVGL (drain). */
+static QueueHandle_t s_inbox;
+static bool s_screen_dirty;
+
+/* Привод подсветки, регистрируемый портом; -1 = ещё не применено. */
+static display_brightness_fn s_brightness_fn;
+static int s_brightness_applied = -1;
 
 /* Буферы под дескрипторы виджетов экрана: строятся в build_page и скопированы
  * ui_page_create (labels + entries). Живут статически — экран один, вызов один. */
@@ -166,36 +176,6 @@ static void item_title(size_t index, char *out, size_t out_size)
 
 static void on_page_gesture(void *ctx, lv_dir_t dir);
 
-static uint32_t hash_update(uint32_t h, const void *data, size_t n)
-{
-    const uint8_t *p = (const uint8_t *)data;
-    for (size_t i = 0; i < n; ++i) {
-        h = (h ^ p[i]) * 16777619u;
-    }
-    return h;
-}
-
-/* Отпечаток экрана: id/заголовок группы + состав, порядок и подписи плиток. Domain не шлёт
- * нам событий об экранах — Display сам ловит правки из веба сравнением отпечатка. */
-static uint32_t screen_signature(size_t group_index)
-{
-    uint32_t h = 2166136261u;
-    if (group_index < s_groups.count) {
-        h = hash_update(h, &s_groups.ids[group_index].id, sizeof(s_groups.ids[group_index].id));
-        ha_group_record_t group = {0};
-        if (read_group(group_index, &group)) {
-            h = hash_update(h, group.title, strnlen(group.title, sizeof(group.title)));
-        }
-    }
-    for (size_t i = 0; i < s_items.count; ++i) {
-        h = hash_update(h, &s_items.keys[i].entity, sizeof(s_items.keys[i].entity));
-        h = hash_update(h, &s_items.recs[i].order, sizeof(s_items.recs[i].order));
-        h = hash_update(h, s_items.recs[i].title,
-                        strnlen(s_items.recs[i].title, sizeof(s_items.recs[i].title)));
-    }
-    return h;
-}
-
 static ui_page_t *build_page(size_t group_index)
 {
     char group_title[HA_GROUP_TITLE_MAX] = "Нет экранов";
@@ -215,14 +195,16 @@ static ui_page_t *build_page(size_t group_index)
         s_descs[i].title = s_titles[i];
         s_descs[i].entity = s_items.keys[i].entity;
     }
-    s_built_sig = screen_signature(group_index);
-    s_built_valid = true;
     return ui_page_create(s_domain, group_title, s_descs, count, on_page_gesture, NULL);
 }
 
-/* Экран без анимации: старт и восстановление при рассинхроне (группу удалили). */
+/* Экран без анимации: старт, восстановление при рассинхроне и пересборка по фактам. */
 static void load_page_now(void)
 {
+    collect_groups();
+    if (s_groups.count > 0 && s_group_index >= s_groups.count) {
+        s_group_index = s_groups.count - 1;
+    }
     ui_page_t *next = build_page(s_group_index);
     if (next == NULL) {
         return;
@@ -236,6 +218,8 @@ static void load_page_now(void)
             lv_obj_delete(root);
         }
     }
+    ui_page_apply(s_page); /* разовая подсевка значений после сборки */
+    ui_nav_dots_update(s_groups.count, (s_groups.count > 0) ? s_group_index : 0);
 }
 
 static void navigate(int group_delta)
@@ -271,6 +255,7 @@ static void navigate(int group_delta)
                         (group_delta > 0) ? LV_SCREEN_LOAD_ANIM_MOVE_LEFT
                                           : LV_SCREEN_LOAD_ANIM_MOVE_RIGHT,
                         DISPLAY_ANIM_MS, 0, true);
+    ui_page_apply(s_page); /* подсевка значений нового экрана */
 }
 
 static void step_group(int delta)
@@ -302,6 +287,7 @@ static void return_to_groups(void)
     }
     s_page = page;
     lv_screen_load_anim(ui_page_root(page), LV_SCREEN_LOAD_ANIM_MOVE_RIGHT, DISPLAY_ANIM_MS, 0, true);
+    ui_page_apply(s_page);
     ui_nav_dots_update(s_groups.count, s_group_index);
 }
 
@@ -342,10 +328,10 @@ static void on_menu(ui_menu_item_t item)
 
 /* --- публичный API --- */
 
-static void poll_timer_cb(lv_timer_t *timer)
+static void drain_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
-    display_poll();
+    display_process_events();
 }
 
 /*
@@ -375,6 +361,37 @@ static ui_palette_id_t read_settings_palette(void)
     return UI_PALETTE_RETRO;
 }
 
+void display_register_brightness(display_brightness_fn fn)
+{
+    s_brightness_fn = fn;
+}
+
+void display_set_brightness(uint8_t percent)
+{
+    if (s_brightness_fn != NULL) {
+        s_brightness_fn(percent);
+    }
+}
+
+/* Подсветка из settings (пишет экран настроек или веб). Применяем только на изменение.
+ * 0 в записи — «не задано» (легаси-дефолт) → полная яркость; слайдер ограничен снизу. */
+static void apply_settings_brightness(void)
+{
+    const ha_settings_key_t key = {.id = HA_SETTINGS_ID};
+    ha_settings_record_t settings = {0};
+    int target =
+        sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_SETTINGS, &key, &settings))
+            ? (int)settings.brightness_pct
+            : 100;
+    if (target <= 0) {
+        target = 100;
+    }
+    if (target != s_brightness_applied) {
+        display_set_brightness((uint8_t)target);
+        s_brightness_applied = target;
+    }
+}
+
 /* Верхний слой (строка состояния, точки, меню) — общий для старта и смены темы. */
 static void create_chrome(void)
 {
@@ -388,6 +405,7 @@ static void create_chrome(void)
 static void build_ui(void)
 {
     create_chrome();
+    ui_status_bar_apply();
     collect_groups();
     s_group_index = 0;
     load_page_now();
@@ -415,13 +433,15 @@ static void reload_ui_async(void *unused)
 
     /* После пересборки прогнать один цикл: заполнить короткие метки (строка состояния,
      * виджеты экрана) актуальными данными из Domain — без «костылей на каждый виджет». */
-    display_poll();
+    display_process_events();
 }
 
 void display_request_theme_reload(void)
 {
     (void)lv_async_call(reload_ui_async, NULL);
 }
+
+static void display_subscribe(domain_t *domain);
 
 void display_start(domain_t *domain)
 {
@@ -430,39 +450,109 @@ void display_start(domain_t *domain)
     }
     s_domain = domain;
     ui_palette_set(read_settings_palette());
+    apply_settings_brightness();
+    display_subscribe(domain); /* до build_ui: не теряем факты во время сборки */
     build_ui();
 
-    (void)lv_timer_create(poll_timer_cb, DISPLAY_POLL_PERIOD_MS, NULL);
+    (void)lv_timer_create(drain_timer_cb, DISPLAY_DRAIN_PERIOD_MS, NULL);
 }
 
-void display_poll(void)
+/* --- подписка Domain ---------------------------------------------------- */
+
+static bool display_accept(const domain_event_t *event, void *ctx)
 {
-    if (s_domain == NULL) {
+    (void)ctx;
+    if (s_inbox == NULL) {
+        return false;
+    }
+    return xQueueSend(s_inbox, event, 0) == pdTRUE;
+}
+
+static void display_subscribe(domain_t *domain)
+{
+    s_inbox = xQueueCreate(DISPLAY_INBOX_LEN, sizeof(domain_event_t));
+    if (s_inbox == NULL) {
         return;
     }
-    ui_status_bar_apply();
-    if (s_screen_mode == SCREEN_WIFI) {
-        ui_wifi_apply();
+    domain_subscription_desc_t desc = {0};
+    desc.kind_mask = (1u << (uint32_t)DOMAIN_FACT_ENTITY_UPSERTED) |
+                     (1u << (uint32_t)DOMAIN_FACT_ENTITY_REMOVED) |
+                     (1u << (uint32_t)DOMAIN_FACT_EVENT);
+    desc.source_mask = 0; /* любые источники */
+    desc.entity = 0;      /* любые типы */
+    desc.try_push = display_accept;
+    desc.ctx = NULL;
+    domain_subscription_t *sub = NULL;
+    (void)domain_subscribe(domain, &desc, &sub);
+}
+
+/* Один факт: обновляем то, что от него зависит (без чтений «на всякий случай»). */
+static void process_fact(const domain_event_t *event)
+{
+    const bool upserted = (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_UPSERTED);
+    const bool removed = (event->kind == (uint8_t)DOMAIN_FACT_ENTITY_REMOVED);
+    if (!upserted && !removed) {
+        return; /* Display рендерит изменение сущностей, не события */
+    }
+    switch ((ha_entity_t)event->entity) {
+    case HA_ENTITY_GROUP:
+    case HA_ENTITY_GROUP_ITEM:
+    case HA_ENTITY_ENTITY:
+    case HA_ENTITY_CAPABILITIES:
+        s_screen_dirty = true; /* состав/имя/возможности → пересобрать текущий экран */
+        break;
+    case HA_ENTITY_PROPERTY_STATE: {
+        ha_state_key_t key = {0};
+        if (event->key_size == sizeof(key)) {
+            memcpy(&key, event->key, sizeof(key));
+        }
+        if (s_screen_mode == SCREEN_GROUPS && s_page != NULL) {
+            ha_state_record_t record = {0};
+            const bool present =
+                upserted && sys_ok(domain_entity_get(
+                                s_domain, (domain_entity_t)HA_ENTITY_PROPERTY_STATE, &key, &record));
+            ui_page_apply_key(s_page, &key, &record.value, present);
+        }
+        if (key.entity == ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM)) {
+            ui_status_bar_apply(); /* время системной Entity */
+        }
+        break;
+    }
+    case HA_ENTITY_WEATHER:
+    case HA_ENTITY_LOCATION:
+        ui_status_bar_apply();
+        break;
+    case HA_ENTITY_SETTINGS:
+        apply_settings_brightness();
+        if (s_screen_mode == SCREEN_SETTINGS) {
+            ui_settings_apply();
+        }
+        break;
+    case HA_ENTITY_WIFI_SCAN:
+    case HA_ENTITY_WIFI_STATUS:
+        if (s_screen_mode == SCREEN_WIFI) {
+            ui_wifi_apply();
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* Дренаж inbox: вызывается из задачи LVGL. Domain читаем только по пришедшим фактам. */
+void display_process_events(void)
+{
+    if (s_domain == NULL || s_inbox == NULL) {
         return;
     }
-    if (s_screen_mode == SCREEN_SETTINGS) {
-        ui_settings_apply();
-        return;
+    domain_event_t event = {0};
+    while (xQueueReceive(s_inbox, &event, 0) == pdTRUE) {
+        process_fact(&event);
     }
-    collect_groups();
-    if (s_groups.count > 0 && s_group_index >= s_groups.count) {
-        s_group_index = s_groups.count - 1;
-    }
-    collect_items(s_group_index);
-    /* Domain не шлёт событий об экранах: ловим правки состава/порядка/подписей из веба
-     * сравнением отпечатка и пересобираем экран (иначе новое видно только после свайпа). */
-    const bool changed = !s_built_valid || screen_signature(s_group_index) != s_built_sig;
-    if (changed || s_page == NULL) {
+    if (s_screen_dirty && s_screen_mode == SCREEN_GROUPS) {
+        s_screen_dirty = false;
         load_page_now();
-    } else {
-        ui_page_apply(s_page);
     }
-    ui_nav_dots_update(s_groups.count, (s_groups.count > 0) ? s_group_index : 0);
 }
 
 /* Семантическая команда по entity: adapter резолвит entity→addr и кодирует (HA_CMD_PROPERTY). */

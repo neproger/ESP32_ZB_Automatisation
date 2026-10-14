@@ -271,6 +271,16 @@ static lv_display_t *lvgl_start(void)
     return lv_disp;
 }
 
+/* Процент (0..100) → duty (0..255). Порт регистрирует привод; UI задаёт процент.
+ * Малые ненулевые значения поднимает backlight_set до минимально видимого. */
+static void backlight_apply_percent(uint8_t percent)
+{
+    if (percent > 100) {
+        percent = 100;
+    }
+    backlight_set((uint8_t)((unsigned)percent * 255u / 100u));
+}
+
 void display_p4_start(domain_t *domain)
 {
     if (domain == NULL) {
@@ -288,7 +298,8 @@ void display_p4_start(domain_t *domain)
         return;
     }
 
-    backlight_set(255);
+    display_register_brightness(backlight_apply_percent);
+    backlight_set(255); /* до применения сохранённой яркости — не мигаем чёрным */
 
     if (lvgl_port_lock(0)) {
         display_start(domain);
