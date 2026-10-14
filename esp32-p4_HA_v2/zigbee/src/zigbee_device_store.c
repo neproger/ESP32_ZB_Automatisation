@@ -4,11 +4,13 @@
 
 #include <string.h>
 
+#if defined(ESP_PLATFORM)
 #include "esp_log.h"
 #include "esp_partition.h"
 #include "esp_rom_crc.h"
 
 static const char *TAG = "zb_store";
+#endif
 
 #define ZB_DEVICE_STORE_MAX 32
 #define ZB_ENDPOINT_STORE_MAX 64
@@ -231,6 +233,8 @@ uint8_t zigbee_endpoint_count(ha_device_uid_t uid)
     return n;
 }
 
+/* Persistence — только на железе (flash-раздел); host-тесты компилируют RAM-часть. */
+#if defined(ESP_PLATFORM)
 /* --- persistence (flash, раздел "zb_model") ------------------------------ */
 
 #define ZB_STORE_MAGIC0 'Z'
@@ -366,3 +370,14 @@ sys_error_t zigbee_device_store_load(void)
     ESP_LOGI(TAG, "loaded: devices=%u endpoints=%u", (unsigned)dev_count, (unsigned)ep_count);
     return SYS_OK;
 }
+#else
+sys_error_t zigbee_device_store_save(void)
+{
+    return SYS_OK; /* host: flash нет */
+}
+
+sys_error_t zigbee_device_store_load(void)
+{
+    return SYS_OK;
+}
+#endif
