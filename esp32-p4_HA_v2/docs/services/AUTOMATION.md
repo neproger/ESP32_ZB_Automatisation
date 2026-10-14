@@ -45,23 +45,25 @@ payload ring.
 ## 4. Форма правила
 
 Правило — entity `automation`; ключ — числовой id. Форма — entity-native `ha_rule_t`
-(`ha_model/ha_rule.h`); ссылки — `entity_id`, не физические адреса.
+(`ha_model/ha_rule.h`); ссылки — `entity_id`, не физические адреса. **Списки**: до
+`HA_RULE_TRIGGERS_MAX`=4 триггеров и до `HA_RULE_ACTIONS_MAX`=4 действий на правило;
+**любой** триггер запускает **все** действия (условия — общие).
 
 ```text
-trigger     вид триггера + параметры:
+triggers[]  вид триггера + параметры (до 4):
               DEVICE_EVENT — событие Entity: entity (SOURCE — «источник»), event_id
               TIME         — «будильник»: minutes_of_day (0..1439) + weekday_mask (бит 0=Пн..6=Вс)
               STATE        — состояние свойства: entity (SOURCE — источник), property,
                              op, edge, value, value2
-conditions  список условий (AND): entity (SOURCE — источник), property, op, value, value2
-action      canonical действие: entity (SOURCE — источник), property, action,
+conditions  список условий (AND, до 4): entity (SOURCE — источник), property, op, value, value2
+actions[]   canonical действия (до 4): entity (SOURCE — источник), property, action,
             value_kind[, SCALAR: kind+value | XY: x+y]
 ```
 
-`HA_ENTITY_ID_SOURCE` (в действии и условиях) означает «то же Entity, что вызвало событие».
+`HA_ENTITY_ID_SOURCE` (в триггере, действиях и условиях) означает «то же Entity, что вызвало событие».
 
-**Loop-guard.** STATE-правило, чьё действие адресует то же `(entity, property)`, что и
-триггер, пропускается (иначе команда → репорт → снова триггер = бесконечная петля).
+**Loop-guard.** STATE-триггер правила, чьё действие адресует то же `(entity, property)`, что и
+триггер, пропускается для этого действия (иначе команда → репорт → снова триггер = петля).
 
 **Виды триггера** (`ha_automation_trigger_kind_t`) в одном байте записи; расширяемо.
 `TIME` проверяется на минутном тике системной Entity (`SYSTEM.md`): Automation читает

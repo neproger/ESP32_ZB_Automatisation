@@ -38,12 +38,13 @@ static QueueHandle_t s_inbox;
 
 /* --- runtime index ------------------------------------------------------- */
 
-#define AUTOMATION_INDEX_MAX 128
+#define AUTOMATION_INDEX_MAX 256
 
 typedef struct {
     uint64_t rule_id;
-    uint8_t trigger_kind; /* ha_automation_trigger_kind_t */
-    ha_entity_id_t entity;  /* EVENT/STATE; HA_ENTITY_ID_SOURCE = источник */
+    uint8_t trigger_index; /* индекс триггера в правиле */
+    uint8_t trigger_kind;  /* ha_automation_trigger_kind_t */
+    ha_entity_id_t entity; /* EVENT/STATE; HA_ENTITY_ID_SOURCE = источник */
     ha_property_id_t property;
     ha_event_id_t event_id;
 } automation_index_entry_t;
@@ -58,25 +59,32 @@ static bool automation_index_add(const void *key, const void *record, void *ctx)
     if (rule->enabled == 0) {
         return true; /* выключенные правила в индексе не нужны */
     }
-    if (s_index_count >= AUTOMATION_INDEX_MAX) {
-        ESP_LOGW(TAG, "index full (%d); extra rules not indexed", AUTOMATION_INDEX_MAX);
-        return true;
-    }
-    automation_index_entry_t *entry = &s_index[s_index_count++];
-    entry->rule_id = ((const ha_automation_key_t *)key)->id;
-    entry->trigger_kind = rule->trigger.kind;
-    entry->entity = HA_ENTITY_ID_NONE;
-    entry->property = HA_PROPERTY_UNKNOWN;
-    entry->event_id = HA_EVENT_NONE;
-    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT ||
-        rule->trigger.kind == (uint8_t)HA_TRIGGER_STATE) {
-        entry->entity = rule->trigger.entity;
-    }
-    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_STATE) {
-        entry->property = rule->trigger.property;
-    }
-    if (rule->trigger.kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
-        entry->event_id = rule->trigger.event_id;
+    const uint64_t rule_id = ((const ha_automation_key_t *)key)->id;
+    const uint8_t count =
+        (rule->trigger_count > HA_RULE_TRIGGERS_MAX) ? HA_RULE_TRIGGERS_MAX : rule->trigger_count;
+    for (uint8_t t = 0; t < count; t++) {
+        if (s_index_count >= AUTOMATION_INDEX_MAX) {
+            ESP_LOGW(TAG, "index full (%d); extra triggers not indexed", AUTOMATION_INDEX_MAX);
+            return true;
+        }
+        const ha_rule_trigger_t *trigger = &rule->triggers[t];
+        automation_index_entry_t *entry = &s_index[s_index_count++];
+        entry->rule_id = rule_id;
+        entry->trigger_index = t;
+        entry->trigger_kind = trigger->kind;
+        entry->entity = HA_ENTITY_ID_NONE;
+        entry->property = HA_PROPERTY_UNKNOWN;
+        entry->event_id = HA_EVENT_NONE;
+        if (trigger->kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT ||
+            trigger->kind == (uint8_t)HA_TRIGGER_STATE) {
+            entry->entity = trigger->entity;
+        }
+        if (trigger->kind == (uint8_t)HA_TRIGGER_STATE) {
+            entry->property = trigger->property;
+        }
+        if (trigger->kind == (uint8_t)HA_TRIGGER_DEVICE_EVENT) {
+            entry->event_id = trigger->event_id;
+        }
     }
     return true;
 }
@@ -149,7 +157,7 @@ static bool automation_conditions_pass(ha_entity_id_t source_entity, const ha_ru
     return true;
 }
 
-static void automation_fire(uint64_t rule_id, ha_entity_id_t source_entity)
+static void automation_fire(uint64_t rule_id, uint8_t trigger_index, ha_entity_id_t source_entity)
 {
     ha_rule_t rule = {0};
     if (!automation_rule_get(rule_id, &rule)) {
@@ -159,27 +167,45 @@ static void automation_fire(uint64_t rule_id, ha_entity_id_t source_entity)
         ESP_LOGI(TAG, "rule %llu blocked by conditions", (unsigned long long)rule_id);
         return;
     }
-    ha_property_command_t command = {0};
-    if (!automation_rule_sem_action(&rule, source_entity, &command)) {
-        ESP_LOGW(TAG, "rule %llu action not resolvable", (unsigned long long)rule_id);
-        return;
-    }
 
-    domain_fact_meta_t meta = {0};
-    meta.source = (uint8_t)DOMAIN_SOURCE_AUTOMATION;
-    meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
-    meta.value.v.u32 = command.action;
-    const sys_error_t err =
-        domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, &meta);
-    if (sys_failed(err)) {
-        ESP_LOGW(TAG, "rule %llu command not posted: entity=%llx err=%u",
+    const ha_rule_trigger_t *trigger = &rule.triggers[trigger_index];
+    const uint8_t count =
+        (rule.action_count > HA_RULE_ACTIONS_MAX) ? HA_RULE_ACTIONS_MAX : rule.action_count;
+    for (uint8_t i = 0; i < count; i++) {
+        ha_property_command_t command = {0};
+        if (!automation_rule_sem_action(&rule.actions[i], source_entity, &command)) {
+            ESP_LOGW(TAG, "rule %llu action %u not resolvable", (unsigned long long)rule_id,
+                     (unsigned)i);
+            continue;
+        }
+        /* Loop-guard: STATE-правило, чьё действие адресует то же (entity, property), что и
+         * сработавший триггер, зациклилось бы (команда → репорт → снова триггер). */
+        if (trigger->kind == (uint8_t)HA_TRIGGER_STATE) {
+            const ha_entity_id_t trig_entity =
+                automation_rule_sem_resolve(trigger->entity, source_entity);
+            if (command.entity == trig_entity && command.property == trigger->property) {
+                ESP_LOGW(TAG, "rule %llu action %u self-trigger skipped", (unsigned long long)rule_id,
+                         (unsigned)i);
+                continue;
+            }
+        }
+
+        domain_fact_meta_t meta = {0};
+        meta.source = (uint8_t)DOMAIN_SOURCE_AUTOMATION;
+        meta.value.type = (uint8_t)DOMAIN_VALUE_ENUM;
+        meta.value.v.u32 = command.action;
+        const sys_error_t err =
+            domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, &meta);
+        if (sys_failed(err)) {
+            ESP_LOGW(TAG, "rule %llu command %u not posted: entity=%llx err=%u",
+                     (unsigned long long)rule_id, (unsigned)i,
+                     (unsigned long long)command.entity, (unsigned)err.code);
+            continue;
+        }
+        ESP_LOGI(TAG, "rule %llu fired: entity=%llx property=%u action=%u",
                  (unsigned long long)rule_id, (unsigned long long)command.entity,
-                 (unsigned)err.code);
-        return;
+                 (unsigned)command.property, (unsigned)command.action);
     }
-    ESP_LOGI(TAG, "rule %llu fired: entity=%llx property=%u action=%u",
-             (unsigned long long)rule_id, (unsigned long long)command.entity,
-             (unsigned)command.property, (unsigned)command.action);
 }
 
 /* --- кэш предыдущих значений (для edge) ---------------------------------- */
@@ -251,8 +277,9 @@ static void automation_event_trigger(ha_entity_id_t source_entity, ha_event_id_t
             if (!automation_rule_get(s_index[i].rule_id, &rule)) {
                 continue;
             }
-            if (automation_rule_sem_time_matches(&rule, minutes, mask)) {
-                automation_fire(s_index[i].rule_id, source_entity);
+            if (automation_rule_sem_time_matches(&rule.triggers[s_index[i].trigger_index], minutes,
+                                                 mask)) {
+                automation_fire(s_index[i].rule_id, s_index[i].trigger_index, source_entity);
             }
         }
         return;
@@ -264,7 +291,7 @@ static void automation_event_trigger(ha_entity_id_t source_entity, ha_event_id_t
             !index_address_matches(s_index[i].entity, source_entity)) {
             continue;
         }
-        automation_fire(s_index[i].rule_id, source_entity);
+        automation_fire(s_index[i].rule_id, s_index[i].trigger_index, source_entity);
     }
 }
 
@@ -295,22 +322,9 @@ static void automation_state_trigger(const ha_state_key_t *key)
         if (!automation_rule_get(s_index[i].rule_id, &rule)) {
             continue;
         }
-        if (automation_rule_sem_state_matches(&rule, key->entity, key->entity, key->property, value,
-                                              prev_known, prev)) {
-            /*
-             * Loop-guard: STATE-правило, чьё действие адресует то же (entity, property), что и
-             * триггер, зациклилось бы (команда → репорт → снова триггер). Пропускаем.
-             */
-            const ha_entity_id_t action_entity =
-                (rule.action_ref.entity == HA_ENTITY_ID_SOURCE) ? key->entity
-                                                                : rule.action_ref.entity;
-            if (action_entity == key->entity && rule.action_ref.property == key->property) {
-                ESP_LOGW(TAG, "rule %llu self-trigger skipped: entity=%llx property=%u",
-                         (unsigned long long)s_index[i].rule_id, (unsigned long long)key->entity,
-                         (unsigned)key->property);
-                continue;
-            }
-            automation_fire(s_index[i].rule_id, key->entity);
+        if (automation_rule_sem_state_matches(&rule.triggers[s_index[i].trigger_index], key->entity,
+                                              key->entity, key->property, value, prev_known, prev)) {
+            automation_fire(s_index[i].rule_id, s_index[i].trigger_index, key->entity);
         }
     }
 }

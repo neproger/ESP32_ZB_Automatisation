@@ -25,6 +25,8 @@ extern "C" {
 #endif
 
 #define HA_RULE_CONDITIONS_MAX 4
+#define HA_RULE_TRIGGERS_MAX 4
+#define HA_RULE_ACTIONS_MAX 4
 
 /* Адрес в правиле: (entity, property). entity может быть HA_ENTITY_ID_SOURCE. */
 typedef struct {
@@ -67,14 +69,27 @@ typedef struct {
 } ha_rule_trigger_t;
 
 typedef struct {
-    ha_rule_ref_t action_ref;   /* цель; HA_ENTITY_ID_SOURCE → цель = источник триггера */
-    ha_rule_trigger_t trigger;
+    ha_rule_ref_t ref;   /* цель; HA_ENTITY_ID_SOURCE → цель = источник триггера */
+    ha_command_value_t value; /* SCALAR (ha_value_t) или XY; kind NONE — без значения */
+    uint8_t action;      /* ha_action_id_t */
+    uint8_t reserved[3];
+} ha_rule_action_t;
+
+/*
+ * Правило: списки триггеров и действий (любой из триггеров запускает все действия).
+ * Условия — общие, AND. Триггер разложен на все виды (без union — детерминированные
+ * байты), значимы поля по `kind`: EVENT — entity + event_id; STATE — entity + property +
+ * op + edge + value(+value2); TIME — minutes_of_day + weekday_mask.
+ */
+typedef struct {
+    ha_rule_trigger_t triggers[HA_RULE_TRIGGERS_MAX];
+    ha_rule_action_t actions[HA_RULE_ACTIONS_MAX];
     ha_rule_condition_t conditions[HA_RULE_CONDITIONS_MAX];
-    ha_command_value_t action_value; /* SCALAR (ha_value_t) или XY; kind NONE — без значения */
     uint8_t enabled;
+    uint8_t trigger_count;
+    uint8_t action_count;
     uint8_t conditions_count;
-    uint8_t action; /* ha_action_id_t */
-    uint8_t reserved0;
+    uint8_t reserved[4]; /* явный tail padding: выравнивание структуры 8 */
 } ha_rule_t;
 
 #ifdef __cplusplus
@@ -82,26 +97,28 @@ static_assert(sizeof(ha_rule_ref_t) == 16, "ha_rule_ref_t: неожиданны�
 static_assert(sizeof(ha_rule_compare_t) == 12, "ha_rule_compare_t: неожиданный размер");
 static_assert(sizeof(ha_rule_condition_t) == 32, "ha_rule_condition_t: неожиданный размер");
 static_assert(sizeof(ha_rule_trigger_t) == 32, "ha_rule_trigger_t: неожиданный размер");
+static_assert(sizeof(ha_rule_action_t) == 32, "ha_rule_action_t: неожиданный размер");
 static_assert(sizeof(ha_command_value_t) == 12, "ha_command_value_t: неожиданный размер");
-static_assert(sizeof(ha_rule_t) == 192, "ha_rule_t: неожиданный размер");
-static_assert(offsetof(ha_rule_t, trigger) == 16, "ha_rule_t: layout trigger");
-static_assert(offsetof(ha_rule_t, conditions) == 48, "ha_rule_t: layout conditions");
-static_assert(offsetof(ha_rule_t, action_value) == 176, "ha_rule_t: layout action_value");
-static_assert(offsetof(ha_rule_t, enabled) == 188, "ha_rule_t: layout enabled");
-static_assert(offsetof(ha_rule_t, action) == 190, "ha_rule_t: layout action");
+static_assert(sizeof(ha_rule_t) == 392, "ha_rule_t: неожиданный размер");
+static_assert(offsetof(ha_rule_t, triggers) == 0, "ha_rule_t: layout triggers");
+static_assert(offsetof(ha_rule_t, actions) == 128, "ha_rule_t: layout actions");
+static_assert(offsetof(ha_rule_t, conditions) == 256, "ha_rule_t: layout conditions");
+static_assert(offsetof(ha_rule_t, enabled) == 384, "ha_rule_t: layout enabled");
+static_assert(offsetof(ha_rule_t, action_count) == 386, "ha_rule_t: layout action_count");
 static_assert(sizeof(ha_rule_t) <= 1024, "ha_rule_t: больше региона");
 #else
 _Static_assert(sizeof(ha_rule_ref_t) == 16, "ha_rule_ref_t: неожиданный размер");
 _Static_assert(sizeof(ha_rule_compare_t) == 12, "ha_rule_compare_t: неожиданный размер");
 _Static_assert(sizeof(ha_rule_condition_t) == 32, "ha_rule_condition_t: неожиданный размер");
 _Static_assert(sizeof(ha_rule_trigger_t) == 32, "ha_rule_trigger_t: неожиданный размер");
+_Static_assert(sizeof(ha_rule_action_t) == 32, "ha_rule_action_t: неожиданный размер");
 _Static_assert(sizeof(ha_command_value_t) == 12, "ha_command_value_t: неожиданный размер");
-_Static_assert(sizeof(ha_rule_t) == 192, "ha_rule_t: неожиданный размер");
-_Static_assert(offsetof(ha_rule_t, trigger) == 16, "ha_rule_t: layout trigger");
-_Static_assert(offsetof(ha_rule_t, conditions) == 48, "ha_rule_t: layout conditions");
-_Static_assert(offsetof(ha_rule_t, action_value) == 176, "ha_rule_t: layout action_value");
-_Static_assert(offsetof(ha_rule_t, enabled) == 188, "ha_rule_t: layout enabled");
-_Static_assert(offsetof(ha_rule_t, action) == 190, "ha_rule_t: layout action");
+_Static_assert(sizeof(ha_rule_t) == 392, "ha_rule_t: неожиданный размер");
+_Static_assert(offsetof(ha_rule_t, triggers) == 0, "ha_rule_t: layout triggers");
+_Static_assert(offsetof(ha_rule_t, actions) == 128, "ha_rule_t: layout actions");
+_Static_assert(offsetof(ha_rule_t, conditions) == 256, "ha_rule_t: layout conditions");
+_Static_assert(offsetof(ha_rule_t, enabled) == 384, "ha_rule_t: layout enabled");
+_Static_assert(offsetof(ha_rule_t, action_count) == 386, "ha_rule_t: layout action_count");
 _Static_assert(sizeof(ha_rule_t) <= 1024, "ha_rule_t: больше региона");
 #endif
 

@@ -59,7 +59,7 @@ export const SIZES = {
   14: { key: 8, rec: 40 },   // ENTITY
   15: { key: 16, rec: 8 },   // PROPERTY_STATE
   16: { key: 8, rec: 216 },  // CAPABILITIES
-  4: { key: 8, rec: 192 },   // AUTOMATION
+  4: { key: 8, rec: 392 },   // AUTOMATION
   8: { key: 16, rec: 36 },   // GROUP_ITEM
   7: { key: 8, rec: 32 },    // GROUP
   6: { key: 8, rec: 60 },    // LOCATION
@@ -258,32 +258,32 @@ export function automationRemove(id) {
   return encodeCommand(CMD.AUTOMATION_REMOVE, out)
 }
 
-// ha_rule_t (192) — плоский POD (offsetof-инварианты ha_rule.h):
-//   action_ref(16)@0 {entity u64, property i32@8, reserved u32@12}
-//   trigger(32)@16 {entity u64, event_id i32@8, property i32@12, value f32@16, value2 f32@20,
-//                   minutes_of_day u16@24, kind u8@26, op u8@27, edge u8@28, weekday u8@29, reserved[2]}
-//   conditions[4](32 each)@48 {ref(16), cmp{op u8@16, reserved[3], value f32@20, value2 f32@24}, reserved u32@28}
-//   action_value(12)@176 {kind i32, scalar{kind i32@+4, value@+8} | xy{x@+4, y@+8}}
-//   enabled u8@188, conditions_count u8@189, action u8@190, reserved0 u8@191
-const RULE_OFF_ACTION_REF = 0
-const RULE_OFF_TRIGGER = 16
-const RULE_OFF_CONDITIONS = 48
-const RULE_OFF_ACTION_VALUE = 176
-const RULE_OFF_ENABLED = 188
-const RULE_OFF_CONDITIONS_COUNT = 189
-const RULE_OFF_ACTION = 190
-const RULE_SIZE = 192
+// ha_rule_t (392) — плоский POD (offsetof-инварианты ha_rule.h):
+//   triggers[4](32 each)@0   {entity u64, event_id i32@8, property i32@12, value f32@16,
+//                             value2 f32@20, minutes_of_day u16@24, kind u8@26, op u8@27,
+//                             edge u8@28, weekday_mask u8@29, reserved[2]@30}
+//   actions[4](32 each)@128  {ref(16){entity u64, property i32@8, reserved u32@12},
+//                             value(12)@16 {kind i32, scalar{i32 kind@+4, f32 value@+8} | xy{f32 x@+4,y@+8}},
+//                             action u8@28, reserved[3]@29}
+//   conditions[4](32 each)@256 {ref(16), cmp{op u8@16, reserved[3], value f32@20, value2 f32@24}, reserved u32@28}
+//   enabled u8@384, trigger_count u8@385, action_count u8@386, conditions_count u8@387, reserved[4]@388
+const RULE_TRIGGERS_OFF = 0
+const RULE_ACTIONS_OFF = 128
+const RULE_CONDITIONS_OFF = 256
+const RULE_OFF_ENABLED = 384
+const RULE_OFF_TRIGGER_COUNT = 385
+const RULE_OFF_ACTION_COUNT = 386
+const RULE_OFF_CONDITIONS_COUNT = 387
+const RULE_TRIGGER_SIZE = 32
+const RULE_ACTION_SIZE = 32
 const CONDITION_SIZE = 32
+const RULE_MAX_TRIGGERS = 4
+const RULE_MAX_ACTIONS = 4
+const RULE_MAX_CONDITIONS = 4
+const RULE_SIZE = 392
 
-function encodeRule(dv, base, rule) {
-  const t = rule.trigger || {}
+function encodeTrigger(dv, o, t) {
   const kind = Number(t.kind) || 0
-  // action_ref
-  const a = rule.action || {}
-  dv.setBigUint64(base + RULE_OFF_ACTION_REF + 0, BigInt(a.entity ?? ENTITY_SOURCE), true)
-  dv.setInt32(base + RULE_OFF_ACTION_REF + 8, Number(a.property) || 0, true)
-  // trigger
-  const o = base + RULE_OFF_TRIGGER
   dv.setBigUint64(o, kind === 0 || kind === 2 ? BigInt(t.entity ?? ENTITY_SOURCE) : 0n, true)
   dv.setInt32(o + 8, kind === 0 ? Number(t.eventId) || 0 : 0, true)
   dv.setInt32(o + 12, kind === 2 ? Number(t.property) || 0 : 0, true)
@@ -294,19 +294,12 @@ function encodeRule(dv, base, rule) {
   dv.setUint8(o + 27, kind === 2 ? Number(t.op) || 1 : 0)
   dv.setUint8(o + 28, kind === 2 ? Number(t.edge) || 0 : 0)
   dv.setUint8(o + 29, kind === 1 ? Number(t.weekdayMask) || 0 : 0)
-  // conditions
-  const conds = (rule.conditions || []).slice(0, 4)
-  for (let i = 0; i < conds.length; i++) {
-    const c = conds[i]
-    const p = base + RULE_OFF_CONDITIONS + i * CONDITION_SIZE
-    dv.setBigUint64(p, BigInt(c.entity ?? ENTITY_SOURCE), true)
-    dv.setInt32(p + 8, Number(c.property) || 0, true)
-    dv.setUint8(p + 16, Number(c.op) || 1)
-    dv.setFloat32(p + 20, Number(c.value) || 0, true)
-    dv.setFloat32(p + 24, Number(c.value2) || 0, true)
-  }
-  // action_value
-  const v = base + RULE_OFF_ACTION_VALUE
+}
+
+function encodeAction(dv, o, a) {
+  dv.setBigUint64(o, BigInt(a.entity ?? ENTITY_SOURCE), true)
+  dv.setInt32(o + 8, Number(a.property) || 0, true)
+  const v = o + 16
   const vk = a.valueKind ?? (a.value == null ? COMMAND_VALUE.NONE : a.x != null ? COMMAND_VALUE.XY : COMMAND_VALUE.SCALAR)
   dv.setInt32(v, vk, true)
   if (vk === COMMAND_VALUE.SCALAR) {
@@ -316,12 +309,35 @@ function encodeRule(dv, base, rule) {
     dv.setFloat32(v + 4, Number(a.x) || 0, true)
     dv.setFloat32(v + 8, Number(a.y) || 0, true)
   }
-  dv.setUint8(base + RULE_OFF_ENABLED, rule.enabled ? 1 : 0)
-  dv.setUint8(base + RULE_OFF_CONDITIONS_COUNT, conds.length)
-  dv.setUint8(base + RULE_OFF_ACTION, Number(a.action) || 0)
+  dv.setUint8(o + 28, Number(a.action) || 0)
 }
 
-// AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+192).
+function encodeRule(dv, base, rule) {
+  const triggers = (rule.triggers || []).slice(0, RULE_MAX_TRIGGERS)
+  const actions = (rule.actions || []).slice(0, RULE_MAX_ACTIONS)
+  const conds = (rule.conditions || []).slice(0, RULE_MAX_CONDITIONS)
+  for (let i = 0; i < triggers.length; i++) {
+    encodeTrigger(dv, base + RULE_TRIGGERS_OFF + i * RULE_TRIGGER_SIZE, triggers[i])
+  }
+  for (let i = 0; i < actions.length; i++) {
+    encodeAction(dv, base + RULE_ACTIONS_OFF + i * RULE_ACTION_SIZE, actions[i])
+  }
+  for (let i = 0; i < conds.length; i++) {
+    const p = base + RULE_CONDITIONS_OFF + i * CONDITION_SIZE
+    const c = conds[i]
+    dv.setBigUint64(p, BigInt(c.entity ?? ENTITY_SOURCE), true)
+    dv.setInt32(p + 8, Number(c.property) || 0, true)
+    dv.setUint8(p + 16, Number(c.op) || 1)
+    dv.setFloat32(p + 20, Number(c.value) || 0, true)
+    dv.setFloat32(p + 24, Number(c.value2) || 0, true)
+  }
+  dv.setUint8(base + RULE_OFF_ENABLED, rule.enabled ? 1 : 0)
+  dv.setUint8(base + RULE_OFF_TRIGGER_COUNT, triggers.length)
+  dv.setUint8(base + RULE_OFF_ACTION_COUNT, actions.length)
+  dv.setUint8(base + RULE_OFF_CONDITIONS_COUNT, conds.length)
+}
+
+// AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+388).
 export function automationPut(id, rule) {
   const out = new Uint8Array(8 + RULE_SIZE)
   const dv = new DataView(out.buffer)

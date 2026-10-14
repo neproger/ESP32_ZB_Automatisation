@@ -30,10 +30,13 @@ export default function Automations() {
             <button className="ghost" onClick={() => setEditing(a.id.toString())}>Изменить</button>
             <button className="ghost danger" onClick={() => store.send(automationRemove(a.id))}>Удалить</button>
           </div>
-          <div className="flow">
-            <span className="node trigger">{describeTrigger(a.rule.trigger, nameOf)}</span>
-            <span className="arrow">→</span>
-            <span className="node action">{describeAction(a.rule.action, nameOf)}</span>
+          <div className="conds">
+            <span className="muted">когда</span>
+            {a.rule.triggers.map((t, i) => <span className="chip" key={i}>{describeTrigger(t, nameOf)}</span>)}
+          </div>
+          <div className="conds">
+            <span className="muted">то</span>
+            {a.rule.actions.map((x, i) => <span className="chip" key={i}>{describeAction(x, nameOf)}</span>)}
           </div>
           {a.rule.conditions?.length > 0 && (
             <div className="conds">

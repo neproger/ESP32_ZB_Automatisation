@@ -258,10 +258,12 @@ static void test_remove_cascade(void)
     const ha_automation_key_t akey = {.id = 1};
     ha_rule_t rule = {0};
     rule.enabled = 1;
-    rule.trigger.kind = HA_TRIGGER_STATE;
-    rule.trigger.entity = e1;
-    rule.action_ref.entity = e1;
-    rule.action = HA_ACTION_ON;
+    rule.trigger_count = 1;
+    rule.triggers[0].kind = HA_TRIGGER_STATE;
+    rule.triggers[0].entity = e1;
+    rule.action_count = 1;
+    rule.actions[0].ref.entity = e1;
+    rule.actions[0].action = HA_ACTION_ON;
     CHECK(sys_ok(domain_entity_put(&d, (domain_entity_t)HA_ENTITY_AUTOMATION, &akey, &rule, &meta,
                                    &changed)));
 

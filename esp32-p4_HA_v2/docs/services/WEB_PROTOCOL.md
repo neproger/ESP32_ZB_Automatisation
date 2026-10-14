@@ -98,21 +98,23 @@ Domain-таблица не становится публичным API авто�
 | Wi-Fi status | `ha_wifi_status_record_t` (36): `state u8@0`, `connected u8@1`, `rssi i8@2`, `reserved u8@3`, `ssid[32]@4` |
 | Settings | `ha_settings_record_t` (8): `screensaver_timeout_ms u32@0`, `brightness_pct u8@4`, `palette_id u8@5`, `reserved[2]@6` |
 
-## 5. Rule wire = `ha_rule_t` (192, плоский POD)
+## 5. Rule wire = `ha_rule_t` (392, плоский POD)
 
 Значимость полей — по `kind` (`ha_automation_trigger_kind_t`: 0 EVENT, 1 TIME, 2 STATE);
-незначимые поля — ноль. Инварианты `offsetof` — `ha_model/ha_rule.h`.
+незначимые поля — ноль. Инварианты `offsetof` — `ha_model/ha_rule.h`. **Любой** из
+`trigger_count` триггеров запускает **все** `action_count` действий; условия — общие.
 
 ```text
-@0   action_ref { entity u64@0, property i32@8, reserved u32@12 }         (16)
-@16  trigger { entity u64@0, event_id i32@8, property i32@12, value f32@16,
-               value2 f32@20, minutes_of_day u16@24, kind u8@26, op u8@27,
-               edge u8@28, weekday_mask u8@29, reserved[2]@30 }           (32)
-@48  conditions[4] { ref(16), cmp{ op u8@0 [if16 in cond: @16], reserved[3],
-                    value f32@20, value2 f32@24 }, reserved u32@28 }      (32 each)
-@176 action_value { kind i32@0,
-                    scalar{ kind i32@4, value u32/f32@8 } | xy{ x f32@4, y f32@8 } } (12)
-@188 enabled u8; @189 conditions_count u8; @190 action u8; @191 reserved0
+@0    triggers[4] { entity u64@0, event_id i32@8, property i32@12, value f32@16,
+                    value2 f32@20, minutes_of_day u16@24, kind u8@26, op u8@27,
+                    edge u8@28, weekday_mask u8@29, reserved[2]@30 }        (32 each)
+@128  actions[4]  { ref(16)@0 {entity u64, property i32@8, reserved u32@12},
+                    value(12)@16 { kind i32, scalar{ kind i32@+4, value u32/f32@+8 } |
+                    xy{ x f32@+4, y f32@+8 } }, action u8@28, reserved[3]@29 } (32 each)
+@256  conditions[4] { ref(16), cmp{ op u8@16, reserved[3], value f32@20, value2 f32@24 },
+                      reserved u32@28 }                                     (32 each)
+@384  enabled u8; @385 trigger_count u8; @386 action_count u8; @387 conditions_count u8;
+      @388 reserved[4] (явный tail padding)
 ```
 
 `entity == 0xFFFFFFFFFFFFFFFF` (`HA_ENTITY_ID_SOURCE`) — «то же, что источник триггера».

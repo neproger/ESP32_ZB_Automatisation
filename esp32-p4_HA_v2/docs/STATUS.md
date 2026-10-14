@@ -17,7 +17,7 @@
 | `ha_model` | canonical словарь: `Entity`, `Logical Device`, `Property`, `Capability`, `Event`, `Action`, `Rule`, `Group`, `Settings`; opaque `source`/`issuer`; `ha_value_to_double` | `static_assert` + host-тестами |
 | `device` | generic Device service: `register/bind/rename/remove` + `register_remover(source,…)`; транспорт-нейтрален | host-тест 1/1 |
 | `zigbee` | адаптер: приватный RAM-store устройства/топологии, интервью, bindings/reporting, мост ZCL↔canonical, события, executor `HA_CMD_PROPERTY`, remove (deferred leave, NVS), radio spinel→`ot_rcp` | host-тесты 10/10, запуск на P4 |
-| `automation` | подписка на canonical EVENT/STATE (по типу факта); правила `ha_rule_t` (entity-native): `DEVICE_EVENT`/`TIME`/`STATE`, условия (AND), `domain_post HA_CMD_PROPERTY` | host-тест 1/1, сквозной цикл на P4 |
+| `automation` | подписка на canonical EVENT/STATE (по типу факта); правила `ha_rule_t` (entity-native): списки триггеров (до 4) `DEVICE_EVENT`/`TIME`/`STATE` и действий (до 4), условия (AND), `domain_post HA_CMD_PROPERTY` | host-тест 1/1, сквозной цикл на P4 |
 | `system` | время/погода: SNTP + GeoIP + Open-Meteo; публикует canonical `PROPERTY_STATE` системной Entity напрямую (ZCL не касается) + тики | запуск на P4 |
 | `wifi` | владелец радио на C3 (ESP-Hosted): стек, скан, подключение; сущности `wifi_scan/known/status` | host-тест 1/1; на железе — provisioning/стабильность AP |
 | `web` | HTTP+WS транспорт canonical-модели, byte-wire v3 (records verbatim, `services/WEB_PROTOCOL.md`): snapshot, дельты, команды; UI встроен | устройство отдаёт UI, snapshot/команды |

@@ -25,8 +25,9 @@
 #define WEB_PROTO_VER 3u
 #define WEB_PROTO_HDR_SIZE 8u
 
-/* Максимальный payload: type + самый большой key+record (CAPABILITIES 8+216). */
-#define WEB_PROTO_MAX_PAYLOAD 256u
+/* Максимальный payload: самый большой key+record (AUTOMATION 8+392) и командный кадр
+ * (cmd + key + record) — берём с запасом. */
+#define WEB_PROTO_MAX_PAYLOAD 512u
 #define WEB_PROTO_MAX_FRAME (WEB_PROTO_HDR_SIZE + WEB_PROTO_MAX_PAYLOAD)
 
 /*

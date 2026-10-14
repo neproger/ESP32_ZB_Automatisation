@@ -7,10 +7,12 @@ import {
   SYSTEM_EVENT_OPTIONS, ACTION_PROPERTIES, minutesToHHMM, hhmmToMinutes,
 } from '../automation.js'
 import { PROPERTY, ACTION, COMMAND_VALUE, propertyName, actionName, eventName } from '../semantics.js'
-import { rgbHexToXy } from '../color.js'
+import { rgbHexToXy, xyToRgbHex } from '../color.js'
 import { ENTITY_SYSTEM } from '../system.js'
 import Switch from './Switch.jsx'
 
+const MAX_TRIGGERS = 4
+const MAX_ACTIONS = 4
 const MAX_CONDITIONS = 4
 const SRC = 'src' // UI-сентинел для HA_ENTITY_ID_SOURCE
 
@@ -35,11 +37,43 @@ function propsOf(entityStr) {
   return [...set.values()].sort((a, b) => a.property - b.property)
 }
 
+const newTrigger = () => ({ kind: 1, entity: SRC, eventId: SYSTEM_EVENT_OPTIONS[0][0], timeStr: '07:00', weekdayMask: 0x7f, property: 0, op: 1, edge: 0, value: 0 })
+const newAction = () => ({ entity: SRC, property: PROPERTY.POWER, action: ACTION.ON, value: 70, color: '#ffcc88' })
+
 export default function AutomationForm({ id, automations, onClose }) {
   const s = useStore()
   const existing = id != null ? s.semAutomations.get(String(id))?.rule : null
   const ents = [...s.semEntities.values()]
-  const hasSystem = ents.some((e) => e.name === 'system' || e.name === 'Система') || true
+
+  const toEntity = (v) => (v === SRC ? ENTITY_SOURCE : BigInt(v))
+  const fromEntity = (e) => (e == null || BigInt(e) === ENTITY_SOURCE ? SRC : BigInt(e).toString())
+  const triggerFromWire = (t) => ({
+    kind: t.kind,
+    entity: fromEntity(t.entity),
+    eventId: t.eventId,
+    timeStr: minutesToHHMM(t.minutesOfDay ?? 420),
+    weekdayMask: t.weekdayMask ?? 0x7f,
+    property: t.property ?? 0,
+    op: t.op ?? 1,
+    edge: t.edge ?? 0,
+    value: t.value ?? 0,
+  })
+  const actionFromWire = (w) => ({
+    entity: fromEntity(w.entity),
+    property: w.property,
+    action: w.action,
+    value: w.valueKind === 2 ? 70 : (w.value ?? 70),
+    color: w.valueKind === 2 ? xyToRgbHex((w.x ?? 0) * 65535, (w.y ?? 0) * 65535) : '#ffcc88',
+  })
+
+  const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
+  const [triggers, setTriggers] = useState(() =>
+    existing?.triggers?.length ? existing.triggers.map(triggerFromWire) : [newTrigger()])
+  const [actions, setActions] = useState(() =>
+    existing?.actions?.length ? existing.actions.map(actionFromWire) : [newAction()])
+  const [conditions, setConditions] = useState(
+    existing ? existing.conditions.map((c) => ({ ...c, entity: fromEntity(c.entity) })) : [],
+  )
 
   if (ents.length === 0 && !existing) {
     return (
@@ -50,19 +84,14 @@ export default function AutomationForm({ id, automations, onClose }) {
     )
   }
 
-  // Опции Entity, сгруппированные по устройству (имя устройства видно, даже если у Entity
-  // имени нет). Внутри группы — имя Entity, иначе короткий id + подсказка по capability.
   const entityLabel = (e) => {
     if (e.name) return e.name
     const caps = store.capabilities(e.id)
     const hint = caps.length > 0 ? ` · ${propertyName(caps[0].property)}` : ''
     return `#${e.id.toString().slice(-4)}${hint}`
   }
-  // Наборы Entity под тип триггера: «событие» — только те, что шлют события; «состояние» —
-  // только те, у кого есть свойства. Неподходящие endpoint'ы в списке не показываются.
   const hasEvents = (e) => store.entityEvents(e.id).length > 0
-  const hasProperties = (e) =>
-    store.capabilities(e.id).length > 0 || store.entityProperties(e.id).length > 0
+  const hasProperties = (e) => store.capabilities(e.id).length > 0 || store.entityProperties(e.id).length > 0
   const hasActions = (e) => store.capabilities(e.id).some((c) => (c.actions?.length ?? 0) > 0)
   const eventEntities = ents.filter(hasEvents)
   const stateEntities = ents.filter(hasProperties)
@@ -81,70 +110,23 @@ export default function AutomationForm({ id, automations, onClose }) {
       const dn = s.semDevices.get(dk)?.name || (dk ? 'устройство ' + dk.slice(-6) : 'без устройства')
       nodes.push(
         <optgroup key={'g' + dk} label={dn}>
-          {group.map((e) => (
-            <option key={e.id.toString()} value={e.id.toString()}>{entityLabel(e)}</option>
-          ))}
+          {group.map((e) => <option key={e.id.toString()} value={e.id.toString()}>{entityLabel(e)}</option>)}
         </optgroup>,
       )
     }
     return nodes
   }
 
-  const toEntity = (v) => (v === SRC ? ENTITY_SOURCE : BigInt(v))
-  const fromEntity = (e) => (e == null || BigInt(e) === ENTITY_SOURCE ? SRC : BigInt(e).toString())
+  const updateTrigger = (i, patch) => setTriggers((ts) => ts.map((t, j) => (j === i ? { ...t, ...patch } : t)))
+  const updateAction = (i, patch) => setActions((as) => as.map((a, j) => (j === i ? { ...a, ...patch } : a)))
 
-  const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
-  const [triggerKind, setTriggerKind] = useState(existing ? existing.trigger.kind : 1)
-  const [triggerEntity, setTriggerEntity] = useState(existing?.trigger.entity != null ? fromEntity(existing.trigger.entity) : (ents[0]?.id.toString() ?? SRC))
-  const [eventId, setEventId] = useState(existing?.trigger.eventId ?? SYSTEM_EVENT_OPTIONS[0][0])
-  const [timeStr, setTimeStr] = useState(minutesToHHMM(existing?.trigger.minutesOfDay ?? 420))
-  const [weekdayMask, setWeekdayMask] = useState(existing?.trigger.weekdayMask ?? 0x7f)
-  const [stateProperty, setStateProperty] = useState(existing?.trigger.property ?? 0)
-  const [stateOp, setStateOp] = useState(existing?.trigger.op ?? 1)
-  const [stateEdge, setStateEdge] = useState(existing?.trigger.edge ?? 1)
-  const [stateValue, setStateValue] = useState(existing?.trigger.value ?? 0)
-
-  const [conditions, setConditions] = useState(
-    existing ? existing.conditions.map((c) => ({ ...c, entity: fromEntity(c.entity) })) : [],
-  )
-
-  const [actionEntity, setActionEntity] = useState(existing?.action.entity != null ? fromEntity(existing.action.entity) : SRC)
-  const [actionProperty, setActionProperty] = useState(existing?.action.property ?? PROPERTY.POWER)
-  const [actionAction, setActionAction] = useState(existing?.action.action ?? ACTION.ON)
-  const [actionValue, setActionValue] = useState(existing?.action.value ?? 70)
-  const [actionColor, setActionColor] = useState('#ffcc88')
-
-  const trigProps = propsOf(triggerEntity)
-
-  // События триггера — только те, что Entity заявила в capabilities (system — свои).
-  const triggerEntityId = triggerEntity === SRC ? null : BigInt(triggerEntity)
-  const triggerEvents = triggerEntityId == null
-    ? []
-    : triggerEntityId === ENTITY_SYSTEM
-      ? SYSTEM_EVENT_OPTIONS.map(([v]) => [v, eventName(v)])
-      : store.entityEvents(triggerEntityId).map((v) => [v, eventName(v)])
-
-  // Держим выбранную Entity внутри допустимого набора текущего типа триггера.
-  const triggerList =
-    Number(triggerKind) === 0 ? eventEntities : Number(triggerKind) === 2 ? stateEntities : []
-  useEffect(() => {
-    if (Number(triggerKind) === 1 || triggerList.length === 0) return
-    if (!triggerList.some((e) => e.id.toString() === triggerEntity)) {
-      setTriggerEntity(triggerList[0].id.toString())
-    }
-  }, [triggerKind, triggerEntity]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Действия — из capabilities выбранной Entity; ACTION_PROPERTIES — только fallback, пока
-  // capabilities неизвестны (UI-сентинел «то же, что триггер» не резолвится).
-  const actionCaps = actionEntity === SRC ? null : propsOf(actionEntity)
-  const actionOptions = actionCaps ?? ACTION_PROPERTIES.map((p) => ({ property: p.id, actions: p.actions }))
-  const actionActions = (actionOptions.find((p) => p.property === actionProperty) || {}).actions || []
-  const actionValueShape = (ACTION_PROPERTIES.find((p) => p.id === actionProperty) || {}).value
-  const pickProperty = (v) => {
+  const actionOptionsFor = (entityStr) =>
+    entityStr === SRC ? ACTION_PROPERTIES.map((p) => ({ property: p.id, actions: p.actions })) : propsOf(entityStr)
+  const valueShapeOf = (property) => (ACTION_PROPERTIES.find((p) => p.id === Number(property)) || {}).value
+  const pickActionProperty = (i, v) => {
     const property = Number(v)
-    setActionProperty(property)
-    const opt = actionOptions.find((p) => p.property === property)
-    setActionAction(opt?.actions?.[0] ?? ACTION.SET)
+    const opt = actionOptionsFor(actions[i].entity).find((p) => p.property === property)
+    updateAction(i, { property, action: opt?.actions?.[0] ?? ACTION.SET })
   }
 
   const updateCondition = (i, patch) => setConditions((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)))
@@ -153,124 +135,158 @@ export default function AutomationForm({ id, automations, onClose }) {
     setConditions((cs) => [...cs, { entity: SRC, property: PROPERTY.POWER, op: 1, value: 1, value2: 0 }])
   }
 
+  const toTriggerWire = (t) =>
+    Number(t.kind) === 1
+      ? { kind: 1, minutesOfDay: hhmmToMinutes(t.timeStr), weekdayMask: t.weekdayMask }
+      : Number(t.kind) === 0
+        ? { kind: 0, entity: toEntity(t.entity), eventId: Number(t.eventId) }
+        : { kind: 2, entity: toEntity(t.entity), property: Number(t.property) || 0, op: Number(t.op) || 1, edge: Number(t.edge) || 0, value: Number(t.value) || 0 }
+
+  const toActionWire = (a) => {
+    const shape = valueShapeOf(a.property)
+    if (a.action === ACTION.SET && shape === 'color') {
+      const { x, y } = rgbHexToXy(a.color)
+      return { entity: toEntity(a.entity), property: Number(a.property), action: Number(a.action), valueKind: COMMAND_VALUE.XY, x: x / 65535, y: y / 65535 }
+    }
+    if (a.action === ACTION.SET && shape) {
+      return { entity: toEntity(a.entity), property: Number(a.property), action: Number(a.action), valueKind: COMMAND_VALUE.SCALAR, value: Number(a.value) || 0 }
+    }
+    return { entity: toEntity(a.entity), property: Number(a.property), action: Number(a.action), valueKind: COMMAND_VALUE.NONE }
+  }
+
+  // Держим выбранную Entity триггера внутри допустимого набора его типа.
+  useEffect(() => {
+    setTriggers((ts) => ts.map((t) => {
+      const list = Number(t.kind) === 0 ? eventEntities : Number(t.kind) === 2 ? stateEntities : []
+      if (Number(t.kind) === 1 || list.length === 0) return t
+      if (list.some((e) => e.id.toString() === t.entity)) return t
+      return { ...t, entity: list[0].id.toString() }
+    }))
+  }, [triggers.length, actions.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const submit = (e) => {
     e.preventDefault()
+    if (triggerListInvalid(triggers) || actions.length === 0) return
     const targetId = id != null ? BigInt(id) : nextId(automations)
-    const trigger =
-      Number(triggerKind) === 1
-        ? { kind: 1, minutesOfDay: hhmmToMinutes(timeStr), weekdayMask }
-        : Number(triggerKind) === 0
-          ? { kind: 0, entity: toEntity(triggerEntity), eventId: Number(eventId) }
-          : { kind: 2, entity: toEntity(triggerEntity), property: Number(stateProperty), op: Number(stateOp), edge: Number(stateEdge), value: Number(stateValue) || 0 }
-
-    let action
-    if (actionAction === ACTION.SET && actionValueShape === 'color') {
-      const { x, y } = rgbHexToXy(actionColor)
-      action = { entity: toEntity(actionEntity), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.XY, x: x / 65535, y: y / 65535 }
-    } else if (actionAction === ACTION.SET) {
-      action = { entity: toEntity(actionEntity), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.SCALAR, value: Number(actionValue) || 0 }
-    } else {
-      action = { entity: toEntity(actionEntity), property: actionProperty, action: actionAction, valueKind: COMMAND_VALUE.NONE }
-    }
-
-    store.send(
-      automationPut(targetId, {
-        enabled,
-        trigger,
-        conditions: conditions.map((c) => ({
-          entity: toEntity(c.entity),
-          property: Number(c.property) || 0,
-          op: Number(c.op) || 1,
-          value: Number(c.value) || 0,
-          value2: Number(c.value2) || 0,
-        })),
-        action,
-      }),
-    )
+    store.send(automationPut(targetId, {
+      enabled,
+      triggers: triggers.map(toTriggerWire),
+      actions: actions.map(toActionWire),
+      conditions: conditions.map((c) => ({
+        entity: toEntity(c.entity),
+        property: Number(c.property) || 0,
+        op: Number(c.op) || 1,
+        value: Number(c.value) || 0,
+        value2: Number(c.value2) || 0,
+      })),
+    }))
     onClose()
+  }
+
+  const triggerEventsFor = (t) => {
+    if (t.entity === SRC) return []
+    const eid = BigInt(t.entity)
+    if (eid === ENTITY_SYSTEM) return SYSTEM_EVENT_OPTIONS.map(([v]) => [v, eventName(v)])
+    return store.entityEvents(eid).map((v) => [v, eventName(v)])
   }
 
   return (
     <form className="form-grid" onSubmit={submit}>
       <label className="af-line">Включено <Switch checked={enabled} onChange={setEnabled} /></label>
 
-      <div className="af-line">Триггер:
-        <select value={triggerKind} onChange={(e) => setTriggerKind(Number(e.target.value))}>
-          {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        {Number(triggerKind) === 1 ? (
-          <>
-            <select value={Math.floor(hhmmToMinutes(timeStr) / 60)}
-              onChange={(e) => setTimeStr(`${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(timeStr) % 60).padStart(2, '0')}`)}>
-              {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
+      <div className="af-section">
+        <div className="af-section-head">
+          <span>Триггеры (любой запускает правило)</span>
+          <button type="button" onClick={() => triggers.length < MAX_TRIGGERS && setTriggers((ts) => [...ts, newTrigger()])} disabled={triggers.length >= MAX_TRIGGERS}>+ Триггер</button>
+        </div>
+        {triggers.map((t, i) => (
+          <div className="af-cond" key={i}>
+            <select value={t.kind} onChange={(e) => updateTrigger(i, { kind: Number(e.target.value) })}>
+              {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
-            <span>:</span>
-            <select value={hhmmToMinutes(timeStr) % 60}
-              onChange={(e) => setTimeStr(`${String(Math.floor(hhmmToMinutes(timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}`)}>
-              {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
-            </select>
-            <span className="days">
-              {WEEKDAY_LABELS.map((d, i) => (
-                <label key={d} className="day">
-                  <input type="checkbox" checked={(weekdayMask >> i) & 1}
-                    onChange={(e) => setWeekdayMask((m) => (e.target.checked ? (m | (1 << i)) : (m & ~(1 << i))))} />
-                  {d}
-                </label>
-              ))}
-            </span>
-          </>
-        ) : Number(triggerKind) === 0 ? (
-          <>
-            <select value={triggerEntity} onChange={(e) => setTriggerEntity(e.target.value)}>
-              {entityOptions(eventEntities, false)}
-            </select>
-            <select value={eventId} onChange={(e) => setEventId(Number(e.target.value))}>
-              {triggerEvents.length === 0
-                ? <option value="">(нет событий)</option>
-                : triggerEvents.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </>
-        ) : (
-          <>
-            <select value={triggerEntity} onChange={(e) => { setTriggerEntity(e.target.value); setStateProperty(0) }}>
-              {entityOptions(stateEntities, false)}
-            </select>
-            <select value={stateProperty || ''} onChange={(e) => setStateProperty(Number(e.target.value))}>
-              <option value="">(свойство)</option>
-              {trigProps.map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
-            </select>
-            <select value={stateOp} onChange={(e) => setStateOp(Number(e.target.value))}>
-              {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-            <input className="ep" type="number" step="any" value={stateValue} onChange={(e) => setStateValue(e.target.value)} />
-            <select value={stateEdge} onChange={(e) => setStateEdge(Number(e.target.value))}>
-              {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          </>
-        )}
+            {Number(t.kind) === 1 ? (
+              <>
+                <select value={Math.floor(hhmmToMinutes(t.timeStr) / 60)}
+                  onChange={(e) => updateTrigger(i, { timeStr: `${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(t.timeStr) % 60).padStart(2, '0')}` })}>
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
+                </select>
+                <span>:</span>
+                <select value={hhmmToMinutes(t.timeStr) % 60}
+                  onChange={(e) => updateTrigger(i, { timeStr: `${String(Math.floor(hhmmToMinutes(t.timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}` })}>
+                  {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+                </select>
+                <span className="days">
+                  {WEEKDAY_LABELS.map((d, k) => (
+                    <label key={d} className="day">
+                      <input type="checkbox" checked={(t.weekdayMask >> k) & 1}
+                        onChange={(e) => updateTrigger(i, { weekdayMask: e.target.checked ? (t.weekdayMask | (1 << k)) : (t.weekdayMask & ~(1 << k)) })} />
+                      {d}
+                    </label>
+                  ))}
+                </span>
+              </>
+            ) : Number(t.kind) === 0 ? (
+              <>
+                <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value })}>{entityOptions(eventEntities, false)}</select>
+                <select value={t.eventId} onChange={(e) => updateTrigger(i, { eventId: Number(e.target.value) })}>
+                  {triggerEventsFor(t).length === 0
+                    ? <option value="">(нет событий)</option>
+                    : triggerEventsFor(t).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value, property: 0 })}>{entityOptions(stateEntities, false)}</select>
+                <select value={t.property || ''} onChange={(e) => updateTrigger(i, { property: Number(e.target.value) })}>
+                  <option value="">(свойство)</option>
+                  {propsOf(t.entity).map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
+                </select>
+                <select value={t.op} onChange={(e) => updateTrigger(i, { op: Number(e.target.value) })}>
+                  {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+                <input className="ep" type="number" step="any" value={t.value} onChange={(e) => updateTrigger(i, { value: e.target.value })} />
+                <select value={t.edge} onChange={(e) => updateTrigger(i, { edge: Number(e.target.value) })}>
+                  {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </>
+            )}
+            {triggers.length > 1 && <button type="button" className="ghost danger" onClick={() => setTriggers((ts) => ts.filter((_, j) => j !== i))}>✕</button>}
+          </div>
+        ))}
       </div>
 
-      <label className="af-line">Действие:
-        <select value={actionEntity} onChange={(e) => setActionEntity(e.target.value)}>
-          {entityOptions(actionEntities, true, 'то же, что триггер')}
-        </select>
-        <select value={actionProperty} onChange={(e) => pickProperty(e.target.value)}>
-          {actionOptions.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
-        </select>
-        <select value={actionAction} onChange={(e) => setActionAction(Number(e.target.value))}>
-          {actionActions.map((a) => <option key={a} value={a}>{actionName(a)}</option>)}
-        </select>
-      </label>
-
-      {actionAction === ACTION.SET && actionValueShape === 'color' && (
-        <label className="af-line">Цвет: <input type="color" value={actionColor} onChange={(e) => setActionColor(e.target.value)} /></label>
-      )}
-      {actionAction === ACTION.SET && actionValueShape && actionValueShape !== 'color' && (
-        <label className="af-line">Значение:
-          <input className="ep" type="number" step="any" value={actionValue} onChange={(e) => setActionValue(e.target.value)} />
-          <span className="muted">{actionValueShape === 'percent' ? '%' : actionValueShape === 'kelvin' ? 'K' : '°'}</span>
-        </label>
-      )}
+      <div className="af-section">
+        <div className="af-section-head">
+          <span>Действия (выполняются подряд)</span>
+          <button type="button" onClick={() => actions.length < MAX_ACTIONS && setActions((as) => [...as, newAction()])} disabled={actions.length >= MAX_ACTIONS}>+ Действие</button>
+        </div>
+        {actions.map((a, i) => {
+          const opts = actionOptionsFor(a.entity)
+          const acts = (opts.find((p) => p.property === a.property) || {}).actions || []
+          const shape = valueShapeOf(a.property)
+          return (
+            <div className="af-cond" key={i}>
+              <select value={a.entity} onChange={(e) => updateAction(i, { entity: e.target.value })}>{entityOptions(actionEntities, true, 'то же, что триггер')}</select>
+              <select value={a.property} onChange={(e) => pickActionProperty(i, e.target.value)}>
+                {opts.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
+              </select>
+              <select value={a.action} onChange={(e) => updateAction(i, { action: Number(e.target.value) })}>
+                {acts.map((x) => <option key={x} value={x}>{actionName(x)}</option>)}
+              </select>
+              {a.action === ACTION.SET && shape === 'color' && (
+                <input type="color" value={a.color} onChange={(e) => updateAction(i, { color: e.target.value })} />
+              )}
+              {a.action === ACTION.SET && shape && shape !== 'color' && (
+                <>
+                  <input className="ep" type="number" step="any" value={a.value} onChange={(e) => updateAction(i, { value: e.target.value })} />
+                  <span className="muted">{shape === 'percent' ? '%' : shape === 'kelvin' ? 'K' : '°'}</span>
+                </>
+              )}
+              {actions.length > 1 && <button type="button" className="ghost danger" onClick={() => setActions((as) => as.filter((_, j) => j !== i))}>✕</button>}
+            </div>
+          )
+        })}
+      </div>
 
       <div className="af-section">
         <div className="af-section-head">
@@ -279,7 +295,7 @@ export default function AutomationForm({ id, automations, onClose }) {
         </div>
         {conditions.length === 0 && <div className="muted">нет — срабатывает всегда</div>}
         {conditions.map((c, i) => {
-          const opts = propsOf(c.entity === SRC ? triggerEntity : c.entity)
+          const opts = propsOf(c.entity === SRC ? (triggers[0]?.entity ?? SRC) : c.entity)
           return (
             <div className="af-cond" key={i}>
               <select value={c.entity} onChange={(e) => updateCondition(i, { entity: e.target.value, property: 0 })}>
@@ -313,4 +329,10 @@ export default function AutomationForm({ id, automations, onClose }) {
       </div>
     </form>
   )
+}
+
+// Минимальная валидация: у каждого триггера STATE должно быть свойство, EVENT — событие.
+function triggerListInvalid(triggers) {
+  if (triggers.length === 0) return true
+  return triggers.some((t) => (Number(t.kind) === 2 && !t.property) || (Number(t.kind) === 0 && !t.eventId))
 }

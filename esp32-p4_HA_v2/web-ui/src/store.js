@@ -58,27 +58,64 @@ function decodeSettings(dv, o) {
 }
 const decodeGroup = (dv, o) => ({ title: cstr(dv, o, 32) })
 
-const RULE_OFF_CONDITIONS_COUNT = 189
-const RULE_OFF_ACTION = 190
 const CONDITION_SIZE = 32
-function decodeRule(dv, base) {
-  const kind = dv.getUint8(base + 26)
-  const trigger = {
-    kind,
-    entity: dv.getBigUint64(base + 16, true),
-    eventId: dv.getInt32(base + 24, true),
-    property: dv.getInt32(base + 28, true),
-    value: dv.getFloat32(base + 32, true),
-    value2: dv.getFloat32(base + 36, true),
-    minutesOfDay: dv.getUint16(base + 40, true),
-    op: dv.getUint8(base + 43),
-    edge: dv.getUint8(base + 44),
-    weekdayMask: dv.getUint8(base + 45),
+const RULE_TRIGGERS_OFF = 0
+const RULE_ACTIONS_OFF = 128
+const RULE_CONDITIONS_OFF = 256
+const RULE_TRIGGER_SIZE = 32
+const RULE_ACTION_SIZE = 32
+const RULE_OFF_ENABLED = 384
+const RULE_OFF_TRIGGER_COUNT = 385
+const RULE_OFF_ACTION_COUNT = 386
+const RULE_OFF_CONDITIONS_COUNT = 387
+
+function decodeTrigger(dv, o) {
+  return {
+    kind: dv.getUint8(o + 26),
+    entity: dv.getBigUint64(o, true),
+    eventId: dv.getInt32(o + 8, true),
+    property: dv.getInt32(o + 12, true),
+    value: dv.getFloat32(o + 16, true),
+    value2: dv.getFloat32(o + 20, true),
+    minutesOfDay: dv.getUint16(o + 24, true),
+    op: dv.getUint8(o + 27),
+    edge: dv.getUint8(o + 28),
+    weekdayMask: dv.getUint8(o + 29),
   }
+}
+
+function decodeAction(dv, o) {
+  const a = {
+    entity: dv.getBigUint64(o, true),
+    property: dv.getInt32(o + 8, true),
+    action: dv.getUint8(o + 28),
+    valueKind: dv.getInt32(o + 16, true),
+  }
+  if (a.valueKind === 1) {
+    a.scalarKind = dv.getInt32(o + 20, true)
+    a.value = a.scalarKind === 4 ? dv.getFloat32(o + 24, true) : dv.getUint32(o + 24, true)
+  } else if (a.valueKind === 2) {
+    a.x = dv.getFloat32(o + 20, true)
+    a.y = dv.getFloat32(o + 24, true)
+  }
+  return a
+}
+
+function decodeRule(dv, base) {
+  const triggerCount = dv.getUint8(base + RULE_OFF_TRIGGER_COUNT)
+  const actionCount = dv.getUint8(base + RULE_OFF_ACTION_COUNT)
   const conditionsCount = dv.getUint8(base + RULE_OFF_CONDITIONS_COUNT)
+  const triggers = []
+  for (let i = 0; i < triggerCount; i++) {
+    triggers.push(decodeTrigger(dv, base + RULE_TRIGGERS_OFF + i * RULE_TRIGGER_SIZE))
+  }
+  const actions = []
+  for (let i = 0; i < actionCount; i++) {
+    actions.push(decodeAction(dv, base + RULE_ACTIONS_OFF + i * RULE_ACTION_SIZE))
+  }
   const conditions = []
   for (let i = 0; i < conditionsCount; i++) {
-    const p = base + 48 + i * CONDITION_SIZE
+    const p = base + RULE_CONDITIONS_OFF + i * CONDITION_SIZE
     conditions.push({
       entity: dv.getBigUint64(p, true),
       property: dv.getInt32(p + 8, true),
@@ -87,20 +124,7 @@ function decodeRule(dv, base) {
       value2: dv.getFloat32(p + 24, true),
     })
   }
-  const action = {
-    entity: dv.getBigUint64(base, true),
-    property: dv.getInt32(base + 8, true),
-    action: dv.getUint8(base + RULE_OFF_ACTION),
-    valueKind: dv.getInt32(base + 176, true),
-  }
-  if (action.valueKind === 1) {
-    action.scalarKind = dv.getInt32(base + 180, true)
-    action.value = action.scalarKind === 4 ? dv.getFloat32(base + 184, true) : dv.getUint32(base + 184, true)
-  } else if (action.valueKind === 2) {
-    action.x = dv.getFloat32(base + 180, true)
-    action.y = dv.getFloat32(base + 184, true)
-  }
-  return { enabled: dv.getUint8(base + 188) !== 0, trigger, conditions, action }
+  return { enabled: dv.getUint8(base + RULE_OFF_ENABLED) !== 0, triggers, actions, conditions }
 }
 
 function decodeValue(payload, atKind, atBits) {
