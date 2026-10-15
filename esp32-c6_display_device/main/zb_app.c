@@ -194,6 +194,41 @@ static void start_color_reporting(void)
     }
 }
 
+/*
+ * OnOff/Level reporting: дефолт eZbee — min_interval=5 с (EZB_ZCL_MIN_REPORTING_INTERVAL_DEFAULT),
+ * из-за чего смена OnOff доходит до координатора только через ~5 с. Включаем отчёты локально
+ * с min=0, чтобы координатор узнавал о переключении немедленно (как Color/Temperature).
+ */
+static void start_light_reporting(void)
+{
+    static const struct {
+        uint16_t cluster;
+        uint16_t attr;
+    } attrs[] = {
+        {EZB_ZCL_CLUSTER_ID_ON_OFF, EZB_ZCL_ATTR_ON_OFF_ON_OFF_ID},
+        {EZB_ZCL_CLUSTER_ID_LEVEL, EZB_ZCL_ATTR_LEVEL_CURRENT_LEVEL_ID},
+    };
+
+    for (size_t i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
+        ezb_zcl_reporting_info_t info =
+            ezb_zcl_reporting_info_find(HA_LIGHT_EP, attrs[i].cluster, EZB_ZCL_CLUSTER_SERVER,
+                                        attrs[i].attr, EZB_ZCL_STD_MANUF_CODE);
+        if (info == EZB_ZCL_INVALID_REPORTING_INFO) {
+            ESP_LOGW(TAG, "light cl=0x%04x attr=0x%04x: no reporting info", attrs[i].cluster,
+                     attrs[i].attr);
+            continue;
+        }
+        ezb_zcl_attr_variable_t delta = { .u8 = 1 };
+        /* max=5: светильник меняет Level дважды за один OnOff (255<->0), reporting-движок
+         * eZbee при этом отдаёт только первое значение; короткий max_interval возвращает
+         * актуальное состояние не позже чем через 5 с. */
+        const ezb_err_t err = ezb_zcl_reporting_info_update(info, 0, 5, &delta);
+        (void)ezb_zcl_reporting_start_attr_report(info);
+        ESP_LOGI(TAG, "light cl=0x%04x attr=0x%04x: reporting min=0 max=5 (err=0x%x)",
+                 attrs[i].cluster, attrs[i].attr, (unsigned)err);
+    }
+}
+
 /* --------------------------- Zigbee callbacks ---------------------------- */
 
 static void core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
@@ -372,6 +407,7 @@ static bool app_signal_handler(const ezb_app_signal_t *app_signal)
             update_net_info();
             start_temperature_reporting();
             start_color_reporting();
+            start_light_reporting();
         }
         break;
     }
@@ -385,6 +421,7 @@ static bool app_signal_handler(const ezb_app_signal_t *app_signal)
             update_net_info();
             start_temperature_reporting();
             start_color_reporting();
+            start_light_reporting();
             ui_add_log("Joined 0x%04hx ch%u", ezb_nwk_get_panid(), ezb_nwk_get_current_channel());
         } else {
             ESP_LOGW(TAG, "Steering failed (0x%02x), retry", status);
