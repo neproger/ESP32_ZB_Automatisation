@@ -1,6 +1,8 @@
 idf_component_register(
     SRCS
         "src/system.c"
+        "src/system_http.c"
+        "src/system_weather.c"
     INCLUDE_DIRS
         "include"
 REQUIRES

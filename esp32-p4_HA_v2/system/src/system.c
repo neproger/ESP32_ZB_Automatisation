@@ -6,7 +6,6 @@
 #include <time.h>
 
 #include "esp_event.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
@@ -18,6 +17,9 @@
 #include "ha_model/ha_state.h"
 #include "ha_model/ha_system.h"
 #include "ha_model/ha_weather.h"
+
+#include "system_http.h"
+#include "system_weather.h"
 
 /*
  * Сервис времени (docs/services/SYSTEM.md). Пока только время: SNTP даёт UTC, GeoIP —
@@ -35,12 +37,9 @@ static const char *TAG = "system";
 
 #define SYSTEM_GEOIP_URL \
     "http://ip-api.com/json/?fields=status,message,city,regionName,lat,lon,timezone,offset"
-#define SYSTEM_GEOIP_TIMEOUT_MS 8000
 #define SYSTEM_GEOIP_BODY_MAX 1024
 #define SYSTEM_GEOIP_ATTEMPTS 5
 
-#define SYSTEM_WEATHER_URL "http://api.open-meteo.com/v1/forecast"
-#define SYSTEM_WEATHER_BODY_MAX 2048
 #define SYSTEM_WEATHER_PERIOD_MIN 15
 #define SYSTEM_WEATHER_ATTEMPTS 3
 
@@ -185,133 +184,13 @@ static void apply_tz(int32_t offset_sec)
     }
 }
 
-/* --- HTTP --------------------------------------------------------------- */
-
-typedef struct {
-    char *buf;
-    size_t cap;
-    size_t len;
-} http_buf_t;
-
-static esp_err_t http_on_data(esp_http_client_event_t *evt)
-{
-    http_buf_t *out = (http_buf_t *)evt->user_data;
-    if (evt->event_id == HTTP_EVENT_ON_DATA && out != NULL && evt->data_len > 0) {
-        if (out->len + (size_t)evt->data_len >= out->cap) {
-            return ESP_ERR_NO_MEM;
-        }
-        memcpy(out->buf + out->len, evt->data, evt->data_len);
-        out->len += (size_t)evt->data_len;
-        out->buf[out->len] = '\0';
-    }
-    return ESP_OK;
-}
-
-static esp_err_t http_get_text(const char *url, char *buf, size_t cap)
-{
-    http_buf_t out = {.buf = buf, .cap = cap, .len = 0};
-    if (cap > 0) {
-        buf[0] = '\0';
-    }
-    const esp_http_client_config_t cfg = {
-        .url = url,
-        .timeout_ms = SYSTEM_GEOIP_TIMEOUT_MS,
-        .method = HTTP_METHOD_GET,
-        .event_handler = http_on_data,
-        .user_data = &out,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    esp_err_t err = esp_http_client_perform(client);
-    if (err == ESP_OK && esp_http_client_get_status_code(client) != 200) {
-        err = ESP_ERR_INVALID_RESPONSE;
-    }
-    esp_http_client_cleanup(client);
-    return err;
-}
-
-/*
- * Мини-извлечение полей из плоского JSON (ip-api): без внешнего парсера. Ищем
- * "key", затем значение. Достаточно для известных ответов; вложенность не поддержана.
- */
-static const char *json_find(const char *json, const char *key)
-{
-    char pattern[48];
-    const int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    if (n <= 0 || n >= (int)sizeof(pattern)) {
-        return NULL;
-    }
-    const char *p = strstr(json, pattern);
-    if (p == NULL) {
-        return NULL;
-    }
-    p += strlen(pattern);
-    while (*p == ' ' || *p == '\t' || *p == ':') {
-        p++;
-    }
-    return p;
-}
-
-static bool json_string(const char *json, const char *key, char *out, size_t out_size)
-{
-    const char *p = json_find(json, key);
-    if (p == NULL || *p != '"') {
-        return false;
-    }
-    p++;
-    size_t n = 0;
-    while (*p != '\0' && *p != '"' && (n + 1) < out_size) {
-        if (*p == '\\' && p[1] != '\0') {
-            p++; /* простейшая разэкранировка */
-        }
-        out[n++] = *p++;
-    }
-    out[n] = '\0';
-    return true;
-}
-
-static bool json_number(const char *json, const char *key, double *out)
-{
-    const char *p = json_find(json, key);
-    if (p == NULL) {
-        return false;
-    }
-    char *end = NULL;
-    const double value = strtod(p, &end);
-    if (end == p) {
-        return false;
-    }
-    *out = value;
-    return true;
-}
-
-/* percent-кодирование query: город может быть кириллицей. */
-static void url_encode(const char *in, char *out, size_t out_size)
-{
-    static const char hex[] = "0123456789ABCDEF";
-    size_t n = 0;
-    for (const unsigned char *p = (const unsigned char *)in; *p != '\0' && n + 4 < out_size; p++) {
-        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
-            *p == '-' || *p == '_' || *p == '.' || *p == '~') {
-            out[n++] = (char)*p;
-        } else {
-            out[n++] = '%';
-            out[n++] = hex[*p >> 4];
-            out[n++] = hex[*p & 0x0F];
-        }
-    }
-    out[n] = '\0';
-}
-
 /* Город → координаты (Open-Meteo geocoding): ручное место задаётся именем, без lat/lon. */
 static bool geocode_city(const char *city, double *lat, double *lon)
 {
     static char body[1024];
     char enc[128] = {0};
     char url[256];
-    url_encode(city, enc, sizeof(enc));
+    system_url_encode(city, enc, sizeof(enc));
     const int n = snprintf(url, sizeof(url),
                            "http://geocoding-api.open-meteo.com/v1/search?name=%s&count=1&"
                            "language=en&format=json",
@@ -319,7 +198,7 @@ static bool geocode_city(const char *city, double *lat, double *lon)
     if (n <= 0 || n >= (int)sizeof(url)) {
         return false;
     }
-    if (http_get_text(url, body, sizeof(body)) != ESP_OK) {
+    if (system_http_get_text(url, body, sizeof(body)) != ESP_OK) {
         ESP_LOGW(TAG, "geocode http failed");
         return false;
     }
@@ -328,36 +207,36 @@ static bool geocode_city(const char *city, double *lat, double *lon)
         ESP_LOGW(TAG, "geocode: нет results для \"%s\"", city);
         return false;
     }
-    return json_number(results, "latitude", lat) && json_number(results, "longitude", lon);
+    return system_json_number(results, "latitude", lat) && system_json_number(results, "longitude", lon);
 }
 
 /* GeoIP: город + координаты + смещение пояса. Один вызов на старте. */
 static bool fetch_location(char *city, size_t city_size, double *lat, double *lon, int32_t *offset_sec)
 {
     static char body[SYSTEM_GEOIP_BODY_MAX];
-    if (http_get_text(SYSTEM_GEOIP_URL, body, sizeof(body)) != ESP_OK) {
+    if (system_http_get_text(SYSTEM_GEOIP_URL, body, sizeof(body)) != ESP_OK) {
         ESP_LOGW(TAG, "geoip http failed");
         return false;
     }
 
     char status[16] = {0};
-    if (!json_string(body, "status", status, sizeof(status)) || strcmp(status, "success") != 0) {
+    if (!system_json_string(body, "status", status, sizeof(status)) || strcmp(status, "success") != 0) {
         ESP_LOGW(TAG, "geoip status: %s", status[0] ? status : "?");
         return false;
     }
-    if (!json_number(body, "lat", lat) || !json_number(body, "lon", lon)) {
+    if (!system_json_number(body, "lat", lat) || !system_json_number(body, "lon", lon)) {
         return false;
     }
 
     double off = 0.0;
-    if (json_number(body, "offset", &off)) {
+    if (system_json_number(body, "offset", &off)) {
         *offset_sec = (int32_t)off;
     }
 
     char c[32] = {0};
     char r[32] = {0};
-    json_string(body, "city", c, sizeof(c));
-    json_string(body, "regionName", r, sizeof(r));
+    system_json_string(body, "city", c, sizeof(c));
+    system_json_string(body, "regionName", r, sizeof(r));
     if (c[0] && r[0]) {
         (void)snprintf(city, city_size, "%s, %s", c, r);
     } else if (c[0]) {
@@ -436,111 +315,6 @@ static void resolve_location(void)
     put_location("Unknown", 0.0, 0.0, 0, HA_LOCATION_FLAG_POS_AUTO | HA_LOCATION_FLAG_TZ_AUTO);
 }
 
-/* --- погода (Open-Meteo) ------------------------------------------------ */
-
-/* WMO weather_code → условие (ha_weather_condition_t). is_day — из поля is_day. */
-static uint8_t wmo_to_condition(int code, bool is_day)
-{
-    switch (code) {
-    case 0:
-    case 1:
-        return is_day ? (uint8_t)HA_WEATHER_CLEAR : (uint8_t)HA_WEATHER_CLEAR_NIGHT;
-    case 2:
-        return (uint8_t)HA_WEATHER_PARTLYCLOUDY;
-    case 3:
-        return (uint8_t)HA_WEATHER_OVERCAST;
-    case 45:
-    case 48:
-        return (uint8_t)HA_WEATHER_FOG;
-    case 51:
-    case 53:
-    case 55:
-    case 56:
-    case 57:
-    case 61:
-    case 63:
-    case 65:
-        return (uint8_t)HA_WEATHER_RAINY;
-    case 66:
-    case 67:
-        return (uint8_t)HA_WEATHER_SNOWY_RAINY;
-    case 71:
-    case 73:
-    case 75:
-    case 77:
-    case 85:
-    case 86:
-        return (uint8_t)HA_WEATHER_SNOWY;
-    case 80:
-    case 81:
-    case 82:
-        return (uint8_t)HA_WEATHER_POURING;
-    case 95:
-        return (uint8_t)HA_WEATHER_LIGHTNING;
-    case 96:
-    case 99:
-        return (uint8_t)HA_WEATHER_LIGHTNING_RAINY;
-    default:
-        return (uint8_t)HA_WEATHER_UNKNOWN;
-    }
-}
-
-static bool fetch_weather(ha_weather_record_t *out)
-{
-    static char body[SYSTEM_WEATHER_BODY_MAX];
-    char url[320];
-    const int n = snprintf(url, sizeof(url),
-                           "%s?latitude=%.4f&longitude=%.4f&current=temperature_2m,"
-                           "relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,"
-                           "cloud_cover,surface_pressure,is_day",
-                           SYSTEM_WEATHER_URL, s_lat, s_lon);
-    if (n <= 0 || n >= (int)sizeof(url)) {
-        return false;
-    }
-    if (http_get_text(url, body, sizeof(body)) != ESP_OK) {
-        ESP_LOGW(TAG, "weather http failed");
-        return false;
-    }
-
-    /* Ключи есть и в `current_units` (строки) — берём только внутри `current`. */
-    const char *current = strstr(body, "\"current\":");
-    if (current == NULL) {
-        ESP_LOGW(TAG, "weather json: нет объекта current");
-        return false;
-    }
-
-    double temp = 0.0;
-    double code = 0.0;
-    if (!json_number(current, "temperature_2m", &temp) ||
-        !json_number(current, "weather_code", &code)) {
-        ESP_LOGW(TAG, "weather json: нет temperature_2m/weather_code");
-        return false;
-    }
-
-    ha_weather_record_t rec = {0};
-    double v = 0.0;
-    const bool is_day = !(json_number(current, "is_day", &v) && v == 0.0);
-    rec.condition = wmo_to_condition((int)code, is_day);
-    rec.temperature_c100 = (int16_t)lround(temp * 100.0);
-    if (json_number(current, "relative_humidity_2m", &v)) {
-        rec.humidity_p100 = (uint16_t)lround(v * 100.0);
-    }
-    if (json_number(current, "surface_pressure", &v)) {
-        rec.pressure_hpa = (uint16_t)lround(v);
-    }
-    if (json_number(current, "wind_speed_10m", &v)) {
-        rec.wind_kmh10 = (uint16_t)lround(v * 10.0);
-    }
-    if (json_number(current, "wind_direction_10m", &v)) {
-        rec.wind_dir_deg = (uint16_t)lround(v);
-    }
-    if (json_number(current, "cloud_cover", &v)) {
-        rec.cloud_pct = (uint8_t)lround(v);
-    }
-    *out = rec;
-    return true;
-}
-
 static void put_weather(const ha_weather_record_t *rec)
 {
     const ha_device_id_t uid = HA_WEATHER_DEVICE_ID;
@@ -554,7 +328,7 @@ static void refresh_weather(void)
 {
     ha_weather_record_t rec = {0};
     for (int attempt = 1; attempt <= SYSTEM_WEATHER_ATTEMPTS; attempt++) {
-        if (fetch_weather(&rec)) {
+        if (system_weather_fetch(s_lat, s_lon, &rec)) {
             put_weather(&rec);
             const bool changed = s_weather_valid && rec.condition != s_weather_condition;
             s_weather_valid = true;
