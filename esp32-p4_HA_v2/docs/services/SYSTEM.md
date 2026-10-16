@@ -80,9 +80,11 @@ Automation подписан и на `SYSTEM`, поэтому правило ве
 
 ## 5. Реализация
 
-Компонент `system` (`system/src/system.c`). Зависит от `domain`/`ha_model`/`sys`; из
+Компонент `system` (`system/src/`): `system.c` — время/локация/состояния/задача;
+`system_http` — HTTP GET + мини-разбор JSON (`system_json_find/string/number`);
+`system_weather` — Open-Meteo (WMO → condition). Зависит от `domain`/`ha_model`/`sys`; из
 IDF — `esp_netif` (SNTP + IP STA), `esp_http_client` (GeoIP + Open-Meteo). Внешнего
-JSON-парсера нет: `json_find`/`json_string`/`json_number` ищут поля по имени. У Open-Meteo
+JSON-парсера нет: `system_json_*` ищут поля по имени. У Open-Meteo
 ключи дублируются в `current_units` (строки), поэтому поля берутся из подстроки после
 `"current":`. IANA-имена поясов newlib не знает — TZ строится из смещения (знак в POSIX
 TZ обратный).

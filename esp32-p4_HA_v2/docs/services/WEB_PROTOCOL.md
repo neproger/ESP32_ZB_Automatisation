@@ -26,27 +26,26 @@
 | 4 | u16 | `seq` — корреляция (транспорт) |
 | 6 | u16 | `flags` — зарезервировано (0) |
 
-### 2.1. Транспорт: per-client TX queue, stop-and-wait
+### 2.1. Транспорт: per-client TX queue, back-to-back
 
-Транспорт тупой: знает только байты и `seq`, не различает типы сообщений.
+Транспорт тупой: знает только байты и `seq`, не различает типы сообщений. Порядок и
+надёжность даёт TCP, поэтому пофреймовый ACK/retry не нужен.
 
 ```text
-web_tx_enqueue(fd, frame)   — поставить кадр (никогда не шлёт); seq присваивает транспорт
-web_tx_ack(fd, seq)         — клиент подтвердил head
-sender (web-задача)         — шлёт head, ждёт ACK, retry ≤ 3, иначе закрывает сессию
+web_sessions_send/broadcast(fd, ...) — поставить кадр в очередь клиента (никогда не шлёт);
+                                       seq присваивает транспорт
+web_sessions_step()                  — web-задача шлёт накопленное бэк-ту-бэк
 ```
 
-- каждый кадр device → browser несёт `header.seq` (per-client, с 0); браузер отвечает
-  кадром `ACK (0x03)` с `header.seq` = подтверждаемый seq (payload пуст);
-- очередь bounded (64 кадра / 16 КБ): переполнение = клиент не успевает → сессия
-  закрывается (`httpd_sess_trigger_close`); после reconnect клиент получает свежий snapshot;
-- порядок железный (stop-and-wait): `enqueue A,B,C` → клиент видит A→B→C;
-- at-least-once: при потере ACK кадр повторяется; браузер дедуплицирует по `seq`
-  (повторно не применяет) → effectively once за сессию;
+- каждый кадр device → browser несёт `header.seq` (per-client, с 0);
+- очередь bounded (64 кадра / 16 КБ): клиент не успевает → сессия закрывается
+  (`httpd_sess_trigger_close`); после reconnect клиент получает свежий snapshot;
+- порядок железный (TCP): `send A,B,C` → клиент видит A→B→C;
+- браузер дедуплицирует по `seq` (повторно не применяет);
 - отправка идёт из web-задачи и **никогда — под Domain-lock**.
 
-Контракт: *within an active session — ordered, retried, acknowledged; across disconnect —
-no guarantee; reconnect + snapshot восстанавливают истину.*
+Контракт: *within an active session — ordered (TCP); across disconnect — no guarantee;
+reconnect + snapshot восстанавливают истину.*
 
 ## 3. Типы кадров
 
@@ -56,7 +55,6 @@ no guarantee; reconnect + snapshot восстанавливают истину.*
 |---|---|---|
 | 0x01 | SYNC_BEGIN | `u32 count` |
 | 0x02 | SYNC_END | `u32 count` |
-| 0x03 | ACK | — (browser → device; `header.seq` = подтверждаемый) |
 | 0xE0 | EVENT | `ha_event_t` verbatim |
 | 0x20 | COMMAND | `u8 cmd` + args (browser → device; см. §6) |
 
@@ -67,7 +65,7 @@ no guarantee; reconnect + snapshot восстанавливают истину.*
 
 | type | сущность | key | record |
 |---|---|---|---|
-| 4 | AUTOMATION | `ha_automation_key_t` (8) | `ha_rule_t` (192) |
+| 4 | AUTOMATION | `ha_automation_key_t` (8) | `ha_rule_t` (392) |
 | 6 | LOCATION | `ha_device_id_t` (8) | `ha_location_record_t` (60) |
 | 7 | GROUP | `ha_group_key_t` (8) | `ha_group_record_t` (32) |
 | 8 | GROUP_ITEM | `ha_group_item_key_t` (16) | `ha_group_item_record_t` (36) |
@@ -91,7 +89,7 @@ Domain-таблица не становится публичным API авто�
 | Logical Device | `ha_logical_device_record_t` (80): `parent_device_id u64@0`, `source u32@8`, `native_id[32]@12`, `name[32]@44`, `reserved[4]@76` |
 | Property state | `ha_state_key_t` (16): `entity u64@0`, `property i32@8`, `reserved u32@12`; record `ha_value_t` (8): `kind i32@0`, `value u32/f32@4` |
 | Capabilities | `ha_entity_capabilities_record_t` (216): `property_count u8@0`, `reserved[3]`, `properties[8]` (`ha_capability_t` 24: `property i32@0`, `action_count u8@4`, `actions[4] i32@8`), `event_count u8@196`, `events[4] i32@200` |
-| Automation | `ha_rule_t` (192) — см. §5 |
+| Automation | `ha_rule_t` (392) — см. §5 |
 | Group / item | `ha_group_record_t` (32): `title[32]`; `ha_group_item_key_t` (16): `group_id u64@0`, `entity u64@8` (плитка = Entity); `ha_group_item_record_t` (36): `order u16@0`, `reserved[2]@2`, `title[32]@4` |
 | Location | `ha_location_record_t` (60): `latitude f32@0`, `longitude f32@4`, `tz_offset_min i16@8`, `flags u8@10`, `reserved u8@11`, `name[48]@12` |
 | Weather | `ha_weather_record_t` (16): `condition u8@0`, `cloud_pct u8@1`, `temperature_c100 i16@2`, `humidity_p100 u16@4`, `pressure_hpa u16@6`, `wind_kmh10 u16@8`, `wind_dir_deg u16@10`, `reserved[4]@12` |
@@ -167,10 +165,10 @@ WS COMMAND (args verbatim):
 
 ## 8. Решённые вопросы
 
-- ~~snapshot под Domain-lock~~ — решено: snapshot и дельты только `web_tx_enqueue`
-  (никакой отправки под Domain-lock); отправляет `web_tx_step` из web-задачи.
-- ~~медленный клиент~~ — решено: bounded-очередь + stop-and-wait; не успевает → сессия
-  закрывается, reconnect даёт свежий snapshot.
+- ~~snapshot под Domain-lock~~ — решено: snapshot и дельты только кладут кадры в очередь
+  (`web_sessions_send`); отправляет `web_sessions_step` из web-задачи (не под Domain-lock).
+- ~~медленный клиент~~ — решено: bounded-очередь, отправка бэк-ту-бэк; не успевает →
+  сессия закрывается, reconnect даёт свежий snapshot.
 - ~~компактные DTO и кодеки в web~~ — решено (Step R): canonical layout = wire layout;
   web несёт canonical structs verbatim, интерпретация — в браузере. Старые протоколы
   (v2, DTO-раскладка v3) не поддерживаются.

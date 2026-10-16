@@ -31,10 +31,11 @@ canonical Domain records (ha_model) → verbatim binary WS → браузер (�
 (little-endian, fixed-width), а вся семантика (имена, виджеты, единицы) — на клиенте.
 Компактных DTO/кодеков в `web` нет.
 
-Модули (`web/src`): `web_sessions` — per-client доставка (очередь + stop-and-wait
-seq/ACK/retry); `web_projection` — canonical → браузер (явный список типов, snapshot,
+Модули (`web/src`): `web_sessions` — per-client доставка (bounded-очередь, бэк-ту-бэк,
+без ACK/retry); `web_projection` — canonical → браузер (явный список типов, snapshot,
 дельты); `web_commands` — браузер → Domain/Device (args verbatim); `web_proto` — framing;
-`web` — HTTP/WS-сервер, подписка, задача, lifecycle.
+`web_model_file` — статический MODEL-блоб в PSRAM (GET /model.bin); `web` — HTTP/WS-сервер,
+подписка, задача, lifecycle.
 
 ## 3. Snapshot и delta
 
@@ -58,8 +59,9 @@ Wi-Fi web не принадлежит: у P4 нет своего радио, в�
 
 Провод — `WEB_PROTOCOL.md` (canonical records verbatim: `type = ha_entity_t`,
 `[key][record]`; маленький endian; 8‑байтный заголовок). Клиент — `web-ui/`
-(Vite + Preact/JSX): кадры и encoders команд (`src/proto.js`), модель-стор
-(`src/store.js`), семантика/словари (`src/semantics.js`, `src/automation.js`),
+(Vite + Preact/JSX): кадры и encoders команд (`src/proto.js`), транспорт+шина
+(`src/store.js`), хранение canonical-записей (`src/model.js`), журнал событий
+(`src/events.js`), семантика/словари (`src/semantics.js`, `src/automation.js`),
 UI (`src/App.jsx`, `src/main.jsx`).
 
 `npm run build` кладёт сборку в `web/ui/` (`index.html`, `app.js`, `app.css` и их `.gz`;

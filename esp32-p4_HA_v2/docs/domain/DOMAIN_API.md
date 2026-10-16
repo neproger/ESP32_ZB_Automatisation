@@ -206,7 +206,7 @@ descriptor задаёт `type`, `key_size`, `payload_size`, `capacity`, `backing
 |---|---|---|
 | Entities | `domain_register_entity` (bootstrap) / `put / get / remove / iter / meta`; `put`/`remove` пишут факт по исходу операции; `meta` — opaque `version` без чтения записи | `ENTITY_STORE.md` |
 | Journal | прямой доступ отсутствует: Journal читает только Dispatcher, публичного `domain_journal_read()` для сервисов нет | `JOURNAL.md` |
-| Subscriptions | `domain_subscribe` / `domain_unsubscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
+| Subscriptions | `domain_subscribe`; доставка — `domain_dispatch_once` / `domain_dispatch_wait` | `DISPATCHER.md` |
 | Commands | `domain_post` + регистрация executor'а | `COMMANDS.md` |
 | Transient payload | `domain_payload_put / get` по opaque ref; размер тела — в факте `payload_size` | `TRANSIENT_PAYLOAD.md` |
 

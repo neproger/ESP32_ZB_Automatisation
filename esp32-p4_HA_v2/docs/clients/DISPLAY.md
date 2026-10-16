@@ -72,7 +72,7 @@ Display не изобретает имена и не заводит вторую
 потребителя (`../domain/COMMANDS.md`); прямого обращения к Zigbee-сервису нет.
 
 Виджет **цвета** (`UI_WIDGET_COLOR`): слайдер оттенка (0..359) + кружок-превью
-текущего цвета + слайдер яркости. Оттенок конвертируется sRGB→CIE xy (в `ui_widgets.c`) и
+текущего цвета + слайдер яркости. Оттенок конвертируется sRGB→CIE xy (в `ui_color.c`) и
 уходит canonical командой `(entity, property=COLOR, action=SET, xy)`; яркость —
 `(entity, property=BRIGHTNESS, action=SET)`. Превью читает canonical `COLOR_X`/`COLOR_Y`
 и `BRIGHTNESS`. ZCL-кодировку делает мост внутри `zigbee/`.
