@@ -53,6 +53,9 @@ export const HDR = 8
 export const VER = 3
 
 // Размеры canonical форм (ключ+запись, verbatim layout ha_model) для bulk-файлов.
+// Зеркало canonical-форм (ключ+запись). Источник истины — ha_model; размеры там
+// зафиксированы _Static_assert, поэтому правка структуры в C ломает сборку прошивки —
+// при этом обнови и этот список (иначе страница молча читает не то).
 export const SIZES = {
   17: { key: 8, rec: 80 },   // LOGICAL_DEVICE
   14: { key: 8, rec: 40 },   // ENTITY
