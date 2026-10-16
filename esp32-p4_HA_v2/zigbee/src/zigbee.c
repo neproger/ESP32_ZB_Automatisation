@@ -330,106 +330,124 @@ static bool zigbee_restore_device(ha_device_uid_t uid, const ha_device_record_t 
     return true;
 }
 
+/* Обработчики очередей: каждый забирает один элемент и делает свою работу. */
+static void zigbee_handle_report(void)
+{
+    zigbee_report_t report = {0};
+    if (xQueueReceive(s_reports, &report, 0) != pdTRUE) {
+        return;
+    }
+    if (!zigbee_device_has(report.device_uid)) {
+        ESP_LOGW(TAG, "report dropped: uid=%llx cluster=%04x attr=%04x",
+                 (unsigned long long)report.device_uid, (unsigned)report.cluster_id,
+                 (unsigned)report.attr_id);
+        zigbee_diag_record(ZIGBEE_DIAG_REPORT,
+                           sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND));
+        return;
+    }
+    zigbee_publish_property_state(&report);
+}
+
+static void zigbee_handle_command(void)
+{
+    ha_zb_command_t command = {0};
+    if (xQueueReceive(s_commands, &command, 0) == pdTRUE) {
+        zigbee_send(&command);
+    }
+}
+
+static void zigbee_handle_interview(void)
+{
+    zigbee_interview_result_t result = {0};
+    if (xQueueReceive(s_interviews, &result, 0) != pdTRUE) {
+        return;
+    }
+    const sys_error_t err = zigbee_interview_apply(&result);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "interview not applied: uid=%llx err=%u", (unsigned long long)result.uid,
+                 (unsigned)err.code);
+        zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
+        return;
+    }
+    ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u", (unsigned long long)result.uid,
+             (unsigned)result.endpoint_count);
+    zigbee_publish_device(result.uid);
+    (void)zigbee_device_store_save();
+}
+
+static void zigbee_handle_event(void)
+{
+    zigbee_event_t event = {0};
+    if (xQueueReceive(s_events, &event, 0) == pdTRUE) {
+        zigbee_event_publish(&event);
+    }
+}
+
+static void zigbee_handle_leave(void)
+{
+    ha_device_uid_t uid = 0;
+    if (xQueueReceive(s_leaves, &uid, 0) != pdTRUE) {
+        return;
+    }
+    const sys_error_t err = zigbee_device_remove(uid);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "device not removed: uid=%llx err=%u", (unsigned long long)uid,
+                 (unsigned)err.code);
+        zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
+        return;
+    }
+    ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
+    zigbee_entity_forget(uid);     /* adapter-private bindings больше не нужны */
+    zigbee_remove_mark_clear(uid); /* устройство ушло — снимаем пометку */
+    (void)zigbee_device_store_save();
+}
+
+static void zigbee_handle_remove_request(void)
+{
+    ha_device_uid_t uid = 0;
+    if (xQueueReceive(s_remove_requests, &uid, 0) != pdTRUE) {
+        return;
+    }
+    const sys_error_t err = zigbee_radio_request_leave(uid);
+    if (sys_failed(err)) {
+        ESP_LOGI(TAG, "leave not sent: uid=%llx err=%u (will announce)",
+                 (unsigned long long)uid, (unsigned)err.code);
+    }
+}
+
+static void zigbee_handle_permit_request(void)
+{
+    uint8_t seconds = 0;
+    if (xQueueReceive(s_permit_requests, &seconds, 0) != pdTRUE) {
+        return;
+    }
+    const sys_error_t err = zigbee_radio_open_network(seconds);
+    if (sys_failed(err)) {
+        ESP_LOGW(TAG, "network not opened: err=%u", (unsigned)err.code);
+    }
+}
+
+/* Задача сервиса: одна ветка на очередь набора; обработчик забирает один элемент. */
 static void zigbee_task(void *arg)
 {
     (void)arg;
 
     for (;;) {
         const QueueHandle_t ready = xQueueSelectFromSet(s_inbox, portMAX_DELAY);
-        if (ready == NULL) {
-            continue;
-        }
-
         if (ready == s_reports) {
-            zigbee_report_t report = {0};
-            if (xQueueReceive(s_reports, &report, 0) != pdTRUE) {
-                continue;
-            }
-
-            if (!zigbee_device_has(report.device_uid)) {
-                ESP_LOGW(TAG, "report dropped: uid=%llx cluster=%04x attr=%04x",
-                         (unsigned long long)report.device_uid, (unsigned)report.cluster_id,
-                         (unsigned)report.attr_id);
-                zigbee_diag_record(ZIGBEE_DIAG_REPORT,
-                                   sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND));
-            } else {
-                zigbee_publish_property_state(&report);
-            }
-            continue;
-        }
-
-        if (ready == s_commands) {
-            ha_zb_command_t command = {0};
-            if (xQueueReceive(s_commands, &command, 0) == pdTRUE) {
-                zigbee_send(&command);
-            }
-            continue;
-        }
-
-        if (ready == s_interviews) {
-            zigbee_interview_result_t result = {0};
-            if (xQueueReceive(s_interviews, &result, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_interview_apply(&result);
-                if (sys_failed(err)) {
-                    ESP_LOGW(TAG, "interview not applied: uid=%llx err=%u",
-                             (unsigned long long)result.uid, (unsigned)err.code);
-                    zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
-                } else {
-                    ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u",
-                             (unsigned long long)result.uid, (unsigned)result.endpoint_count);
-                    zigbee_publish_device(result.uid);
-                    (void)zigbee_device_store_save();
-                }
-            }
-            continue;
-        }
-
-        if (ready == s_events) {
-            zigbee_event_t event = {0};
-            if (xQueueReceive(s_events, &event, 0) == pdTRUE) {
-                zigbee_event_publish(&event);
-            }
-            continue;
-        }
-
-        if (ready == s_leaves) {
-            ha_device_uid_t uid = 0;
-            if (xQueueReceive(s_leaves, &uid, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_device_remove(uid);
-                if (sys_failed(err)) {
-                    ESP_LOGW(TAG, "device not removed: uid=%llx err=%u",
-                             (unsigned long long)uid, (unsigned)err.code);
-                    zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
-                } else {
-                    ESP_LOGI(TAG, "device removed: uid=%llx", (unsigned long long)uid);
-                    zigbee_entity_forget(uid); /* adapter-private bindings больше не нужны */
-                    zigbee_remove_mark_clear(uid); /* устройство ушло — снимаем пометку */
-                    (void)zigbee_device_store_save();
-                }
-            }
-            continue;
-        }
-
-        if (ready == s_remove_requests) {
-            ha_device_uid_t uid = 0;
-            if (xQueueReceive(s_remove_requests, &uid, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_radio_request_leave(uid);
-                if (sys_failed(err)) {
-                    ESP_LOGI(TAG, "leave not sent: uid=%llx err=%u (ждём announce)",
-                             (unsigned long long)uid, (unsigned)err.code);
-                }
-            }
-            continue;
-        }
-
-        if (ready == s_permit_requests) {
-            uint8_t seconds = 0;
-            if (xQueueReceive(s_permit_requests, &seconds, 0) == pdTRUE) {
-                const sys_error_t err = zigbee_radio_open_network(seconds);
-                if (sys_failed(err)) {
-                    ESP_LOGW(TAG, "network not opened: err=%u", (unsigned)err.code);
-                }
-            }
+            zigbee_handle_report();
+        } else if (ready == s_commands) {
+            zigbee_handle_command();
+        } else if (ready == s_interviews) {
+            zigbee_handle_interview();
+        } else if (ready == s_events) {
+            zigbee_handle_event();
+        } else if (ready == s_leaves) {
+            zigbee_handle_leave();
+        } else if (ready == s_remove_requests) {
+            zigbee_handle_remove_request();
+        } else if (ready == s_permit_requests) {
+            zigbee_handle_permit_request();
         }
     }
 }
