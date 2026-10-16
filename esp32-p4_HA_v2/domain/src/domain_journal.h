@@ -35,9 +35,6 @@ sys_error_t domain_journal_get(const domain_journal_t *journal, domain_event_id_
 
 sys_error_t domain_journal_oldest(const domain_journal_t *journal, domain_event_id_t *out);
 sys_error_t domain_journal_newest(const domain_journal_t *journal, domain_event_id_t *out);
-sys_error_t domain_journal_count(const domain_journal_t *journal, size_t *out);
-sys_error_t domain_journal_contains(const domain_journal_t *journal, domain_event_id_t id,
-                                     bool *out);
 
 #ifdef __cplusplus
 }

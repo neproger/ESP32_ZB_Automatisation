@@ -36,10 +36,6 @@ static void test_init_deinit(void)
     CHECK(sys_ok(domain_journal_init(&journal, CAPACITY)));
     CHECK(sys_is(domain_journal_init(&journal, CAPACITY), SYS_CODE_INVALID_STATE));
 
-    size_t count = 0;
-    CHECK(sys_ok(domain_journal_count(&journal, &count)));
-    CHECK(count == 0);
-
     domain_event_id_t id = 0;
     CHECK(sys_is(domain_journal_oldest(&journal, &id), SYS_CODE_NOT_FOUND));
     CHECK(sys_is(domain_journal_newest(&journal, &id), SYS_CODE_NOT_FOUND));
@@ -105,22 +101,13 @@ static void test_bounds_and_gap(void)
     CHECK(oldest == 1);
     CHECK(newest == CAPACITY);
 
-    bool contained = false;
-    CHECK(sys_ok(domain_journal_contains(&journal, 1, &contained)));
-    CHECK(contained);
-    CHECK(sys_ok(domain_journal_contains(&journal, CAPACITY + 1, &contained)));
-    CHECK(!contained);
-
+    CHECK(sys_ok(domain_journal_get(&journal, 1, &out)));
     CHECK(sys_is(domain_journal_get(&journal, CAPACITY + 1, &out), SYS_CODE_NOT_FOUND));
 
     /* Переполнение: самая старая запись вытеснена — это и есть признак gap. */
     domain_event_t overflow = event_of(1, 99);
     CHECK(sys_ok(domain_journal_append(&journal, &overflow, &id)));
     CHECK(id == CAPACITY + 1);
-
-    size_t count = 0;
-    CHECK(sys_ok(domain_journal_count(&journal, &count)));
-    CHECK(count == CAPACITY);
 
     CHECK(sys_ok(domain_journal_oldest(&journal, &oldest)));
     CHECK(oldest == 2);
@@ -150,10 +137,6 @@ static void test_events_are_not_collapsed(void)
     }
 
     CHECK(last - first == (domain_event_id_t)(CAPACITY - 1));
-
-    size_t count = 0;
-    CHECK(sys_ok(domain_journal_count(&journal, &count)));
-    CHECK(count == CAPACITY);
 
     CHECK(sys_ok(domain_journal_deinit(&journal)));
 }

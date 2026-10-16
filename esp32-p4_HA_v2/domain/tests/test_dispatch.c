@@ -133,11 +133,6 @@ static void test_delivery(void)
     CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
     CHECK(delivered == 0);
 
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
-    put(domain, TYPE_A, 2);
-    CHECK(sys_ok(domain_dispatch_once(domain, &delivered)));
-    CHECK(delivered == 0);
-
     CHECK(sys_ok(domain_deinit(domain)));
 }
 
@@ -173,7 +168,6 @@ static void test_filter_by_kind(void)
     CHECK(errors.events[0].kind == DOMAIN_FACT_ERROR);
     CHECK(sys_is(errors.events[0].error, SYS_CODE_NO_SPACE));
 
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
     CHECK(sys_ok(domain_deinit(domain)));
 }
 
@@ -199,7 +193,6 @@ static void test_filter_by_entity(void)
     CHECK(inbox.count == 1);
     CHECK(inbox.events[0].entity == TYPE_B);
 
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
     CHECK(sys_ok(domain_deinit(domain)));
 }
 
@@ -227,7 +220,6 @@ static void test_inbox_overflow_is_local_loss(void)
     CHECK(delivered == 1);
     CHECK(inbox.events[0].event_id == 2);
 
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
     CHECK(sys_ok(domain_deinit(domain)));
 }
 
@@ -263,7 +255,6 @@ static void test_gap_is_detected(void)
     CHECK(delivered == 8);
     CHECK(inbox.events[0].event_id == 3);
 
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
@@ -281,27 +272,6 @@ static void test_dispatch_once_without_counter_still_delivers(void)
     put(domain, TYPE_A, 1);
     CHECK(sys_ok(domain_dispatch_once(domain, NULL)));
     CHECK(inbox.count == 1);
-
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
-    CHECK(sys_ok(domain_deinit(domain)));
-}
-
-static void test_unsubscribe_is_idempotent_and_rejects_foreign(void)
-{
-    domain_entity_desc_t desc_a;
-    domain_entity_desc_t desc_b;
-    domain_t *domain = start(&desc_a, &desc_b);
-
-    inbox_t inbox = {0};
-    inbox.accept = true;
-    domain_subscription_desc_t desc = sub_all(&inbox);
-    domain_subscription_t *sub = NULL;
-    CHECK(sys_ok(domain_subscribe(domain, &desc, &sub)));
-
-    CHECK(sys_ok(domain_unsubscribe(domain, sub)));
-    /* Повторная отписка не освобождает память дважды. */
-    CHECK(sys_is(domain_unsubscribe(domain, sub), SYS_CODE_NOT_FOUND));
-    CHECK(sys_is(domain_unsubscribe(domain, NULL), SYS_CODE_INVALID_ARG));
 
     CHECK(sys_ok(domain_deinit(domain)));
 }
@@ -329,7 +299,6 @@ int main(void)
     test_inbox_overflow_is_local_loss();
     test_gap_is_detected();
     test_dispatch_once_without_counter_still_delivers();
-    test_unsubscribe_is_idempotent_and_rejects_foreign();
     test_deinit_with_active_subscription();
 
     if (g_failures != 0) {

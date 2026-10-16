@@ -82,19 +82,4 @@ sys_error_t domain_journal_newest(const domain_journal_t *journal, domain_event_
     return mstore_ring_newest_seq(&journal->ring, out);
 }
 
-sys_error_t domain_journal_count(const domain_journal_t *journal, size_t *out)
-{
-    if (journal == NULL || out == NULL) {
-        return domain_fail(SYS_CODE_INVALID_ARG);
-    }
-    return mstore_ring_count(&journal->ring, out);
-}
 
-sys_error_t domain_journal_contains(const domain_journal_t *journal, domain_event_id_t id,
-                                     bool *out)
-{
-    if (journal == NULL || out == NULL) {
-        return domain_fail(SYS_CODE_INVALID_ARG);
-    }
-    return mstore_ring_contains(&journal->ring, id, out);
-}

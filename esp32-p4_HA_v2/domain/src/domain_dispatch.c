@@ -3,6 +3,10 @@
 #include "domain_internal.h"
 #include "domain_platform.h"
 
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#endif
+
 /*
  * Dispatcher — доставка фактов подписчикам. Здесь только маршрутизация:
  * фильтр, push в inbox, пробуждение. Логику подписчика Dispatcher не выполняет и не
@@ -111,33 +115,6 @@ sys_error_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t 
     return SYS_OK;
 }
 
-sys_error_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub)
-{
-    domain_state_t *state = domain_state(domain);
-    if (state == NULL || sub == NULL) {
-        return domain_fail(SYS_CODE_INVALID_ARG);
-    }
-
-    domain_platform_lock_acquire(state->dispatch_lock);
-    domain_subscription_t **link = &state->subscriptions;
-    while (*link != NULL && *link != sub) {
-        link = &(*link)->next;
-    }
-    const bool found = (*link == sub);
-    if (found) {
-        *link = sub->next;
-    }
-    domain_platform_lock_release(state->dispatch_lock);
-
-    if (!found) {
-        /* Чужой или уже отписанный handle: освобождать его Domain не имеет права. */
-        return domain_fail(SYS_CODE_NOT_FOUND);
-    }
-
-    domain_platform_free(sub);
-    return SYS_OK;
-}
-
 sys_error_t domain_dispatch_wait(domain_t *domain, uint32_t timeout_ms, bool *out_signalled)
 {
     domain_state_t *state = domain_state(domain);
@@ -173,9 +150,16 @@ sys_error_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
     }
 
     domain_event_id_t oldest = 0;
-    if (sys_ok(domain_journal_oldest(&state->journal, &oldest)) && state->cursor < oldest) {
+    const bool gapped =
+        sys_ok(domain_journal_oldest(&state->journal, &oldest)) && state->cursor < oldest;
+    if (gapped) {
         /* Факты вытеснены раньше, чем их прочитали: фиксируем и догоняем с oldest. */
         state->gap_count++;
+#ifdef ESP_PLATFORM
+        ESP_LOGW("domain", "journal gap: cursor=%llu oldest=%llu count=%u",
+                 (unsigned long long)state->cursor, (unsigned long long)oldest,
+                 (unsigned)state->gap_count);
+#endif
         state->cursor = oldest;
     }
 
@@ -200,6 +184,12 @@ sys_error_t domain_dispatch_once(domain_t *domain, size_t *out_delivered)
             }
             /* false — inbox подписчика полон: его локальная потеря, доставка продолжается. */
         }
+    }
+
+    if (gapped) {
+        /* След в Journal: пропуск оседает ERROR-фактом (подписчики его не несут). */
+        domain_fact_write(state, NULL, 0, NULL, 0, (uint8_t)DOMAIN_FACT_ERROR, 0,
+                          domain_fail(SYS_CODE_STALE), NULL);
     }
 
     domain_platform_lock_release(state->dispatch_lock);

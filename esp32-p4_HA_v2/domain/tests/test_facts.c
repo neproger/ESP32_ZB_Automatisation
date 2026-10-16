@@ -62,9 +62,13 @@ static void meta_fill(domain_fact_meta_t *out, uint8_t source, uint32_t value)
 static size_t fact_count(domain_t *domain)
 {
     domain_state_t *state = domain_state(domain);
-    size_t count = 0;
-    CHECK(sys_ok(domain_journal_count(&state->journal, &count)));
-    return count;
+    domain_event_id_t oldest = 0;
+    domain_event_id_t newest = 0;
+    if (sys_failed(domain_journal_oldest(&state->journal, &oldest)) ||
+        sys_failed(domain_journal_newest(&state->journal, &newest))) {
+        return 0;
+    }
+    return (size_t)(newest - oldest + 1);
 }
 
 static domain_event_t last_fact(domain_t *domain)

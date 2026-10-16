@@ -119,7 +119,6 @@ static void put_publishes_event_with_ref(void)
     /* Размер тела едет в самом факте: подписчику не нужен отдельный запрос. */
     CHECK(inbox.events[0].payload_size == sizeof(written));
 
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
@@ -184,7 +183,6 @@ static void event_carries_target(void)
     CHECK(inbox.events[0].key_size == sizeof(uid));
     CHECK(memcmp(inbox.events[0].key, &uid, sizeof(uid)) == 0);
 
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 

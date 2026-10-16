@@ -153,7 +153,6 @@ typedef struct domain_subscription domain_subscription_t;
 
 sys_error_t domain_subscribe(domain_t *domain, const domain_subscription_desc_t *desc,
                               domain_subscription_t **out_sub);
-sys_error_t domain_unsubscribe(domain_t *domain, domain_subscription_t *sub);
 
 /*
  * Доставка: читает Journal от cursor до newest и раскладывает по подписчикам.

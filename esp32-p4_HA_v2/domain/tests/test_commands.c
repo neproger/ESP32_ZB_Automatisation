@@ -122,7 +122,6 @@ static void command_sent_is_journaled(void)
     CHECK(inbox.events[0].source == DOMAIN_SOURCE_UI);
     CHECK(inbox.events[0].value.v.u32 == 32);
 
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
@@ -150,7 +149,6 @@ static void rejected_command_writes_no_fact(void)
     CHECK(sys_ok(domain_dispatch_once(&domain, &delivered)));
     CHECK(delivered == 0); /* COMMAND_SENT означает «передано», а не «попытались» */
 
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
     CHECK(sys_ok(domain_deinit(&domain)));
 }
 
@@ -260,8 +258,6 @@ static void command_fact_carries_target(void)
     CHECK(inbox.events[0].entity == TYPE_DEVICE);
     CHECK(inbox.events[0].key_size == sizeof(uid));
     CHECK(memcmp(inbox.events[0].key, &uid, sizeof(uid)) == 0);
-
-    CHECK(sys_ok(domain_unsubscribe(&domain, sub)));
 
     /* Неизвестный тип адресата — отказ до executor'а: факта нет. */
     const domain_fact_target_t unknown = {.entity = 99, .key = &uid};

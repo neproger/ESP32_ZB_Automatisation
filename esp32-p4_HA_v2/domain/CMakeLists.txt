@@ -17,4 +17,6 @@ idf_component_register(
         mstore
         esp_common
         esp_timer
+    PRIV_REQUIRES
+        log
 )
