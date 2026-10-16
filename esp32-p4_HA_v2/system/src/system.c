@@ -204,7 +204,7 @@ static bool geocode_city(const char *city, double *lat, double *lon)
     }
     const char *results = strstr(body, "\"results\":");
     if (results == NULL) {
-        ESP_LOGW(TAG, "geocode: нет results для \"%s\"", city);
+        ESP_LOGW(TAG, "geocode: no results for \"%s\"", city);
         return false;
     }
     return system_json_number(results, "latitude", lat) && system_json_number(results, "longitude", lon);

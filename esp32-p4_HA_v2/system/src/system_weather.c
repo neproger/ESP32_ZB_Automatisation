@@ -78,7 +78,7 @@ bool system_weather_fetch(double lat, double lon, ha_weather_record_t *out)
     /* Ключи есть и в `current_units` (строки) — берём только внутри `current`. */
     const char *current = strstr(body, "\"current\":");
     if (current == NULL) {
-        ESP_LOGW(TAG, "weather json: нет объекта current");
+        ESP_LOGW(TAG, "weather json: no current object");
         return false;
     }
 
@@ -86,7 +86,7 @@ bool system_weather_fetch(double lat, double lon, ha_weather_record_t *out)
     double code = 0.0;
     if (!system_json_number(current, "temperature_2m", &temp) ||
         !system_json_number(current, "weather_code", &code)) {
-        ESP_LOGW(TAG, "weather json: нет temperature_2m/weather_code");
+        ESP_LOGW(TAG, "weather json: no temperature_2m/weather_code");
         return false;
     }
 

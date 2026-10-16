@@ -200,7 +200,7 @@ static esp_err_t touch_init(void)
     } else if (i2c_master_probe(s_i2c_bus, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, 100) == ESP_OK) {
         addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
     } else {
-        ESP_LOGW(TAG, "GT911 нет на 0x5D/0x14 — панель без тача");
+        ESP_LOGW(TAG, "GT911 not found at 0x5D/0x14 — panel without touch");
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -219,7 +219,7 @@ static esp_err_t touch_init(void)
         .flags = {.swap_xy = 0, .mirror_x = 0, .mirror_y = 0},
     };
     ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(touch_io, &cfg, &s_touch), TAG, "gt911 new");
-    ESP_LOGI(TAG, "GT911 на 0x%02X", addr);
+    ESP_LOGI(TAG, "GT911 at 0x%02X", addr);
     return ESP_OK;
 }
 
@@ -287,14 +287,14 @@ void display_p4_start(domain_t *domain)
         return;
     }
     if (display_init() != ESP_OK) {
-        ESP_LOGE(TAG, "панель не поднялась");
+        ESP_LOGE(TAG, "panel init failed");
         return;
     }
     if (touch_init() != ESP_OK) {
-        ESP_LOGW(TAG, "тач недоступен — UI без ввода");
+        ESP_LOGW(TAG, "touch unavailable — UI without input");
     }
     if (lvgl_start() == NULL) {
-        ESP_LOGE(TAG, "LVGL не стартовал");
+        ESP_LOGE(TAG, "LVGL did not start");
         return;
     }
 
@@ -305,5 +305,5 @@ void display_p4_start(domain_t *domain)
         display_start(domain);
         lvgl_port_unlock();
     }
-    ESP_LOGI(TAG, "display порт запущен");
+    ESP_LOGI(TAG, "display port started");
 }
