@@ -5,15 +5,15 @@
 
 /*
  * MODEL-блоб (статическая часть canonical-модели: devices/entities/capabilities/
- * automations/groups/location/settings) хранится файлом в разделе flash и отдаётся по
- * GET /model.bin. Пересобирается в фоне при изменениях MODEL-типов; новые подключения
- * забирают актуальный файл, а живым клиентам изменения приходят как WS-дельты.
+ * automations/groups/location/settings) собирается в PSRAM целиком и отдаётся по
+ * GET /model.bin. Пересобирается лениво — при первом запросе после изменения MODEL-типа;
+ * живым клиентам изменения приходят как WS-дельты.
  */
 
 void web_model_file_init(void);
 
-/* Пометить файл «грязным» (вызывается при изменении MODEL-типа). Пересборка — в фоне. */
+/* Пометить блоб «грязным» (вызывается при изменении MODEL-типа); пересборка — при запросе. */
 void web_model_file_mark_dirty(void);
 
-/* Отдать активный слот по GET /model.bin (chunked). */
+/* Собрать (если нужно) и отдать блоб по GET /model.bin. */
 esp_err_t web_model_file_serve(httpd_req_t *req);
