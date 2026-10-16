@@ -182,17 +182,6 @@ size_t web_projection_build_model(uint8_t *buf, size_t cap, uint32_t *out_count)
     return w.overflow ? 0 : w.off;
 }
 
-static bool state_emit(const void *key, const void *record, void *ctx)
-{
-    snapshot_ctx_t *s = (snapshot_ctx_t *)ctx;
-    uint8_t out[WEB_PROTO_MAX_PAYLOAD];
-    memcpy(out, key, s->key_size);
-    memcpy(out + s->key_size, record, s->rec_size);
-    web_sessions_send(s->fd, s->type, out, (uint16_t)(s->key_size + s->rec_size));
-    s->sent++;
-    return true;
-}
-
 void web_projection_send_state(int fd)
 {
     uint8_t word[4];
@@ -207,7 +196,7 @@ void web_projection_send_state(int fd)
                               .key_size = SCHEMA[i].key_size,
                               .rec_size = SCHEMA[i].rec_size,
                               .sent = 0};
-        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, state_emit, &ctx);
+        domain_entity_iter(s_domain, (domain_entity_t)SCHEMA[i].type, scan_emit, &ctx);
     }
     put_u32(word, 0);
     web_sessions_send(fd, WEB_MSG_SYNC_END, word, sizeof(word));

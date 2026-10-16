@@ -11,7 +11,6 @@ import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
-  ACK: 0x03, // browser → device: подтверждение кадра с данным header.seq (пустой payload)
   EVENT: 0xE0, // device → browser: payload = ha_event_t verbatim (вне диапазона ha_entity_t)
   COMMAND: 0x20,
 }
@@ -121,11 +120,6 @@ export function encodeFrame(type, payload, seq) {
   dv.setUint16(4, s, true)
   out.set(payload, HDR)
   return { seq: s, bytes: out }
-}
-
-// ACK входящего серверного кадра: header.seq = подтверждаемый seq.
-export function ack(seq) {
-  return encodeFrame(MSG.ACK, new Uint8Array(0), seq)
 }
 
 const enc = new TextEncoder()

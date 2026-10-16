@@ -33,7 +33,7 @@ static QueueHandle_t s_inbox;
 
 /*
  * Элемент inbox: факт Domain (kind 0) либо запрос снапшота задачи web (kind 1 — полный,
- * kind 2 — STATE). open/ack идут синхронно в httpd-задаче (транспорт под мьютексом).
+ * kind 2 — STATE). open идёт синхронно в httpd-задаче (транспорт под мьютексом).
  */
 typedef struct {
     uint8_t kind; /* 0 — факт, 1 — snapshot(full), 2 — snapshot_state */
@@ -133,9 +133,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     size_t payload_len = 0;
     if (frame.len >= WEB_PROTO_HDR_SIZE &&
         web_frame_decode(frame.payload, frame.len, &hdr, &payload, &payload_len)) {
-        if (hdr.type == (uint8_t)WEB_MSG_ACK) {
-            web_sessions_ack(fd, hdr.seq);
-        } else if (hdr.type == (uint8_t)WEB_MSG_COMMAND && payload_len >= 1) {
+        if (hdr.type == (uint8_t)WEB_MSG_COMMAND && payload_len >= 1) {
             if (payload[0] == (uint8_t)WEB_CMD_SNAPSHOT) {
                 web_request_snapshot(fd); /* полный snapshot (fallback) */
             } else if (payload[0] == (uint8_t)WEB_CMD_SNAPSHOT_STATE) {

@@ -168,13 +168,6 @@ void web_sessions_open(int fd)
     unlock();
 }
 
-void web_sessions_ack(int fd, uint16_t seq)
-{
-    /* TCP уже подтверждает доставку; пофреймовый ACK не нужен. No-op (совместимость). */
-    (void)fd;
-    (void)seq;
-}
-
 void web_sessions_send(int fd, uint8_t type, const void *payload, uint16_t len)
 {
     if (s_lock == NULL) {

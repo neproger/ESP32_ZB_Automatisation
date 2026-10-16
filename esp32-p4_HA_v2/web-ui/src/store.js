@@ -1,4 +1,4 @@
-import { MSG, ENTITY, SIZES, parseSnapshot, decodeFrame, snapshot, snapshotState, ack } from './proto.js'
+import { MSG, ENTITY, SIZES, parseSnapshot, decodeFrame, snapshot, snapshotState } from './proto.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 
@@ -261,9 +261,6 @@ function wsUrl() {
 function onFrame(buf) {
   const frame = decodeFrame(buf)
   if (!frame) return
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(ack(frame.seq).bytes)
-  }
   if (frame.seq === lastSeq) return
   lastSeq = frame.seq
 
