@@ -540,13 +540,10 @@ static const mstore_storage_ops_t MSTORE_FLASH_OPS = {
     .close = flash_close,
 };
 
-/*
- * Размер региона под геометрию таблицы. Считает backend как владелец формата:
- * Region Manager не должен повторять раскладку записей у себя.
- */
-sys_error_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, size_t payload_size,
-                                              size_t erase_size, size_t *out_region_size) {
-    if (capacity == 0 || key_size == 0 || erase_size == 0) {
+/* Геометрия формата: max_record и records_needed (capacity + headroom) с проверками. */
+static sys_error_t flash_geometry(size_t capacity, size_t key_size, size_t payload_size,
+                                  size_t *out_max_record, size_t *out_records_needed) {
+    if (capacity == 0 || key_size == 0) {
         return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
     if (capacity > (size_t)UINT32_MAX || key_size > 0xFFFF || payload_size > 0xFFFF) {
@@ -558,7 +555,7 @@ sys_error_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, s
     }
     const size_t max_record = fixed + key_size + payload_size;
     size_t headroom = 0;
-    sys_error_t err = append_headroom(capacity, &headroom);
+    const sys_error_t err = append_headroom(capacity, &headroom);
     if (sys_failed(err)) {
         return err;
     }
@@ -568,6 +565,27 @@ sys_error_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, s
     }
     if (records_needed > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
         return mstore_fail(SYS_CODE_INVALID_SIZE);
+    }
+    *out_max_record = max_record;
+    *out_records_needed = records_needed;
+    return SYS_OK;
+}
+
+/*
+ * Размер региона под геометрию таблицы. Считает backend как владелец формата:
+ * Region Manager не должен повторять раскладку записей у себя.
+ */
+sys_error_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, size_t payload_size,
+                                              size_t erase_size, size_t *out_region_size) {
+    if (erase_size == 0) {
+        return mstore_fail(SYS_CODE_INVALID_SIZE);
+    }
+    size_t max_record = 0;
+    size_t records_needed = 0;
+    const sys_error_t err =
+        flash_geometry(capacity, key_size, payload_size, &max_record, &records_needed);
+    if (sys_failed(err)) {
+        return err;
     }
     const size_t bank_content = MSTORE_FLASH_HEADER_SIZE + records_needed * max_record;
     /* Округление банки вверх до erase-блока арифметикой, а не маской. */
@@ -582,6 +600,62 @@ sys_error_t mstore_storage_flash_region_size(size_t capacity, size_t key_size, s
     return SYS_OK;
 }
 
+/*
+ * Выбрать активный банк по header seq. Нет валидных header'ов — fresh (регион должен быть
+ * erased); иначе дочитываем активный банк сканом (torn-tail → нужен checkpoint).
+ */
+static sys_error_t flash_select_bank(mstore_flash_storage_t *st) {
+    uint8_t hdr0[MSTORE_FLASH_HEADER_SIZE];
+    uint8_t hdr1[MSTORE_FLASH_HEADER_SIZE];
+    const bool valid0 = header_read(st, 0, hdr0);
+    const bool valid1 = header_read(st, 1, hdr1);
+
+    int active = -1;
+    if (valid0 && valid1) {
+        active = (get_u32(hdr0 + 8) >= get_u32(hdr1 + 8)) ? 0 : 1;
+    } else if (valid0) {
+        active = 0;
+    } else if (valid1) {
+        active = 1;
+    }
+
+    if (active < 0) {
+        const sys_error_t state0 = header_region_state(st, 0);
+        const sys_error_t state1 = header_region_state(st, 1);
+        if (sys_failed(state0) || sys_failed(state1)) {
+            return (sys_is(state0, SYS_CODE_IO) || sys_is(state1, SYS_CODE_IO))
+                       ? mstore_fail(SYS_CODE_IO)
+                       : mstore_fail(SYS_CODE_CORRUPT);
+        }
+        if (!dev_erase(st, 0, st->bank_size)) {
+            return mstore_fail(SYS_CODE_IO);
+        }
+        uint8_t hdr[MSTORE_FLASH_HEADER_SIZE];
+        header_build(st, hdr, 1);
+        if (!dev_program(st, 0, hdr, st->header_size)) {
+            return mstore_fail(SYS_CODE_IO);
+        }
+        st->active_bank = 0;
+        st->active_seq = 1;
+        st->write_offset = st->header_size;
+        st->needs_checkpoint = false;
+        return SYS_OK;
+    }
+
+    const uint8_t *hdr = (active == 0) ? hdr0 : hdr1;
+    if (!header_matches(st, hdr)) {
+        return mstore_fail(SYS_CODE_INVALID_STATE);
+    }
+    st->active_bank = (size_t)active;
+    st->active_seq = get_u32(hdr + 8);
+    bool torn = false;
+    const sys_error_t err = flash_scan(st, &torn);
+    if (sys_ok(err)) {
+        st->needs_checkpoint = torn;
+    }
+    return err;
+}
+
 sys_error_t mstore_storage_flash_open(const mstore_storage_config_t *config,
                                        mstore_storage_t **out_storage) {
     if (config->backing != MSTORE_BACKING_FLASH) {
@@ -590,30 +664,13 @@ sys_error_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     if (config->persist_key == NULL || config->persist_key[0] == '\0') {
         return mstore_fail(SYS_CODE_INVALID_ARG);
     }
-    if (config->capacity == 0 || config->key_size == 0) {
-        return mstore_fail(SYS_CODE_INVALID_SIZE);
-    }
-    if (config->capacity > (size_t)UINT32_MAX || config->key_size > 0xFFFF ||
-        config->payload_size > 0xFFFF) {
-        return mstore_fail(SYS_CODE_INVALID_SIZE);
-    }
 
-    const size_t fixed = MSTORE_FLASH_RECORD_FIXED + MSTORE_FLASH_RECORD_TAIL;
-    if (config->key_size > SIZE_MAX - config->payload_size - fixed) {
-        return mstore_fail(SYS_CODE_INVALID_SIZE);
-    }
-    const size_t max_record = fixed + config->key_size + config->payload_size;
-    size_t headroom = 0;
-    sys_error_t headroom_err = append_headroom(config->capacity, &headroom);
-    if (sys_failed(headroom_err)) {
-        return headroom_err;
-    }
-    const size_t records_needed = config->capacity + headroom;
-    if (records_needed < config->capacity) {
-        return mstore_fail(SYS_CODE_INVALID_SIZE);
-    }
-    if (records_needed > (SIZE_MAX - MSTORE_FLASH_HEADER_SIZE) / max_record) {
-        return mstore_fail(SYS_CODE_INVALID_SIZE);
+    size_t max_record = 0;
+    size_t records_needed = 0;
+    sys_error_t err = flash_geometry(config->capacity, config->key_size, config->payload_size,
+                                     &max_record, &records_needed);
+    if (sys_failed(err)) {
+        return err;
     }
 
     mstore_flash_storage_t *st = mstore_platform_alloc(sizeof(*st));
@@ -629,8 +686,9 @@ sys_error_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     st->record_capacity = max_record;
 
     /* Регион выделяет Region Manager: backend получает уже готовый view и не знает о соседях. */
-    sys_error_t bind_err = mstore_region_bind(config->persist_key, config->capacity, config->key_size,
-                                               config->payload_size, &st->view);
+    const sys_error_t bind_err =
+        mstore_region_bind(config->persist_key, config->capacity, config->key_size,
+                           config->payload_size, &st->view);
     if (sys_failed(bind_err)) {
         mstore_platform_free(st);
         return bind_err;
@@ -642,7 +700,7 @@ sys_error_t mstore_storage_flash_open(const mstore_storage_config_t *config,
         return mstore_fail(SYS_CODE_INVALID_SIZE);
     }
 
-    size_t key_len = strlen(config->persist_key);
+    const size_t key_len = strlen(config->persist_key);
     st->persist_key = mstore_platform_alloc(key_len + 1);
     st->latest = mstore_platform_alloc(sizeof(*st->latest) * st->capacity);
     st->record_buf = mstore_platform_alloc(max_record);
@@ -653,57 +711,7 @@ sys_error_t mstore_storage_flash_open(const mstore_storage_config_t *config,
     memcpy(st->persist_key, config->persist_key, key_len + 1);
     memset(st->latest, 0, sizeof(*st->latest) * st->capacity);
 
-    uint8_t hdr0[MSTORE_FLASH_HEADER_SIZE];
-    uint8_t hdr1[MSTORE_FLASH_HEADER_SIZE];
-    bool valid0 = header_read(st, 0, hdr0);
-    bool valid1 = header_read(st, 1, hdr1);
-
-    int active = -1;
-    if (valid0 && valid1) {
-        active = (get_u32(hdr0 + 8) >= get_u32(hdr1 + 8)) ? 0 : 1;
-    } else if (valid0) {
-        active = 0;
-    } else if (valid1) {
-        active = 1;
-    }
-
-    sys_error_t err = SYS_OK;
-    if (active < 0) {
-        /* Нет валидного header: fresh допустим только если регион реально erased. */
-        sys_error_t state0 = header_region_state(st, 0);
-        sys_error_t state1 = header_region_state(st, 1);
-        if (sys_failed(state0) || sys_failed(state1)) {
-            err = (sys_is(state0, SYS_CODE_IO) || sys_is(state1, SYS_CODE_IO)) ? mstore_fail(SYS_CODE_IO) : mstore_fail(SYS_CODE_CORRUPT);
-        } else if (!dev_erase(st, 0, st->bank_size)) {
-            err = mstore_fail(SYS_CODE_IO);
-        } else {
-            uint8_t hdr[MSTORE_FLASH_HEADER_SIZE];
-            header_build(st, hdr, 1);
-            if (!dev_program(st, 0, hdr, st->header_size)) {
-                err = mstore_fail(SYS_CODE_IO);
-            }
-        }
-        if (sys_ok(err)) {
-            st->active_bank = 0;
-            st->active_seq = 1;
-            st->write_offset = st->header_size;
-            st->needs_checkpoint = false;
-        }
-    } else {
-        const uint8_t *hdr = (active == 0) ? hdr0 : hdr1;
-        if (!header_matches(st, hdr)) {
-            err = mstore_fail(SYS_CODE_INVALID_STATE);
-        } else {
-            st->active_bank = (size_t)active;
-            st->active_seq = get_u32(hdr + 8);
-            bool torn = false;
-            err = flash_scan(st, &torn);
-            if (sys_ok(err)) {
-                st->needs_checkpoint = torn;
-            }
-        }
-    }
-
+    err = flash_select_bank(st);
     if (sys_failed(err)) {
         flash_close(&st->base);
         return err;
