@@ -21,7 +21,6 @@ extern "C" {
  */
 typedef uint16_t sys_layer_t;
 
-#define SYS_LAYER_NONE ((sys_layer_t)0)
 #define SYS_LAYER_MSTORE ((sys_layer_t)1)
 #define SYS_LAYER_DOMAIN ((sys_layer_t)2)
 /* 3 — adapter-specific (Zigbee) */

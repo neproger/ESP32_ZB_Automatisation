@@ -21,19 +21,6 @@ static sys_error_t device_fail(sys_code_t code)
     return sys_error_make(SYS_LAYER_DEVICE, code);
 }
 
-static void copy_field(char *dst, size_t dst_size, const char *src)
-{
-    if (src == NULL) {
-        return;
-    }
-    size_t length = strlen(src);
-    if (length >= dst_size) {
-        length = dst_size - 1;
-    }
-    memcpy(dst, src, length);
-    dst[length] = '\0';
-}
-
 sys_error_t device_register_remover(ha_source_id_t source, device_remover_fn fn, void *ctx)
 {
     if (fn == NULL || source == HA_SOURCE_NONE) {
@@ -91,7 +78,7 @@ sys_error_t device_register(domain_t *domain, uint8_t origin, const ha_device_de
         /* Имя — собственность Device: initial name заполняем только если пусто. */
         if (existing.name[0] == '\0' && desc->name[0] != '\0') {
             ha_logical_device_record_t rec = existing;
-            copy_field(rec.name, sizeof(rec.name), desc->name);
+            strlcpy(rec.name, desc->name, sizeof(rec.name));
             domain_fact_meta_t meta = {0};
             meta.source = origin;
             bool changed = false;
@@ -105,8 +92,8 @@ sys_error_t device_register(domain_t *domain, uint8_t origin, const ha_device_de
     ha_logical_device_record_t record = {0};
     record.parent_device_id = parent_device_id;
     record.source = desc->source;
-    copy_field(record.native_id, sizeof(record.native_id), desc->native_id);
-    copy_field(record.name, sizeof(record.name), desc->name);
+    strlcpy(record.native_id, desc->native_id, sizeof(record.native_id));
+    strlcpy(record.name, desc->name, sizeof(record.name));
 
     domain_fact_meta_t meta = {0};
     meta.source = origin;
@@ -165,7 +152,7 @@ sys_error_t device_rename(domain_t *domain, uint8_t origin, ha_device_id_t devic
     if (sys_failed(found)) {
         return found;
     }
-    copy_field(record.name, sizeof(record.name), name);
+    strlcpy(record.name, name, sizeof(record.name));
 
     domain_fact_meta_t meta = {0};
     meta.source = origin;

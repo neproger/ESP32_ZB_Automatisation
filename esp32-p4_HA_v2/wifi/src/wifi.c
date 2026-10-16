@@ -56,22 +56,6 @@ static sys_error_t wifi_fail(sys_code_t code)
     return sys_error_make(SYS_LAYER_WIFI, code);
 }
 
-/* Копирование с явной границей: источники (ssid/пароль) неизвестной длины. */
-static void copy_str(char *dst, size_t size, const char *src)
-{
-    if (size == 0) {
-        return;
-    }
-    size_t n = 0;
-    if (src != NULL) {
-        while (n + 1 < size && src[n] != '\0') {
-            ++n;
-        }
-        memcpy(dst, src, n);
-    }
-    dst[n] = '\0';
-}
-
 /* --- Domain: статус / скан / известные ---------------------------------- */
 
 static void put_status(uint8_t state, uint8_t connected, int8_t rssi, const char *ssid)
@@ -81,7 +65,7 @@ static void put_status(uint8_t state, uint8_t connected, int8_t rssi, const char
     record.connected = connected;
     record.rssi = rssi;
     if (ssid != NULL) {
-        copy_str(record.ssid, sizeof(record.ssid), ssid);
+        strlcpy(record.ssid, ssid, sizeof(record.ssid));
     }
     const ha_device_id_t uid = HA_WIFI_DEVICE_ID;
     domain_fact_meta_t meta = {0};
@@ -109,27 +93,32 @@ static void clear_scan(void)
     (void)domain_entity_remove(s_domain, (domain_entity_t)HA_ENTITY_WIFI_SCAN, &uid, &meta);
 }
 
+typedef struct {
+    known_entry_t *cursor;
+    known_entry_t *end;
+} known_collect_t;
+
 static bool known_cb(const void *key, const void *record, void *ctx)
 {
-    known_entry_t **cursor = (known_entry_t **)ctx;
-    (*cursor)->key = *(const ha_wifi_known_key_t *)key;
-    (*cursor)->record = *(const ha_wifi_known_record_t *)record;
-    (*cursor)++;
+    known_collect_t *collect = (known_collect_t *)ctx;
+    if (collect->cursor >= collect->end) {
+        return false; /* буфер полон — дальше не собираем */
+    }
+    collect->cursor->key = *(const ha_wifi_known_key_t *)key;
+    collect->cursor->record = *(const ha_wifi_known_record_t *)record;
+    collect->cursor++;
     return true;
 }
 
-/* Собирает известные точки в буфер; возвращает число записей. */
+/* Собирает известные точки в буфер; возвращает число записей (не больше capacity). */
 static size_t collect_known(known_entry_t *out, size_t capacity)
 {
-    known_entry_t *cursor = out;
-    size_t count = 0;
     if (capacity == 0) {
         return 0;
     }
-    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_KNOWN, known_cb, &cursor);
-    count = (size_t)(cursor - out);
-    (void)capacity;
-    return count;
+    known_collect_t collect = {.cursor = out, .end = out + capacity};
+    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_WIFI_KNOWN, known_cb, &collect);
+    return (size_t)(collect.cursor - out);
 }
 
 static bool ssid_equals(const char *a, const char *b)
@@ -148,7 +137,7 @@ static void ensure_known(const char *ssid, const char *password)
     for (size_t i = 0; i < count; ++i) {
         if (ssid_equals(entries[i].record.ssid, ssid)) {
             ha_wifi_known_record_t record = entries[i].record;
-            copy_str(record.password, sizeof(record.password), password);
+            strlcpy(record.password, password, sizeof(record.password));
             domain_fact_meta_t meta = {0};
             meta.source = (uint8_t)DOMAIN_SOURCE_WIFI;
             bool changed = false;
@@ -168,8 +157,8 @@ static void ensure_known(const char *ssid, const char *password)
     }
     const ha_wifi_known_key_t key = {.id = has_any ? (max_id + 1u) : 1u};
     ha_wifi_known_record_t record = {0};
-    copy_str(record.ssid, sizeof(record.ssid), ssid);
-    copy_str(record.password, sizeof(record.password), password);
+    strlcpy(record.ssid, ssid, sizeof(record.ssid));
+    strlcpy(record.password, password, sizeof(record.password));
     domain_fact_meta_t meta = {0};
     meta.source = (uint8_t)DOMAIN_SOURCE_WIFI;
     bool changed = false;
@@ -223,7 +212,7 @@ static bool scan_now(ha_wifi_scan_record_t *out)
     ha_wifi_scan_record_t scan = {0};
     scan.count = (uint8_t)shown;
     for (uint16_t i = 0; i < shown; ++i) {
-        copy_str(scan.aps[i].ssid, sizeof(scan.aps[i].ssid), (const char *)records[i].ssid);
+        strlcpy(scan.aps[i].ssid, (const char *)records[i].ssid, sizeof(scan.aps[i].ssid));
         scan.aps[i].rssi = records[i].rssi;
         scan.aps[i].auth = map_auth(records[i].authmode);
     }
@@ -257,8 +246,8 @@ static void do_connect(const char *ssid, const char *password)
     ensure_known(ssid, password);
 
     wifi_config_t config = {0};
-    copy_str((char *)config.sta.ssid, sizeof(config.sta.ssid), ssid);
-    copy_str((char *)config.sta.password, sizeof(config.sta.password), password);
+    strlcpy((char *)config.sta.ssid, ssid, sizeof(config.sta.ssid));
+    strlcpy((char *)config.sta.password, password, sizeof(config.sta.password));
     /* Как в старом рабочем web-сервисе: порог WPA2. */
     config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     /* PMF не обязателен, но заявляем поддержку: часть AP иначе рвёт ассоциацию. */
