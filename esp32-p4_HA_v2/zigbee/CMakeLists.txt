@@ -10,6 +10,8 @@ idf_component_register(
         "src/zigbee_binding.c"
         "src/zigbee_diag.c"
         "src/zigbee_radio.c"
+        "src/zigbee_radio_reports.c"
+        "src/zigbee_radio_commissioning.c"
         "src/zigbee_remove_mark.c"
         "src/zigbee_semantics.c"
     INCLUDE_DIRS
