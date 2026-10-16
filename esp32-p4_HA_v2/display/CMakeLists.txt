@@ -3,6 +3,7 @@
 idf_component_register(
     SRCS
         "src/display.c"
+        "src/ui_color.c"
         "src/ui_menu.c"
         "src/ui_nav_dots.c"
         "src/ui_page.c"
