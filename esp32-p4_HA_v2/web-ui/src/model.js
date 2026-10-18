@@ -1,4 +1,4 @@
-import { ENTITY, SIZES } from './proto.js'
+import { ENTITY, MSG, SIZES } from './proto.js'
 import { VALUE_KIND } from './semantics.js'
 import { ENTITY_SYSTEM } from './system.js'
 import { pushEvent } from './events.js'
