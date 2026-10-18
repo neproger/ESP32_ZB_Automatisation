@@ -9,6 +9,8 @@
 #include "domain/domain.h"
 #include "domain/domain_event.h"
 #include "lvgl.h"
+#include "ha_model/ha_automation.h"
+#include "ha_model/ha_rule.h"
 #include "ha_model/ha_commands.h"
 #include "ha_model/ha_entities.h"
 #include "ha_model/ha_entity.h"
@@ -45,6 +47,12 @@ typedef struct {
     ha_group_item_record_t recs[UI_MAX_ITEMS];
 } item_list_t;
 
+typedef struct {
+    size_t count;
+    ha_group_automation_key_t keys[UI_MAX_ITEMS];
+    ha_group_item_record_t recs[UI_MAX_ITEMS];
+} automation_list_t;
+
 typedef enum {
     SCREEN_GROUPS = 0,
     SCREEN_WIFI,
@@ -57,6 +65,7 @@ static screen_mode_t s_screen_mode;
 static size_t s_group_index;
 static group_list_t s_groups;
 static item_list_t s_items;
+static automation_list_t s_autos;
 
 /* Подписка Domain: факты приходят в inbox, обрабатываем в задаче LVGL (drain). */
 static QueueHandle_t s_inbox;
@@ -141,6 +150,53 @@ static void collect_items(size_t group_index)
     sort_items(&s_items);
 }
 
+static void sort_autos(automation_list_t *list)
+{
+    for (size_t i = 1; i < list->count; ++i) {
+        const ha_group_automation_key_t key = list->keys[i];
+        const ha_group_item_record_t record = list->recs[i];
+        size_t j = i;
+        while (j > 0 && list->recs[j - 1].order > record.order) {
+            list->keys[j] = list->keys[j - 1];
+            list->recs[j] = list->recs[j - 1];
+            --j;
+        }
+        list->keys[j] = key;
+        list->recs[j] = record;
+    }
+}
+
+static bool auto_item_cb(const void *key, const void *record, void *ctx)
+{
+    const ha_group_automation_key_t *item_key = (const ha_group_automation_key_t *)key;
+    item_filter_t *filter = (item_filter_t *)ctx;
+    if (item_key->group_id != filter->group_id) {
+        return true;
+    }
+    if (s_autos.count < UI_MAX_ITEMS) {
+        const size_t at = s_autos.count;
+        s_autos.keys[at] = *item_key;
+        s_autos.recs[at] = *(const ha_group_item_record_t *)record;
+        s_autos.count++;
+    }
+    return true;
+}
+
+static void collect_automations(size_t group_index)
+{
+    s_autos.count = 0;
+    if (group_index >= s_groups.count) {
+        return;
+    }
+    item_filter_t filter = {
+        .group_id = s_groups.ids[group_index].id,
+        .list = NULL,
+    };
+    (void)domain_entity_iter(s_domain, (domain_entity_t)HA_ENTITY_GROUP_AUTOMATION, auto_item_cb,
+                             &filter);
+    sort_autos(&s_autos);
+}
+
 static bool read_group(size_t index, ha_group_record_t *out)
 {
     return (index < s_groups.count) &&
@@ -148,19 +204,21 @@ static bool read_group(size_t index, ha_group_record_t *out)
                                     &s_groups.ids[index], out));
 }
 
-static void item_title(size_t index, char *out, size_t out_size)
+static bool read_rule(uint64_t automation, ha_rule_t *out)
 {
-    snprintf(out, out_size, "—");
-    if (index >= s_items.count) {
-        return;
-    }
-    const ha_group_item_record_t *record = &s_items.recs[index];
+    const ha_automation_key_t key = {.id = automation};
+    return sys_ok(
+        domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key, out));
+}
+
+static void entity_title(const ha_group_item_record_t *record, ha_entity_id_t entity, char *out,
+                         size_t out_size)
+{
     if (record->title[0] != '\0') {
         snprintf(out, out_size, "%s", record->title);
         return;
     }
     /* Заголовок плитки — имя Entity (A4: identity — entity_id, не устройство). */
-    const ha_entity_id_t entity = s_items.keys[index].entity;
     const ha_entity_key_t key = {.id = entity};
     ha_entity_record_t record_entity = {0};
     if (sys_ok(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_ENTITY, &key,
@@ -169,6 +227,18 @@ static void item_title(size_t index, char *out, size_t out_size)
         snprintf(out, out_size, "%s", record_entity.name);
     } else {
         snprintf(out, out_size, "%016llX", (unsigned long long)entity);
+    }
+}
+
+static void automation_title(const ha_group_item_record_t *record, uint64_t automation,
+                             const ha_rule_t *rule, char *out, size_t out_size)
+{
+    if (record->title[0] != '\0') {
+        snprintf(out, out_size, "%s", record->title);
+    } else if (rule != NULL && rule->name[0] != '\0') {
+        snprintf(out, out_size, "%s", rule->name);
+    } else {
+        snprintf(out, out_size, "Правило #%llu", (unsigned long long)automation);
     }
 }
 
@@ -188,14 +258,39 @@ static ui_page_t *build_page(size_t group_index)
             snprintf(group_title, sizeof(group_title), "Экран");
         }
     }
-    collect_items(group_index); /* невалидный индекс → пустой список */
-    const size_t count = s_items.count;
-    for (size_t i = 0; i < count; ++i) {
-        item_title(i, s_titles[i], sizeof(s_titles[i]));
-        s_descs[i].title = s_titles[i];
-        s_descs[i].entity = s_items.keys[i].entity;
+    collect_items(group_index);      /* невалидный индекс → пустой список */
+    collect_automations(group_index);
+    size_t ei = 0;
+    size_t ai = 0;
+    size_t n = 0;
+    while (n < UI_MAX_ITEMS && (ei < s_items.count || ai < s_autos.count)) {
+        const bool take_entity =
+            (ai >= s_autos.count) ||
+            (ei < s_items.count && s_items.recs[ei].order <= s_autos.recs[ai].order);
+        ui_page_item_t *desc = &s_descs[n];
+        if (take_entity) {
+            const ha_entity_id_t entity = s_items.keys[ei].entity;
+            entity_title(&s_items.recs[ei], entity, s_titles[n], sizeof(s_titles[n]));
+            *desc = (ui_page_item_t){
+                .title = s_titles[n], .kind = UI_PAGE_ITEM_ENTITY, .entity = entity};
+            ei++;
+        } else {
+            const uint64_t id = s_autos.keys[ai].automation_id;
+            ha_rule_t rule = {0};
+            const bool have_rule = read_rule(id, &rule);
+            automation_title(&s_autos.recs[ai], id, have_rule ? &rule : NULL, s_titles[n],
+                             sizeof(s_titles[n]));
+            *desc = (ui_page_item_t){
+                .title = s_titles[n],
+                .kind = UI_PAGE_ITEM_AUTOMATION,
+                .automation = id,
+                .enabled = have_rule && rule.enabled != 0,
+            };
+            ai++;
+        }
+        n++;
     }
-    return ui_page_create(s_domain, group_title, s_descs, count, on_page_gesture, NULL);
+    return ui_page_create(s_domain, group_title, s_descs, n, on_page_gesture, NULL);
 }
 
 /* Экран без анимации: старт, восстановление при рассинхроне и пересборка по фактам. */
@@ -501,6 +596,24 @@ static void process_fact(const domain_event_t *event)
     case HA_ENTITY_CAPABILITIES:
         s_screen_dirty = true; /* состав/имя/возможности → пересобрать текущий экран */
         break;
+    case HA_ENTITY_GROUP_AUTOMATION:
+        s_screen_dirty = true; /* состав плиток экрана */
+        break;
+    case HA_ENTITY_AUTOMATION: {
+        if (!upserted) {
+            s_screen_dirty = true; /* правило удалено — плитку убрать */
+            break;
+        }
+        ha_automation_key_t key = {0};
+        if (event->key_size == sizeof(key)) {
+            memcpy(&key, event->key, sizeof(key));
+        }
+        ha_rule_t rule = {0};
+        if (s_screen_mode == SCREEN_GROUPS && s_page != NULL && read_rule(key.id, &rule)) {
+            ui_page_apply_automation(s_page, key.id, rule.name, rule.enabled != 0);
+        }
+        break;
+    }
     case HA_ENTITY_PROPERTY_STATE: {
         ha_state_key_t key = {0};
         if (event->key_size == sizeof(key)) {
@@ -570,6 +683,25 @@ bool display_send_command(ha_entity_id_t entity, ha_property_id_t property, ha_a
         command.value = *value;
     }
     return sys_ok(domain_post(s_domain, HA_CMD_PROPERTY, &command, sizeof(command), NULL, NULL));
+}
+
+bool display_set_automation_enabled(uint64_t automation, bool enabled)
+{
+    if (s_domain == NULL) {
+        return false;
+    }
+    const ha_automation_key_t key = {.id = automation};
+    ha_rule_t rule = {0};
+    if (sys_failed(domain_entity_get(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key,
+                                     &rule))) {
+        return false;
+    }
+    rule.enabled = enabled ? 1 : 0;
+    domain_fact_meta_t meta = {0};
+    meta.source = (uint8_t)DOMAIN_SOURCE_UI;
+    bool changed = false;
+    return sys_ok(domain_entity_put(s_domain, (domain_entity_t)HA_ENTITY_AUTOMATION, &key, &rule,
+                                    &meta, &changed));
 }
 
 bool display_send_wifi_scan(void)

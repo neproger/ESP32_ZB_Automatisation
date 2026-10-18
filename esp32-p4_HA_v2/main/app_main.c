@@ -34,7 +34,7 @@
  * инициализация: `device` и `state` создаёт Zigbee, а читают их все.
  */
 
-#define APP_ENTITY_TYPES 17
+#define APP_ENTITY_TYPES 18
 #define APP_JOURNAL_CAPACITY 64
 #define APP_PAYLOAD_CAPACITY 8
 #define APP_PAYLOAD_MAX_SIZE 64
@@ -45,6 +45,7 @@
 #define APP_LOCATION_CAPACITY 4
 #define APP_GROUP_CAPACITY 16
 #define APP_GROUP_ITEM_CAPACITY 128
+#define APP_GROUP_AUTOMATION_CAPACITY 32
 #define APP_WEATHER_CAPACITY 1
 #define APP_WIFI_SCAN_CAPACITY 1
 #define APP_WIFI_KNOWN_CAPACITY 8
@@ -95,6 +96,16 @@ static const domain_entity_desc_t group_item_desc = {
     .capacity = APP_GROUP_ITEM_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
     .persist_key = "group_item_v3", /* плитка = entity: старый ABI (entity/property) не читаем */
+};
+
+/* Плитка-переключатель автоматизации на экране: тот же порядок/подпись, ключ — (экран, правило). */
+static const domain_entity_desc_t group_automation_desc = {
+    .type = (domain_entity_t)HA_ENTITY_GROUP_AUTOMATION,
+    .key_size = sizeof(ha_group_automation_key_t),
+    .payload_size = sizeof(ha_group_item_record_t),
+    .capacity = APP_GROUP_AUTOMATION_CAPACITY,
+    .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
+    .persist_key = "group_auto_v1",
 };
 
 /*
@@ -206,7 +217,7 @@ static const domain_entity_desc_t automation_desc = {
     .payload_size = sizeof(ha_rule_t),
     .capacity = APP_AUTOMATION_CAPACITY,
     .backing = DOMAIN_BACKING_RAM | DOMAIN_BACKING_FLASH,
-    .persist_key = "automation_v3", /* новая раскладка (триггеры/действия списками): старый ключ не читаем */
+    .persist_key = "automation_v5", /* + name[64]: старый ключ не читаем (раскладка записи) */
 };
 
 /*
@@ -332,6 +343,10 @@ void app_main(void)
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &group_item_desc), "register group-item")) {
+        return;
+    }
+    if (!start_step(domain_register_entity(&s_domain, &group_automation_desc),
+                    "register group-automation")) {
         return;
     }
     if (!start_step(domain_register_entity(&s_domain, &weather_desc), "register weather")) {

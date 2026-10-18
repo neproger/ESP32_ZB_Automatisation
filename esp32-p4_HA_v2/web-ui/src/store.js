@@ -151,6 +151,9 @@ export const store = {
   get semGroupItems() {
     return model.semGroupItems
   },
+  get semGroupAutomations() {
+    return model.semGroupAutomations
+  },
   get semEntities() {
     return model.semEntities
   },

@@ -36,7 +36,7 @@ export default function Automations() {
               disabled={!online}
               onChange={(v) => setEnabled(a, v)}
             />
-            <span className="rule-id">Правило #{a.id.toString()}</span>
+            <span className="rule-id">{a.rule.name?.trim() || `Правило #${a.id.toString()}`}</span>
             <span className="spacer" />
             <button className="ghost" onClick={() => setEditing(a.id.toString())}>Изменить</button>
             <button className="ghost danger" onClick={() => store.send(automationRemove(a.id))}>Удалить</button>

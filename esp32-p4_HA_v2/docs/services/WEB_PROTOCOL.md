@@ -65,7 +65,7 @@ reconnect + snapshot восстанавливают истину.*
 
 | type | сущность | key | record |
 |---|---|---|---|
-| 4 | AUTOMATION | `ha_automation_key_t` (8) | `ha_rule_t` (392) |
+| 4 | AUTOMATION | `ha_automation_key_t` (8) | `ha_rule_t` (456) |
 | 6 | LOCATION | `ha_device_id_t` (8) | `ha_location_record_t` (60) |
 | 7 | GROUP | `ha_group_key_t` (8) | `ha_group_record_t` (32) |
 | 8 | GROUP_ITEM | `ha_group_item_key_t` (16) | `ha_group_item_record_t` (36) |
@@ -76,6 +76,7 @@ reconnect + snapshot восстанавливают истину.*
 | 15 | PROPERTY_STATE | `ha_state_key_t` (16) | `ha_state_record_t` (8) |
 | 16 | CAPABILITIES | `ha_entity_key_t` (8) | `ha_entity_capabilities_record_t` (216) |
 | 17 | LOGICAL_DEVICE | `ha_logical_device_key_t` (8) | `ha_logical_device_record_t` (80) |
+| 18 | GROUP_AUTOMATION | `ha_group_automation_key_t` (16) | `ha_group_item_record_t` (36) |
 
 Список типов в браузер — **явный** (`SCHEMA` в `web/src/web.c`): новая внутренняя
 Domain-таблица не становится публичным API автоматически. `wifi_scan`/`wifi_known`
@@ -89,14 +90,14 @@ Domain-таблица не становится публичным API авто�
 | Logical Device | `ha_logical_device_record_t` (80): `parent_device_id u64@0`, `source u32@8`, `native_id[32]@12`, `name[32]@44`, `reserved[4]@76` |
 | Property state | `ha_state_key_t` (16): `entity u64@0`, `property i32@8`, `reserved u32@12`; record `ha_value_t` (8): `kind i32@0`, `value u32/f32@4` |
 | Capabilities | `ha_entity_capabilities_record_t` (216): `property_count u8@0`, `reserved[3]`, `properties[8]` (`ha_capability_t` 24: `property i32@0`, `action_count u8@4`, `actions[4] i32@8`), `event_count u8@196`, `events[4] i32@200` |
-| Automation | `ha_rule_t` (392) — см. §5 |
-| Group / item | `ha_group_record_t` (32): `title[32]`; `ha_group_item_key_t` (16): `group_id u64@0`, `entity u64@8` (плитка = Entity); `ha_group_item_record_t` (36): `order u16@0`, `reserved[2]@2`, `title[32]@4` |
+| Automation | `ha_rule_t` (456) — см. §5 |
+| Group / item | `ha_group_record_t` (32): `title[32]`; `ha_group_item_key_t` (16): `group_id u64@0`, `entity u64@8` (плитка = Entity); `ha_group_automation_key_t` (16): `group_id u64@0`, `automation_id u64@8` (плитка-переключатель правила); `ha_group_item_record_t` (36): `order u16@0`, `reserved[2]@2`, `title[32]@4` — общая запись обеих плиток |
 | Location | `ha_location_record_t` (60): `latitude f32@0`, `longitude f32@4`, `tz_offset_min i16@8`, `flags u8@10`, `reserved u8@11`, `name[48]@12` |
 | Weather | `ha_weather_record_t` (16): `condition u8@0`, `cloud_pct u8@1`, `temperature_c100 i16@2`, `humidity_p100 u16@4`, `pressure_hpa u16@6`, `wind_kmh10 u16@8`, `wind_dir_deg u16@10`, `reserved[4]@12` |
 | Wi-Fi status | `ha_wifi_status_record_t` (36): `state u8@0`, `connected u8@1`, `rssi i8@2`, `reserved u8@3`, `ssid[32]@4` |
 | Settings | `ha_settings_record_t` (8): `screensaver_timeout_ms u32@0`, `brightness_pct u8@4`, `palette_id u8@5`, `reserved[2]@6` |
 
-## 5. Rule wire = `ha_rule_t` (392, плоский POD)
+## 5. Rule wire = `ha_rule_t` (456, плоский POD)
 
 Значимость полей — по `kind` (`ha_automation_trigger_kind_t`: 0 EVENT, 1 TIME, 2 STATE);
 незначимые поля — ноль. Инварианты `offsetof` — `ha_model/ha_rule.h`. **Любой** из
@@ -112,7 +113,7 @@ Domain-таблица не становится публичным API авто�
 @256  conditions[4] { ref(16), cmp{ op u8@16, reserved[3], value f32@20, value2 f32@24 },
                       reserved u32@28 }                                     (32 each)
 @384  enabled u8; @385 trigger_count u8; @386 action_count u8; @387 conditions_count u8;
-      @388 reserved[4] (явный tail padding)
+      @388 reserved[4] (явный tail padding); @392 name[64] (пользовательская подпись)
 ```
 
 `entity == 0xFFFFFFFFFFFFFFFF` (`HA_ENTITY_ID_SOURCE`) — «то же, что источник триггера».
@@ -138,6 +139,8 @@ padding недопустим.
 | 19 | PROPERTY_COMMAND | `ha_property_command_t` (32): `entity u64@0`, `property i32@8`, `action u8@12`, `reserved[3]`, `ha_command_value_t@16` (`kind i32`, `scalar{kind i32, value}` / `xy{x,y}`), `reserved2[4]@28`. Wire = `sizeof` (включая явный tail padding) |
 | 20 | DEVICE_RENAME | `ha_device_id_t` + `char name[32]` |
 | 21 | LOGICAL_DEVICE_REMOVE | `ha_device_id_t` |
+| 22 | GROUP_AUTOMATION_PUT | `ha_group_automation_key_t` + `ha_group_item_record_t` |
+| 23 | GROUP_AUTOMATION_REMOVE | `ha_group_automation_key_t` |
 
 ## 7. Сценарии
 

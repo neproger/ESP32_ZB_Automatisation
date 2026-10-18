@@ -54,6 +54,9 @@ typedef enum {
     /* Logical Device (Шаг B): логический узел/вещь, которой принадлежат Entity. Форма —
      * ha_model/ha_logical_device.h. Transport-agnostic, Domain не знает EUI64. */
     HA_ENTITY_LOGICAL_DEVICE = 17,
+    /* Плитка автоматизации на экране Display: (group_id, automation_id) + order/title.
+     * Отдельный тип, потому что у правила нет entity_id (ключ group_item — (group, entity)). */
+    HA_ENTITY_GROUP_AUTOMATION = 18,
 } ha_entity_t;
 
 /* Локация (ключ — системный device id): текст города + координаты + tz-offset. */

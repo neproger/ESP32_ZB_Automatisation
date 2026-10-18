@@ -38,6 +38,8 @@ static const web_schema_t SCHEMA[] = {
      true},
     {HA_ENTITY_AUTOMATION, sizeof(ha_automation_key_t), sizeof(ha_rule_t), true},
     {HA_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t), sizeof(ha_group_item_record_t), true},
+    {HA_ENTITY_GROUP_AUTOMATION, sizeof(ha_group_automation_key_t),
+     sizeof(ha_group_item_record_t), true},
     {HA_ENTITY_GROUP, sizeof(ha_group_key_t), sizeof(ha_group_record_t), true},
     {HA_ENTITY_LOCATION, sizeof(ha_device_id_t), sizeof(ha_location_record_t), true},
     {HA_ENTITY_WEATHER, sizeof(ha_device_id_t), sizeof(ha_weather_record_t), false},

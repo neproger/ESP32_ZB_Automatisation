@@ -127,6 +127,18 @@ static uint16_t do_group_item_remove(const uint8_t *args, size_t len)
     return remove_entity(args, len, HA_ENTITY_GROUP_ITEM, sizeof(ha_group_item_key_t));
 }
 
+static uint16_t do_group_automation_put(const uint8_t *args, size_t len)
+{
+    return put_entity(args, len, HA_ENTITY_GROUP_AUTOMATION,
+                      sizeof(ha_group_automation_key_t), sizeof(ha_group_item_record_t));
+}
+
+static uint16_t do_group_automation_remove(const uint8_t *args, size_t len)
+{
+    return remove_entity(args, len, HA_ENTITY_GROUP_AUTOMATION,
+                         sizeof(ha_group_automation_key_t));
+}
+
 static uint16_t do_location_put(const uint8_t *args, size_t len)
 {
     return put_entity(args, len, HA_ENTITY_LOCATION, sizeof(ha_device_id_t),
@@ -180,6 +192,12 @@ void web_commands_handle(uint8_t cmd, const uint8_t *args, size_t len)
         break;
     case WEB_CMD_GROUP_ITEM_REMOVE:
         status = do_group_item_remove(args, len);
+        break;
+    case WEB_CMD_GROUP_AUTOMATION_PUT:
+        status = do_group_automation_put(args, len);
+        break;
+    case WEB_CMD_GROUP_AUTOMATION_REMOVE:
+        status = do_group_automation_remove(args, len);
         break;
     case WEB_CMD_LOCATION_PUT:
         status = do_location_put(args, len);

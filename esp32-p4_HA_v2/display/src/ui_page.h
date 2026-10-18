@@ -7,7 +7,9 @@
  * группами делаются снаружи через lv_screen_load_anim.
  */
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "lvgl.h"
 
@@ -19,9 +21,17 @@
 extern "C" {
 #endif
 
+typedef enum {
+    UI_PAGE_ITEM_ENTITY = 0,   /* плитка Entity: виджеты по capability */
+    UI_PAGE_ITEM_AUTOMATION,   /* плитка правила: подпись + переключатель enabled */
+} ui_page_item_kind_t;
+
 typedef struct {
-    const char *title;      /* подпись плитки (копируется в label) */
-    ha_entity_id_t entity;  /* плитка = Entity; виджеты — по её capability */
+    const char *title;        /* подпись плитки (копируется в label) */
+    ui_page_item_kind_t kind;
+    ha_entity_id_t entity;    /* ENTITY: плитка = Entity */
+    uint64_t automation;      /* AUTOMATION: id правила */
+    bool enabled;             /* AUTOMATION: начальное положение свича */
 } ui_page_item_t;
 
 typedef struct ui_page ui_page_t;
@@ -42,6 +52,10 @@ void ui_page_apply(ui_page_t *page);
  */
 void ui_page_apply_key(ui_page_t *page, const ha_state_key_t *key, const ha_value_t *value,
                        bool present);
+
+/* Обновить плитку автоматизации по факту правила (имя и/или enabled). */
+void ui_page_apply_automation(ui_page_t *page, uint64_t automation, const char *name,
+                              bool enabled);
 
 lv_obj_t *ui_page_root(const ui_page_t *page);
 

@@ -30,6 +30,7 @@ export const ENTITY = {
   PROPERTY_STATE: 15,
   CAPABILITIES: 16,
   LOGICAL_DEVICE: 17,
+  GROUP_AUTOMATION: 18,
 }
 
 export const CMD = {
@@ -47,6 +48,8 @@ export const CMD = {
   PROPERTY_COMMAND: 19,
   DEVICE_RENAME: 20,
   LOGICAL_DEVICE_REMOVE: 21,
+  GROUP_AUTOMATION_PUT: 22,
+  GROUP_AUTOMATION_REMOVE: 23,
 }
 
 export const HDR = 8
@@ -61,8 +64,9 @@ export const SIZES = {
   14: { key: 8, rec: 40 },   // ENTITY
   15: { key: 16, rec: 8 },   // PROPERTY_STATE
   16: { key: 8, rec: 216 },  // CAPABILITIES
-  4: { key: 8, rec: 392 },   // AUTOMATION
+  4: { key: 8, rec: 456 },   // AUTOMATION
   8: { key: 16, rec: 36 },   // GROUP_ITEM
+  18: { key: 16, rec: 36 },  // GROUP_AUTOMATION
   7: { key: 8, rec: 32 },    // GROUP
   6: { key: 8, rec: 60 },    // LOCATION
   9: { key: 8, rec: 16 },    // WEATHER
@@ -224,6 +228,25 @@ export function groupItemRemove(groupId, entity) {
   return encodeCommand(CMD.GROUP_ITEM_REMOVE, out)
 }
 
+// GROUP_AUTOMATION_PUT/REMOVE: ключ (group_id, automation_id), запись — общий item-record.
+export function groupAutomationPut(groupId, item) {
+  const out = new Uint8Array(52)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(item.automationId), true)
+  dv.setUint16(16, Number(item.order) || 0, true)
+  putText(out, 20, item.title, 32)
+  return encodeCommand(CMD.GROUP_AUTOMATION_PUT, out)
+}
+
+export function groupAutomationRemove(groupId, automationId) {
+  const out = new Uint8Array(16)
+  const dv = new DataView(out.buffer)
+  dv.setBigUint64(0, BigInt(groupId), true)
+  dv.setBigUint64(8, BigInt(automationId), true)
+  return encodeCommand(CMD.GROUP_AUTOMATION_REMOVE, out)
+}
+
 // ha_location_record_t (60): latitude f32@0, longitude f32@4, tz_offset_min i16@8,
 // flags u8@10, reserved u8@11, name[48]@12.
 export function encodeLocationRecord(r) {
@@ -255,7 +278,7 @@ export function automationRemove(id) {
   return encodeCommand(CMD.AUTOMATION_REMOVE, out)
 }
 
-// ha_rule_t (392) — плоский POD (offsetof-инварианты ha_rule.h):
+// ha_rule_t (456) — плоский POD (offsetof-инварианты ha_rule.h):
 //   triggers[4](32 each)@0   {entity u64, event_id i32@8, property i32@12, value f32@16,
 //                             value2 f32@20, minutes_of_day u16@24, kind u8@26, op u8@27,
 //                             edge u8@28, weekday_mask u8@29, reserved[2]@30}
@@ -263,7 +286,8 @@ export function automationRemove(id) {
 //                             value(12)@16 {kind i32, scalar{i32 kind@+4, f32 value@+8} | xy{f32 x@+4,y@+8}},
 //                             action u8@28, reserved[3]@29}
 //   conditions[4](32 each)@256 {ref(16), cmp{op u8@16, reserved[3], value f32@20, value2 f32@24}, reserved u32@28}
-//   enabled u8@384, trigger_count u8@385, action_count u8@386, conditions_count u8@387, reserved[4]@388
+//   enabled u8@384, trigger_count u8@385, action_count u8@386, conditions_count u8@387, reserved[4]@388,
+//   name[64]@392
 const RULE_TRIGGERS_OFF = 0
 const RULE_ACTIONS_OFF = 128
 const RULE_CONDITIONS_OFF = 256
@@ -271,13 +295,15 @@ const RULE_OFF_ENABLED = 384
 const RULE_OFF_TRIGGER_COUNT = 385
 const RULE_OFF_ACTION_COUNT = 386
 const RULE_OFF_CONDITIONS_COUNT = 387
+const RULE_OFF_NAME = 392
+const RULE_NAME_MAX = 64
 const RULE_TRIGGER_SIZE = 32
 const RULE_ACTION_SIZE = 32
 const CONDITION_SIZE = 32
 const RULE_MAX_TRIGGERS = 4
 const RULE_MAX_ACTIONS = 4
 const RULE_MAX_CONDITIONS = 4
-const RULE_SIZE = 392
+const RULE_SIZE = 456
 
 function encodeTrigger(dv, o, t) {
   const kind = Number(t.kind) || 0
@@ -332,6 +358,14 @@ function encodeRule(dv, base, rule) {
   dv.setUint8(base + RULE_OFF_TRIGGER_COUNT, triggers.length)
   dv.setUint8(base + RULE_OFF_ACTION_COUNT, actions.length)
   dv.setUint8(base + RULE_OFF_CONDITIONS_COUNT, conds.length)
+  /* name[32] — байтовый лимит: режем UTF-8, не разрывая символ (иначе RangeError). */
+  let name = enc.encode(rule.name || '')
+  if (name.length > RULE_NAME_MAX - 1) {
+    let n = RULE_NAME_MAX - 1
+    while (n > 0 && (name[n] & 0xc0) === 0x80) n--
+    name = name.subarray(0, n)
+  }
+  new Uint8Array(dv.buffer, dv.byteOffset + base + RULE_OFF_NAME, name.length).set(name)
 }
 
 // AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+388).

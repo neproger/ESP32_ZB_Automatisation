@@ -13,6 +13,7 @@ export const settingsMap = new Map()
 export const groups = new Map()
 export const semAutomations = new Map()
 export const semGroupItems = new Map()
+export const semGroupAutomations = new Map()
 export const semEntities = new Map()
 export const semDevices = new Map()
 export const propStates = new Map()
@@ -61,6 +62,7 @@ const RULE_OFF_ENABLED = 384
 const RULE_OFF_TRIGGER_COUNT = 385
 const RULE_OFF_ACTION_COUNT = 386
 const RULE_OFF_CONDITIONS_COUNT = 387
+const RULE_OFF_NAME = 392
 
 function decodeTrigger(dv, o) {
   return {
@@ -117,7 +119,7 @@ function decodeRule(dv, base) {
       value2: dv.getFloat32(p + 24, true),
     })
   }
-  return { enabled: dv.getUint8(base + RULE_OFF_ENABLED) !== 0, triggers, actions, conditions }
+  return { enabled: dv.getUint8(base + RULE_OFF_ENABLED) !== 0, name: cstr(dv, base + RULE_OFF_NAME, 64), triggers, actions, conditions }
 }
 
 function decodeValue(payload, atKind, atBits) {
@@ -135,7 +137,7 @@ function decodeValue(payload, atKind, atBits) {
 }
 
 export function clearModel() {
-  for (const m of [semDevices, semEntities, propCapabilities, semAutomations, semGroupItems, groups, locations, settingsMap]) m.clear()
+  for (const m of [semDevices, semEntities, propCapabilities, semAutomations, semGroupItems, semGroupAutomations, groups, locations, settingsMap]) m.clear()
 }
 export function clearState() {
   for (const m of [propStates, weatherMap, wifiStatusMap]) m.clear()
@@ -187,6 +189,12 @@ export function applyEntity(type, p) {
     const entity = p.getBigUint64(8, true)
     semGroupItems.set(`${groupId}:${entity}`, {
       groupId, entity, order: p.getUint16(16, true), title: textAt(p, 20, 32),
+    })
+  } else if (type === ENTITY.GROUP_AUTOMATION) {
+    const groupId = p.getBigUint64(0, true)
+    const automationId = p.getBigUint64(8, true)
+    semGroupAutomations.set(`${groupId}:${automationId}`, {
+      groupId, automationId, order: p.getUint16(16, true), title: textAt(p, 20, 32),
     })
   } else if (type === ENTITY.GROUP) {
     const id = p.getBigUint64(0, true)

@@ -77,6 +77,7 @@ export default function AutomationForm({ id, automations, onClose }) {
   })
 
   const [enabled, setEnabled] = useState(existing ? !!existing.enabled : true)
+  const [name, setName] = useState(existing?.name ?? '')
   const [triggers, setTriggers] = useState(() =>
     existing?.triggers?.length ? existing.triggers.map(triggerFromWire) : [newTrigger()])
   const [actions, setActions] = useState(() =>
@@ -180,6 +181,7 @@ export default function AutomationForm({ id, automations, onClose }) {
     const targetId = id != null ? BigInt(id) : nextId(automations)
     store.send(automationPut(targetId, {
       enabled,
+      name: name.trim(),
       triggers: triggers.map(toTriggerWire),
       actions: actions.map(toActionWire),
       conditions: conditions.map((c) => ({
@@ -203,6 +205,10 @@ export default function AutomationForm({ id, automations, onClose }) {
   return (
     <form className="form-grid" onSubmit={submit}>
       <label className="af-line">Включено <Switch checked={enabled} onChange={setEnabled} /></label>
+      <label className="af-line">Название
+        <input type="text" value={name} maxLength={63} placeholder="(необязательно)"
+          onChange={(e) => setName(e.target.value)} />
+      </label>
 
       <div className="af-section">
         <div className="af-section-head">

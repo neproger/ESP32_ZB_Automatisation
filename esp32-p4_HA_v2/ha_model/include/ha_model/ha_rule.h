@@ -27,6 +27,7 @@ extern "C" {
 #define HA_RULE_CONDITIONS_MAX 4
 #define HA_RULE_TRIGGERS_MAX 4
 #define HA_RULE_ACTIONS_MAX 4
+#define HA_RULE_NAME_MAX 64
 
 /* Адрес в правиле: (entity, property). entity может быть HA_ENTITY_ID_SOURCE. */
 typedef struct {
@@ -90,6 +91,7 @@ typedef struct {
     uint8_t action_count;
     uint8_t conditions_count;
     uint8_t reserved[4]; /* явный tail padding: выравнивание структуры 8 */
+    char name[HA_RULE_NAME_MAX]; /* пользовательская подпись; пустая — UI покажет «Правило #id» */
 } ha_rule_t;
 
 #ifdef __cplusplus
@@ -99,12 +101,13 @@ static_assert(sizeof(ha_rule_condition_t) == 32, "ha_rule_condition_t: неож�
 static_assert(sizeof(ha_rule_trigger_t) == 32, "ha_rule_trigger_t: неожиданный размер");
 static_assert(sizeof(ha_rule_action_t) == 32, "ha_rule_action_t: неожиданный размер");
 static_assert(sizeof(ha_command_value_t) == 12, "ha_command_value_t: неожиданный размер");
-static_assert(sizeof(ha_rule_t) == 392, "ha_rule_t: неожиданный размер");
+static_assert(sizeof(ha_rule_t) == 456, "ha_rule_t: неожиданный размер");
 static_assert(offsetof(ha_rule_t, triggers) == 0, "ha_rule_t: layout triggers");
 static_assert(offsetof(ha_rule_t, actions) == 128, "ha_rule_t: layout actions");
 static_assert(offsetof(ha_rule_t, conditions) == 256, "ha_rule_t: layout conditions");
 static_assert(offsetof(ha_rule_t, enabled) == 384, "ha_rule_t: layout enabled");
 static_assert(offsetof(ha_rule_t, action_count) == 386, "ha_rule_t: layout action_count");
+static_assert(offsetof(ha_rule_t, name) == 392, "ha_rule_t: layout name");
 static_assert(sizeof(ha_rule_t) <= 1024, "ha_rule_t: больше региона");
 #else
 _Static_assert(sizeof(ha_rule_ref_t) == 16, "ha_rule_ref_t: неожиданный размер");
@@ -113,12 +116,13 @@ _Static_assert(sizeof(ha_rule_condition_t) == 32, "ha_rule_condition_t: неож
 _Static_assert(sizeof(ha_rule_trigger_t) == 32, "ha_rule_trigger_t: неожиданный размер");
 _Static_assert(sizeof(ha_rule_action_t) == 32, "ha_rule_action_t: неожиданный размер");
 _Static_assert(sizeof(ha_command_value_t) == 12, "ha_command_value_t: неожиданный размер");
-_Static_assert(sizeof(ha_rule_t) == 392, "ha_rule_t: неожиданный размер");
+_Static_assert(sizeof(ha_rule_t) == 456, "ha_rule_t: неожиданный размер");
 _Static_assert(offsetof(ha_rule_t, triggers) == 0, "ha_rule_t: layout triggers");
 _Static_assert(offsetof(ha_rule_t, actions) == 128, "ha_rule_t: layout actions");
 _Static_assert(offsetof(ha_rule_t, conditions) == 256, "ha_rule_t: layout conditions");
 _Static_assert(offsetof(ha_rule_t, enabled) == 384, "ha_rule_t: layout enabled");
 _Static_assert(offsetof(ha_rule_t, action_count) == 386, "ha_rule_t: layout action_count");
+_Static_assert(offsetof(ha_rule_t, name) == 392, "ha_rule_t: layout name");
 _Static_assert(sizeof(ha_rule_t) <= 1024, "ha_rule_t: больше региона");
 #endif
 

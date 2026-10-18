@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useStore } from '../useStore.js'
 import { store } from '../store.js'
-import { groupPut, groupRemove, groupItemPut, groupItemRemove } from '../proto.js'
+import { groupPut, groupRemove, groupItemPut, groupItemRemove, groupAutomationPut, groupAutomationRemove, automationPut } from '../proto.js'
+import Switch from '../components/Switch.jsx'
 import Modal from '../components/Modal.jsx'
 import EntityWidgets from '../components/EntityWidgets.jsx'
 import WeatherWidget from '../components/WeatherWidget.jsx'
@@ -12,6 +13,23 @@ import WeatherWidget from '../components/WeatherWidget.jsx'
 
 function entityName(s, entity) {
   return s.semEntities.get(entity.toString())?.name || entity.toString().slice(-6)
+}
+
+function automationName(a) {
+  return a.rule?.name?.trim() || `Правило #${a.id.toString()}`
+}
+
+function removeTile(group, tile) {
+  if (tile.automationId != null) store.send(groupAutomationRemove(group.key.id, tile.automationId))
+  else store.send(groupItemRemove(group.key.id, tile.entity))
+}
+
+function putTileAt(group, tile, order) {
+  if (tile.automationId != null) {
+    store.send(groupAutomationPut(group.key.id, { automationId: tile.automationId, order, title: tile.title }))
+  } else {
+    store.send(groupItemPut(group.key.id, { entity: tile.entity, order, title: tile.title }))
+  }
 }
 
 // Entity, у которых есть capability или известные свойства (для выпадающего списка).
@@ -28,39 +46,73 @@ function entitiesWithProps(s) {
   return out
 }
 
-// Плитка: Entity → подпись.
-function TileForm({ s, group, items, item, onClose }) {
+// Плитка экрана: Entity (виджеты по capability) или автоматизация (переключатель).
+function TileForm({ s, group, nextOrder, item, onClose }) {
   const ents = entitiesWithProps(s)
-  const [entity, setEntity] = useState(item ? item.entity.toString() : '')
-  const [title, setTitle] = useState(item ? item.title : '')
+  const autos = [...s.semAutomations.values()].sort((a, b) => (a.id < b.id ? -1 : 1))
+  const [kind, setKind] = useState(item?.automationId != null ? 'automation' : 'entity')
+  const [entity, setEntity] = useState(item?.entity != null ? item.entity.toString() : '')
+  const [automationId, setAutomationId] = useState(item?.automationId != null ? item.automationId.toString() : '')
+  const [title, setTitle] = useState(item?.title ?? '')
 
   const effEntity = entity || (ents[0]?.id.toString() ?? '')
+  const effAuto = automationId || (autos[0]?.id.toString() ?? '')
+  const canSave = kind === 'entity' ? !!effEntity : !!effAuto
+
+  const putTile = (newOrder) => {
+    if (kind === 'automation') {
+      store.send(groupAutomationPut(group.key.id, { automationId: BigInt(effAuto), order: newOrder, title: title.trim() }))
+    } else {
+      store.send(groupItemPut(group.key.id, { entity: BigInt(effEntity), order: newOrder, title: title.trim() }))
+    }
+  }
 
   const save = () => {
-    if (!effEntity) return
-    const order = item ? item.order : (items.length ? Math.max(...items.map((it) => it.order)) + 1 : 0)
-    if (item && item.entity.toString() !== effEntity) {
-      store.send(groupItemRemove(group.key.id, item.entity))
+    if (!canSave) return
+    if (item) {
+      const changedKind = (item.automationId != null) !== (kind === 'automation')
+      const changedTarget = kind === 'entity'
+        ? item.entity != null && item.entity.toString() !== effEntity
+        : item.automationId != null && item.automationId.toString() !== effAuto
+      if (changedKind) removeTile(group, item)
+      else if (changedTarget) removeTile(group, item)
     }
-    store.send(groupItemPut(group.key.id, { entity: BigInt(effEntity), order, title: title.trim() }))
+    putTile(item ? item.order : nextOrder)
     onClose()
   }
 
   return (
     <div className="form-grid">
-      <div className="af-line">Сущность:
-        <select value={effEntity} onChange={(e) => setEntity(e.target.value)}>
-          {ents.length === 0 && <option value="">(нет сущностей со свойствами)</option>}
-          {ents.map((g) => <option key={g.id.toString()} value={g.id.toString()}>{g.name}</option>)}
+      <div className="af-line">Тип:
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="entity">Сущность</option>
+          <option value="automation">Автоматизация</option>
         </select>
       </div>
+      {kind === 'entity' ? (
+        <div className="af-line">Сущность:
+          <select value={effEntity} onChange={(e) => setEntity(e.target.value)}>
+            {ents.length === 0 && <option value="">(нет сущностей со свойствами)</option>}
+            {ents.map((g) => <option key={g.id.toString()} value={g.id.toString()}>{g.name}</option>)}
+          </select>
+        </div>
+      ) : (
+        <div className="af-line">Автоматизация:
+          <select value={effAuto} onChange={(e) => setAutomationId(e.target.value)}>
+            {autos.length === 0 && <option value="">(правил нет)</option>}
+            {autos.map((a) => (
+              <option key={a.id.toString()} value={a.id.toString()}>{automationName(a)}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="af-line">Подпись:
         <input type="text" value={title} placeholder="(необязательно)" onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="af-line">
-        <button onClick={save} disabled={!effEntity}>Сохранить</button>
+        <button onClick={save} disabled={!canSave}>Сохранить</button>
         {item && (
-          <button className="ghost danger" onClick={() => { store.send(groupItemRemove(group.key.id, item.entity)); onClose() }}>Удалить</button>
+          <button className="ghost danger" onClick={() => { removeTile(group, item); onClose() }}>Удалить</button>
         )}
         <button className="ghost" onClick={onClose}>Отмена</button>
       </div>
@@ -68,17 +120,18 @@ function TileForm({ s, group, items, item, onClose }) {
   )
 }
 
-function GroupCard({ group, items, s }) {
+function GroupCard({ group, tiles, s }) {
   const [form, setForm] = useState(null)
   const [edit, setEdit] = useState(false)
+  const nextOrder = tiles.length ? Math.max(...tiles.map((t) => t.order)) + 1 : 0
 
   const move = (index, delta) => {
     const j = index + delta
-    if (j < 0 || j >= items.length) return
-    const a = items[index]
-    const b = items[j]
-    store.send(groupItemPut(group.key.id, { ...a, order: b.order }))
-    store.send(groupItemPut(group.key.id, { ...b, order: a.order }))
+    if (j < 0 || j >= tiles.length) return
+    const a = tiles[index]
+    const b = tiles[j]
+    putTileAt(group, a, b.order)
+    putTileAt(group, b, a.order)
   }
 
   return (
@@ -90,20 +143,32 @@ function GroupCard({ group, items, s }) {
         <button className="ghost danger" onClick={() => store.send(groupRemove(group.key.id))}>Удалить экран</button>
       </div>
 
-      {items.length === 0 && <div className="muted">плиток нет</div>}
+      {tiles.length === 0 && <div className="muted">плиток нет</div>}
       <div className="screen-tiles">
-        {items.map((it, i) => (
-          <div className="entity-tile" key={it.entity.toString()}>
-            <div className="entity-tile-head">
-              <span className="entity-tile-title">{it.title || entityName(s, it.entity)}</span>
-              <span className="spacer" />
-              <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-              <button className="ghost" onClick={() => move(i, 1)} disabled={i === items.length - 1}>↓</button>
-              <button className="ghost" onClick={() => setForm({ item: it })}>Изменить</button>
+        {tiles.map((it, i) => {
+          const auto = it.automationId != null ? s.semAutomations.get(it.automationId.toString()) : null
+          return (
+            <div className="entity-tile" key={(auto ? 'a' : 'e') + (auto ? it.automationId : it.entity)}>
+              <div className="entity-tile-head">
+                <span className="entity-tile-title">
+                  {it.title || (auto ? automationName(auto) : entityName(s, it.entity))}
+                </span>
+                <span className="spacer" />
+                <button className="ghost" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
+                <button className="ghost" onClick={() => move(i, 1)} disabled={i === tiles.length - 1}>↓</button>
+                <button className="ghost" onClick={() => setForm({ item: it })}>Изменить</button>
+              </div>
+              {auto ? (
+                <label className="af-line">Включено
+                  <Switch checked={auto.rule.enabled}
+                    onChange={(v) => store.send(automationPut(auto.id, { ...auto.rule, enabled: v }))} />
+                </label>
+              ) : (
+                <EntityWidgets entity={it.entity} />
+              )}
             </div>
-            <EntityWidgets entity={it.entity} />
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <div className="af-line">
@@ -119,7 +184,7 @@ function GroupCard({ group, items, s }) {
       )}
       {form && (
         <Modal title={form.item ? 'Изменить плитку' : 'Новая плитка'} onClose={() => setForm(null)}>
-          <TileForm s={s} group={group} items={items} item={form.item} onClose={() => setForm(null)} />
+          <TileForm s={s} group={group} nextOrder={nextOrder} item={form.item} onClose={() => setForm(null)} />
         </Modal>
       )}
     </div>
@@ -169,9 +234,10 @@ export default function Groups() {
           <GroupCard
             key={'grp:' + g.key.id}
             group={g}
-            items={[...s.semGroupItems.values()]
-              .filter((it) => it.groupId === g.key.id)
-              .sort((a, b) => a.order - b.order)}
+            tiles={[
+              ...[...s.semGroupItems.values()].filter((it) => it.groupId === g.key.id),
+              ...[...s.semGroupAutomations.values()].filter((it) => it.groupId === g.key.id),
+            ].sort((a, b) => a.order - b.order)}
             s={s}
           />
         ))}

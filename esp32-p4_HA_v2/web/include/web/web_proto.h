@@ -82,6 +82,9 @@ typedef enum {
     WEB_CMD_PROPERTY_COMMAND = 19,
     WEB_CMD_DEVICE_RENAME = 20,
     WEB_CMD_LOGICAL_DEVICE_REMOVE = 21,
+    /* Плитка автоматизации на экране: [key 16][record 36] / [key 16]. */
+    WEB_CMD_GROUP_AUTOMATION_PUT = 22,
+    WEB_CMD_GROUP_AUTOMATION_REMOVE = 23,
 } web_cmd_t;
 
 typedef struct __attribute__((packed)) {

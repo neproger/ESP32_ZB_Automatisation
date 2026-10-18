@@ -18,8 +18,9 @@ Display — локальный LVGL-интерфейс устройства. О�
 bootstrap как любые другие (`../RECORD_MODEL.md` §1.1):
 
 ```text
-group       — экран/дашборд: числовой ключ id (как у automation), payload — title
-group_item  — плитка на экране: ссылка на Entity + order + title
+group             — экран/дашборд: числовой ключ id (как у automation), payload — title
+group_item        — плитка на экране: ссылка на Entity + order + title
+group_automation  — плитка-переключатель правила: ссылка на automation id + order + title
 ```
 
 `title` у экрана и у элемента задаёт пользователь, независимо от имени устройства:
@@ -45,7 +46,8 @@ Display — подписчик Dispatcher'а (`../domain/DISPATCHER.md`), как
 Domain читается **только по пришедшим фактам**, не каждый тик.
 
 ```text
-GROUP/GROUP_ITEM/ENTITY/CAPABILITIES upsert|remove → пересобрать текущий экран
+GROUP/GROUP_ITEM/GROUP_AUTOMATION/ENTITY/CAPABILITIES upsert|remove → пересобрать текущий экран
+AUTOMATION upsert|remove                             → подпись/переключатель плитки правила
 PROPERTY_STATE(entity, property) upsert|remove     → обновить виджеты экрана с этим ключом
 WEATHER/LOCATION upsert|remove                     → строка состояния
 SETTINGS upsert|remove                             → тема/подсветка (+ экран настроек)
