@@ -2,7 +2,11 @@
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xf000,   0x1000,
 factory,  app,  factory, 0x10000,  4M,
-mstore,   data, fat,     0x410000, 0x40000,
-zb_storage, data, nvs,   ,         16K,
-zb_fct,     data, fat,   ,         1K,
-zb_model,   data, 0x41,  0x470000, 0x4000,
+# mstore: 0x60000 (256K -> 384K). Регионы не переиспользуются, смена persist_key
+# оставляет мёртвые регионы; запаса хватает на несколько версий раскладок.
+mstore,   data, fat,     0x410000, 0x60000,
+zb_model, data, 0x41,    0x470000, 0x4000,
+# zb_storage/zb_fct — в свободном хвосте после zb_model (сдвиг данных делается
+# при обновлении таблицы разделов; на работу по labels не влияет).
+zb_storage, data, nvs,   0x474000, 16K,
+zb_fct,     data, fat,   0x478000, 1K,
