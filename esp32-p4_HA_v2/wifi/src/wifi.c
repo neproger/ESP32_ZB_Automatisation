@@ -382,11 +382,7 @@ static sys_error_t wifi_init_stack(void)
 
     /* Без этого STA с дефолтным power-save пропускает auth-кадры и получает
      * reason=2 (AUTH_EXPIRE) при хорошем RSSI (прецедент — старый web-сервис). */
-    const esp_err_t ps_set = esp_wifi_set_ps(WIFI_PS_NONE);
-    wifi_ps_type_t ps_get = WIFI_PS_MIN_MODEM;
-    const esp_err_t ps_read = esp_wifi_get_ps(&ps_get);
-    ESP_LOGI(TAG, "power-save: set=%s read=%s mode=%d", esp_err_to_name(ps_set),
-             esp_err_to_name(ps_read), (int)ps_get);
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
     (void)esp_wifi_set_country_code("RU", true);
     return SYS_OK;
 }
