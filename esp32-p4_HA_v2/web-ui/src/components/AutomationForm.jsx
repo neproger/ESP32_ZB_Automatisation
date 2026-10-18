@@ -11,6 +11,16 @@ import { rgbHexToXy, xyToRgbHex } from '../color.js'
 import { ENTITY_SYSTEM } from '../system.js'
 import Switch from './Switch.jsx'
 
+// Подпись над контролом: строка из многих селектов без подписей неразличима.
+function Field({ label, children }) {
+  return (
+    <label className="af-field">
+      <span className="af-cap">{label}</span>
+      {children}
+    </label>
+  )
+}
+
 const MAX_TRIGGERS = 4
 const MAX_ACTIONS = 4
 const MAX_CONDITIONS = 4
@@ -201,56 +211,78 @@ export default function AutomationForm({ id, automations, onClose }) {
         </div>
         {triggers.map((t, i) => (
           <div className="af-cond" key={i}>
-            <select value={t.kind} onChange={(e) => updateTrigger(i, { kind: Number(e.target.value) })}>
-              {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            <Field label="триггер">
+              <select value={t.kind} onChange={(e) => updateTrigger(i, { kind: Number(e.target.value) })}>
+                {TRIGGER_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </Field>
             {Number(t.kind) === 1 ? (
               <>
-                <select value={Math.floor(hhmmToMinutes(t.timeStr) / 60)}
-                  onChange={(e) => updateTrigger(i, { timeStr: `${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(t.timeStr) % 60).padStart(2, '0')}` })}>
-                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
-                </select>
-                <span>:</span>
-                <select value={hhmmToMinutes(t.timeStr) % 60}
-                  onChange={(e) => updateTrigger(i, { timeStr: `${String(Math.floor(hhmmToMinutes(t.timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}` })}>
-                  {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
-                </select>
-                <span className="days">
-                  {WEEKDAY_LABELS.map((d, k) => (
-                    <label key={d} className="day">
-                      <input type="checkbox" checked={(t.weekdayMask >> k) & 1}
-                        onChange={(e) => updateTrigger(i, { weekdayMask: e.target.checked ? (t.weekdayMask | (1 << k)) : (t.weekdayMask & ~(1 << k)) })} />
-                      {d}
-                    </label>
-                  ))}
-                </span>
+                <Field label="время">
+                  <span className="time-pick">
+                    <select value={Math.floor(hhmmToMinutes(t.timeStr) / 60)}
+                      onChange={(e) => updateTrigger(i, { timeStr: `${String(Number(e.target.value)).padStart(2, '0')}:${String(hhmmToMinutes(t.timeStr) % 60).padStart(2, '0')}` })}>
+                      {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}</option>)}
+                    </select>
+                    <span>:</span>
+                    <select value={hhmmToMinutes(t.timeStr) % 60}
+                      onChange={(e) => updateTrigger(i, { timeStr: `${String(Math.floor(hhmmToMinutes(t.timeStr) / 60)).padStart(2, '0')}:${String(Number(e.target.value)).padStart(2, '0')}` })}>
+                      {Array.from({ length: 60 }, (_, m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
+                    </select>
+                  </span>
+                </Field>
+                <Field label="дни">
+                  <span className="days">
+                    {WEEKDAY_LABELS.map((d, k) => (
+                      <label key={d} className="day">
+                        <input type="checkbox" checked={(t.weekdayMask >> k) & 1}
+                          onChange={(e) => updateTrigger(i, { weekdayMask: e.target.checked ? (t.weekdayMask | (1 << k)) : (t.weekdayMask & ~(1 << k)) })} />
+                        {d}
+                      </label>
+                    ))}
+                  </span>
+                </Field>
               </>
             ) : Number(t.kind) === 0 ? (
               <>
-                <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value })}>{entityOptions(eventEntities, false)}</select>
-                <select value={t.eventId} onChange={(e) => updateTrigger(i, { eventId: Number(e.target.value) })}>
-                  {triggerEventsFor(t).length === 0
-                    ? <option value="">(нет событий)</option>
-                    : triggerEventsFor(t).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                <Field label="устройство">
+                  <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value })}>{entityOptions(eventEntities, false)}</select>
+                </Field>
+                <Field label="событие">
+                  <select value={t.eventId} onChange={(e) => updateTrigger(i, { eventId: Number(e.target.value) })}>
+                    {triggerEventsFor(t).length === 0
+                      ? <option value="">(нет событий)</option>
+                      : triggerEventsFor(t).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </Field>
               </>
             ) : (
               <>
-                <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value, property: 0 })}>{entityOptions(stateEntities, false)}</select>
-                <select value={t.property || ''} onChange={(e) => updateTrigger(i, { property: Number(e.target.value) })}>
-                  <option value="">(свойство)</option>
-                  {propsOf(t.entity).map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
-                </select>
-                <select value={t.op} onChange={(e) => updateTrigger(i, { op: Number(e.target.value) })}>
-                  {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-                <input className="ep" type="number" step="any" value={t.value} onChange={(e) => updateTrigger(i, { value: e.target.value })} />
-                <select value={t.edge} onChange={(e) => updateTrigger(i, { edge: Number(e.target.value) })}>
-                  {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                <Field label="устройство">
+                  <select value={t.entity} onChange={(e) => updateTrigger(i, { entity: e.target.value, property: 0 })}>{entityOptions(stateEntities, false)}</select>
+                </Field>
+                <Field label="свойство">
+                  <select value={t.property || ''} onChange={(e) => updateTrigger(i, { property: Number(e.target.value) })}>
+                    <option value="">(свойство)</option>
+                    {propsOf(t.entity).map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
+                  </select>
+                </Field>
+                <Field label="условие">
+                  <select value={t.op} onChange={(e) => updateTrigger(i, { op: Number(e.target.value) })}>
+                    {TRIGGER_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </Field>
+                <Field label="значение">
+                  <input className="ep" type="number" step="any" value={t.value} onChange={(e) => updateTrigger(i, { value: e.target.value })} />
+                </Field>
+                <Field label="реакция">
+                  <select value={t.edge} onChange={(e) => updateTrigger(i, { edge: Number(e.target.value) })}>
+                    {TRIGGER_EDGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </Field>
               </>
             )}
-            {triggers.length > 1 && <button type="button" className="ghost danger" onClick={() => setTriggers((ts) => ts.filter((_, j) => j !== i))}>✕</button>}
+            {triggers.length > 1 && <button type="button" className="ghost danger af-del" onClick={() => setTriggers((ts) => ts.filter((_, j) => j !== i))}>✕</button>}
           </div>
         ))}
       </div>
@@ -266,23 +298,33 @@ export default function AutomationForm({ id, automations, onClose }) {
           const shape = valueShapeOf(a.property)
           return (
             <div className="af-cond" key={i}>
-              <select value={a.entity} onChange={(e) => updateAction(i, { entity: e.target.value })}>{entityOptions(actionEntities, true, 'то же, что триггер')}</select>
-              <select value={a.property} onChange={(e) => pickActionProperty(i, e.target.value)}>
-                {opts.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
-              </select>
-              <select value={a.action} onChange={(e) => updateAction(i, { action: Number(e.target.value) })}>
-                {acts.map((x) => <option key={x} value={x}>{actionName(x)}</option>)}
-              </select>
+              <Field label="устройство">
+                <select value={a.entity} onChange={(e) => updateAction(i, { entity: e.target.value })}>{entityOptions(actionEntities, true, 'то же, что триггер')}</select>
+              </Field>
+              <Field label="свойство">
+                <select value={a.property} onChange={(e) => pickActionProperty(i, e.target.value)}>
+                  {opts.map((p) => <option key={p.property} value={p.property}>{propertyName(p.property)}</option>)}
+                </select>
+              </Field>
+              <Field label="действие">
+                <select value={a.action} onChange={(e) => updateAction(i, { action: Number(e.target.value) })}>
+                  {acts.map((x) => <option key={x} value={x}>{actionName(x)}</option>)}
+                </select>
+              </Field>
               {a.action === ACTION.SET && shape === 'color' && (
-                <input type="color" value={a.color} onChange={(e) => updateAction(i, { color: e.target.value })} />
+                <Field label="цвет">
+                  <input type="color" value={a.color} onChange={(e) => updateAction(i, { color: e.target.value })} />
+                </Field>
               )}
               {a.action === ACTION.SET && shape && shape !== 'color' && (
-                <>
-                  <input className="ep" type="number" step="any" value={a.value} onChange={(e) => updateAction(i, { value: e.target.value })} />
-                  <span className="muted">{shape === 'percent' ? '%' : shape === 'kelvin' ? 'K' : '°'}</span>
-                </>
+                <Field label="значение">
+                  <span className="af-num">
+                    <input className="ep" type="number" step="any" value={a.value} onChange={(e) => updateAction(i, { value: e.target.value })} />
+                    <span className="muted">{shape === 'percent' ? '%' : shape === 'kelvin' ? 'K' : '°'}</span>
+                  </span>
+                </Field>
               )}
-              {actions.length > 1 && <button type="button" className="ghost danger" onClick={() => setActions((as) => as.filter((_, j) => j !== i))}>✕</button>}
+              {actions.length > 1 && <button type="button" className="ghost danger af-del" onClick={() => setActions((as) => as.filter((_, j) => j !== i))}>✕</button>}
             </div>
           )
         })}
@@ -298,26 +340,34 @@ export default function AutomationForm({ id, automations, onClose }) {
           const opts = propsOf(c.entity === SRC ? (triggers[0]?.entity ?? SRC) : c.entity)
           return (
             <div className="af-cond" key={i}>
-              <select value={c.entity} onChange={(e) => updateCondition(i, { entity: e.target.value, property: 0 })}>
-                {entityOptions(stateEntities, true, 'то же, что триггер')}
-              </select>
-              <select value={c.property || ''} onChange={(e) => updateCondition(i, { property: Number(e.target.value) })}>
-                <option value="">(свойство)</option>
-                {opts.map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
-              </select>
-              <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
-                {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-              {c.op === 8 ? (
-                <>
+              <Field label="устройство">
+                <select value={c.entity} onChange={(e) => updateCondition(i, { entity: e.target.value, property: 0 })}>
+                  {entityOptions(stateEntities, true, 'то же, что триггер')}
+                </select>
+              </Field>
+              <Field label="свойство">
+                <select value={c.property || ''} onChange={(e) => updateCondition(i, { property: Number(e.target.value) })}>
+                  <option value="">(свойство)</option>
+                  {opts.map((o) => <option key={o.property} value={o.property}>{propertyName(o.property)}</option>)}
+                </select>
+              </Field>
+              <Field label="условие">
+                <select value={c.op} onChange={(e) => updateCondition(i, { op: Number(e.target.value) })}>
+                  {CONDITION_OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </Field>
+              <Field label="значение">
+                {c.op === 8 ? (
+                  <span className="af-num">
+                    <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
+                    <span className="muted">…</span>
+                    <input className="ep" type="number" step="any" value={c.value2 ?? 0} onChange={(e) => updateCondition(i, { value2: e.target.value })} />
+                  </span>
+                ) : (
                   <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
-                  <span className="muted">…</span>
-                  <input className="ep" type="number" step="any" value={c.value2 ?? 0} onChange={(e) => updateCondition(i, { value2: e.target.value })} />
-                </>
-              ) : (
-                <input className="ep" type="number" step="any" value={c.value} onChange={(e) => updateCondition(i, { value: e.target.value })} />
-              )}
-              <button type="button" className="ghost danger" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>✕</button>
+                )}
+              </Field>
+              <button type="button" className="ghost danger af-del" onClick={() => setConditions((cs) => cs.filter((_, j) => j !== i))}>✕</button>
             </div>
           )
         })}

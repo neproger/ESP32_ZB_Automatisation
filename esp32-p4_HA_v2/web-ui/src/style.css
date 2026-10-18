@@ -331,10 +331,25 @@ button.ghost.danger:hover { color: #ef5350; }
 .arrow { color: #6b7280; }
 .card.off { opacity: 0.55; }
 
+/* Карточка правила: цветная полоса слева = статус (зелёная активна, серая выключена). */
+.card.rule { border-left: 3px solid #2e7d32; }
+.card.rule.off { border-left-color: #3a4150; }
+.card.rule .flow { margin-top: 0.6rem; }
+.card.rule .rule-id { color: #e6e6e6; }
+
 .af-section { border-top: 1px solid #2a2f38; margin-top: 0.6rem; padding-top: 0.6rem; }
 .af-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
-.af-cond { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
-.af-cond select, .af-cond input.ep { max-width: 220px; }
+/* Выражение — отдельный блок: подписанные поля, не сливаются в общий ряд. */
+.af-cond {
+  display: flex; align-items: flex-end; gap: 0.7rem; flex-wrap: wrap;
+  background: #161a21; border: 1px solid #232830; border-radius: 8px;
+  padding: 0.55rem 0.65rem; margin-bottom: 0.5rem;
+}
+.af-field { display: flex; flex-direction: column; gap: 0.15rem; }
+.af-cap { font-size: 0.66rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.03em; }
+.af-cond select, .af-cond input.ep, .af-cond input[type='color'] { max-width: 220px; }
+.af-num { display: inline-flex; align-items: center; gap: 0.3rem; }
+.af-del { align-self: center; margin-left: auto; }
 .conds { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
 
 .sysstatus { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: auto; margin-right: 0.75rem; font-size: 0.85rem; }
