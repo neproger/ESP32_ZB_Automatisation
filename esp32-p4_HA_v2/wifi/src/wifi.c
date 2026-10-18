@@ -215,6 +215,8 @@ static bool scan_now(ha_wifi_scan_record_t *out)
         strlcpy(scan.aps[i].ssid, (const char *)records[i].ssid, sizeof(scan.aps[i].ssid));
         scan.aps[i].rssi = records[i].rssi;
         scan.aps[i].auth = map_auth(records[i].authmode);
+        ESP_LOGI(TAG, "ap \"%s\" %d dBm ch%u auth%u", scan.aps[i].ssid, (int)scan.aps[i].rssi,
+                 (unsigned)records[i].primary, (unsigned)records[i].authmode);
     }
     *out = scan;
     return true;
@@ -262,7 +264,17 @@ static void do_connect(const char *ssid, const char *password)
     esp_wifi_connect();
 }
 
-/* Автоподключение при старте: известная точка с самым сильным сигналом. */
+/* Поставить переподключение в очередь задачи (backoff — там, чтобы не долбить AP). */
+static void schedule_reconnect(void)
+{
+    if (!s_reconnect_enabled || s_queue == NULL) {
+        return;
+    }
+    const wifi_request_t request = {.kind = WIFI_REQ_RECONNECT};
+    (void)xQueueSend(s_queue, &request, 0);
+}
+
+/* Автоподключение/переподключение: скан заново, выбор известной с лучшим сигналом, connect. */
 static void autoconnect(void)
 {
     known_entry_t entries[HA_WIFI_KNOWN_MAX] = {0};
@@ -275,6 +287,7 @@ static void autoconnect(void)
     ha_wifi_scan_record_t scan = {0};
     if (!scan_now(&scan)) {
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
+        schedule_reconnect();
         return;
     }
 
@@ -289,8 +302,38 @@ static void autoconnect(void)
         ESP_LOGI(TAG, "autoconnect to \"%s\" (%d dBm)", known[index].ssid, (int)rssi);
         do_connect(known[index].ssid, known[index].password);
     } else {
-        ESP_LOGI(TAG, "no known network in range");
+        ESP_LOGI(TAG, "no known network in range; will rescan");
         put_status(HA_WIFI_STATE_IDLE, 0, 0, NULL);
+        schedule_reconnect();
+    }
+}
+
+/* Имя причины отвала: по голому номеру reason диагноз не поставить. */
+static const char *reason_name(int reason)
+{
+    switch (reason) {
+    case WIFI_REASON_AUTH_EXPIRE:
+        return "AUTH_EXPIRE (AP не ответил на auth)";
+    case WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY:
+        return "ASSOC_EXPIRE (AP не ответил на assoc)";
+    case WIFI_REASON_ASSOC_TOOMANY:
+        return "ASSOC_TOOMANY (лимит клиентов AP)";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+        return "4WAY_HANDSHAKE_TIMEOUT (не сошёлся ключ/пароль)";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        return "HANDSHAKE_TIMEOUT";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "NO_AP_FOUND";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+        return "NO_AP_FOUND_W_COMPATIBLE_SECURITY";
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "NO_AP_FOUND_IN_AUTHMODE_THRESHOLD";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return "NO_AP_FOUND_IN_RSSI_THRESHOLD";
+    case WIFI_REASON_AUTH_FAIL:
+        return "AUTH_FAIL (AP отклонил auth)";
+    default:
+        return "?";
     }
 }
 
@@ -300,13 +343,10 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *event =
             (const wifi_event_sta_disconnected_t *)data;
-        ESP_LOGW(TAG, "disconnected: reason=%d rssi=%d", event ? (int)event->reason : -1,
-                 event ? (int)event->rssi : 0);
+        ESP_LOGW(TAG, "disconnected: reason=%d (%s) rssi=%d", event ? (int)event->reason : -1,
+                 event ? reason_name((int)event->reason) : "?", event ? (int)event->rssi : 0);
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
-        if (s_reconnect_enabled && s_queue != NULL) {
-            wifi_request_t request = {.kind = WIFI_REQ_RECONNECT};
-            (void)xQueueSend(s_queue, &request, 0); /* backoff — в задаче, чтобы не долбить AP */
-        }
+        schedule_reconnect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -342,7 +382,11 @@ static sys_error_t wifi_init_stack(void)
 
     /* Без этого STA с дефолтным power-save пропускает auth-кадры и получает
      * reason=2 (AUTH_EXPIRE) при хорошем RSSI (прецедент — старый web-сервис). */
-    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+    const esp_err_t ps_set = esp_wifi_set_ps(WIFI_PS_NONE);
+    wifi_ps_type_t ps_get = WIFI_PS_MIN_MODEM;
+    const esp_err_t ps_read = esp_wifi_get_ps(&ps_get);
+    ESP_LOGI(TAG, "power-save: set=%s read=%s mode=%d", esp_err_to_name(ps_set),
+             esp_err_to_name(ps_read), (int)ps_get);
     (void)esp_wifi_set_country_code("RU", true);
     return SYS_OK;
 }
@@ -394,7 +438,7 @@ static void do_reconnect(void)
     ESP_LOGI(TAG, "reconnect in %u ms (attempt %u)", (unsigned)delay_ms, (unsigned)s_fail_count);
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
     if (s_reconnect_enabled) {
-        esp_wifi_connect();
+        autoconnect(); /* пересканировать и подключиться к лучшей известной */
     }
 }
 
