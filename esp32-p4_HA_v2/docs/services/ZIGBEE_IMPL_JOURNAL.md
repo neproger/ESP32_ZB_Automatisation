@@ -87,6 +87,8 @@ zigbee_diag.c       счётчики и печать ошибок               
 RCP-прошивки `ot_rcp`) — в справочнике `../hardware/JC4880P443C_I_W.md` §6.
 
 Статус: прошито и проверено. C6 несёт **standalone 802.15.4 RCP** (`ot_rcp`, без
-`esp_hosted`); spinel вынесен на `GPIO17/16`. Wi-Fi на C6 не используется — он вынесен
-на отдельный C3 (`../hardware/JC4880P443C_I_W.md` §4.5). C6 шьётся внешним 3.3 В
-USB-TTL в JP1. Детали — `../hardware/JC4880P443C_I_W.md` §6.
+`esp_hosted`); spinel идёт по внутренним линиям SDIO: P4 `GPIO14/15` ↔ C6 `GPIO20/21`.
+Wi-Fi на C6 не используется — он вынесен на отдельный C3
+(`../hardware/JC4880P443C_I_W.md` §4.5). C6 шьётся внешним 3.3 В USB-TTL в JP1
+(UART0/`IO9`/`CHIP_PU`); пины spinel (`GPIO20/21`) задаются при сборке `ot_rcp`.
+Детали — `../hardware/JC4880P443C_I_W.md` §6.

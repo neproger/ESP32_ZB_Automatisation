@@ -27,7 +27,7 @@
 ## 2. Что проверено на плате (ESP32-P4 rev 1.3, IDF 6.1)
 
 ```text
-радиоканал            → spinel UART GPIO29/30 → RCP ot_rcp на C6 (802.15.4)
+радиоканал            → spinel UART GPIO14/15 ↔ C6 20/21 → RCP ot_rcp (802.15.4)
 Wi-Fi (внешний C3)    → ESP-Hosted SPI 40 МГц → got ip + веб-сервер
 интервью              → Simple_Desc → Basic → Logical Device + Entity(1 на endpoint) + Capabilities
 состояние             → репорт → canonical PROPERTY_STATE (entity, property)
