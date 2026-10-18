@@ -50,8 +50,9 @@ CONFIG_ESP_HOSTED_HOST_SPI_CS_GPIO=31
 CONFIG_ESP_HOSTED_HOST_HANDSHAKE_GPIO=49
 CONFIG_ESP_HOSTED_HOST_DATA_READY_GPIO=50
 CONFIG_ESP_HOSTED_HOST_RESET_GPIO=34
-# 26 МГц: 40 МГц выигрыша не даёт — предел упирается в CP, а не в SPI.
-CONFIG_ESP_HOSTED_HOST_SPI_CLK_MHZ=26
+# Питание P4 от C3: ~2 МБ/с на 40 МГц (26 МГц — на ~25% меньше). Питание от USB
+# P4 давало ~0.6 Мбит/с: шум/просадки стабилизатора P4 рушили SPI-линк.
+CONFIG_ESP_HOSTED_HOST_SPI_CLK_MHZ=40
 # Транзиентный провал bring-up (SPI-линк/гонка загрузки CP) не должен ронять Wi-Fi:
 # при таймауте хост импульсом сбрасывает CP и повторяет bring-up.
 CONFIG_ESP_HOSTED_HOST_CP_BRINGUP_ON_TIMEOUT_REATTEMPT=y
