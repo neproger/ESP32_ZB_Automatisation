@@ -36,10 +36,11 @@ static const char *TAG = "zigbee.radio";
 #define PRIMARY_CHANNEL_MASK (1l << 15)
 #define ZIGBEE_STORAGE_PARTITION "zb_storage"
 
-/* Spinel-UART к ot_rcp на C6: пины P4 GPIO29(TX)/30(RX) через JP1. */
+/* Spinel-UART к ot_rcp на C6 по разведённым линиям SDIO: P4 GPIO14(TX)/15(RX)
+ * <-> C6 GPIO20(RX)/21(TX). Внешние перемычки не нужны (docs/hardware §4.2.1). */
 #define RCP_UART_PORT UART_NUM_1
-#define RCP_UART_TX_PIN 29
-#define RCP_UART_RX_PIN 30
+#define RCP_UART_TX_PIN 14
+#define RCP_UART_RX_PIN 15
 #define RCP_UART_BAUD 460800
 #define RCP_START_DELAY_MS 1000
 
