@@ -195,6 +195,9 @@ ui_page_t *ui_page_create(domain_t *domain, const char *group_title,
             lv_free(page);
             return NULL;
         }
+        /* Плитки Entity заполняют не все поля, автоматизации — только auto_*: без
+         * обнуления ui_page_apply читает мусор в count/widgets. */
+        memset(page->entries, 0, item_count * sizeof(*page->entries));
     }
 
     page->root = lv_obj_create(NULL);

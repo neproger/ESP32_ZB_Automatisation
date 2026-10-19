@@ -239,21 +239,24 @@ static void apply_status(void)
 
     char text[96] = "Не подключено";
     if (present) {
-        switch (status.state) {
-        case HA_WIFI_STATE_SCANNING:
-            snprintf(text, sizeof(text), "Поиск сетей…");
-            break;
-        case HA_WIFI_STATE_CONNECTING:
-            snprintf(text, sizeof(text), "Подключение…");
-            break;
-        case HA_WIFI_STATE_CONNECTED:
-            snprintf(text, sizeof(text), "Подключено: %s (%d dBm)", status.ssid, (int)status.rssi);
-            break;
-        case HA_WIFI_STATE_ERROR:
-            snprintf(text, sizeof(text), "Ошибка подключения");
-            break;
-        default:
-            break;
+        if (status.connected) {
+            /* Скан не рвёт связь: карточка текущей сети остаётся «подключено». */
+            snprintf(text, sizeof(text), "Подключено: %s (%d dBm)", status.ssid,
+                     (int)status.rssi);
+        } else {
+            switch (status.state) {
+            case HA_WIFI_STATE_SCANNING:
+                snprintf(text, sizeof(text), "Поиск сетей…");
+                break;
+            case HA_WIFI_STATE_CONNECTING:
+                snprintf(text, sizeof(text), "Подключение…");
+                break;
+            case HA_WIFI_STATE_ERROR:
+                snprintf(text, sizeof(text), "Ошибка подключения");
+                break;
+            default:
+                break;
+            }
         }
     }
     lv_label_set_text(s_status, text);
@@ -344,6 +347,7 @@ lv_obj_t *ui_wifi_create(domain_t *domain, ui_wifi_back_cb back)
     lv_obj_center(scan_label);
 
     s_has_scan_version = false;
+    ui_wifi_apply(); /* экран открыт уже сейчас — подсеять статус/скан из Domain */
     return s_root;
 }
 

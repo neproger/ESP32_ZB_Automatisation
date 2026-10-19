@@ -517,6 +517,7 @@ static void reload_ui_async(void *unused)
     ui_palette_set(read_settings_palette());
     lv_obj_clean(lv_layer_top());
     create_chrome();
+    ui_status_bar_apply(); /* новая строка состояния пустая: подсеять время/погоду/Wi-Fi */
     collect_groups();
     if (s_screen_mode == SCREEN_SETTINGS) {
         open_settings();
@@ -642,7 +643,12 @@ static void process_fact(const domain_event_t *event)
         }
         break;
     case HA_ENTITY_WIFI_SCAN:
+        if (s_screen_mode == SCREEN_WIFI) {
+            ui_wifi_apply();
+        }
+        break;
     case HA_ENTITY_WIFI_STATUS:
+        ui_status_bar_apply(); /* уровень/состояние Wi-Fi в строке состояния */
         if (s_screen_mode == SCREEN_WIFI) {
             ui_wifi_apply();
         }
