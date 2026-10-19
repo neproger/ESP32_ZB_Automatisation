@@ -50,6 +50,14 @@ static QueueHandle_t s_queue;
 static volatile bool s_reconnect_enabled = true;
 /* Счётчик подряд неудачных переподключений — задаёт backoff (AP отбивает частые ретраи). */
 static uint32_t s_fail_count = 0;
+/* Связь есть (GOT_IP). Watchdog различает «connect идёт» и «связи нет». */
+static volatile bool s_connected;
+/* Переподключение уже в очереди: не плодим дубли на каждый DISCONNECTED/таймаут. */
+static volatile bool s_reconnect_pending;
+/* Время последнего connect-запроса: watchdog даёт DHCP время до вмешательства. */
+static TickType_t s_last_connect_at;
+
+static void schedule_reconnect(void);
 
 static sys_error_t wifi_fail(sys_code_t code)
 {
@@ -224,27 +232,29 @@ static bool scan_now(ha_wifi_scan_record_t *out)
 
 static void do_scan(void)
 {
-    put_status(HA_WIFI_STATE_SCANNING, 0, 0, NULL);
-
-    /* Скан требует свободного STA: снимаем текущее подключение и глушим
-     * автопереподключение, иначе esp_wifi_scan_start вернёт ESP_ERR_WIFI_STATE. */
-    s_reconnect_enabled = false;
-    (void)esp_wifi_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(300));
+    /* Скан в connected state: от текущего AP не отключаемся (IDF это поддерживает).
+     * Смена сети — только явный connect к другому SSID. */
+    wifi_ap_record_t ap = {0};
+    const bool connected = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+    const char *ssid = connected ? (const char *)ap.ssid : NULL;
+    const int8_t rssi = connected ? ap.rssi : 0;
+    put_status(HA_WIFI_STATE_SCANNING, connected ? 1 : 0, rssi, ssid);
 
     ha_wifi_scan_record_t scan = {0};
     const bool ok = scan_now(&scan);
-    s_reconnect_enabled = true;
     if (!ok) {
-        put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
+        put_status(connected ? HA_WIFI_STATE_CONNECTED : HA_WIFI_STATE_ERROR,
+                   connected ? 1 : 0, rssi, ssid);
         return;
     }
     put_scan(&scan);
-    put_status(HA_WIFI_STATE_IDLE, 0, 0, NULL);
+    put_status(connected ? HA_WIFI_STATE_CONNECTED : HA_WIFI_STATE_IDLE,
+               connected ? 1 : 0, rssi, ssid);
 }
 
 static void do_connect(const char *ssid, const char *password)
 {
+    s_reconnect_pending = false; /* ручной connect отменяет отложенный автоподключ */
     ensure_known(ssid, password);
 
     wifi_config_t config = {0};
@@ -259,19 +269,27 @@ static void do_connect(const char *ssid, const char *password)
     put_status(HA_WIFI_STATE_CONNECTING, 0, 0, ssid);
     if (esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK) {
         put_status(HA_WIFI_STATE_ERROR, 0, 0, ssid);
+        schedule_reconnect();
         return;
     }
-    esp_wifi_connect();
+    s_connected = false;
+    s_last_connect_at = xTaskGetTickCount();
+    if (esp_wifi_connect() != ESP_OK) {
+        schedule_reconnect(); /* команда не принята — DISCONNECTED не придёт */
+    }
 }
 
 /* Поставить переподключение в очередь задачи (backoff — там, чтобы не долбить AP). */
 static void schedule_reconnect(void)
 {
-    if (!s_reconnect_enabled || s_queue == NULL) {
+    if (!s_reconnect_enabled || s_queue == NULL || s_reconnect_pending) {
         return;
     }
+    s_reconnect_pending = true;
     const wifi_request_t request = {.kind = WIFI_REQ_RECONNECT};
-    (void)xQueueSend(s_queue, &request, 0);
+    if (xQueueSend(s_queue, &request, 0) != pdTRUE) {
+        s_reconnect_pending = false;
+    }
 }
 
 /* Автоподключение/переподключение: скан заново, выбор известной с лучшим сигналом, connect. */
@@ -345,6 +363,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             (const wifi_event_sta_disconnected_t *)data;
         ESP_LOGW(TAG, "disconnected: reason=%d (%s) rssi=%d", event ? (int)event->reason : -1,
                  event ? reason_name((int)event->reason) : "?", event ? (int)event->rssi : 0);
+        s_connected = false;
         put_status(HA_WIFI_STATE_ERROR, 0, 0, NULL);
         schedule_reconnect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -358,6 +377,8 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             rssi = ap.rssi;
         }
         put_status(HA_WIFI_STATE_CONNECTED, 1, rssi, ssid);
+        s_connected = true;
+        s_reconnect_pending = false;
         s_fail_count = 0; /* связь есть — сбрасываем backoff */
         clear_scan(); /* скан больше не нужен — подключение состоялось */
     }
@@ -433,9 +454,55 @@ static void do_reconnect(void)
     }
     ESP_LOGI(TAG, "reconnect in %u ms (attempt %u)", (unsigned)delay_ms, (unsigned)s_fail_count);
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    s_reconnect_pending = false;
     if (s_reconnect_enabled) {
         autoconnect(); /* пересканировать и подключиться к лучшей известной */
     }
+}
+
+#define WIFI_WATCHDOG_MS 5000
+#define WIFI_RECONNECT_GRACE_MS 15000
+
+/*
+ * Сторож связи: события DISCONNECTED может не быть (стек/CP завис, потерялся RPC),
+ * поэтому раз в 5 с проверяем, что AP ещё отвечает. Два провала подряд — переподключение.
+ * Пока идёт connect/DHCP (15 с после запроса), не вмешиваемся.
+ */
+static void wifi_watchdog(void)
+{
+    static uint8_t misses;
+
+    if (!s_reconnect_enabled) {
+        return;
+    }
+    known_entry_t known[HA_WIFI_KNOWN_MAX];
+    if (collect_known(known, HA_WIFI_KNOWN_MAX) == 0) {
+        return; /* некуда подключаться — не крутим скан вхолостую */
+    }
+    if (s_connected) {
+        wifi_ap_record_t ap = {0};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            misses = 0;
+            return;
+        }
+        if (++misses < 2) {
+            return;
+        }
+        misses = 0;
+        ESP_LOGW(TAG, "watchdog: AP info lost; reconnect");
+        s_connected = false;
+        schedule_reconnect();
+        return;
+    }
+    misses = 0;
+    if (s_reconnect_pending) {
+        return;
+    }
+    if ((xTaskGetTickCount() - s_last_connect_at) < pdMS_TO_TICKS(WIFI_RECONNECT_GRACE_MS)) {
+        return;
+    }
+    ESP_LOGW(TAG, "watchdog: not connected; reconnect");
+    schedule_reconnect();
 }
 
 static void wifi_task(void *arg)
@@ -450,12 +517,17 @@ static void wifi_task(void *arg)
 
     for (;;) {
         wifi_request_t request = {0};
-        if (xQueueReceive(s_queue, &request, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(s_queue, &request, pdMS_TO_TICKS(WIFI_WATCHDOG_MS)) != pdTRUE) {
+            wifi_watchdog();
             continue;
         }
         if (request.kind == WIFI_REQ_SCAN) {
             do_scan();
         } else if (request.kind == WIFI_REQ_RECONNECT) {
+            if (s_connected) {
+                s_reconnect_pending = false; /* связь уже восстановилась — запрос устарел */
+                continue;
+            }
             do_reconnect();
         } else {
             do_connect(request.args.ssid, request.args.password);
