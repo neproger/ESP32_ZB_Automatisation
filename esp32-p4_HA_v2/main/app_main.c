@@ -7,6 +7,7 @@
 #include "domain/domain.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha_model/ha_capabilities.h"
@@ -326,6 +327,7 @@ static void erase_legacy_mstore_once(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "HA on ESP32-P4: bootstrap");
+    ESP_LOGI(TAG, "reset reason: %d", (int)esp_reset_reason());
     erase_legacy_mstore_once();
 
     if (!start_step(domain_init(&s_domain, APP_ENTITY_TYPES, APP_JOURNAL_CAPACITY,
