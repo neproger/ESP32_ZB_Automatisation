@@ -19,6 +19,7 @@ mod persisted;
 mod ring;
 mod table;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
+pub use flash::sim::SimFlash;
 pub use persisted::{Fixed, PersistedTable};
 
 pub use ring::Ring;

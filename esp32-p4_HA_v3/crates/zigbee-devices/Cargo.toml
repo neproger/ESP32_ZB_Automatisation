@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 z2m-rs = { path = "../z2m-rs" }
+micro-db = { path = "../micro-db" }

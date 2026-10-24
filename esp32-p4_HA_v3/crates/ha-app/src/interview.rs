@@ -27,7 +27,7 @@ static DONE: Mutex<bool> = Mutex::new(false);
 
 unsafe extern "C" fn on_read(
     ext: u64,
-    _short: u16,
+    short: u16,
     _ep: u8,
     cluster: u16,
     attr: u16,
@@ -39,7 +39,7 @@ unsafe extern "C" fn on_read(
         return;
     }
     let bytes = std::slice::from_raw_parts(value, usize::from(len));
-    handle_read(ext, attr, bytes);
+    handle_read(ext, short, attr, bytes);
 }
 
 extern "C" {
@@ -97,7 +97,12 @@ pub fn selected_profile() -> Option<&'static z2m_rs::Profile> {
     *PROFILE.lock().unwrap()
 }
 
-fn handle_read(ext: u64, attr: u16, bytes: &[u8]) {
+pub fn restore(profile: &'static z2m_rs::Profile) {
+    *PROFILE.lock().unwrap() = Some(profile);
+    *DONE.lock().unwrap() = true;
+}
+
+fn handle_read(ext: u64, short: u16, attr: u16, bytes: &[u8]) {
     let (manufacturer, model, done) = {
         let mut guard = STATE.lock().unwrap();
         let Some(state) = guard.as_mut() else {
@@ -140,6 +145,7 @@ fn handle_read(ext: u64, attr: u16, bytes: &[u8]) {
                 profile.support
             );
             *PROFILE.lock().unwrap() = Some(profile);
+            crate::store::save(ext, short, &manufacturer, &model, profile.id);
         }
         None => log::warn!("interview: unknown manufacturer={manufacturer} model={model}"),
     }

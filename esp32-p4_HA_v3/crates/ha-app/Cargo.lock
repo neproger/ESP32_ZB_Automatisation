@@ -774,6 +774,7 @@ dependencies = [
  "ha-domain",
  "ha-web",
  "log",
+ "micro-db",
  "z2m-rs",
  "zigbee-devices",
  "zigbee-exec",
@@ -1783,6 +1784,7 @@ version = "0.1.0"
 name = "zigbee-devices"
 version = "0.1.0"
 dependencies = [
+ "micro-db",
  "z2m-rs",
 ]
 

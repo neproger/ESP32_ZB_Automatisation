@@ -8,7 +8,9 @@
 use z2m_rs::{decode, Action, RawZcl, Update as Z2mUpdate};
 
 mod device_record;
-pub use device_record::{DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN};
+mod registry;
+pub use device_record::{DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD};
+pub use registry::{RecordSlot, Registry};
 
 /// Borrowed ZCL event, valid only for the duration of decoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

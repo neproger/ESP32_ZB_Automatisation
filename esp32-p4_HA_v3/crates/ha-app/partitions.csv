@@ -1,0 +1,8 @@
+# HA V3: app 4M (бинарник ~1.5M), mstore под MicroDB Registry, zb_storage под Zigbee.
+# nvs сохранён в исходном месте/размере — сеть Zigbee PoC не теряется при смене таблицы.
+# Name,      Type, SubType, Offset,   Size,  Flags
+nvs,         data, nvs,     0x9000,   0x6000,
+phy_init,    data, phy,     0xf000,   0x1000,
+factory,     app,  factory, 0x10000,  4M,
+mstore,      data, fat,     0x410000, 0x60000,
+zb_storage,  data, nvs,     0x470000, 16K,

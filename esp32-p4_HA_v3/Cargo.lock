@@ -25,6 +25,7 @@ version = "0.1.0"
 name = "zigbee-devices"
 version = "0.1.0"
 dependencies = [
+ "micro-db",
  "z2m-rs",
 ]
 

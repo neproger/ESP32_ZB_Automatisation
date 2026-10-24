@@ -19,6 +19,7 @@ use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
 mod exec;
 mod frames;
 mod interview;
+mod store;
 mod web;
 
 const DEVICE: EntityType = 1;
@@ -87,6 +88,7 @@ fn main() {
     frames::install();
     exec::install();
     interview::install();
+    store::init();
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut transport = exec::EspTransport;
     std::thread::Builder::new()
@@ -105,11 +107,11 @@ fn main() {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
             handle_event(&mut domain, &event, &delta_rx);
-            interview::start(&mut executor, (event.extended_addr, event.short_addr), now_ms());
+            ensure_interview(&mut executor, event.extended_addr, event.short_addr);
         }
         frames::process_pending();
         if let Some(device) = frames::last_device() {
-            interview::start(&mut executor, device, now_ms());
+            ensure_interview(&mut executor, device.0, device.1);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
@@ -216,4 +218,15 @@ fn start_wifi() {
 }
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
+}
+fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
+    if eui == 0 || interview::selected_profile().is_some() {
+        return;
+    }
+    if let Some(profile) = store::lookup(eui) {
+        log::info!("registry: restored profile={} (no interview)", profile.id);
+        interview::restore(profile);
+    } else {
+        interview::start(executor, (eui, short), now_ms());
+    }
 }
