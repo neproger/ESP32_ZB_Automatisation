@@ -19,6 +19,8 @@ log = "0.4"
 ha-domain = { path = "../ha-domain" }
 ha-web = { path = "../ha-web" }
 zigbee-devices = { path = "../zigbee-devices" }
+z2m-rs = { path = "../z2m-rs" }
+zigbee-frames = { path = "../zigbee-frames" }
 esp-idf-svc = { version = "0.53", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 

@@ -20,6 +20,7 @@
 #include "ezbee/zcl/cluster/on_off_desc.h"
 #include "ezbee/zcl/cluster/power_config_desc.h"
 #include "ezbee/zcl/zcl_core.h"
+#include "ezbee/zcl/zcl_general_cmd.h"
 #include "ezbee/zdo/zdo_bind_mgmt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -258,6 +259,107 @@ static void uart_config(esp_zigbee_config_t *config)
     uart->tx_pin = (gpio_num_t)POC_UART_TX;
 }
 
+/* --- Attribute Reports -> Rust sink --------------------------------------- */
+typedef struct {
+    uint64_t src_ext;
+    uint16_t cluster;
+    uint16_t manuf_code;
+    uint8_t src_ep;
+    uint8_t command;
+    uint8_t tsn;
+    uint8_t fc;
+    int8_t rssi;
+} zb_frame_meta_t;
+
+typedef void (*zb_frame_sink_t)(const zb_frame_meta_t *meta, const uint8_t *data, uint16_t len);
+
+static zb_frame_sink_t s_frame_sink;
+static uint32_t s_dropped_reports;
+
+void zb_poc_set_frame_sink(zb_frame_sink_t sink) { s_frame_sink = sink; }
+uint32_t zb_poc_dropped_reports(void) { return s_dropped_reports; }
+
+/* ZCL type -> value size; 0 means "cannot frame this attribute". */
+static size_t zcl_value_size(uint8_t type)
+{
+    switch (type) {
+    case 0x08: return 1;
+    case 0x09: return 2;
+    case 0x0A: return 3;
+    case 0x0B: return 4;
+    case 0x0C: return 5;
+    case 0x0D: return 6;
+    case 0x0E: return 7;
+    case 0x0F: return 8;
+    case 0x10: case 0x18: case 0x20: case 0x28: case 0x30: return 1;
+    case 0x19: case 0x21: case 0x29: case 0x31: return 2;
+    case 0x22: case 0x2A: return 3;
+    case 0x23: case 0x2B: case 0x39: return 4;
+    case 0x27: case 0x2F: case 0x3A: return 8;
+    default: return 0;
+    }
+}
+
+/*
+ * SDK отдаёт отчёт списком разобранных атрибутов. Собираем из них канонический
+ * Report Attributes payload (attr u16 LE, type, value) в один слот Rust-пула:
+ * один колбэк — один кадр. Буфер SDK не покидает колбэк.
+ */
+static void forward_report(const ezb_zcl_cmd_report_attr_message_t *report)
+{
+    if (s_frame_sink == NULL || report == NULL || report->in.header == NULL) {
+        return;
+    }
+    uint8_t payload[128];
+    uint16_t len = 0;
+    for (const ezb_zcl_report_attr_variable_t *var = report->in.variables; var != NULL;
+         var = var->next) {
+        const size_t size = zcl_value_size(var->attr_type);
+        if (size == 0 || var->attr_value == NULL || len + 3u + size > sizeof(payload)) {
+            s_dropped_reports++;
+            continue;
+        }
+        payload[len++] = (uint8_t)(var->attr_id & 0xFFu);
+        payload[len++] = (uint8_t)(var->attr_id >> 8);
+        payload[len++] = var->attr_type;
+        memcpy(&payload[len], var->attr_value, size);
+        len = (uint16_t)(len + size);
+    }
+    if (len == 0) {
+        return;
+    }
+
+    const ezb_zcl_cmd_hdr_t *header = report->in.header;
+    zb_frame_meta_t meta = {0};
+    meta.cluster = header->cluster_id;
+    meta.manuf_code = header->manuf_code;
+    meta.src_ep = header->src_ep;
+    meta.command = header->cmd_id;
+    meta.tsn = header->tsn;
+    meta.fc = header->fc;
+    meta.rssi = header->rssi;
+    if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
+        meta.src_ext = header->src_addr.u.extended_addr.u64;
+    } else if (header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+        ezb_extaddr_t uid = {0};
+        if (ezb_address_extended_by_short(header->src_addr.u.short_addr, &uid) == EZB_ERR_NONE) {
+            meta.src_ext = uid.u64;
+        }
+    }
+    s_frame_sink(&meta, payload, len);
+}
+
+static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
+{
+    if (callback_id != EZB_ZCL_CORE_REPORT_ATTR_CB_ID || message == NULL) {
+        return;
+    }
+    ezb_zcl_cmd_report_attr_message_t *report = message;
+    report->out.result = EZB_ZCL_STATUS_SUCCESS;
+    forward_report(report);
+}
+
+/* ------------------------------------------------------------------------- */
 static bool coordinator_device(void)
 {
     ezb_af_device_desc_t device = ezb_af_create_device_desc();
@@ -292,6 +394,7 @@ static bool coordinator_device(void)
         return false;
     }
     ezb_zcl_raw_command_handler_register(raw_frame_handler);
+    ezb_zcl_core_action_handler_register(poc_core_action_handler);
     return true;
 }
 

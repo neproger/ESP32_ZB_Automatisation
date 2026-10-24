@@ -16,6 +16,7 @@ use std::time::Duration;
 use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
 use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
 
+mod frames;
 mod web;
 
 const DEVICE: EntityType = 1;
@@ -81,6 +82,7 @@ fn main() {
         log::error!("zb_poc_start failed: {started}");
         panic!("zigbee stack did not start");
     }
+    frames::install();
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
@@ -98,6 +100,7 @@ fn main() {
         if unsafe { zb_poc_poll(&mut event) } != 0 {
             handle_event(&mut domain, &event, &delta_rx);
         }
+        frames::process_pending();
         std::thread::sleep(Duration::from_millis(20));
     }
 }

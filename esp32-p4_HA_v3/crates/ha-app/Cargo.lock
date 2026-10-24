@@ -774,7 +774,9 @@ dependencies = [
  "ha-domain",
  "ha-web",
  "log",
+ "z2m-rs",
  "zigbee-devices",
+ "zigbee-frames",
 ]
 
 [[package]]
@@ -1773,8 +1775,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "z2m-rs"
+version = "0.1.0"
+
+[[package]]
 name = "zigbee-devices"
 version = "0.1.0"
+dependencies = [
+ "z2m-rs",
+]
+
+[[package]]
+name = "zigbee-frames"
+version = "0.1.0"
+dependencies = [
+ "z2m-rs",
+]
 
 [[package]]
 name = "zmij"
