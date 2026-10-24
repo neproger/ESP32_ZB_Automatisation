@@ -190,11 +190,25 @@ static void zigbee_event_publish(const zigbee_event_t *event)
     physical.endpoint = event->endpoint;
     physical.cluster_id = event->cluster_id;
     physical.command_id = event->command_id;
+    physical.payload_len = event->payload_len;
+    memcpy(physical.payload, event->payload, sizeof(physical.payload));
 
     ha_device_record_t device = {0};
     const bool has_device = zigbee_device_get(event->device_uid, &device);
+    /* Диагностика: что именно шлёт устройство (кнопки/пульты бывают нестандартными). */
+    ESP_LOGI(TAG, "rx cmd: uid=%llx ep=%u cluster=%04x cmd=%02x len=%u data=%02x%02x%02x%02x%02x",
+             (unsigned long long)event->device_uid, (unsigned)event->endpoint,
+             (unsigned)event->cluster_id, (unsigned)event->command_id,
+             (unsigned)event->payload_len,
+             event->payload_len > 0 ? (unsigned)event->payload[0] : 0,
+             event->payload_len > 1 ? (unsigned)event->payload[1] : 0,
+             event->payload_len > 2 ? (unsigned)event->payload[2] : 0,
+             event->payload_len > 3 ? (unsigned)event->payload[3] : 0,
+             event->payload_len > 4 ? (unsigned)event->payload[4] : 0);
     ha_event_t semantic = {0};
     if (!semantics_decode_event(&physical, has_device ? &device : NULL, &semantic)) {
+        ESP_LOGW(TAG, "command unmapped (cluster=%04x cmd=%02x)",
+                 (unsigned)event->cluster_id, (unsigned)event->command_id);
         return;
     }
 
@@ -239,6 +253,17 @@ static void zigbee_publish_property_state(const zigbee_report_t *report)
 }
 
 /*
+ * Tuya TS0041 — однокнопочный сценарный выключатель. Прошивка устройства объявляет
+ * 4 endpoint'а и OnOff как server, но кнопка одна и шлёт OnOff cmd 0xFD
+ * (payload: 0=одиночное, 1=двойное, 2=удержание). Для UI/автоматизаций это кнопка,
+ * а не набор из четырёх «выключателей». Многокнопочные TS004x сюда не попадают.
+ */
+static bool tuya_button_model(const char *model)
+{
+    return model != NULL && strncmp(model, "TS0041", 6) == 0;
+}
+
+/*
  * A6.1b: canonical capabilities Entity из кластеров endpoint'а (через мост), по entity_id.
  * Cluster/attr в записи не сохраняются — web читает properties/actions напрямую.
  */
@@ -253,6 +278,33 @@ static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
     ha_entity_capabilities_record_t caps = {0};
     if (!semantics_endpoint_capabilities(&ep_record, &caps)) {
         return;
+    }
+
+    ha_device_record_t device = {0};
+    (void)zigbee_device_get(uid, &device);
+    if (tuya_button_model(device.model)) {
+        uint8_t kept = 0;
+        for (uint8_t i = 0; i < caps.property_count; i++) {
+            if (caps.properties[i].property == HA_PROPERTY_POWER) {
+                continue; /* кнопка не управляет питанием */
+            }
+            caps.properties[kept++] = caps.properties[i];
+        }
+        caps.property_count = kept;
+        const ha_event_id_t button_events[] = {HA_EVENT_SINGLE_PRESS, HA_EVENT_DOUBLE_PRESS,
+                                               HA_EVENT_HOLD};
+        for (size_t i = 0; i < sizeof(button_events) / sizeof(button_events[0]); i++) {
+            bool dup = false;
+            for (uint8_t k = 0; k < caps.event_count; k++) {
+                if (caps.events[k] == button_events[i]) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup && caps.event_count < HA_ENTITY_EVENTS_MAX) {
+                caps.events[caps.event_count++] = button_events[i];
+            }
+        }
     }
 
     const ha_entity_key_t key = {.id = entity_id};
@@ -271,12 +323,16 @@ typedef struct {
     ha_device_uid_t uid;
     ha_device_id_t device_id;
     uint8_t endpoint_total;
+    bool tuya_button; /* только ep1: остальные endpoint'ы у Tuya фантомные */
 } zigbee_publish_ctx_t;
 
 static bool zigbee_publish_endpoint(uint8_t endpoint, const ha_endpoint_record_t *record, void *ctx)
 {
     (void)record;
     zigbee_publish_ctx_t *c = (zigbee_publish_ctx_t *)ctx;
+    if (c->tuya_button && endpoint != 1) {
+        return true;
+    }
     ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
     if (!sys_ok(zigbee_entity_ensure(s_domain, c->uid, endpoint, c->endpoint_total, &entity_id))) {
         return true;
@@ -315,7 +371,11 @@ static void zigbee_publish_device(ha_device_uid_t uid)
         .uid = uid,
         .device_id = device_id,
         .endpoint_total = zigbee_endpoint_count(uid),
+        .tuya_button = tuya_button_model(device.model),
     };
+    if (ctx.tuya_button) {
+        ctx.endpoint_total = 1; /* имя без суффикса "- N" */
+    }
     zigbee_endpoints_foreach(uid, zigbee_publish_endpoint, &ctx);
 }
 
@@ -345,6 +405,9 @@ static void zigbee_handle_report(void)
                            sys_error_make(ZIGBEE_SYS_LAYER, SYS_CODE_NOT_FOUND));
         return;
     }
+    ESP_LOGD(TAG, "rx report: uid=%llx ep=%u cluster=%04x attr=%04x",
+             (unsigned long long)report.device_uid, (unsigned)report.endpoint,
+             (unsigned)report.cluster_id, (unsigned)report.attr_id);
     zigbee_publish_property_state(&report);
 }
 
@@ -369,10 +432,12 @@ static void zigbee_handle_interview(void)
         zigbee_diag_record(ZIGBEE_DIAG_TOPOLOGY, err);
         return;
     }
-    ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u", (unsigned long long)result.uid,
-             (unsigned)result.endpoint_count);
+    ESP_LOGI(TAG, "interview applied: uid=%llx endpoints=%u model=\"%s\"",
+             (unsigned long long)result.uid, (unsigned)result.endpoint_count, result.model);
     zigbee_publish_device(result.uid);
-    (void)zigbee_device_store_save();
+    const sys_error_t saved = zigbee_device_store_save();
+    ESP_LOGI(TAG, "device store saved: uid=%llx err=%u", (unsigned long long)result.uid,
+             (unsigned)saved.code);
 }
 
 static void zigbee_handle_event(void)

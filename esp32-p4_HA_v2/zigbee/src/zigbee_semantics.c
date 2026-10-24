@@ -427,6 +427,30 @@ bool semantics_decode_event(const ha_zb_event_t *physical, const ha_device_recor
     if (physical == NULL || out == NULL) {
         return false;
     }
+    /* Tuya scene switch: OnOff cmd 0xFD, payload[0] = тип нажатия. */
+    if (physical->cluster_id == HA_ZB_CLUSTER_ON_OFF && physical->command_id == 0xFD &&
+        physical->payload_len >= 1) {
+        ha_event_id_t id = 0;
+        switch (physical->payload[0]) {
+        case 0x00:
+            id = HA_EVENT_SINGLE_PRESS;
+            break;
+        case 0x01:
+            id = HA_EVENT_DOUBLE_PRESS;
+            break;
+        case 0x02:
+            id = HA_EVENT_HOLD;
+            break;
+        default:
+            return false;
+        }
+        ha_event_t event = {0};
+        event.id = id;
+        event.source_entity = HA_ENTITY_ID_NONE;
+        event.value.kind = HA_VALUE_NONE;
+        *out = event;
+        return true;
+    }
     const char *model = (device != NULL) ? device->model : NULL;
     const size_t count = sizeof(ZB_EVENT_MAP) / sizeof(ZB_EVENT_MAP[0]);
     for (size_t i = 0; i < count; i++) {
@@ -533,7 +557,18 @@ bool semantics_endpoint_capabilities(const ha_endpoint_record_t *endpoint,
             const size_t n = semantics_cluster_capabilities(cluster, caps,
                                                             HA_ENTITY_CAPABILITIES_MAX);
             for (size_t j = 0; j < n && count < HA_ENTITY_CAPABILITIES_MAX; j++) {
-                record.properties[count++] = caps[j];
+                /* Simple descriptor некоторых устройств (Tuya) дублирует кластер —
+                 * без дедупа в capability попадает одно и то же свойство дважды. */
+                bool dup = false;
+                for (uint8_t k = 0; k < count; k++) {
+                    if (record.properties[k].property == caps[j].property) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    record.properties[count++] = caps[j];
+                }
             }
             continue;
         }

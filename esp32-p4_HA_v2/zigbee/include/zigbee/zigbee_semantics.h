@@ -43,6 +43,8 @@ typedef struct {
     uint8_t endpoint;
     uint16_t cluster_id;
     uint8_t command_id;
+    uint8_t payload_len; /* vendor-команды (Tuya OnOff 0xFD) кодируют нажатие в payload */
+    uint8_t payload[8];
 } ha_zb_event_t;
 
 /*

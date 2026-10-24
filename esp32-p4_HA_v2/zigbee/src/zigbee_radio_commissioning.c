@@ -211,6 +211,17 @@ bool app_signal_handler(const ezb_app_signal_t *signal)
         return true;
     }
 
+    case EZB_ZDO_SIGNAL_DEVICE_AUTHORIZED: {
+        const ezb_zdo_signal_device_authorized_params_t *auth =
+            ezb_app_signal_get_params(signal);
+        ESP_LOGI(TAG, "device authorized: uid=%llx short=0x%04x type=0x%02x status=0x%02x",
+                 (unsigned long long)auth->device_addr.u64, (unsigned)auth->short_addr,
+                 (unsigned)auth->type, (unsigned)auth->status);
+        /* Повторную конфигурацию здесь не делаем: шквал secure-bind'ов переполняет
+         * очередь sleepy-устройства (0x408) и оно уходит из сети. */
+        return true;
+    }
+
     case EZB_ZDO_SIGNAL_DEVICE_ANNCE: {
         const ezb_zdo_signal_device_annce_params_t *annce = ezb_app_signal_get_params(signal);
         const ha_device_uid_t uid = (ha_device_uid_t)annce->device_addr.u64;
@@ -229,6 +240,8 @@ bool app_signal_handler(const ezb_app_signal_t *signal)
         const ezb_zdo_signal_device_update_params_t *update = ezb_app_signal_get_params(signal);
         const ha_device_uid_t uid = (ha_device_uid_t)update->device_addr.u64;
         if (update->status == EZB_ZDO_UPDDEV_DEVICE_LEFT) {
+            ESP_LOGI(TAG, "device LEFT (stack update): short=0x%04x uid=%llx",
+                     (unsigned)update->short_addr, (unsigned long long)uid);
             return device_left(uid, update->short_addr);
         }
         if (device_marked_for_removal(uid)) {
@@ -245,6 +258,9 @@ bool app_signal_handler(const ezb_app_signal_t *signal)
     case EZB_ZDO_SIGNAL_LEAVE_INDICATION: {
         const ezb_zdo_signal_leave_indication_params_t *leave =
             ezb_app_signal_get_params(signal);
+        ESP_LOGI(TAG, "leave indication (device sent): short=0x%04x uid=%llx type=%u",
+                 (unsigned)leave->short_addr, (unsigned long long)leave->device_addr.u64,
+                 (unsigned)leave->leave_type);
         return device_left((ha_device_uid_t)leave->device_addr.u64, leave->short_addr);
     }
 

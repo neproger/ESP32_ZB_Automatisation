@@ -31,6 +31,8 @@ typedef struct {
     uint16_t cluster_id;
     uint8_t command_id;
     uint8_t endpoint;
+    uint8_t payload_len;   /* Tuya и др. кодируют кнопку/тип нажатия в payload команды */
+    uint8_t payload[8];
 } zigbee_event_t;
 
 /* Поднимает задачу сервиса. Вызывается из bootstrap после domain_init(). */

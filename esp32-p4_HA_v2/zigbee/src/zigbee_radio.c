@@ -136,6 +136,14 @@ static sys_error_t init_zigbee_stack(void)
     }
 
     ezb_aps_secur_enable_distributed_security(false);
+    /*
+     * Tuya-устройства (TS0041) не всегда доводят TC-link-key exchange, а после
+     * перезагрузки координатора переподключаются well-known ключом. Если политика
+     * «exchange обязателен» / rejoin запрещён, устройство выкидывают — оно мигает
+     * и уходит по кругу. Сетевой ключ при этом всё равно защищает трафик.
+     */
+    (void)ezb_secur_set_tclk_exchange_required(false);
+    ezb_secur_tcpol_set_allow_rejoins_with_well_known_key(true);
     const ezb_err_t channel = ezb_bdb_set_primary_channel_set(PRIMARY_CHANNEL_MASK);
     if (channel != EZB_ERR_NONE) {
         return radio_fail("set primary channel set failed", (uint32_t)channel);

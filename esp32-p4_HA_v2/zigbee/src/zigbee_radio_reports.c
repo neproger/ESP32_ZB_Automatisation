@@ -233,10 +233,13 @@ void interview_drop(ha_device_uid_t uid)
 
 /* Прочитать текущие значения reportable-атрибутов (после подписки), чтобы состояние
  * появилось сразу, а не ждало change/periodic репорта. */
-static void interview_read_states(const interview_device_t *device)
+static void interview_read_states(const interview_device_t *device, uint8_t only_endpoint)
 {
     for (uint8_t e = 0; e < device->endpoint_count; e++) {
         const zigbee_interview_endpoint_t *ep = &device->endpoints[e];
+        if (only_endpoint != 0 && ep->endpoint != only_endpoint) {
+            continue;
+        }
         for (uint8_t c = 0; c < ep->cluster_count; c++) {
             if (ep->clusters[c].role != HA_ZB_ROLE_SERVER) {
                 continue;
@@ -296,11 +299,28 @@ static void interview_finish(interview_device_t *device)
                  device->model);
     }
 
+    /* TS0041: кнопка одна, endpoint'ы 2..4 — фантомные. Конфигурируем только ep1:
+     * шквал secure-bind'ов на все endpoint'ы переполняет очередь устройства (0x408). */
+    const bool single_button = (strncmp(device->model, "TS0041", 6) == 0);
+    const zigbee_interview_endpoint_t *only = NULL;
+    if (single_button) {
+        for (uint8_t i = 0; i < device->endpoint_count; i++) {
+            if (device->endpoints[i].endpoint == 1) {
+                only = &device->endpoints[i];
+                break;
+            }
+        }
+    }
+
     /* Без binding и reporting устройство не шлёт состояние координатору. */
-    zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
-                         device->endpoint_count);
-    interview_read_states(device); /* сразу читаем текущее состояние атрибутов */
-    configured_add(device->uid);   /* reporting настроен в этой загрузке */
+    if (only != NULL) {
+        zigbee_binding_apply(device->uid, device->short_addr, only, 1);
+    } else {
+        zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
+                             device->endpoint_count);
+    }
+    interview_read_states(device, single_button ? 1 : 0);
+    configured_add(device->uid); /* reporting настроен в этой загрузке */
 
     device->used = false;
 }
@@ -381,8 +401,15 @@ static void interview_on_simple_desc(const ezb_zdo_simple_desc_req_result_t *res
             endpoint->device_id = desc->app_device_id;
             endpoint->cluster_count = count;
             device->endpoint_count++;
-            ESP_LOGI(TAG, "simple desc: uid=%llx ep=%u clusters=%u",
-                     (unsigned long long)device->uid, (unsigned)desc->ep_id, (unsigned)count);
+            ESP_LOGI(TAG, "simple desc: uid=%llx ep=%u in=%u out=%u clusters=%u",
+                     (unsigned long long)device->uid, (unsigned)desc->ep_id,
+                     (unsigned)desc->app_input_cluster_count,
+                     (unsigned)desc->app_output_cluster_count, (unsigned)count);
+            for (uint8_t ci = 0; ci < endpoint->cluster_count; ci++) {
+                ESP_LOGI(TAG, "  ep=%u cluster=0x%04x role=%s", (unsigned)desc->ep_id,
+                         (unsigned)endpoint->clusters[ci].cluster_id,
+                         endpoint->clusters[ci].role == HA_ZB_ROLE_SERVER ? "server" : "client");
+            }
             /* Модель берём с endpoint'а, где Basic действительно есть: иначе ответа нет. */
             if (!device->basic_requested && endpoint_has_basic_server(endpoint) &&
                 interview_read_basic(device, desc->ep_id)) {
@@ -499,6 +526,8 @@ void interview_begin(ha_device_uid_t uid, uint16_t short_addr)
     device->model[0] = '\0';
     device->basic_requested = false;
     device->outstanding = 1;
+    ESP_LOGI(TAG, "interview begin: uid=%llx short=0x%04x", (unsigned long long)uid,
+             (unsigned)short_addr);
 
     const ezb_zdo_active_ep_req_t request = {
         .dst_nwk_addr = short_addr,
@@ -597,6 +626,13 @@ bool raw_frame_handler(const ezb_zcl_raw_frame_t *raw)
     event.cluster_id = header->cluster_id;
     event.command_id = header->cmd_id;
     event.endpoint = header->src_ep;
+    if (raw->payload != NULL) {
+        const uint16_t len = (raw->payload_length > sizeof(event.payload))
+                                 ? (uint16_t)sizeof(event.payload)
+                                 : raw->payload_length;
+        event.payload_len = (uint8_t)len;
+        memcpy(event.payload, raw->payload, len);
+    }
 
     const sys_error_t err = zigbee_submit_event(&event);
     if (sys_failed(err)) {
