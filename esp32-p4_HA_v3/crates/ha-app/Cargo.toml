@@ -17,6 +17,7 @@ opt-level = "s"
 [dependencies]
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
+ha-web = { path = "../ha-web" }
 zigbee-devices = { path = "../zigbee-devices" }
 esp-idf-svc = { version = "0.53", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
@@ -28,3 +29,7 @@ embuild = "0.33.5"
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["../zigbee-esp/native"]
 remote_component = { name = "espressif/esp-zigbee-lib", version = ">=2.0.0" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["native_net"]
+remote_component = { name = "espressif/esp_hosted", version = "*" }

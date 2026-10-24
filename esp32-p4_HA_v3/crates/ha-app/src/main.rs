@@ -9,11 +9,14 @@
 //! `[0]` last button action, `[1]` reserved, `[2..4]` press count (LE),
 //! `[8..12]` reserved. Every press changes the count, so `version` must grow.
 
+use std::ffi::{c_char, CStr, CString};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
 use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
+
+mod web;
 
 const DEVICE: EntityType = 1;
 const SOURCE_ZIGBEE: u8 = 1;
@@ -33,6 +36,8 @@ struct PocEvent {
 }
 
 extern "C" {
+    fn ha_wifi_start(ssid: *const c_char, password: *const c_char) -> i32;
+    fn ha_wifi_ip(out: *mut c_char, len: usize) -> i32;
     fn zb_poc_start() -> i32;
     fn zb_poc_run();
     fn zb_poc_poll(event: *mut PocEvent) -> i32;
@@ -63,6 +68,14 @@ fn main() {
         move |fact| delta_tx.send(*fact).is_ok(),
     );
 
+    unsafe {
+        esp_idf_svc::sys::esp_netif_init();
+        esp_idf_svc::sys::esp_event_loop_create_default();
+    }
+    if !web::start() {
+        log::error!("web server not started");
+    }
+
     let started = unsafe { zb_poc_start() };
     if started != 0 {
         log::error!("zb_poc_start failed: {started}");
@@ -73,6 +86,11 @@ fn main() {
         .stack_size(8192)
         .spawn(|| unsafe { zb_poc_run() })
         .expect("zigbee mainloop thread");
+    std::thread::Builder::new()
+        .name("wifi".into())
+        .stack_size(8192)
+        .spawn(start_wifi)
+        .expect("wifi thread");
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
     loop {
@@ -142,6 +160,7 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
         .entity_meta(DEVICE, &key)
         .map_or(0, |meta| meta.version);
 
+    web::publish(event.extended_addr, action as u8, count);
     let delivered = domain.dispatch_once();
     let mut journal = Vec::new();
     while let Ok(fact) = deltas.try_recv() {
@@ -151,4 +170,30 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
         "device={:016x} press={action:?} count={count} changed={changed} version={version} deltas={delivered} journal={journal:?}",
         event.extended_addr
     );
+}
+
+fn start_wifi() {
+    let (Some(ssid), Some(password)) = (option_env!("HA_WIFI_SSID"), option_env!("HA_WIFI_PASSWORD"))
+    else {
+        log::warn!("wifi disabled: set HA_WIFI_SSID/HA_WIFI_PASSWORD at build time");
+        return;
+    };
+    let ssid = CString::new(ssid).expect("ssid");
+    let password = CString::new(password).expect("password");
+
+    let err = unsafe { ha_wifi_start(ssid.as_ptr(), password.as_ptr()) };
+    if err != 0 {
+        log::error!("wifi start failed: {err}");
+        return;
+    }
+    for _ in 0..120 {
+        let mut buf = [0 as c_char; 32];
+        if unsafe { ha_wifi_ip(buf.as_mut_ptr(), buf.len()) } != 0 {
+            let ip = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+            log::info!("wifi ip={ip}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    log::warn!("wifi: no IPv4 after 60 s");
 }
