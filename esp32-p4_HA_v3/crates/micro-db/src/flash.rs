@@ -29,6 +29,7 @@ pub enum FlashError {
 
 pub trait NorFlash {
     fn capacity(&self) -> usize;
+    fn erase_size(&self) -> usize;
     fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError>;
     fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), FlashError>;
     fn erase(&mut self, offset: usize, len: usize) -> Result<(), FlashError>;
@@ -57,11 +58,13 @@ struct Latest {
 pub struct FlashTable {
     geometry: Geometry,
     id: [u8; 16],
+    bank_size: usize,
+    active_bank: usize,
+    active_seq: u32,
     write_offset: usize,
     latest: Vec<Option<Latest>>,
     scratch: Vec<u8>,
     torn: bool,
-    capacity: usize,
 }
 
 impl FlashTable {
@@ -73,6 +76,70 @@ impl FlashTable {
         RECORD_FIXED + RECORD_TAIL
     }
 
+    fn record_len(&self, kind: u8) -> usize {
+        if kind == KIND_SET { self.set_len() } else { self.meta_len() }
+    }
+
+    fn bank_base(&self, bank: usize) -> usize {
+        bank * self.bank_size
+    }
+
+    fn active_base(&self) -> usize {
+        self.bank_base(self.active_bank)
+    }
+
+    fn bank_size_for<F: NorFlash>(flash: &F) -> Result<usize, FlashError> {
+        let size = flash.capacity() / 2;
+        if size == 0 || size % flash.erase_size() != 0 {
+            return Err(FlashError::InvalidSize);
+        }
+        Ok(size)
+    }
+
+    fn header_bytes(&self, seq: u32) -> [u8; HEADER_SIZE] {
+        let mut header = [0xFFu8; HEADER_SIZE];
+        put_u32(&mut header, 0, HEADER_MAGIC);
+        put_u16(&mut header, 4, FORMAT_REVISION);
+        put_u16(&mut header, 6, HEADER_SIZE as u16);
+        put_u32(&mut header, 8, seq);
+        put_u32(&mut header, 12, self.geometry.capacity as u32);
+        put_u16(&mut header, 16, self.geometry.key_size as u16);
+        put_u16(&mut header, 18, self.geometry.payload_size as u16);
+        header[20..36].copy_from_slice(&self.id);
+        let crc = crc32(&header[..HEADER_CRC_LEN]);
+        put_u32(&mut header, HEADER_CRC_LEN, crc);
+        header
+    }
+
+    fn read_header<F: NorFlash>(
+        flash: &mut F,
+        base: usize,
+    ) -> Result<Option<(u32, Geometry, [u8; 16])>, FlashError> {
+        let mut header = [0u8; HEADER_SIZE];
+        flash.read(base, &mut header)?;
+        if header.iter().all(|byte| *byte == 0xFF) {
+            return Ok(None);
+        }
+        if get_u32(&header, 0) != HEADER_MAGIC
+            || get_u16(&header, 4) != FORMAT_REVISION
+            || get_u16(&header, 6) as usize != HEADER_SIZE
+            || crc32(&header[..HEADER_CRC_LEN]) != get_u32(&header, HEADER_CRC_LEN)
+        {
+            return Ok(None);
+        }
+        let mut id = [0u8; 16];
+        id.copy_from_slice(&header[20..36]);
+        Ok(Some((
+            get_u32(&header, 8),
+            Geometry {
+                capacity: get_u32(&header, 12) as usize,
+                key_size: get_u16(&header, 16) as usize,
+                payload_size: get_u16(&header, 18) as usize,
+            },
+            id,
+        )))
+    }
+
     pub fn format<F: NorFlash>(
         flash: &mut F,
         geometry: Geometry,
@@ -81,78 +148,67 @@ impl FlashTable {
         if geometry.capacity == 0 || geometry.key_size == 0 || geometry.payload_size == 0 {
             return Err(FlashError::InvalidSize);
         }
-        let needed = HEADER_SIZE + geometry.capacity * (RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL);
-        if flash.capacity() < needed {
+        let bank_size = Self::bank_size_for(flash)?;
+        let set_len = RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL;
+        if HEADER_SIZE + geometry.capacity * set_len > bank_size {
             return Err(FlashError::NoSpace);
         }
-        flash.erase(0, flash.capacity())?;
-
         let id = persist_id_bytes(persist_id);
-        let mut header = [0xFFu8; HEADER_SIZE];
-        put_u32(&mut header, 0, HEADER_MAGIC);
-        put_u16(&mut header, 4, FORMAT_REVISION);
-        put_u16(&mut header, 6, HEADER_SIZE as u16);
-        put_u32(&mut header, 8, 1);
-        put_u32(&mut header, 12, geometry.capacity as u32);
-        put_u16(&mut header, 16, geometry.key_size as u16);
-        put_u16(&mut header, 18, geometry.payload_size as u16);
-        header[20..36].copy_from_slice(&id);
-        let header_crc = crc32(&header[..HEADER_CRC_LEN]);
-        put_u32(&mut header, HEADER_CRC_LEN, header_crc);
-        flash.write(0, &header)?;
-
+        flash.erase(0, bank_size * 2)?;
         let table = Self {
             geometry,
             id,
+            bank_size,
+            active_bank: 0,
+            active_seq: 1,
             write_offset: HEADER_SIZE,
             latest: vec![None; geometry.capacity],
-            scratch: vec![0; RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL],
+            scratch: vec![0; set_len],
             torn: false,
-            capacity: flash.capacity(),
         };
+        let header = table.header_bytes(1);
+        flash.write(0, &header)?;
         Ok(table)
     }
 
     pub fn open<F: NorFlash>(flash: &mut F, geometry: Geometry) -> Result<Self, FlashError> {
-        let mut header = [0u8; HEADER_SIZE];
-        flash.read(0, &mut header)?;
-        if get_u32(&header, 0) != HEADER_MAGIC
-            || get_u16(&header, 4) != FORMAT_REVISION
-            || get_u16(&header, 6) as usize != HEADER_SIZE
-            || crc32(&header[..HEADER_CRC_LEN]) != get_u32(&header, HEADER_CRC_LEN)
-        {
-            return Err(FlashError::Corrupt);
-        }
-        let header_geometry = Geometry {
-            capacity: get_u32(&header, 12) as usize,
-            key_size: get_u16(&header, 16) as usize,
-            payload_size: get_u16(&header, 18) as usize,
+        let bank_size = Self::bank_size_for(flash)?;
+        let first = Self::read_header(flash, 0)?;
+        let second = Self::read_header(flash, bank_size)?;
+        let (active_bank, active_seq, header_geometry, id) = match (first, second) {
+            (Some((seq0, geo0, id0)), Some((seq1, geo1, id1))) => {
+                if seq0 >= seq1 {
+                    (0, seq0, geo0, id0)
+                } else {
+                    (1, seq1, geo1, id1)
+                }
+            }
+            (Some((seq, geo, id)), None) => (0, seq, geo, id),
+            (None, Some((seq, geo, id))) => (1, seq, geo, id),
+            (None, None) => return Err(FlashError::Corrupt),
         };
         if header_geometry != geometry {
             return Err(FlashError::InvalidSize);
         }
-        let mut id = [0u8; 16];
-        id.copy_from_slice(&header[20..36]);
-
+        let set_len = RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL;
         let mut table = Self {
             geometry,
             id,
+            bank_size,
+            active_bank,
+            active_seq,
             write_offset: HEADER_SIZE,
             latest: vec![None; geometry.capacity],
-            scratch: vec![0; RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL],
+            scratch: vec![0; set_len],
             torn: false,
-            capacity: flash.capacity(),
         };
         table.recover(flash)?;
         Ok(table)
     }
 
-    pub fn can_append(&self, kind: u8) -> bool {
-        if self.torn {
-            return false;
-        }
-        let len = if kind == KIND_SET { self.set_len() } else { self.meta_len() };
-        self.write_offset + len <= self.capacity
+    pub fn can_append(&self, _kind: u8) -> bool {
+        let live = self.latest.iter().flatten().count();
+        HEADER_SIZE + (live + 1) * self.set_len() <= self.bank_size
     }
 
     pub fn id(&self) -> [u8; 16] {
@@ -160,41 +216,37 @@ impl FlashTable {
     }
 
     fn recover<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
+        let base = self.active_base();
         let mut offset = HEADER_SIZE;
-        let set_len = self.set_len();
-        let meta_len = self.meta_len();
-        let mut buf = vec![0u8; set_len.max(meta_len)];
-        loop {
-            if offset + RECORD_FIXED > flash.capacity() {
-                break;
-            }
+        let proof = self.scratch.len();
+        let mut buf = vec![0u8; proof];
+        while offset + RECORD_FIXED <= self.bank_size {
             let mut prefix = [0u8; RECORD_FIXED];
-            flash.read(offset, &mut prefix)?;
-            if prefix.iter().all(|b| *b == 0xFF) {
+            flash.read(base + offset, &mut prefix)?;
+            if prefix.iter().all(|byte| *byte == 0xFF) {
                 break;
-            }
-            if get_u16(&prefix, 0) != RECORD_MAGIC {
-                self.torn = true;
-                break; // torn/corrupt tail: keep what was committed
             }
             let kind = prefix[2];
-            let len = match kind {
-                KIND_SET => set_len,
-                KIND_META => meta_len,
-                _ => break,
-            };
-            if offset + len > flash.capacity() {
-                return Err(FlashError::Corrupt);
+            let header_ok = get_u16(&prefix, 0) == RECORD_MAGIC
+                && (kind == KIND_SET || kind == KIND_META);
+            if !header_ok {
+                self.torn = self.classify_tail(flash, offset)?;
+                break;
             }
-            flash.read(offset, &mut buf[..len])?;
-            let crc_off = match kind {
-                KIND_SET => RECORD_FIXED + self.geometry.key_size + self.geometry.payload_size,
-                _ => RECORD_FIXED,
+            let len = self.record_len(kind);
+            if offset + len > self.bank_size {
+                self.torn = self.classify_tail(flash, offset)?;
+                break;
+            }
+            flash.read(base + offset, &mut buf[..len])?;
+            let crc_off = if kind == KIND_SET {
+                RECORD_FIXED + self.geometry.key_size + self.geometry.payload_size
+            } else {
+                RECORD_FIXED
             };
-            let committed = get_u32(&buf, crc_off + 4) == COMMIT_MARKER;
-            if !committed {
-                self.torn = true;
-                break; // torn append
+            if get_u32(&buf, crc_off + 4) != COMMIT_MARKER {
+                self.torn = self.classify_tail(flash, offset)?;
+                break;
             }
             if crc32(&buf[..crc_off]) != get_u32(&buf, crc_off) {
                 return Err(FlashError::Corrupt);
@@ -208,6 +260,40 @@ impl FlashTable {
         }
         self.write_offset = offset;
         Ok(())
+    }
+
+    fn classify_tail<F: NorFlash>(
+        &self,
+        flash: &mut F,
+        from: usize,
+    ) -> Result<bool, FlashError> {
+        let base = self.active_base();
+        let mut buf = [0u8; 64];
+        let mut run = 0usize;
+        let mut seen_erased = false;
+        let mut offset = from;
+        while offset < self.bank_size {
+            let chunk = (self.bank_size - offset).min(buf.len());
+            flash.read(base + offset, &mut buf[..chunk])?;
+            for byte in &buf[..chunk] {
+                if *byte != 0xFF {
+                    if seen_erased {
+                        return Err(FlashError::Corrupt);
+                    }
+                    run += 1;
+                } else {
+                    seen_erased = true;
+                }
+            }
+            offset += chunk;
+        }
+        if run == 0 {
+            Ok(false)
+        } else if run > self.set_len() {
+            Err(FlashError::Corrupt)
+        } else {
+            Ok(true)
+        }
     }
 
     pub fn append_set<F: NorFlash>(
@@ -245,13 +331,14 @@ impl FlashTable {
         if slot as usize >= self.geometry.capacity {
             return Err(FlashError::InvalidSize);
         }
-        let len = match kind {
-            KIND_SET => self.set_len(),
-            _ => self.meta_len(),
-        };
-        if self.torn || self.write_offset + len > flash.capacity() {
+        let len = self.record_len(kind);
+        if self.torn || self.write_offset + len > self.bank_size {
+            self.compact(flash)?;
+        }
+        if self.write_offset + len > self.bank_size {
             return Err(FlashError::NoSpace);
         }
+        let base = self.active_base();
         let record = &mut self.scratch[..len];
         record.fill(0xFF);
         put_u16(record, 0, RECORD_MAGIC);
@@ -274,9 +361,13 @@ impl FlashTable {
         put_u32(record, crc_off, crc32(&record[..crc_off]));
         put_u32(record, crc_off + 4, COMMIT_MARKER);
 
-        // Commit marker is written last: a power cut leaves a torn, ignored tail.
-        flash.write(self.write_offset, &record[..len - 4])?;
-        flash.write(self.write_offset + len - 4, &record[len - 4..])?;
+        if let Err(error) = flash
+            .write(base + self.write_offset, &record[..len - 4])
+            .and_then(|()| flash.write(base + self.write_offset + len - 4, &record[len - 4..]))
+        {
+            self.torn = true;
+            return Err(error);
+        }
         self.latest[slot as usize] = Some(Latest {
             offset: self.write_offset,
             kind,
@@ -285,7 +376,44 @@ impl FlashTable {
         Ok(())
     }
 
-    /// Latest record for a slot: copies key/payload into the caller's buffers.
+    fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
+        let inactive = 1 - self.active_bank;
+        let old_base = self.active_base();
+        let new_base = self.bank_base(inactive);
+        flash.erase(new_base, self.bank_size)?;
+
+        let mut new_latest = vec![None; self.geometry.capacity];
+        let mut cursor = HEADER_SIZE;
+        for slot in 0..self.geometry.capacity {
+            let Some(entry) = self.latest[slot] else {
+                continue;
+            };
+            let len = self.record_len(entry.kind);
+            if cursor + len > self.bank_size {
+                return Err(FlashError::NoSpace);
+            }
+            flash.read(old_base + entry.offset, &mut self.scratch[..len])?;
+            flash.write(new_base + cursor, &self.scratch[..len - 4])?;
+            flash.write(new_base + cursor + len - 4, &self.scratch[len - 4..])?;
+            new_latest[slot] = Some(Latest {
+                offset: cursor,
+                kind: entry.kind,
+            });
+            cursor += len;
+        }
+
+        let header = self.header_bytes(self.active_seq + 1);
+        flash.write(new_base, &header)?;
+
+        self.latest = new_latest;
+        self.active_bank = inactive;
+        self.active_seq += 1;
+        self.write_offset = cursor;
+        self.torn = false;
+        let _ = flash.erase(old_base, self.bank_size);
+        Ok(())
+    }
+
     pub fn read_slot<F: NorFlash>(
         &self,
         flash: &mut F,
@@ -299,22 +427,25 @@ impl FlashTable {
         if key_out.len() < self.geometry.key_size || payload_out.len() < self.geometry.payload_size {
             return Err(FlashError::InvalidSize);
         }
+        let base = self.active_base();
         let mut prefix = [0u8; RECORD_FIXED];
-        flash.read(entry.offset, &mut prefix)?;
+        flash.read(base + entry.offset, &mut prefix)?;
         let meta = FlashMeta {
             used: prefix[3] != 0,
             generation: get_u32(&prefix, 8),
             version: get_u32(&prefix, 12),
         };
         if entry.kind == KIND_SET {
-            let key_off = entry.offset + RECORD_FIXED;
+            let key_off = base + entry.offset + RECORD_FIXED;
             flash.read(key_off, &mut key_out[..self.geometry.key_size])?;
-            flash.read(key_off + self.geometry.key_size, &mut payload_out[..self.geometry.payload_size])?;
+            flash.read(
+                key_off + self.geometry.key_size,
+                &mut payload_out[..self.geometry.payload_size],
+            )?;
         }
         Ok((meta, entry.kind))
     }
 }
-
 pub fn persist_id_bytes(text: &str) -> [u8; 16] {
     let a = fnv1a64(text, 1_469_598_103_934_665_603);
     let b = fnv1a64(text, 1_099_511_628_211);
@@ -402,6 +533,10 @@ pub mod sim {
             self.bytes.len()
         }
 
+        fn erase_size(&self) -> usize {
+            self.erase_size
+        }
+
         fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
             let end = offset + out.len();
             if end > self.bytes.len() {
@@ -461,7 +596,7 @@ mod tests {
     }
 
     fn region() -> SimFlash {
-        SimFlash::new(4096, 4096)
+        SimFlash::new(8192, 4096)
     }
 
     fn key(id: u8) -> [u8; 8] {
@@ -558,7 +693,7 @@ mod tests {
 
     #[test]
     fn no_space_is_explicit_and_meta_records_work() {
-        let mut flash = SimFlash::new(256, 256);
+        let mut flash = SimFlash::new(512, 256);
         let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
         let meta = FlashMeta {
             used: true,
@@ -598,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn torn_tail_blocks_further_appends() {
+    fn torn_tail_is_compacted_before_append() {
         let mut flash = region();
         let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
         table
@@ -616,8 +751,214 @@ mod tests {
             .unwrap();
         let record = RECORD_FIXED + geometry().key_size + geometry().payload_size + RECORD_TAIL;
         flash.corrupt(HEADER_SIZE + record - 4, &[0xFF; 4]);
-        let reopened = FlashTable::open(&mut flash, geometry()).unwrap();
-        assert!(!reopened.can_append(KIND_SET));
-        assert!(!reopened.can_append(KIND_META));
+        let mut reopened = FlashTable::open(&mut flash, geometry()).unwrap();
+        assert!(reopened.can_append(KIND_SET));
+        reopened
+            .append_set(
+                &mut flash,
+                0,
+                FlashMeta {
+                    used: true,
+                    generation: 2,
+                    version: 2,
+                },
+                &key(1),
+                &[2; 12],
+            )
+            .unwrap();
+        assert_eq!(reopened.active_bank, 1);
+        let mut after = FlashTable::open(&mut flash, geometry()).unwrap();
+        let mut payload = [0u8; 12];
+        let (meta, _) = after
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(meta.generation, 2);
+        assert_eq!(meta.version, 2);
+        assert_eq!(payload, [2; 12]);
+    }
+    #[test]
+    fn compaction_preserves_latest_metadata_and_tombstones() {
+        let mut flash = region();
+        let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
+        let meta = |generation, version| FlashMeta {
+            used: true,
+            generation,
+            version,
+        };
+        table.append_set(&mut flash, 0, meta(1, 1), &key(1), &[1; 12]).unwrap();
+        table.append_set(&mut flash, 1, meta(1, 1), &key(2), &[2; 12]).unwrap();
+        table.append_set(&mut flash, 2, meta(1, 1), &key(3), &[3; 12]).unwrap();
+        table.append_set(&mut flash, 0, meta(2, 3), &key(1), &[9; 12]).unwrap();
+        table
+            .append_meta(&mut flash, 2, FlashMeta { used: false, generation: 2, version: 2 })
+            .unwrap();
+        table.compact(&mut flash).unwrap();
+        assert_eq!(table.active_bank, 1);
+
+        let mut reopened = FlashTable::open(&mut flash, geometry()).unwrap();
+        let mut payload = [0u8; 12];
+        let (read, kind) = reopened
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(read, meta(2, 3));
+        assert_eq!(kind, KIND_SET);
+        assert_eq!(payload, [9; 12]);
+        let (read, _) = reopened
+            .read_slot(&mut flash, 1, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(read, meta(1, 1));
+        let (read, kind) = reopened
+            .read_slot(&mut flash, 2, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert!(!read.used);
+        assert_eq!(read.generation, 2);
+        assert_eq!(kind, KIND_META);
+    }
+
+    struct CrashFlash<'a> {
+        inner: &'a mut SimFlash,
+        fail_write: Option<usize>,
+        writes: usize,
+        tear_write: bool,
+        fail_erase: Option<usize>,
+        erases: usize,
+    }
+
+    impl NorFlash for CrashFlash<'_> {
+        fn capacity(&self) -> usize {
+            self.inner.capacity()
+        }
+
+        fn erase_size(&self) -> usize {
+            self.inner.erase_size()
+        }
+
+        fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+            self.inner.read(offset, out)
+        }
+
+        fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), FlashError> {
+            if self.fail_write == Some(self.writes) {
+                if self.tear_write {
+                    let half = data.len() / 2;
+                    let _ = self.inner.write(offset, &data[..half]);
+                }
+                return Err(FlashError::Io);
+            }
+            self.writes += 1;
+            self.inner.write(offset, data)
+        }
+
+        fn erase(&mut self, offset: usize, len: usize) -> Result<(), FlashError> {
+            if self.fail_erase == Some(self.erases) {
+                let _ = self.inner.erase(offset, len);
+                return Err(FlashError::Io);
+            }
+            self.erases += 1;
+            self.inner.erase(offset, len)
+        }
+    }
+
+    fn crash_case(fail_write: Option<usize>, tear_write: bool) {
+        let mut flash = region();
+        let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
+        table
+            .append_set(
+                &mut flash,
+                0,
+                FlashMeta { used: true, generation: 1, version: 1 },
+                &key(1),
+                &[7; 12],
+            )
+            .unwrap();
+        {
+            let mut crash = CrashFlash {
+                inner: &mut flash,
+                fail_write,
+                writes: 0,
+                tear_write,
+                fail_erase: None,
+                erases: 0,
+            };
+            table.compact(&mut crash).unwrap_err();
+        }
+        let mut reopened = FlashTable::open(&mut flash, geometry()).unwrap();
+        let mut payload = [0u8; 12];
+        let (meta, _) = reopened
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(meta.generation, 1);
+        assert_eq!(meta.version, 1);
+        assert_eq!(payload, [7; 12]);
+    }
+
+    #[test]
+    fn crash_during_copy_keeps_old_bank() {
+        crash_case(Some(1), true);
+    }
+
+    #[test]
+    fn crash_during_header_keeps_old_bank() {
+        crash_case(Some(2), true);
+    }
+
+    #[test]
+    fn committed_header_wins_even_if_old_bank_erase_fails() {
+        let mut flash = SimFlash::new(8192, 2048);
+        let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
+        table
+            .append_set(
+                &mut flash,
+                0,
+                FlashMeta { used: true, generation: 1, version: 1 },
+                &key(1),
+                &[7; 12],
+            )
+            .unwrap();
+        {
+            let mut crash = CrashFlash {
+                inner: &mut flash,
+                fail_write: None,
+                writes: 0,
+                tear_write: false,
+                fail_erase: Some(1),
+                erases: 0,
+            };
+            table.compact(&mut crash).unwrap();
+        }
+        let mut reopened = FlashTable::open(&mut flash, geometry()).unwrap();
+        assert_eq!(reopened.active_bank, 1);
+        let mut payload = [0u8; 12];
+        let (meta, _) = reopened
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(meta.version, 1);
+        assert_eq!(payload, [7; 12]);
+    }
+
+    #[test]
+    fn repeated_compactions_keep_latest_state() {
+        let mut flash = region();
+        let mut table = FlashTable::format(&mut flash, geometry(), "devices").unwrap();
+        for version in 1..=6 {
+            table
+                .append_set(
+                    &mut flash,
+                    0,
+                    FlashMeta { used: true, generation: 1, version },
+                    &key(1),
+                    &[version as u8; 12],
+                )
+                .unwrap();
+            table.compact(&mut flash).unwrap();
+            assert_eq!(table.active_bank, version as usize % 2);
+        }
+        let mut reopened = FlashTable::open(&mut flash, geometry()).unwrap();
+        let mut payload = [0u8; 12];
+        let (meta, _) = reopened
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
+        assert_eq!(meta.version, 6);
+        assert_eq!(payload, [6; 12]);
     }
 }

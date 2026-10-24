@@ -235,7 +235,7 @@ mod tests {
     use crate::flash::sim::SimFlash;
 
     fn region() -> SimFlash {
-        SimFlash::new(2048, 2048)
+        SimFlash::new(4096, 2048)
     }
 
     fn values() -> [u8; 12] {
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn no_space_is_rejected_before_ram_changes() {
-        let mut flash = SimFlash::new(256, 256);
+        let mut flash = SimFlash::new(512, 256);
         let mut store: PersistedTable<[u8; 8], [u8; 12]> =
             PersistedTable::format(&mut flash, 4, "devices").unwrap();
         let key = [5u8; 8];
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn failed_allocate_restores_free_list() {
-        let mut flash = SimFlash::new(512, 512);
+        let mut flash = SimFlash::new(1024, 512);
         let mut store: PersistedTable<[u8; 8], [u8; 12]> =
             PersistedTable::format(&mut flash, 2, "devices").unwrap();
         flash.fail_next_write = true;

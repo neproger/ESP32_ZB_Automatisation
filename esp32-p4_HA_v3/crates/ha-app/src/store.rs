@@ -25,6 +25,10 @@ impl NorFlash for EspFlash {
         unsafe { ha_mstore_size() as usize }
     }
 
+    fn erase_size(&self) -> usize {
+        4096
+    }
+
     fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
         if unsafe { ha_mstore_read(offset as u32, out.as_mut_ptr(), out.len()) } == 0 {
             Ok(())
@@ -54,12 +58,20 @@ static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 
 pub fn init() {
     let mut flash = EspFlash;
+    let size = unsafe { ha_mstore_size() } as usize;
     let mut header = [0u8; 64];
     if flash.read(0, &mut header).is_err() {
         log::error!("registry: mstore not readable");
         return;
     }
-    let erased = header.iter().all(|byte| *byte == 0xFF);
+    // With two banks either header can be the active one; only a fully erased
+    // region may be formatted.
+    let mut standby_header = [0u8; 64];
+    let standby_erased = flash
+        .read(size / 2, &mut standby_header)
+        .map(|()| standby_header.iter().all(|byte| *byte == 0xFF))
+        .unwrap_or(false);
+    let erased = header.iter().all(|byte| *byte == 0xFF) && standby_erased;
 
     let registry = match Registry::open(&mut flash, CAPACITY) {
         Ok(registry) => registry,

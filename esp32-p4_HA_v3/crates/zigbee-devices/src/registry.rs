@@ -174,7 +174,7 @@ mod tests {
     }
 
     fn flash() -> SimFlash {
-        SimFlash::new(8192, 8192)
+        SimFlash::new(8192, 4096)
     }
 
     #[test]
