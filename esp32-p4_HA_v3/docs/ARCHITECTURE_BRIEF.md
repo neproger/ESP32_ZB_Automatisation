@@ -147,6 +147,8 @@ Rust execution stack для P4 требует отдельного выбора/
 
 1. ~~C6 — полноценный coordinator с SDK или RCP~~ — решено: P4 — координатор и стек, C6 — `ot_rcp` (802.15.4) по UART/Spinel (§4).
 2. Rust на P4 — ESP-IDF/std или no_std/Embassy, интеграция с FFI.
+   PoC: ESP-IDF/std (esp-idf-svc 0.53, nightly-2026-07-08) — работает (§14);
+   окончательно фиксируем после FFI к Zigbee SDK.
 3. Формат транспорта P4↔C6 и его гарантии при рестарте/потере пакетов.
 4. Типовая схема значений/capabilities для domain и конвертеров.
 5. Rust-обвязка существующей MicroDB или её переосмысление как отдельного Rust crate.
@@ -156,3 +158,26 @@ Rust execution stack для P4 требует отдельного выбора/
 ## 13. Архитектурное правило
 
 Zigbee — автономный модуль протокола и устройств. Domain Store — источник подтверждённого состояния. MQTT — возможная внешняя интеграция, никогда не фундамент работы Zigbee.
+
+## 14. Проверенный стек (PoC, 24.10.2026)
+
+Официальный шаблон `esp-rs/esp-idf-template` собран и запущен на плате B
+(P4 rev v1.3, C6 `ot_rcp`), USB-консоль:
+
+```text
+I (179) zigbee_esp: Hello, world!
+```
+
+- Rust: **nightly-2026-07-08** + `rust-src`, `riscv32imafc-esp-espidf`, `build-std`
+  (свежий nightly ломает std для espidf: `libc::stat` без `st_atime`).
+- ESP-IDF: **v6.1** (managed, esp-idf-sys 0.38.1), esp-idf-svc 0.53.
+- Обязательно `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`: rev v1.3 — pre-v3.0,
+  нестандартный CLIC; без флага std падает в `Illegal instruction`.
+- Консоль — `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`.
+- Windows: `libclang` для bindgen (`LIBCLANG_PATH`), `target-dir` вне глубокого
+  пути (ограничение esp-idf-sys).
+- Проект: `crates/zigbee-esp` (сборка — см. `README.md`).
+
+Следующий шаг PoC: FFI к `esp-zigbee-lib` (P4 coordinator, UART/Spinel к C6),
+C-callback → bounded queue → Rust, событие TS0041.
+
