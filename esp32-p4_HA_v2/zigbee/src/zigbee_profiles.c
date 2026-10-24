@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ha_model/ha_properties.h"
+#include "zigbee/generated/zb_catalog_generated.h"
 
 /*
  * Ручные записи до появления генератора. Порядок важен: первое совпадение
@@ -52,6 +53,23 @@ static bool field_matches(const char *value, const char *needle)
     return needle == NULL || (value != NULL && strstr(value, needle) != NULL);
 }
 
+static zb_profile_match_t match_profile(const zb_device_profile_t *profile,
+                                        const zb_device_signature_t *signature,
+                                        const zb_device_profile_t **out)
+{
+    if (!field_matches(signature->manufacturer, profile->manufacturer) ||
+        !field_matches(signature->model, profile->model)) {
+        return ZB_PROFILE_NONE;
+    }
+    if (out != NULL) {
+        *out = profile;
+    }
+    if (profile->protocol != NULL && !protocol_supported(profile->protocol->kind)) {
+        return ZB_PROFILE_RECOGNIZED;
+    }
+    return ZB_PROFILE_SUPPORTED;
+}
+
 zb_profile_match_t zb_profiles_match(const zb_device_signature_t *signature,
                                      const zb_device_profile_t **out)
 {
@@ -61,19 +79,19 @@ zb_profile_match_t zb_profiles_match(const zb_device_signature_t *signature,
     if (signature == NULL) {
         return ZB_PROFILE_NONE;
     }
+    /* Ручные записи выигрывают у сгенерированных: они уточняют поведение. */
     for (size_t i = 0; i < PROFILE_COUNT; i++) {
-        const zb_device_profile_t *profile = &k_profiles[i];
-        if (!field_matches(signature->manufacturer, profile->manufacturer) ||
-            !field_matches(signature->model, profile->model)) {
-            continue;
+        const zb_profile_match_t match = match_profile(&k_profiles[i], signature, out);
+        if (match != ZB_PROFILE_NONE) {
+            return match;
         }
-        if (out != NULL) {
-            *out = profile;
+    }
+    for (size_t i = 0; i < zb_catalog_generated_count; i++) {
+        const zb_profile_match_t match =
+            match_profile(&zb_catalog_generated[i], signature, out);
+        if (match != ZB_PROFILE_NONE) {
+            return match;
         }
-        if (profile->protocol != NULL && !protocol_supported(profile->protocol->kind)) {
-            return ZB_PROFILE_RECOGNIZED;
-        }
-        return ZB_PROFILE_SUPPORTED;
     }
     return ZB_PROFILE_NONE;
 }

@@ -115,6 +115,27 @@ UI: LOGICAL_DEVICE_REMOVE(device_id)
 Кнопка, у которой нет server-кластеров, получает `properties=[]`, `events=[...]`.
 Публикуется адаптером по `entity_id` при интервью.
 
+### 9.1 Каталог профилей устройства
+
+Границы: **каталог описывает устройство** (`capability_profile` — что доступно
+приложению: `properties[]`, `events[]`, какой endpoint единственный), **handler
+описывает поведение** (`protocol_binding` — как читать/писать/декодировать),
+**состояние хранит Domain** (обработчики публикуют факты, не пишут состояние сами).
+
+- fingerprint — `(manufacturer, model)` из Basic 0x0004/0x0005 (хранятся в
+  `ha_device_record_t`); `profile_id` — не идентичность, а результат поиска.
+- `zb_profiles_match(signature)` возвращает `NONE` / `RECOGNIZED` (fingerprint есть,
+  handler не реализован) / `SUPPORTED`.
+- Ручные записи (`zb_profiles.c`) выигрывают у сгенерированных: они уточняют поведение
+  (например, TS0041 — одна кнопка, `OnOff 0xFD`, только ep1).
+- Каталог генерируется из `zigbee-herdsman-converters` (пин версии в
+  `tools/zb_catalog/update.py`): fingerprint + `exposes` → C-таблицы в
+  `zigbee/src/generated/`; фильтр вендоров — только в генераторе. Обычная сборка без
+  сети, сгенерированные файлы коммитятся. JSON в прошивке не используется.
+- Ограничение: JS-конвертеры (`fromZigbee`/`toZigbee`/`configure`) не переносятся
+  автоматически; Tuya DP (`0xEF00`) — отдельный нативный handler (пока
+  `RECOGNIZED`, не `SUPPORTED`).
+
 ## 10. Ошибки и диагностика
 
 - слой `ZIGBEE_SYS_LAYER` (adapter-owned) в `zigbee_adapter_ids.h`;

@@ -34,6 +34,7 @@ typedef struct {
 typedef enum {
     ZB_PROTOCOL_STANDARD = 0,      /* ZCL: стандартные кластеры */
     ZB_PROTOCOL_TUYA_ONOFF_ACTION, /* OnOff 0xFD: payload 0/1/2 → single/double/hold */
+    ZB_PROTOCOL_TUYA_DP,           /* Tuya DP 0xEF00: handler ещё не реализован */
 } zb_protocol_kind_t;
 
 typedef struct {
