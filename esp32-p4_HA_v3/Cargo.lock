@@ -29,6 +29,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zigbee-exec"
+version = "0.1.0"
+
+[[package]]
 name = "zigbee-frames"
 version = "0.1.0"
 dependencies = [
