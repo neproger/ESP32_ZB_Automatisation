@@ -22,8 +22,89 @@ struct State {
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
-static PROFILE: Mutex<Option<&'static z2m_rs::Profile>> = Mutex::new(None);
-static DONE: Mutex<bool> = Mutex::new(false);
+const PROFILE_SLOTS: usize = 8;
+
+#[derive(Clone, Copy)]
+struct ProfileMap {
+    items: [Option<(u64, &'static z2m_rs::Profile)>; PROFILE_SLOTS],
+}
+
+impl ProfileMap {
+    const fn new() -> Self {
+        Self { items: [None; PROFILE_SLOTS] }
+    }
+
+    fn get(&self, eui: u64) -> Option<&'static z2m_rs::Profile> {
+        self.items
+            .iter()
+            .flatten()
+            .find(|(id, _)| *id == eui)
+            .map(|(_, profile)| *profile)
+    }
+
+    fn insert(&mut self, eui: u64, profile: &'static z2m_rs::Profile) {
+        for slot in &mut self.items {
+            match slot {
+                Some((id, _)) if *id == eui => {
+                    *slot = Some((eui, profile));
+                    return;
+                }
+                None => {
+                    *slot = Some((eui, profile));
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+static PROFILES: Mutex<ProfileMap> = Mutex::new(ProfileMap::new());
+
+const DEVICE_QUEUE: usize = 8;
+
+struct DeviceQueue {
+    items: [Option<(u64, u16)>; DEVICE_QUEUE],
+    head: usize,
+    tail: usize,
+}
+
+impl DeviceQueue {
+    const fn new() -> Self {
+        Self { items: [None; DEVICE_QUEUE], head: 0, tail: 0 }
+    }
+
+    fn push(&mut self, ext: u64, short: u16) {
+        if self.items.iter().flatten().any(|queued| queued.0 == ext) {
+            return;
+        }
+        if self.tail - self.head >= DEVICE_QUEUE {
+            log::warn!("interview: device queue full, dropping {:016x}", ext);
+            return;
+        }
+        self.items[self.tail % DEVICE_QUEUE] = Some((ext, short));
+        self.tail += 1;
+    }
+
+    fn pop(&mut self) -> Option<(u64, u16)> {
+        if self.head == self.tail {
+            return None;
+        }
+        let item = self.items[self.head % DEVICE_QUEUE].take();
+        self.head += 1;
+        item
+    }
+}
+
+static DEVICES: Mutex<DeviceQueue> = Mutex::new(DeviceQueue::new());
+
+unsafe extern "C" fn on_device(ext: u64, short: u16) {
+    DEVICES.lock().unwrap().push(ext, short);
+}
+
+pub fn next_device() -> Option<(u64, u16)> {
+    DEVICES.lock().unwrap().pop()
+}
 
 unsafe extern "C" fn on_read(
     ext: u64,
@@ -43,6 +124,7 @@ unsafe extern "C" fn on_read(
 }
 
 extern "C" {
+    fn zb_poc_set_device_event_cb(cb: Option<unsafe extern "C" fn(u64, u16)>);
     fn zb_interview_set_callback(
         cb: Option<unsafe extern "C" fn(u64, u16, u8, u16, u16, u8, *const u8, u16)>,
     );
@@ -50,11 +132,12 @@ extern "C" {
 
 pub fn install() {
     unsafe { zb_interview_set_callback(Some(on_read)) };
-    log::info!("interview callback installed");
+    unsafe { zb_poc_set_device_event_cb(Some(on_device)) };
+    log::info!("interview + device event callbacks installed");
 }
 
 pub fn start(exec: &mut Executor, device: (u64, u16), now: u64) {
-    if device.0 == 0 || *DONE.lock().unwrap() {
+    if device.0 == 0 || selected_profile(device.0).is_some() {
         return;
     }
     {
@@ -77,7 +160,7 @@ pub fn start(exec: &mut Executor, device: (u64, u16), now: u64) {
             device: device.0,
             short: device.1,
             endpoint: 1,
-            sleepy: false,
+            sleepy: true,
             retry: RetryPolicy::SAFE,
             expiry_ms: 10_000,
             timeout_ms: 3_000,
@@ -93,13 +176,12 @@ pub fn start(exec: &mut Executor, device: (u64, u16), now: u64) {
     }
 }
 
-pub fn selected_profile() -> Option<&'static z2m_rs::Profile> {
-    *PROFILE.lock().unwrap()
+pub fn selected_profile(eui: u64) -> Option<&'static z2m_rs::Profile> {
+    PROFILES.lock().unwrap().get(eui)
 }
 
-pub fn restore(profile: &'static z2m_rs::Profile) {
-    *PROFILE.lock().unwrap() = Some(profile);
-    *DONE.lock().unwrap() = true;
+pub fn restore(eui: u64, profile: &'static z2m_rs::Profile) {
+    PROFILES.lock().unwrap().insert(eui, profile);
 }
 
 fn handle_read(ext: u64, short: u16, attr: u16, bytes: &[u8]) {
@@ -144,11 +226,10 @@ fn handle_read(ext: u64, short: u16, attr: u16, bytes: &[u8]) {
                 profile.id,
                 profile.support
             );
-            *PROFILE.lock().unwrap() = Some(profile);
+            PROFILES.lock().unwrap().insert(ext, profile);
             crate::store::save(ext, short, &manufacturer, &model, profile.id);
         }
         None => log::warn!("interview: unknown manufacturer={manufacturer} model={model}"),
     }
     *STATE.lock().unwrap() = None;
-    *DONE.lock().unwrap() = true;
 }

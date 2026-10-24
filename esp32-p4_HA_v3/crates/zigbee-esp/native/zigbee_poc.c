@@ -49,6 +49,9 @@ typedef struct {
     uint8_t payload[8];
 } poc_event_t;
 
+typedef void (*zb_device_event_t)(uint64_t ext, uint16_t short_addr);
+static zb_device_event_t s_device_event;
+
 static poc_event_t s_queue[POC_QUEUE_LEN];
 static volatile uint32_t s_head;
 static volatile uint32_t s_tail;
@@ -215,6 +218,9 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
                  (unsigned)auth->type, (unsigned)auth->status);
         if (auth->status == 0u) {
             bind_device(auth->device_addr.u64, auth->short_addr, POC_ENDPOINT);
+            if (s_device_event != NULL) {
+                s_device_event(auth->device_addr.u64, auth->short_addr);
+            }
         }
         return true;
     }
@@ -225,6 +231,9 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
         ESP_LOGI(TAG, "device announced eui64=%016llx short=0x%04x",
                  (unsigned long long)annce->device_addr.u64, (unsigned)annce->short_addr);
         bind_device(annce->device_addr.u64, annce->short_addr, POC_ENDPOINT);
+        if (s_device_event != NULL) {
+            s_device_event(annce->device_addr.u64, annce->short_addr);
+        }
         return true;
     }
 
@@ -375,6 +384,7 @@ static zb_exec_zdo_t s_exec_zdo;
 static zb_interview_read_t s_interview_read;
 
 void zb_interview_set_callback(zb_interview_read_t cb) { s_interview_read = cb; }
+void zb_poc_set_device_event_cb(zb_device_event_t cb) { s_device_event = cb; }
 
 void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo)
 {

@@ -140,7 +140,7 @@ pub fn process_pending() {
                 );
                 return;
             }
-            let Some(profile) = crate::interview::selected_profile() else {
+            let Some(profile) = crate::interview::selected_profile(meta.src_ext) else {
                 log::info!(
                     "attr frame cluster=0x{:04x} attrs={} dropped={} (interview pending)",
                     meta.cluster,

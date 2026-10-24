@@ -105,12 +105,18 @@ fn main() {
     loop {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
+            executor.device_awake(event.short_addr);
             ensure_interview(&mut executor, event.extended_addr, event.short_addr);
             handle_event(&mut domain, &event, &delta_rx);
         }
         frames::process_pending();
         if let Some(device) = frames::last_device() {
+            executor.device_awake(device.1);
             ensure_interview(&mut executor, device.0, device.1);
+        }
+        while let Some((eui, short)) = interview::next_device() {
+            executor.device_awake(short);
+            ensure_interview(&mut executor, eui, short);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
@@ -122,7 +128,7 @@ fn main() {
 
 fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<Fact>) {
     let payload_len = usize::from(event.payload_len.min(8));
-    let Some(profile) = interview::selected_profile() else {
+    let Some(profile) = interview::selected_profile(event.extended_addr) else {
         log::info!(
             "ignored eui64={:016x} cluster=0x{:04x} cmd=0x{:02x} (no profile yet)",
             event.extended_addr,
@@ -235,12 +241,12 @@ fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
-    if eui == 0 || interview::selected_profile().is_some() {
+    if eui == 0 || interview::selected_profile(eui).is_some() {
         return;
     }
     if let Some(profile) = store::lookup(eui) {
         log::info!("registry: restored profile={} (no interview)", profile.id);
-        interview::restore(profile);
+        interview::restore(eui, profile);
     } else {
         interview::start(executor, (eui, short), now_ms());
     }
