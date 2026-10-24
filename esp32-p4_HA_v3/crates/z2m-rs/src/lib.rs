@@ -371,6 +371,8 @@ pub struct Profile {
     pub from: &'static [Converter],
     pub to: &'static [CommandMap],
     pub configure: Option<&'static ConfigurePlan>,
+    /// Z2M `omitOptionalLevelAndColorParams`: omit optionsMask/optionsOverride.
+    pub omit_optional_params: bool,
     pub support: Support,
 }
 
@@ -495,7 +497,15 @@ impl Default for EncodeOptions {
 }
 
 pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<usize> {
-    encode_with_options(profile, command, EncodeOptions::default(), out)
+    let options = if profile.omit_optional_params {
+        EncodeOptions {
+            transition: 0,
+            options: None,
+        }
+    } else {
+        EncodeOptions::default()
+    };
+    encode_with_options(profile, command, options, out)
 }
 
 pub fn encode_with_options(
@@ -749,6 +759,7 @@ pub static TUYA_TS0041: Profile = Profile {
         Expose::Action("hold"),
     ],
     // ZHC: tuya.configureMagicPacket; no Bind/Reporting for this model.
+    omit_optional_params: false,
     support: Support::IDENTIFIED
         .union(Support::DECODED)
         .union(Support::PARTIAL),
@@ -851,7 +862,8 @@ mod tests {
             from: FROM,
             to: &[],
             configure: None,
-            support: Support::IDENTIFIED,
+            omit_optional_params: false,
+    support: Support::IDENTIFIED,
         };
         let bytes = (-512i16).to_le_bytes();
         let mut ev = event(0x0402, 0x0A, &bytes);
@@ -886,7 +898,8 @@ mod tests {
             from: &[],
             to: TO,
             configure: None,
-            support: Support::IDENTIFIED,
+            omit_optional_params: false,
+    support: Support::IDENTIFIED,
         };
         let mut out = [0u8; 8];
         let len = encode(

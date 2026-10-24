@@ -15,6 +15,19 @@ static BASE: Profile = Profile {
     from: &[],
     to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
     configure: None,
+    omit_optional_params: false,
+    support: Support::IDENTIFIED,
+};
+
+static OMIT: Profile = Profile {
+    id: "golden.converters.omit",
+    vendor: "golden",
+    fingerprints: &[],
+    exposes: &[],
+    from: &[],
+    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
+    configure: None,
+    omit_optional_params: true,
     support: Support::IDENTIFIED,
 };
 
@@ -33,6 +46,7 @@ static ENHANCED: Profile = Profile {
         COLOR_ENHANCED_TO,
     ],
     configure: None,
+    omit_optional_params: false,
     support: Support::IDENTIFIED,
 };
 
@@ -107,6 +121,27 @@ fn zcl_payloads_match_original_converters() {
                 Command::Property {
                     property: COLOR,
                     value: Value::Color(ColorValue::hs(180.0, 50.0)),
+                },
+            ),
+            "brightness_omit" => (
+                &OMIT,
+                Command::Property {
+                    property: BRIGHTNESS,
+                    value: Value::Int(100),
+                },
+            ),
+            "color_temp_omit" => (
+                &OMIT,
+                Command::Property {
+                    property: COLOR_TEMP,
+                    value: Value::Int(350),
+                },
+            ),
+            "color_xy_omit" => (
+                &OMIT,
+                Command::Property {
+                    property: COLOR,
+                    value: Value::Color(ColorValue::xy(0.5, 0.25)),
                 },
             ),
             "color_enhanced" => (

@@ -81,5 +81,6 @@ pub static SNZB_01P: Profile = Profile {
     to: &[],
     configure: Some(&BATTERY_3600_7200_MV_CONFIGURE),
     // Battery only: the inline button converter stays manual until ported.
+    omit_optional_params: false,
     support: Support::IDENTIFIED.union(Support::DECODED),
 };

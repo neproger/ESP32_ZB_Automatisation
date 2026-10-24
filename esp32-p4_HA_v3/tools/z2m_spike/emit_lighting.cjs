@@ -149,6 +149,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
     const bmax = Number.isFinite(brightness.value_max) ? brightness.value_max : 254;
     const configureReporting = args.configureReporting === true;
     const levelNoOnOff = args.moveToLevelWithOnOffDisable === true;
+    const omitOptions = !!(raw.meta && raw.meta.omitOptionalLevelAndColorParams === true);
     for (const option of [
       args.levelConfig && 'level_config',
       args.effect !== false && args.effect !== undefined && 'effect',
@@ -156,6 +157,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       args.turnsOffAtBrightness1 && 'turns_off_at_brightness_1',
       args.configureReporting && 'configure_reporting',
       args.moveToLevelWithOnOffDisable && 'move_to_level_without_onoff',
+      omitOptions && 'omit_optional_params',
     ]) {
       if (option) noteOption(option);
     }
@@ -169,6 +171,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       ctRange: ct ? [Number(ct.value_min), Number(ct.value_max)] : null,
       configureReporting,
       levelNoOnOff,
+      omitOptions,
       hasColor,
       colorModes,
       enhanced,
@@ -256,6 +259,7 @@ for (const [index, profile] of profiles.entries()) {
       ? 'Some(&DIM_CT_READ)'
       : 'None';
   lines.push(`    configure: ${configure},`);
+  lines.push(`    omit_optional_params: ${profile.omitOptions},`);
   lines.push(
     '    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED).union(Support::PARTIAL),',
   );
@@ -280,6 +284,7 @@ console.log(
       dim_ct: profiles.filter((p) => p.tier === 'dim_ct').length,
       configureReporting: profiles.filter((p) => p.configureReporting).length,
       levelNoOnOff: profiles.filter((p) => p.levelNoOnOff).length,
+      omitOptions: profiles.filter((p) => p.omitOptions).length,
       skipped,
       options,
       bytes: fs.statSync(out).size,

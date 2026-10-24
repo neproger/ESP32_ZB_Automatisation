@@ -124,3 +124,15 @@ ColorTemp were missing `optionsMask/optionsOverride`. They now include them by
 default (Level 5 bytes, ColorTemp 6). `encode_with_options` carries a transition
 and optional options; the default (transition 0, options 0/0) matches ZHC.
 Per-device `omitOptionalLevelAndColorParams` is not wired into profiles yet.
+
+## omitOptionalLevelAndColorParams (implemented)
+
+`Profile.omit_optional_params` is generated from the definition meta. `encode`
+then omits `optionsMask/optionsOverride`; the differential harness covers it:
+
+- brightness omit -> `64 00 00` (3 bytes);
+- color temp omit -> `5e 01 00 00` (4);
+- XY omit -> `00 80 00 40 00 00` (6).
+
+11 generated profiles carry the flag. `encode_with_options` remains the
+low-level command parameter API; behavior modifiers are not folded into it.

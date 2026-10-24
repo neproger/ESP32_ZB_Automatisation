@@ -102,6 +102,9 @@ async function run(name, key, converter, message, definition) {
   const enhancedDef = {
     meta: { supportsHueAndSaturation: true, supportsEnhancedHue: true },
   };
+  const omitDef = {
+    meta: { supportsHueAndSaturation: false, omitOptionalLevelAndColorParams: true },
+  };
   const cases = [
     ['state_on', 'state', tz.on_off, { state: 'ON' }, xyDef],
     ['state_off', 'state', tz.on_off, { state: 'OFF' }, xyDef],
@@ -110,6 +113,9 @@ async function run(name, key, converter, message, definition) {
     ['color_xy', 'color', tz.light_color, { color: { x: 0.5, y: 0.25 } }, xyDef],
     ['color_hs', 'color', tz.light_color, { color: { h: 180, s: 50 } }, hsDef],
     ['color_enhanced', 'color', tz.light_color, { color: { h: 180, s: 50 } }, enhancedDef],
+    ['brightness_omit', 'brightness', tz.light_onoff_brightness, { brightness: 100 }, omitDef],
+    ['color_temp_omit', 'color_temp', tz.light_colortemp, { color_temp: 350 }, omitDef],
+    ['color_xy_omit', 'color', tz.light_color, { color: { x: 0.5, y: 0.25 } }, omitDef],
   ];
   const rows = [];
   for (const [name, key, converter, message, definition] of cases) {

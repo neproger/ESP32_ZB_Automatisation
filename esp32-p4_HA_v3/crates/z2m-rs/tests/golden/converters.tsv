@@ -5,3 +5,6 @@ color_temp	lightingColorCtrl	moveToColorTemp	0x0a	5e0100000000
 color_xy	lightingColorCtrl	moveToColor	0x07	0080004000000000
 color_hs	lightingColorCtrl	moveToHueAndSaturation	0x06	7f7f00000000
 color_enhanced	lightingColorCtrl	enhancedMoveToHueAndSaturation	0x43	00807f00000000
+brightness_omit	genLevelCtrl	moveToLevelWithOnOff	0x04	640000
+color_temp_omit	lightingColorCtrl	moveToColorTemp	0x0a	5e010000
+color_xy_omit	lightingColorCtrl	moveToColor	0x07	008000400000

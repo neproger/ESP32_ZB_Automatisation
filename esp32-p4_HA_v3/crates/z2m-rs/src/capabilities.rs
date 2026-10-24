@@ -357,7 +357,8 @@ mod tests {
         from: DIM_CT_FROM,
         to: DIM_CT_TO,
         configure: Some(&DIM_CT_CONFIGURE),
-        support: Support::IDENTIFIED
+        omit_optional_params: false,
+    support: Support::IDENTIFIED
             .union(Support::DECODED)
             .union(Support::CONTROLLED),
     };
@@ -370,7 +371,8 @@ mod tests {
         from: &[COLOR_FRAME],
         to: &[COLOR_XY_TO, COLOR_HS_TO],
         configure: None,
-        support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+        omit_optional_params: false,
+    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
     };
 
     static ENHANCED_PROFILE: Profile = Profile {
@@ -381,7 +383,8 @@ mod tests {
         from: &[COLOR_FRAME],
         to: &[COLOR_ENHANCED_TO],
         configure: None,
-        support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+        omit_optional_params: false,
+    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
     };
 
     fn color_updates<'a>(profile: &Profile, payload: &'a [u8]) -> Vec<Update> {

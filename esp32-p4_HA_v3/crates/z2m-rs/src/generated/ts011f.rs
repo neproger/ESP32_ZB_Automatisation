@@ -95,6 +95,7 @@ pub static TS011F: Profile = Profile {
     configure: Some(&TS011F_CONFIGURE),
     // Core state/commands/configure work; electrical measurements and options are
     // not generated yet.
+    omit_optional_params: false,
     support: Support::IDENTIFIED
         .union(Support::DECODED)
         .union(Support::CONTROLLED)
