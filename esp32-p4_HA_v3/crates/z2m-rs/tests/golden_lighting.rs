@@ -105,8 +105,8 @@ fn generated_light_identifies_and_encodes_brightness() {
         property: BRIGHTNESS,
         value: Value::Int(100),
     };
-    assert_eq!(encode(found, &command, &mut out), Some(3));
-    assert_eq!(&out[..3], &[100, 0, 0]);
+    assert_eq!(encode(found, &command, &mut out), Some(5));
+    assert_eq!(&out[..5], &[100, 0, 0, 0, 0]);
 }
 #[test]
 fn generated_color_profiles_decode_and_encode() {

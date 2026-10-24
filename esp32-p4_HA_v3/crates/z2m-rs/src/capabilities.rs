@@ -508,14 +508,14 @@ mod tests {
             property: BRIGHTNESS,
             value: Value::Int(100),
         };
-        assert_eq!(encode(&PROFILE, &level, &mut out), Some(3));
-        assert_eq!(&out[..3], &[100, 0, 0]);
+        assert_eq!(encode(&PROFILE, &level, &mut out), Some(5));
+        assert_eq!(&out[..5], &[100, 0, 0, 0, 0]);
 
         let temp = Command::Property {
             property: COLOR_TEMP,
             value: Value::Int(350),
         };
-        assert_eq!(encode(&PROFILE, &temp, &mut out), Some(4));
-        assert_eq!(&out[..4], &[0x5E, 0x01, 0, 0]);
+        assert_eq!(encode(&PROFILE, &temp, &mut out), Some(6));
+        assert_eq!(&out[..6], &[0x5E, 0x01, 0, 0, 0, 0]);
     }
 }

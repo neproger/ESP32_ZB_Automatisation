@@ -477,8 +477,36 @@ pub fn resolve_command(profile: &Profile, command: &Command) -> Option<(u16, u8)
     find_command(profile, command).map(|map| (map.cluster, map.zcl_command))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EncodeOptions {
+    pub transition: u16,
+    /// Z2M sends `optionsMask/optionsOverride` by default; `None` matches
+    /// `omitOptionalLevelAndColorParams`.
+    pub options: Option<(u8, u8)>,
+}
+
+impl Default for EncodeOptions {
+    fn default() -> Self {
+        Self {
+            transition: 0,
+            options: Some((0, 0)),
+        }
+    }
+}
+
 pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<usize> {
+    encode_with_options(profile, command, EncodeOptions::default(), out)
+}
+
+pub fn encode_with_options(
+    profile: &Profile,
+    command: &Command,
+    options: EncodeOptions,
+    out: &mut [u8],
+) -> Option<usize> {
     let map = find_command(profile, command)?;
+    let transition = options.transition.to_le_bytes();
+    let extra = if options.options.is_some() { 2 } else { 0 };
     match map.codec {
         CommandCodec::None => {
             if out.len() < map.args.len() {
@@ -488,20 +516,24 @@ pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<us
             Some(map.args.len())
         }
         CommandCodec::Level => {
-            if out.len() < 3 {
+            let needed = 3 + extra;
+            if out.len() < needed {
                 return None;
             }
             let level = numeric_value(command)?.clamp(0.0, 254.0).round() as u8;
-            out[..3].copy_from_slice(&[level, 0, 0]);
-            Some(3)
+            out[0] = level;
+            out[1..3].copy_from_slice(&transition);
+            Some(with_options(out, 3, options.options))
         }
         CommandCodec::ColorTemp => {
-            if out.len() < 4 {
+            let needed = 4 + extra;
+            if out.len() < needed {
                 return None;
             }
             let mireds = numeric_value(command)?.clamp(0.0, 65535.0).round() as u16;
-            out[..4].copy_from_slice(&[mireds as u8, (mireds >> 8) as u8, 0, 0]);
-            Some(4)
+            out[..2].copy_from_slice(&mireds.to_le_bytes());
+            out[2..4].copy_from_slice(&transition);
+            Some(with_options(out, 4, options.options))
         }
         CommandCodec::ColorXy => {
             let ColorValue::Xy {
@@ -511,22 +543,16 @@ pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<us
             else {
                 return None;
             };
-            if out.len() < 8 {
+            let needed = 6 + extra;
+            if out.len() < needed {
                 return None;
             }
             let x = (x.clamp(0.0, 1.0) * 65535.0).round() as u16;
             let y = (y.clamp(0.0, 1.0) * 65535.0).round() as u16;
-            out[..8].copy_from_slice(&[
-                x as u8,
-                (x >> 8) as u8,
-                y as u8,
-                (y >> 8) as u8,
-                0,
-                0,
-                0,
-                0,
-            ]);
-            Some(8)
+            out[..2].copy_from_slice(&x.to_le_bytes());
+            out[2..4].copy_from_slice(&y.to_le_bytes());
+            out[4..6].copy_from_slice(&transition);
+            Some(with_options(out, 6, options.options))
         }
         CommandCodec::ColorHs | CommandCodec::ColorHsEnhanced => {
             let ColorValue::Hs {
@@ -539,34 +565,42 @@ pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<us
             let hue = hue.clamp(0.0, 360.0);
             let saturation = saturation.clamp(0.0, 100.0);
             if map.codec == CommandCodec::ColorHsEnhanced {
-                if out.len() < 7 {
+                let needed = 5 + extra;
+                if out.len() < needed {
                     return None;
                 }
                 let hue = (hue * 65535.0 / 360.0).round() as u16;
                 let saturation = (saturation * 254.0 / 100.0).round() as u8;
-                out[..7].copy_from_slice(&[
-                    hue as u8,
-                    (hue >> 8) as u8,
-                    saturation,
-                    0,
-                    0,
-                    0,
-                    0,
-                ]);
-                Some(7)
+                out[..2].copy_from_slice(&hue.to_le_bytes());
+                out[2] = saturation;
+                out[3..5].copy_from_slice(&transition);
+                Some(with_options(out, 5, options.options))
             } else {
-                if out.len() < 6 {
+                let needed = 4 + extra;
+                if out.len() < needed {
                     return None;
                 }
                 let hue = (hue * 254.0 / 360.0).round() as u8;
                 let saturation = (saturation * 254.0 / 100.0).round() as u8;
-                out[..6].copy_from_slice(&[hue, saturation, 0, 0, 0, 0]);
-                Some(6)
+                out[0] = hue;
+                out[1] = saturation;
+                out[2..4].copy_from_slice(&transition);
+                Some(with_options(out, 4, options.options))
             }
         }
     }
 }
 
+fn with_options(out: &mut [u8], len: usize, options: Option<(u8, u8)>) -> usize {
+    match options {
+        Some((mask, overrides)) => {
+            out[len] = mask;
+            out[len + 1] = overrides;
+            len + 2
+        }
+        None => len,
+    }
+}
 fn color_value(command: &Command) -> Option<ColorValue> {
     match command {
         Command::Property {
