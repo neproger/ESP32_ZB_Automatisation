@@ -99,6 +99,11 @@ fn main() {
             configure::ensure(&mut executor, eui, short, now_ms());
         }
     }
+    if let Some(count) = option_env!("HA_FORCE_COMPACT") {
+        for _ in 0..count.parse::<u32>().unwrap_or(0) {
+            store::compact_for_test();
+        }
+    }
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)

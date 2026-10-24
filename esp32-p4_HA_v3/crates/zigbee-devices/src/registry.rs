@@ -127,6 +127,14 @@ impl Registry {
         self.table.remove(flash, &ieee.to_le_bytes())
     }
 
+    pub fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), Error> {
+        self.table.compact(flash)
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.table.bank_state()
+    }
+
     pub fn values(&self) -> impl Iterator<Item = &RecordSlot> {
         self.table.iter().map(|view| view.payload)
     }

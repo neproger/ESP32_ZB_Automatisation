@@ -72,7 +72,7 @@ The Rust backend already matches the V2 header and record envelope (magic,
 revision, sizes, CRC, commit marker, SET/META, latest-per-slot, torn tail,
 generation/version). It is currently one bank using the whole partition.
 
-Planned extension, keeping `PersistedTable`'s API:
+Extension implemented, keeping `PersistedTable`'s API:
 
 - `bank_size = capacity / 2`, aligned; bank 0 starts at 0, bank 1 at `bank_size`.
   Existing mstore data lives at offset 0 and stays in bank 0; bank 1 is erased,
@@ -104,3 +104,6 @@ write after a chosen byte count, then reopen the same image:
    then normal appends continue.
 
 Only after these pass, wire the 2-bank backend to `mstore`.
+
+Hardware check: forced compaction moved bank 0/seq 1 -> bank 1/seq 2 and
+back to bank 0/seq 3; both reboots restored entries and `configured_version`.

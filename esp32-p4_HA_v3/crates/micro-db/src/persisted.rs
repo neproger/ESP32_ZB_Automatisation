@@ -216,6 +216,16 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
         Ok(())
     }
 
+    /// Moves the journal to the other bank. RAM handles/slots are unchanged:
+    /// slot, generation and version are copied by the flash backend.
+    pub fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), Error> {
+        self.flash.compact(flash).map_err(Into::into)
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.flash.bank_state()
+    }
+
     pub fn len(&self) -> usize {
         self.table.len()
     }

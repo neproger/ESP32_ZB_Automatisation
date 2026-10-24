@@ -92,8 +92,9 @@ pub fn init() {
             return;
         }
     };
+    let (bank, seq) = registry.bank_state();
     log::info!(
-        "registry ready: mstore={} bytes entries={}",
+        "registry ready: mstore={} bytes entries={} bank={bank} seq={seq}",
         flash.capacity(),
         registry.len()
     );
@@ -180,4 +181,21 @@ pub fn device_addresses() -> ([(u64, u16); CAPACITY], usize) {
         }
     }
     (out, count)
+}
+
+/// Diagnostic hook (kept behind the `HA_FORCE_COMPACT` build flag): moves the
+/// journal to the other bank without touching RAM records.
+pub fn compact_for_test() {
+    let mut flash = EspFlash;
+    let mut guard = REGISTRY.lock().unwrap();
+    let Some(registry) = guard.as_mut() else {
+        return;
+    };
+    match registry.compact(&mut flash) {
+        Ok(()) => {
+            let (bank, seq) = registry.bank_state();
+            log::info!("micro-db: forced compaction bank={bank} seq={seq}");
+        }
+        Err(error) => log::error!("micro-db: forced compaction failed: {error:?}"),
+    }
 }

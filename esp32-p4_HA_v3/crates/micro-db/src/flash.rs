@@ -211,6 +211,10 @@ impl FlashTable {
         HEADER_SIZE + (live + 1) * self.set_len() <= self.bank_size
     }
 
+    pub fn bank_state(&self) -> (usize, u32) {
+        (self.active_bank, self.active_seq)
+    }
+
     pub fn id(&self) -> [u8; 16] {
         self.id
     }
@@ -376,7 +380,7 @@ impl FlashTable {
         Ok(())
     }
 
-    fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
+    pub(crate) fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
         let inactive = 1 - self.active_bank;
         let old_base = self.active_base();
         let new_base = self.bank_base(inactive);
