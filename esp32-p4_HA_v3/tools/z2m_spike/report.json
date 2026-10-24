@@ -1,0 +1,663 @@
+{
+  "zhc": "zigbee-herdsman-converters",
+  "devices": [
+    {
+      "target": "TS011F",
+      "model": "ZMO-606-20A",
+      "vendor": "Zemismart",
+      "file": "zemismart.js",
+      "identified": true,
+      "states": {
+        "identified": true,
+        "decoded": true,
+        "controlled": true,
+        "configure": "fragments"
+      },
+      "counts": {
+        "manualFrom": 0,
+        "manualTo": 0,
+        "fragmentFrom": 8,
+        "fragmentTo": 5,
+        "exposes": 0
+      },
+      "provenance": [
+        {
+          "helper": "modernExtend.identify",
+          "args": [],
+          "children": [],
+          "made": {
+            "exposes": 1,
+            "from": 0,
+            "to": 1,
+            "configure": "undefined"
+          },
+          "detail": {
+            "steps": [],
+            "exposes": [
+              {
+                "type": "enum",
+                "name": "identify",
+                "property": "identify",
+                "values": [
+                  "identify"
+                ]
+              }
+            ],
+            "from": [],
+            "to": [
+              {
+                "key": [
+                  "identify"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "helper": "tuya.tuyaBase",
+          "args": [],
+          "children": [
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "genBasic",
+                {
+                  "name": "genBasic",
+                  "ID": 0,
+                  "attributes": {},
+                  "commands": {
+                    "tuyaSetup": "..."
+                  },
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            },
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "genGroups",
+                {
+                  "name": "genGroups",
+                  "ID": 4,
+                  "attributes": {},
+                  "commands": {
+                    "miboxerSetZones": "..."
+                  },
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            },
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "genOnOff",
+                {
+                  "name": "genOnOff",
+                  "ID": 6,
+                  "attributes": {
+                    "tuyaBacklightSwitch": "...",
+                    "tuyaBacklightMode": "...",
+                    "moesStartUpOnOff": "...",
+                    "tuyaOperationMode": "..."
+                  },
+                  "commands": {
+                    "tuyaCountdown": "...",
+                    "tuyaAction2": "...",
+                    "tuyaAction": "..."
+                  },
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            },
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "genLevelCtrl",
+                {
+                  "name": "genLevelCtrl",
+                  "ID": 8,
+                  "attributes": {},
+                  "commands": {
+                    "moveToLevelTuya": "..."
+                  },
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            },
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "manuSpecificTuya2",
+                {
+                  "name": "manuSpecificTuya2",
+                  "ID": 57346,
+                  "attributes": {
+                    "alarmTemperatureMax": "...",
+                    "alarmTemperatureMin": "...",
+                    "alarmHumidityMax": "...",
+                    "alarmHumidityMin": "...",
+                    "alarmHumidity": "...",
+                    "alarmTemperature": "...",
+                    "unknown": "..."
+                  },
+                  "commands": {},
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            },
+            {
+              "helper": "modernExtend.deviceAddCustomCluster",
+              "args": [
+                "manuSpecificTuya3",
+                {
+                  "name": "manuSpecificTuya3",
+                  "ID": 57345,
+                  "attributes": {
+                    "powerOnBehavior": "...",
+                    "switchMode": "...",
+                    "switchType": "..."
+                  },
+                  "commands": {
+                    "setOptions1": "...",
+                    "setOptions2": "...",
+                    "setOptions3": "..."
+                  },
+                  "commandsResponse": {}
+                }
+              ],
+              "children": [],
+              "made": {
+                "exposes": 0,
+                "from": 0,
+                "to": 0,
+                "configure": "functions:1"
+              },
+              "detail": {
+                "steps": [
+                  "[fn]"
+                ],
+                "exposes": [],
+                "from": [],
+                "to": []
+              }
+            }
+          ],
+          "made": {
+            "exposes": 0,
+            "from": 2,
+            "to": 0,
+            "configure": "functions:8"
+          },
+          "detail": {
+            "steps": [
+              "[fn]",
+              "[fn]",
+              "[fn]",
+              "[fn]",
+              "[fn]",
+              "[fn]",
+              "[fn]",
+              "[fn]"
+            ],
+            "exposes": [],
+            "from": [
+              {
+                "cluster": "manuSpecificTuya",
+                "type": [
+                  "commandMcuSyncTime",
+                  "commandMcuGatewayConnectionStatus",
+                  "commandDataResponse",
+                  "commandDataReport",
+                  "commandActiveStatusReport",
+                  "commandActiveStatusReportAlt"
+                ]
+              },
+              {
+                "cluster": "manuSpecificTuya",
+                "type": [
+                  "commandMcuVersionResponse"
+                ]
+              }
+            ],
+            "to": []
+          }
+        },
+        {
+          "helper": "tuya.tuyaOnOff",
+          "args": {
+            "indicatorMode": true,
+            "onOffCountdown": true,
+            "childLock": true
+          },
+          "children": [],
+          "made": {
+            "exposes": 5,
+            "from": 6,
+            "to": 4,
+            "configure": "functions:1"
+          },
+          "detail": {
+            "steps": [
+              "[fn]"
+            ],
+            "exposes": [
+              {
+                "type": "switch"
+              },
+              {
+                "type": "numeric",
+                "name": "countdown",
+                "property": "countdown"
+              },
+              {
+                "type": "enum",
+                "name": "power_on_behavior",
+                "property": "power_on_behavior",
+                "values": [
+                  "off",
+                  "previous",
+                  "on"
+                ]
+              },
+              {
+                "type": "enum",
+                "name": "indicator_mode",
+                "property": "indicator_mode",
+                "values": [
+                  "off",
+                  "off/on",
+                  "on/off",
+                  "on"
+                ]
+              },
+              {
+                "type": "binary",
+                "name": "child_lock",
+                "property": "child_lock"
+              }
+            ],
+            "from": [
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              },
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              },
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              },
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              },
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              },
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              }
+            ],
+            "to": [
+              {
+                "key": [
+                  "state",
+                  "countdown"
+                ]
+              },
+              {
+                "key": [
+                  "power_on_behavior",
+                  "power_outage_memory"
+                ]
+              },
+              {
+                "key": [
+                  "backlight_mode",
+                  "indicator_mode"
+                ]
+              },
+              {
+                "key": [
+                  "child_lock"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "manual": {
+        "from": [],
+        "to": []
+      }
+    },
+    {
+      "target": "SNZB-01P",
+      "model": "SNZB-01P",
+      "vendor": "SONOFF",
+      "file": "sonoff.js",
+      "identified": true,
+      "states": {
+        "identified": true,
+        "decoded": true,
+        "controlled": true,
+        "configure": "fragments"
+      },
+      "counts": {
+        "manualFrom": 0,
+        "manualTo": 0,
+        "fragmentFrom": 2,
+        "fragmentTo": 1,
+        "exposes": 0
+      },
+      "provenance": [
+        {
+          "helper": "inline",
+          "args": null,
+          "children": [],
+          "made": {
+            "exposes": 1,
+            "from": 1,
+            "to": 0,
+            "configure": "functions:1"
+          },
+          "inlineKeys": [
+            "exposes",
+            "fromZigbee",
+            "configure",
+            "isModernExtend"
+          ],
+          "detail": {
+            "steps": [
+              "[fn]"
+            ],
+            "exposes": [
+              {
+                "type": "enum",
+                "name": "action",
+                "property": "action",
+                "values": [
+                  "single",
+                  "double",
+                  "long"
+                ]
+              }
+            ],
+            "from": [
+              {
+                "cluster": "genOnOff",
+                "type": [
+                  "commandOn",
+                  "commandOff",
+                  "commandToggle"
+                ]
+              }
+            ],
+            "to": []
+          }
+        },
+        {
+          "helper": "modernExtend.battery",
+          "args": {
+            "percentageReportingConfig": {
+              "min": 3600,
+              "max": 7200,
+              "change": 0
+            },
+            "voltage": true,
+            "voltageReporting": true,
+            "voltageReportingConfig": {
+              "min": 3600,
+              "max": 7200,
+              "change": 0
+            }
+          },
+          "children": [],
+          "made": {
+            "exposes": 2,
+            "from": 1,
+            "to": 1,
+            "configure": "functions:3"
+          },
+          "detail": {
+            "steps": [
+              "[fn]",
+              "[fn]",
+              "[fn]"
+            ],
+            "exposes": [
+              {
+                "type": "numeric",
+                "name": "battery",
+                "property": "battery"
+              },
+              {
+                "type": "numeric",
+                "name": "voltage",
+                "property": "voltage"
+              }
+            ],
+            "from": [
+              {
+                "cluster": "genPowerCfg",
+                "type": [
+                  "attributeReport",
+                  "readResponse"
+                ]
+              }
+            ],
+            "to": [
+              {
+                "key": [
+                  "battery",
+                  "voltage"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "manual": {
+        "from": [],
+        "to": []
+      }
+    },
+    {
+      "target": "WXKG11LM",
+      "model": "WXKG11LM",
+      "vendor": "Aqara",
+      "file": "lumi.js",
+      "identified": true,
+      "states": {
+        "identified": true,
+        "decoded": true,
+        "controlled": true,
+        "configure": "fragments"
+      },
+      "counts": {
+        "manualFrom": 3,
+        "manualTo": 0,
+        "fragmentFrom": 0,
+        "fragmentTo": 1,
+        "exposes": 5
+      },
+      "provenance": [
+        {
+          "helper": "modernExtend.quirkCheckinInterval",
+          "args": "1_HOUR",
+          "children": [],
+          "made": {
+            "exposes": 0,
+            "from": 0,
+            "to": 0,
+            "configure": "functions:1"
+          },
+          "detail": {
+            "steps": [
+              "[fn]"
+            ],
+            "exposes": [],
+            "from": [],
+            "to": []
+          }
+        },
+        {
+          "helper": "modernExtend.identify",
+          "args": {
+            "isSleepy": true
+          },
+          "children": [],
+          "made": {
+            "exposes": 1,
+            "from": 0,
+            "to": 1,
+            "configure": "undefined"
+          },
+          "detail": {
+            "steps": [],
+            "exposes": [
+              {
+                "type": "enum",
+                "name": "identify",
+                "property": "identify",
+                "values": [
+                  "identify"
+                ]
+              }
+            ],
+            "from": [],
+            "to": [
+              {
+                "key": [
+                  "identify"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "manual": {
+        "from": [
+          {
+            "cluster": "genMultistateInput",
+            "type": [
+              "attributeReport",
+              "readResponse"
+            ]
+          },
+          {
+            "cluster": "genOnOff",
+            "type": [
+              "attributeReport"
+            ]
+          },
+          {
+            "cluster": "genBasic",
+            "type": [
+              "attributeReport",
+              "readResponse"
+            ]
+          }
+        ],
+        "to": []
+      }
+    }
+  ]
+}

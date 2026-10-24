@@ -14,6 +14,10 @@
 //! for fixed arguments. Tuya DP codecs, scaling variants and the configure state
 //! machine land with the devices that need them; the contracts are already here.
 
+mod generated;
+
+pub use generated::*;
+
 pub const MAX_UPDATES: usize = 8;
 
 pub type DeviceKey = [u8; 8];
@@ -21,6 +25,15 @@ pub type DeviceKey = [u8; 8];
 /// Opaque property id in the z2m-rs namespace (generator-assigned, stable).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PropertyId(pub u32);
+
+/// Stable property ids used by generated profiles and golden tests.
+pub mod properties {
+    use super::PropertyId;
+
+    pub const BATTERY: PropertyId = PropertyId(1);
+    pub const VOLTAGE: PropertyId = PropertyId(2);
+    pub const STATE: PropertyId = PropertyId(3);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
@@ -44,6 +57,7 @@ pub enum Unit {
     Celsius,
     Percent,
     Volt,
+    MilliVolt,
     Lux,
     Minutes,
 }
@@ -117,6 +131,8 @@ pub struct AttributeRule {
     pub kind: AttrType,
     pub property: PropertyId,
     pub scale: Scale,
+    /// Z2M often ignores a sentinel value (e.g. 255 = unknown for battery).
+    pub skip: Option<i64>,
 }
 
 pub enum Converter {
@@ -188,6 +204,8 @@ pub struct RawZcl<'a> {
     pub endpoint: u8,
     pub cluster: u16,
     pub command: u8,
+    /// Attribute id for foundation Report/ReadResponse frames; None for commands.
+    pub attribute: Option<u16>,
     pub payload: &'a [u8],
 }
 
@@ -246,6 +264,26 @@ pub struct ConfigurePlan {
     pub retries: u8,
 }
 
+/// Coverage bitmask: identified -> decoded -> controlled; partial helpers set only the covered bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Support(u8);
+
+impl Support {
+    pub const IDENTIFIED: Self = Self(1);
+    pub const DECODED: Self = Self(2);
+    pub const CONTROLLED: Self = Self(4);
+    /// Some helper options/converter rules are not generated (reported explicitly).
+    pub const PARTIAL: Self = Self(8);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
 pub struct Profile {
     pub id: &'static str,
     pub vendor: &'static str,
@@ -254,9 +292,10 @@ pub struct Profile {
     pub from: &'static [Converter],
     pub to: &'static [CommandMap],
     pub configure: Option<&'static ConfigurePlan>,
+    pub support: Support,
 }
 
-pub static PROFILES: &[&Profile] = &[&TUYA_TS0041];
+pub static PROFILES: &[&Profile] = &[&TUYA_TS0041, &SNZB_01P, &TS011F];
 
 pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
     PROFILES.iter().copied().find(|profile| {
@@ -279,12 +318,14 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
     for converter in profile.from {
         match converter {
             Converter::Attribute(rule) => {
-                if event.cluster == rule.cluster {
-                    if let Some(value) = read_value(rule.kind, event.payload) {
-                        let value = scale_value(value, rule.scale);
+                if event.cluster == rule.cluster && event.attribute == Some(rule.attribute) {
+                    if let Some((raw, value)) = read_raw(rule.kind, event.payload) {
+                        if rule.skip == Some(raw) {
+                            continue;
+                        }
                         decoded.push(Update::Property {
                             property: rule.property,
-                            value,
+                            value: scale_value(value, rule.scale),
                         });
                     }
                 }
@@ -315,8 +356,21 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
 }
 
 /// `toZigbee` for fixed-argument commands.
+pub fn resolve_command(profile: &Profile, command: &Command) -> Option<(u16, u8)> {
+    find_command(profile, command).map(|map| (map.cluster, map.zcl_command))
+}
+
 pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<usize> {
-    let map = profile.to.iter().find(|map| match (command, &map.command) {
+    let map = find_command(profile, command)?;
+    if out.len() < map.args.len() {
+        return None;
+    }
+    out[..map.args.len()].copy_from_slice(map.args);
+    Some(map.args.len())
+}
+
+fn find_command<'a>(profile: &'a Profile, command: &Command) -> Option<&'a CommandMap> {
+    profile.to.iter().find(|map| match (command, &map.command) {
         (
             Command::Property { property, value },
             Command::Property {
@@ -326,24 +380,40 @@ pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<us
         ) => property == mapped && value == mapped_value,
         (Command::Action(action), Command::Action(mapped)) => action == mapped,
         _ => false,
-    })?;
-    if out.len() < map.args.len() {
-        return None;
-    }
-    out[..map.args.len()].copy_from_slice(map.args);
-    Some(map.args.len())
+    })
 }
 
-fn read_value(kind: AttrType, payload: &[u8]) -> Option<Value> {
+fn read_raw(kind: AttrType, payload: &[u8]) -> Option<(i64, Value)> {
     Some(match kind {
-        AttrType::Bool => Value::Bool(*payload.first()? != 0),
-        AttrType::Uint8 | AttrType::Enum8 => Value::Int(i32::from(*payload.first()?)),
-        AttrType::Int8 => Value::Int(i32::from(*payload.first()? as i8)),
-        AttrType::Uint16 => Value::Int(i32::from(u16::from_le_bytes(words(payload)?))),
-        AttrType::Int16 => Value::Int(i32::from(i16::from_le_bytes(words(payload)?))),
-        AttrType::Uint32 => Value::Uint(u32::from_le_bytes(quads(payload)?)),
-        AttrType::Int32 => Value::Int(i32::from_le_bytes(quads(payload)?)),
-        AttrType::Float32 => Value::Float(f32::from_le_bytes(quads(payload)?)),
+        AttrType::Bool => {
+            let raw = *payload.first()?;
+            (i64::from(raw), Value::Bool(raw != 0))
+        }
+        AttrType::Uint8 | AttrType::Enum8 => {
+            let raw = *payload.first()?;
+            (i64::from(raw), Value::Int(i32::from(raw)))
+        }
+        AttrType::Int8 => {
+            let raw = *payload.first()? as i8;
+            (i64::from(raw), Value::Int(i32::from(raw)))
+        }
+        AttrType::Uint16 => {
+            let raw = u16::from_le_bytes(words(payload)?);
+            (i64::from(raw), Value::Int(i32::from(raw)))
+        }
+        AttrType::Int16 => {
+            let raw = i16::from_le_bytes(words(payload)?);
+            (i64::from(raw), Value::Int(i32::from(raw)))
+        }
+        AttrType::Uint32 => {
+            let raw = u32::from_le_bytes(quads(payload)?);
+            (i64::from(raw), Value::Uint(raw))
+        }
+        AttrType::Int32 => {
+            let raw = i32::from_le_bytes(quads(payload)?);
+            (i64::from(raw), Value::Int(raw))
+        }
+        AttrType::Float32 => (0, Value::Float(f32::from_le_bytes(quads(payload)?))),
     })
 }
 
@@ -383,6 +453,7 @@ pub static TUYA_TS0041: Profile = Profile {
         Expose::Action("double"),
         Expose::Action("hold"),
     ],
+    support: Support::IDENTIFIED.union(Support::DECODED),
     from: &[Converter::Command {
         cluster: 0x0006,
         command: 0xFD,
@@ -406,6 +477,7 @@ mod tests {
             endpoint: 1,
             cluster,
             command,
+            attribute: None,
             payload,
         }
     }
@@ -460,6 +532,7 @@ mod tests {
             kind: AttrType::Int16,
             property: PropertyId(7),
             scale: Scale { mul: 1, div: 100 },
+            skip: None,
         })];
         static PROFILE: Profile = Profile {
             id: "test.sensor",
@@ -469,8 +542,12 @@ mod tests {
             from: FROM,
             to: &[],
             configure: None,
+            support: Support::IDENTIFIED,
         };
-        let decoded = decode(&PROFILE, &event(0x0402, 0x0A, &(-512i16).to_le_bytes())).unwrap();
+        let bytes = (-512i16).to_le_bytes();
+        let mut ev = event(0x0402, 0x0A, &bytes);
+        ev.attribute = Some(0x0000);
+        let decoded = decode(&PROFILE, &ev).unwrap();
         assert_eq!(
             decoded.updates().copied().collect::<Vec<_>>(),
             vec![Update::Property {
@@ -499,6 +576,7 @@ mod tests {
             from: &[],
             to: TO,
             configure: None,
+            support: Support::IDENTIFIED,
         };
         let mut out = [0u8; 8];
         let len = encode(

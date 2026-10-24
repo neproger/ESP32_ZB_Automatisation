@@ -57,6 +57,7 @@ impl DeviceAdapter for TuyaButton {
             endpoint: event.endpoint,
             cluster: event.cluster,
             command: event.command,
+            attribute: None,
             payload: event.payload,
         };
         let decoded = decode(&z2m_rs::TUYA_TS0041, &raw)?;
