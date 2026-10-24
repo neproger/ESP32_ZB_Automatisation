@@ -93,8 +93,9 @@ static sys_error_t create_coordinator_device(void)
 }
 
 /*
- * Spinel-UART к C6 с прошивкой ot_rcp (standalone RCP, без esp_hosted). Пины P4
- * GPIO29(TX)/GPIO30(RX) через JP1 — те же, что раньше для spinel.
+ * Spinel-UART к C6 с прошивкой ot_rcp (голое 802.15.4-радио, стек — на P4).
+ * Внутренние линии платы: P4 GPIO14(TX) → C6 GPIO20(RX), P4 GPIO15(RX) ← C6
+ * GPIO21(TX), 460800 бод. Внешние перемычки не нужны.
  */
 static void radio_uart_config(esp_zigbee_config_t *config)
 {

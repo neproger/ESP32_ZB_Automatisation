@@ -1,6 +1,7 @@
 # Home Automation V3 — архитектурный бриф
 
-Draft 0.1 · 24 октября 2026 · Концепция, не утверждённая спецификация
+Draft 0.2 · 24 октября 2026 · Концепция, не утверждённая спецификация
+(0.2: зафиксирована аппаратная схема P4 Coordinator + C6 RCP)
 
 ## 1. Видение
 
@@ -13,7 +14,7 @@ HA V3 не является портом Home Assistant. Не требуется
 - Основная прикладная логика на Rust, включая async/await.
 - Zigbee-модуль с независимым API, не привязанный к MQTT, UI, Domain Store или ESP32.
 - Повторное использование моделей устройств, fingerprints и конвертерных подходов Zigbee2MQTT/ZHA с измеримым покрытием.
-- ESP32-P4 выполняет прикладную логику и интерпретацию Zigbee; ESP32-C6 выполняет радио и низкоуровневые сетевые задачи (предварительное решение).
+- ESP32-P4 выполняет прикладную логику, Zigbee Coordinator и весь Zigbee-стек; ESP32-C6 работает как RCP — только радио (решено, см. §4).
 - Сохранить принципы V2: команды — намерения, события — факты, Domain Store — источник подтверждённого состояния, Domain Delta — уведомление о совершённом изменении.
 - MicroDB — универсальное хранилище без знаний о Zigbee и UI.
 - Возможность тестировать переносимое ядро на ПК без прошивки ESP32.
@@ -27,22 +28,30 @@ HA V3 не является портом Home Assistant. Не требуется
 - Переписывание всех уровней Zigbee (MAC/NWK/APS/security) на Rust в первой версии.
 - Обещание 100% совместимости со всем каталогом Z2M после импорта fingerprints/exposes.
 
-## 4. Аппаратная модель
+## 4. Аппаратная модель (зафиксировано)
 
 ```text
-ESP32-P4: HA V3 (Rust)
+ESP32-P4: HA V3 (Rust) + Zigbee Coordinator
   ├─ Domain Store / Automation / UI / MicroDB
-  ├─ Zigbee integration adapter
-  └─ Zigbee Rust engine: interview, ZCL, catalog, converters
-               │
-       async transport (протокол ещё выбрать)
-               │
-ESP32-C6: Zigbee coordinator / stack / 802.15.4 radio
+  ├─ Zigbee integration adapter (Rust)
+  └─ Zigbee engine: interview, ZCL, catalog, converters
+       └─ Espressif Zigbee SDK (C) через FFI
+               │  Spinel, UART1, 460800
+               │  P4 GPIO14(TX)→C6 GPIO20(RX)
+               │  P4 GPIO15(RX)←C6 GPIO21(TX)
+ESP32-C6: ot_rcp — только IEEE 802.15.4 радио
                │
        Zigbee devices
 ```
 
-C6 может использовать Espressif Zigbee SDK и C/Rust FFI. Приоритет — работающее, поддерживаемое разделение по слоям. Альтернатива с RCP и переносом host stack на P4 требует отдельного исследования; это не утверждённое решение. Нужно проверить доступность нужных ZDO/ZCL операций и полных событий через выбранный интерфейс C6↔P4.
+Схема уже работает в V2 и фиксируется для V3: координатор и весь Zigbee-стек
+(esp-zigbee-lib/SDK) живут на P4, C6 прошит `ot_rcp` (голое 802.15.4-радио) и
+общается по внутренней UART/Spinel; внешние перемычки не нужны. Отдельный
+транспорт P4↔C6 не проектируем — используем существующий канал.
+
+Следствие для Rust: собственный NWK/APS/security/ZDO не пишем. Rust-слой V3
+работает поверх существующего SDK через FFI (interview, matching, ZCL-обвязка,
+конвертеры, каталог), а host-тесты идут на fake-координаторе.
 
 ## 5. Логические модули
 
@@ -51,8 +60,8 @@ ha-v3/
   crates/
     zigbee-core/        # протокол приложения, interview, ZCL, network abstractions
     zigbee-devices/     # fingerprints, device definitions, converters, Tuya
-    zigbee-transport/   # абстракция общения с координатором
-    zigbee-esp/         # ESP32-C6 / ESP-IDF адаптер
+    zigbee-transport/   # абстракция координатора (FFI + fake для host-тестов)
+    zigbee-esp/         # P4: ESP-IDF/FFI-адаптер к esp-zigbee-lib (SDK — C)
     domain/             # доменная модель, commands, confirmed state, delta
     micro-db/           # универсальное embedded-хранилище
     automation/         # правила и реакции на события
@@ -136,7 +145,7 @@ Rust execution stack для P4 требует отдельного выбора/
 
 ## 12. Открытые решения
 
-1. C6 — полноценный coordinator с SDK или RCP; какой API доступен P4.
+1. ~~C6 — полноценный coordinator с SDK или RCP~~ — решено: P4 — координатор и стек, C6 — `ot_rcp` (802.15.4) по UART/Spinel (§4).
 2. Rust на P4 — ESP-IDF/std или no_std/Embassy, интеграция с FFI.
 3. Формат транспорта P4↔C6 и его гарантии при рестарте/потере пакетов.
 4. Типовая схема значений/capabilities для domain и конвертеров.
