@@ -83,6 +83,17 @@ pub enum RequestKind {
         payload: Payload,
         expect: Expect,
     },
+    /// Read one attribute; the response is matched as a normal ZCL response.
+    ReadAttributes { cluster: u16, attribute: u16 },
+    /// Configure one reporting record; response 0x07 carries the per-record status.
+    ConfigureReporting {
+        cluster: u16,
+        attribute: u16,
+        attribute_type: u8,
+        min: u16,
+        max: u16,
+        change: u8,
+    },
     /// Completed by the SDK ZDO callback; no TSN waiter is used.
     ZdoBind { cluster: u16 },
 }
@@ -323,6 +334,8 @@ impl Executor {
 
         let expect = match self.ops[index].as_ref().map(|op| op.request.kind) {
             Some(RequestKind::Zcl { expect, .. }) => expect,
+            Some(RequestKind::ReadAttributes { .. }) => Expect::ZclResponse { command: 0x01 },
+            Some(RequestKind::ConfigureReporting { .. }) => Expect::ZclResponse { command: 0x07 },
             Some(RequestKind::ZdoBind { .. }) => {
                 let op = self.ops[index].as_mut().unwrap();
                 op.status = Status::Acknowledged;
@@ -408,6 +421,8 @@ impl Executor {
             RequestKind::Zcl {
                 cluster, expect, ..
             } => (cluster, expect),
+            RequestKind::ReadAttributes { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x01 }),
+            RequestKind::ConfigureReporting { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x07 }),
             RequestKind::ZdoBind { .. } => return false,
         };
         let Event::ZclResponse {

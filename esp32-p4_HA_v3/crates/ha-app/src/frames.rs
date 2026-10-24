@@ -16,6 +16,7 @@ const FRAME_CAPACITY: usize = 160;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameMeta {
     pub src_ext: u64,
+    pub src_short: u16,
     pub cluster: u16,
     pub manuf_code: u16,
     pub src_ep: u8,
@@ -79,6 +80,11 @@ impl Inbox {
 }
 
 static INBOX: Mutex<Inbox> = Mutex::new(Inbox::new());
+static LAST_DEVICE: Mutex<Option<(u64, u16)>> = Mutex::new(None);
+
+pub fn last_device() -> Option<(u64, u16)> {
+    *LAST_DEVICE.lock().unwrap()
+}
 
 /// Called from the C shim inside the Zigbee callback. Copies, never decodes.
 pub unsafe extern "C" fn ha_frame_received(meta: *const FrameMeta, data: *const u8, len: u16) {
@@ -107,6 +113,10 @@ pub fn process_pending() {
     let Some((meta, frame, dropped)) = item else {
         return;
     };
+
+    if meta.src_ext != 0 {
+        *LAST_DEVICE.lock().unwrap() = Some((meta.src_ext, meta.src_short));
+    }
 
     match frame.parse() {
         Ok(view) => {

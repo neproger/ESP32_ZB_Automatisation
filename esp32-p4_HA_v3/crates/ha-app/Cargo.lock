@@ -776,6 +776,7 @@ dependencies = [
  "log",
  "z2m-rs",
  "zigbee-devices",
+ "zigbee-exec",
  "zigbee-frames",
 ]
 
@@ -1784,6 +1785,10 @@ version = "0.1.0"
 dependencies = [
  "z2m-rs",
 ]
+
+[[package]]
+name = "zigbee-exec"
+version = "0.1.0"
 
 [[package]]
 name = "zigbee-frames"

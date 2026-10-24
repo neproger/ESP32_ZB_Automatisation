@@ -16,6 +16,7 @@ use std::time::Duration;
 use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
 use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
 
+mod exec;
 mod frames;
 mod web;
 
@@ -83,6 +84,10 @@ fn main() {
         panic!("zigbee stack did not start");
     }
     frames::install();
+    exec::install();
+    let mut executor = Box::new(zigbee_exec::Executor::new());
+    let mut transport = exec::EspTransport;
+    let mut config: Option<exec::ConfigRun> = None;
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
@@ -101,6 +106,21 @@ fn main() {
             handle_event(&mut domain, &event, &delta_rx);
         }
         frames::process_pending();
+        if config.is_none() {
+            if let Some(device) = frames::last_device() {
+                config = Some(exec::ConfigRun::start(&mut executor, device, now_ms()));
+            }
+        }
+        executor.tick(&mut transport, now_ms());
+        while let Some(result) = executor.take_result() {
+            log::info!("exec op={} status={:?}", result.id, result.status);
+            if let Some(run) = &mut config {
+                run.on_result(result);
+            }
+        }
+        if let Some(run) = &mut config {
+            run.tick(&mut executor, now_ms());
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -199,4 +219,7 @@ fn start_wifi() {
         std::thread::sleep(Duration::from_millis(500));
     }
     log::warn!("wifi: no IPv4 after 60 s");
+}
+fn now_ms() -> u64 {
+    (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }

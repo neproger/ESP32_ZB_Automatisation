@@ -17,6 +17,7 @@
 #include "ezbee/app_signals.h"
 #include "ezbee/bdb.h"
 #include "ezbee/nwk.h"
+#include "ezbee/zcl/cluster/on_off.h"
 #include "ezbee/zcl/cluster/on_off_desc.h"
 #include "ezbee/zcl/cluster/power_config_desc.h"
 #include "ezbee/zcl/zcl_core.h"
@@ -262,6 +263,7 @@ static void uart_config(esp_zigbee_config_t *config)
 /* --- Attribute Reports -> Rust sink --------------------------------------- */
 typedef struct {
     uint64_t src_ext;
+    uint16_t src_short;
     uint16_t cluster;
     uint16_t manuf_code;
     uint8_t src_ep;
@@ -340,7 +342,9 @@ static void forward_report(const ezb_zcl_cmd_report_attr_message_t *report)
     meta.rssi = header->rssi;
     if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
         meta.src_ext = header->src_addr.u.extended_addr.u64;
+        (void)ezb_address_short_by_extended(&header->src_addr.u.extended_addr, &meta.src_short);
     } else if (header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+        meta.src_short = header->src_addr.u.short_addr;
         ezb_extaddr_t uid = {0};
         if (ezb_address_extended_by_short(header->src_addr.u.short_addr, &uid) == EZB_ERR_NONE) {
             meta.src_ext = uid.u64;
@@ -349,14 +353,215 @@ static void forward_report(const ezb_zcl_cmd_report_attr_message_t *report)
     s_frame_sink(&meta, payload, len);
 }
 
-static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
+/* --- Request executor bridge (sends + confirmations) ---------------------- */
+typedef void (*zb_exec_confirm_t)(uint32_t op, uint8_t tsn, uint8_t success);
+typedef void (*zb_exec_response_t)(uint16_t src_short, uint8_t src_ep, uint16_t cluster,
+                                   uint8_t command, uint8_t tsn, int16_t rsp_to_cmd,
+                                   int16_t status);
+typedef void (*zb_exec_zdo_t)(uint32_t op, uint8_t success);
+
+static zb_exec_confirm_t s_exec_confirm;
+static zb_exec_response_t s_exec_response;
+static zb_exec_zdo_t s_exec_zdo;
+
+void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo)
 {
-    if (callback_id != EZB_ZCL_CORE_REPORT_ATTR_CB_ID || message == NULL) {
+    s_exec_confirm = confirm;
+    s_exec_response = response;
+    s_exec_zdo = zdo;
+}
+
+static void exec_confirm_cb(ezb_af_user_cnf_t *cnf, void *user_ctx)
+{
+    if (s_exec_confirm != NULL && cnf != NULL) {
+        s_exec_confirm((uint32_t)(uintptr_t)user_ctx, cnf->tsn, cnf->status == 0 ? 1 : 0);
+    }
+}
+
+static void exec_set_addr(ezb_address_t *addr, uint64_t eui64, uint16_t short_addr)
+{
+    if (eui64 != 0) {
+        addr->addr_mode = EZB_ADDR_MODE_EXT;
+        addr->u.extended_addr.u64 = eui64;
+    } else {
+        addr->addr_mode = EZB_ADDR_MODE_SHORT;
+        addr->u.short_addr = short_addr;
+    }
+}
+
+static void exec_notify_response(const ezb_zcl_cmd_hdr_t *header, uint16_t cluster,
+                                 uint8_t command, int16_t rsp_to_cmd, int16_t status)
+{
+    if (s_exec_response == NULL || header == NULL) {
         return;
     }
-    ezb_zcl_cmd_report_attr_message_t *report = message;
-    report->out.result = EZB_ZCL_STATUS_SUCCESS;
-    forward_report(report);
+    uint16_t short_addr = 0;
+    if (header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+        short_addr = header->src_addr.u.short_addr;
+    } else if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
+        (void)ezb_address_short_by_extended(&header->src_addr.u.extended_addr, &short_addr);
+    }
+    s_exec_response(short_addr, header->src_ep, cluster, command, header->tsn, rsp_to_cmd,
+                    status);
+}
+
+int zb_exec_read(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint16_t cluster,
+                 uint16_t attr)
+{
+    uint16_t attrs[1] = {attr};
+    ezb_zcl_read_attr_cmd_t req = {0};
+    exec_set_addr(&req.cmd_ctrl.dst_addr, eui64, short_addr);
+    req.cmd_ctrl.dst_ep = ep;
+    req.cmd_ctrl.src_ep = POC_ENDPOINT;
+    req.cmd_ctrl.cluster_id = cluster;
+    req.cmd_ctrl.manuf_code = 0; /* standard profile */
+    req.cmd_ctrl.cnf_ctx.cb = exec_confirm_cb;
+    req.cmd_ctrl.cnf_ctx.user_ctx = (void *)(uintptr_t)op;
+    req.payload.attr_number = 1;
+    req.payload.attr_field = attrs;
+
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
+    }
+    const ezb_err_t err = ezb_zcl_read_attr_cmd_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint8_t on)
+{
+    ezb_zcl_on_off_cmd_t req = {0};
+    exec_set_addr(&req.cmd_ctrl.dst_addr, eui64, short_addr);
+    req.cmd_ctrl.dst_ep = ep;
+    req.cmd_ctrl.src_ep = POC_ENDPOINT;
+    req.cmd_ctrl.dis_default_rsp = false;
+    req.cmd_ctrl.cnf_ctx.cb = exec_confirm_cb;
+    req.cmd_ctrl.cnf_ctx.user_ctx = (void *)(uintptr_t)op;
+
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
+    }
+    const ezb_err_t err =
+        on ? ezb_zcl_on_off_on_cmd_req(&req) : ezb_zcl_on_off_off_cmd_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+int zb_exec_config_report(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
+                          uint16_t cluster, uint16_t attr, uint8_t attr_type, uint16_t min,
+                          uint16_t max, uint8_t change)
+{
+    ezb_zcl_config_report_record_t record = {0};
+    record.direction = EZB_ZCL_REPORTING_SEND;
+    record.attr_id = attr;
+    record.client.attr_type = attr_type;
+    record.client.min_interval = min;
+    record.client.max_interval = max;
+    record.client.reportable_change.u8 = change;
+
+    ezb_zcl_config_report_cmd_t req = {0};
+    exec_set_addr(&req.cmd_ctrl.dst_addr, eui64, short_addr);
+    req.cmd_ctrl.dst_ep = ep;
+    req.cmd_ctrl.src_ep = POC_ENDPOINT;
+    req.cmd_ctrl.cluster_id = cluster;
+    req.cmd_ctrl.manuf_code = 0;
+    req.cmd_ctrl.cnf_ctx.cb = exec_confirm_cb;
+    req.cmd_ctrl.cnf_ctx.user_ctx = (void *)(uintptr_t)op;
+    req.payload.record_number = 1;
+    req.payload.record_field = &record;
+
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
+    }
+    const ezb_err_t err = ezb_zcl_config_report_cmd_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+static void exec_bind_cb(const ezb_zdp_bind_req_result_t *result, void *user_ctx)
+{
+    const bool ok = result != NULL && result->error == EZB_ERR_NONE &&
+                    result->rsp != NULL && result->rsp->status == EZB_ZDP_STATUS_SUCCESS;
+    if (s_exec_zdo != NULL) {
+        s_exec_zdo((uint32_t)(uintptr_t)user_ctx, ok ? 1 : 0);
+    }
+}
+
+int zb_exec_bind(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t src_ep,
+                 uint16_t cluster, uint8_t dst_ep)
+{
+    ezb_extaddr_t coordinator = {0};
+    ezb_nwk_get_extended_address(&coordinator);
+    if (short_addr == 0 && eui64 != 0) {
+        ezb_extaddr_t device = {.u64 = eui64};
+        (void)ezb_address_short_by_extended(&device, &short_addr);
+    }
+    if (short_addr == 0) {
+        return -1;
+    }
+
+    ezb_zdo_bind_req_t req = {0};
+    req.dst_nwk_addr = short_addr;
+    req.field.src_addr.u64 = eui64;
+    req.field.src_ep = src_ep;
+    req.field.cluster_id = cluster;
+    req.field.dst_addr_mode = EZB_ADDR_MODE_EXT;
+    req.field.dst_addr.extended_addr = coordinator;
+    req.field.dst_ep = dst_ep;
+    req.cb = exec_bind_cb;
+    req.user_ctx = (void *)(uintptr_t)op;
+
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
+    }
+    const ezb_err_t err = ezb_zdo_bind_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+/* --- end request executor bridge ----------------------------------------- */
+
+static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
+{
+    if (message == NULL) {
+        return;
+    }
+    switch (callback_id) {
+    case EZB_ZCL_CORE_REPORT_ATTR_CB_ID: {
+        ezb_zcl_cmd_report_attr_message_t *report = message;
+        report->out.result = EZB_ZCL_STATUS_SUCCESS;
+        forward_report(report);
+        break;
+    }
+    case EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID: {
+        ezb_zcl_cmd_read_attr_rsp_message_t *rsp = message;
+        rsp->out.result = EZB_ZCL_STATUS_SUCCESS;
+        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, -1);
+        break;
+    }
+    case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
+        ezb_zcl_cmd_default_rsp_message_t *rsp = message;
+        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x0B,
+                             (int16_t)rsp->in.rsp_to_cmd, (int16_t)rsp->in.status_code);
+        break;
+    }
+    case EZB_ZCL_CORE_CONFIG_REPORT_RSP_CB_ID: {
+        ezb_zcl_cmd_config_report_rsp_message_t *rsp = message;
+        rsp->out.result = EZB_ZCL_STATUS_SUCCESS;
+        int16_t status = 0;
+        for (const ezb_zcl_config_report_rsp_variable_t *var = rsp->in.variables; var != NULL;
+             var = var->next) {
+            if (var->status != EZB_ZCL_STATUS_SUCCESS) {
+                status = 1;
+                break;
+            }
+        }
+        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x07, -1, status);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
