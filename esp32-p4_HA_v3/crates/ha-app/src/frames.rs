@@ -121,6 +121,14 @@ pub fn process_pending() {
     match frame.parse() {
         Ok(view) => {
             let attributes = view.attributes().count();
+            if meta.cluster == 0x0006 {
+                for attr in view.attributes() {
+                    log::debug!(
+                        "attr 0x{:04x} type=0x{:02x} value={:02x?}",
+                        attr.id, attr.zcl_type, attr.value
+                    );
+                }
+            }
             if meta.cluster != 0x0001 {
                 log::info!(
                     "attr frame eui64={:016x} ep={} cluster=0x{:04x} attrs={} dropped={} (no profile)",

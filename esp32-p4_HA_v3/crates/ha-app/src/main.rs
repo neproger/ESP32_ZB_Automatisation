@@ -14,7 +14,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
-use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
 
 mod exec;
 mod frames;
@@ -106,8 +105,8 @@ fn main() {
     loop {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
-            handle_event(&mut domain, &event, &delta_rx);
             ensure_interview(&mut executor, event.extended_addr, event.short_addr);
+            handle_event(&mut domain, &event, &delta_rx);
         }
         frames::process_pending();
         if let Some(device) = frames::last_device() {
@@ -123,29 +122,45 @@ fn main() {
 
 fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<Fact>) {
     let payload_len = usize::from(event.payload_len.min(8));
-    let raw = RawZclEvent {
-        eui64: event.extended_addr,
+    let Some(profile) = interview::selected_profile() else {
+        log::info!(
+            "ignored eui64={:016x} cluster=0x{:04x} cmd=0x{:02x} (no profile yet)",
+            event.extended_addr,
+            event.cluster_id,
+            event.command_id
+        );
+        return;
+    };
+    let raw = z2m_rs::RawZcl {
+        device: event.extended_addr.to_be_bytes(),
         endpoint: event.endpoint,
         cluster: event.cluster_id,
         command: event.command_id,
+        attribute: None,
         payload: &event.payload[..payload_len],
     };
-    let update = match TuyaButton.decode(&raw) {
-        Some(update) => update,
-        None => {
-            log::info!(
-                "ignored eui64={:016x} cluster=0x{:04x} cmd=0x{:02x} payload_len={payload_len}",
-                event.extended_addr,
-                event.cluster_id,
-                event.command_id
-            );
-            return;
-        }
+    let Some(decoded) = z2m_rs::decode(profile, &raw) else {
+        log::info!(
+            "ignored eui64={:016x} cluster=0x{:04x} cmd=0x{:02x} payload_len={payload_len}",
+            event.extended_addr,
+            event.cluster_id,
+            event.command_id
+        );
+        return;
     };
-    let action = match update.property {
-        Property::Button(action) => action,
+    let Some(action) = decoded.updates().find_map(|update| match update {
+        z2m_rs::Update::Action(action) => Some(*action),
+        _ => None,
+    }) else {
+        log::info!("no action in decoded event");
+        return;
     };
-    let key = update.device;
+    let code = match action {
+        z2m_rs::Action::Single => 0u32,
+        z2m_rs::Action::Double => 1,
+        z2m_rs::Action::Hold => 2,
+    };
+    let key = event.extended_addr.to_be_bytes();
 
     let mut record = [0u8; DEVICE_RECORD_LEN];
     match domain.entity_get(DEVICE, &key, &mut record) {
@@ -157,7 +172,7 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
     }
 
     let count = u16::from_le_bytes([record[2], record[3]]).wrapping_add(1);
-    record[0] = action as u8;
+    record[0] = code as u8;
     record[2..4].copy_from_slice(&count.to_le_bytes());
 
     let changed = match domain.entity_put(
@@ -166,7 +181,7 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
         &record,
         FactMeta {
             source: SOURCE_ZIGBEE,
-            value: Value::enum_(action.code()),
+            value: Value::enum_(code),
         },
     ) {
         Ok(changed) => changed,
@@ -179,7 +194,7 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
         .entity_meta(DEVICE, &key)
         .map_or(0, |meta| meta.version);
 
-    web::publish(event.extended_addr, action as u8, count);
+    web::publish(event.extended_addr, code as u8, count);
     let delivered = domain.dispatch_once();
     let mut journal = Vec::new();
     while let Ok(fact) = deltas.try_recv() {

@@ -126,6 +126,12 @@ static void bind_device(uint64_t uid, uint16_t short_addr, uint8_t endpoint)
 static bool raw_frame_handler(const ezb_zcl_raw_frame_t *raw)
 {
     const ezb_zcl_cmd_hdr_t *header = raw != NULL ? raw->header : NULL;
+    if (header != NULL && header->cluster_id == 0x0006) {
+        ESP_LOGD(TAG, "raw 0x0006 fc=0x%02x cmd=0x%02x src_ep=%u tsn=%u manuf=0x%04x len=%u",
+                 (unsigned)header->fc, (unsigned)header->cmd_id, (unsigned)header->src_ep,
+                 (unsigned)header->tsn, (unsigned)header->manuf_code,
+                 raw != NULL ? (unsigned)raw->payload_length : 0u);
+    }
     if (header == NULL || header->profile_id != POC_PROFILE_HA) {
         return false;
     }
@@ -572,6 +578,23 @@ static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_i
     case EZB_ZCL_CORE_REPORT_ATTR_CB_ID: {
         ezb_zcl_cmd_report_attr_message_t *report = message;
         report->out.result = EZB_ZCL_STATUS_SUCCESS;
+        if (report->in.header != NULL) {
+            ESP_LOGD(TAG,
+                     "rpt 0x%04x fc=0x%02x cmd=0x%02x src_ep=%u tsn=%u manuf=0x%04x",
+                     (unsigned)report->info.cluster_id, (unsigned)report->in.header->fc,
+                     (unsigned)report->in.header->cmd_id, (unsigned)report->in.header->src_ep,
+                     (unsigned)report->in.header->tsn,
+                     (unsigned)report->in.header->manuf_code);
+        }
+        for (const ezb_zcl_report_attr_variable_t *var = report->in.variables; var != NULL;
+             var = var->next) {
+            ESP_LOGD(TAG, "  attr=0x%04x type=0x%02x value=%02x %02x %02x %02x",
+                     (unsigned)var->attr_id, (unsigned)var->attr_type,
+                     var->attr_value != NULL ? ((const uint8_t *)var->attr_value)[0] : 0u,
+                     var->attr_value != NULL ? ((const uint8_t *)var->attr_value)[1] : 0u,
+                     var->attr_value != NULL ? ((const uint8_t *)var->attr_value)[2] : 0u,
+                     var->attr_value != NULL ? ((const uint8_t *)var->attr_value)[3] : 0u);
+        }
         forward_report(report);
         break;
     }

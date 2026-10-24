@@ -487,20 +487,41 @@ pub static TUYA_TS0041: Profile = Profile {
         model: "TS0041",
     }],
     exposes: &[
+        Expose::Numeric {
+            property: crate::properties::BATTERY,
+            unit: Unit::Percent,
+            min: 0.0,
+            max: 100.0,
+            step: 1.0,
+        },
         Expose::Action("single"),
         Expose::Action("double"),
         Expose::Action("hold"),
     ],
-    support: Support::IDENTIFIED.union(Support::DECODED),
-    from: &[Converter::Command {
-        cluster: 0x0006,
-        command: 0xFD,
-        actions: &[
-            (0x00, Action::Single),
-            (0x01, Action::Double),
-            (0x02, Action::Hold),
-        ],
-    }],
+    // ZHC: tuya.configureMagicPacket is not ported yet; no Bind/Reporting for this model.
+    support: Support::IDENTIFIED
+        .union(Support::DECODED)
+        .union(Support::PARTIAL),
+    from: &[
+        Converter::Command {
+            cluster: 0x0006,
+            command: 0xFD,
+            actions: &[
+                (0x00, Action::Single),
+                (0x01, Action::Double),
+                (0x02, Action::Hold),
+            ],
+        },
+        // ZHC: fz.battery -> batteryPercentageRemaining / 2, 255 = unknown.
+        Converter::Attribute(AttributeRule {
+            cluster: 0x0001,
+            attribute: 0x0021,
+            kind: AttrType::Uint8,
+            property: crate::properties::BATTERY,
+            scale: Scale { mul: 1, div: 2 },
+            skip: Some(255),
+        }),
+    ],
     to: &[],
     configure: None,
 };
@@ -679,5 +700,40 @@ mod tests {
         let mut decoded = Decoded::default();
         assert_eq!(decode_frame(&SNZB_01P, &frame, &mut decoded), 0);
         assert!(decoded.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod ts0041_battery_tests {
+    use super::*;
+
+    fn frame(payload: &[u8]) -> AttributeFrameView<'_> {
+        AttributeFrameView::parse(0x0001, 1, 0x0A, payload).unwrap()
+    }
+
+    #[test]
+    fn battery_percentage_matches_z2m() {
+        for (raw, expected) in [(200u8, 100.0f32), (123, 61.5)] {
+            let mut out = Decoded::default();
+            assert_eq!(
+                decode_frame(&TUYA_TS0041, &frame(&[0x21, 0x00, 0x20, raw]), &mut out),
+                1
+            );
+            let update = out.updates().next().unwrap();
+            assert_eq!(
+                *update,
+                Update::Property {
+                    property: properties::BATTERY,
+                    value: Value::Float(expected)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_battery_value_and_foreign_attribute_are_ignored() {
+        let mut out = Decoded::default();
+        assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x21, 0x00, 0x20, 255]), &mut out), 0);
+        assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x55, 0x00, 0x20, 1]), &mut out), 0);
     }
 }
