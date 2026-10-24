@@ -14,8 +14,12 @@
 //! Backends (RAM now, NOR flash later) keep canonical slot bytes and do not know
 //! what keys or generations mean.
 
+mod flash;
+mod persisted;
 mod ring;
 mod table;
+pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
+pub use persisted::{Fixed, PersistedTable};
 
 pub use ring::Ring;
 pub use table::{Error, Handle, Meta, Result, Table, View};

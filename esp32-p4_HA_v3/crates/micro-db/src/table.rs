@@ -14,6 +14,8 @@ pub enum Error {
     NoMemory,
     InvariantFailed,
     Overflow,
+    Io,
+    Corrupt,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
@@ -262,6 +264,30 @@ impl<K, V> Table<K, V> {
                 self.free.push(slot);
             }
         }
+    }
+
+    pub(crate) fn restore(&mut self, key: K, payload: V, meta: Meta) -> Result<()>
+    where
+        K: Eq + Hash,
+    {
+        if self.find(&key).is_ok() {
+            return Err(Error::AlreadyExists);
+        }
+        let position = self
+            .free
+            .iter()
+            .rposition(|&slot| self.slots[slot as usize].meta.generation != u32::MAX)
+            .ok_or(Error::Overflow)?;
+        let slot = self.free.swap_remove(position);
+        let entry = &mut self.slots[slot as usize];
+        entry.meta = Meta {
+            used: true,
+            ..meta
+        };
+        entry.data = Some((key, payload));
+        self.index_insert(slot);
+        self.live_count += 1;
+        Ok(())
     }
 
     fn checked(&self, handle: Handle) -> Result<()> {
