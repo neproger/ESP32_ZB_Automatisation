@@ -1786,6 +1786,7 @@ version = "0.1.0"
 dependencies = [
  "micro-db",
  "z2m-rs",
+ "zigbee-exec",
 ]
 
 [[package]]
