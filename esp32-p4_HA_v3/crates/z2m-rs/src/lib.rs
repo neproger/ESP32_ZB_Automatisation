@@ -14,8 +14,10 @@
 //! for fixed arguments. Tuya DP codecs, scaling variants and the configure state
 //! machine land with the devices that need them; the contracts are already here.
 
+mod frame;
 mod generated;
 
+pub use frame::{AttributeFrameView, AttributeIter, AttributeView, FrameError};
 pub use generated::*;
 
 pub const MAX_UPDATES: usize = 8;
@@ -150,6 +152,8 @@ pub enum Converter {
         decode: fn(&[u8], &mut Decoded) -> bool,
     },
     Custom(fn(&RawZcl<'_>, &mut Decoded) -> bool),
+    /// Converter that needs the whole attribute frame (Z2M semantics).
+    Frame(for<'a> fn(&AttributeFrameView<'a>, &mut Decoded) -> bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -350,9 +354,43 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
             Converter::Custom(handler) => {
                 let _ = handler(event, &mut decoded);
             }
+            Converter::Frame(_) => {}
         }
     }
     (!decoded.is_empty()).then_some(decoded)
+}
+
+/// Attribute frame -> normalized updates (one ZCL frame may carry many attributes).
+pub fn decode_frame(profile: &Profile, frame: &AttributeFrameView<'_>, out: &mut Decoded) -> usize {
+    let before = out.len();
+    for converter in profile.from {
+        match converter {
+            Converter::Frame(handler) => {
+                let _ = handler(frame, out);
+            }
+            Converter::Attribute(rule) => {
+                if frame.cluster != rule.cluster {
+                    continue;
+                }
+                for attr in frame.attributes() {
+                    if attr.id != rule.attribute {
+                        continue;
+                    }
+                    if let Some((raw, value)) = read_raw(rule.kind, attr.value) {
+                        if rule.skip == Some(raw) {
+                            continue;
+                        }
+                        out.push(Update::Property {
+                            property: rule.property,
+                            value: scale_value(value, rule.scale),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out.len() - before
 }
 
 /// `toZigbee` for fixed-argument commands.
@@ -609,5 +647,37 @@ mod tests {
         }
         assert!(!decoded.push(Update::Action(Action::Single)));
         assert_eq!(decoded.len(), MAX_UPDATES);
+    }
+
+    #[test]
+    fn frame_with_several_attributes_decodes_all_matching_rules() {
+        let payload = [0x21, 0x00, 0x20, 200, 0x20, 0x00, 0x20, 30];
+        let frame = AttributeFrameView::parse(0x0001, 1, 0x0A, &payload).unwrap();
+        let mut decoded = Decoded::default();
+        assert_eq!(decode_frame(&SNZB_01P, &frame, &mut decoded), 2);
+        let updates: Vec<_> = decoded.updates().copied().collect();
+        assert_eq!(
+            updates[0],
+            Update::Property {
+                property: properties::BATTERY,
+                value: Value::Float(100.0)
+            }
+        );
+        assert_eq!(
+            updates[1],
+            Update::Property {
+                property: properties::VOLTAGE,
+                value: Value::Float(3000.0)
+            }
+        );
+    }
+
+    #[test]
+    fn frame_with_unknown_attribute_ids_yields_no_updates() {
+        let payload = [0x55, 0x00, 0x20, 1];
+        let frame = AttributeFrameView::parse(0x0001, 1, 0x0A, &payload).unwrap();
+        let mut decoded = Decoded::default();
+        assert_eq!(decode_frame(&SNZB_01P, &frame, &mut decoded), 0);
+        assert!(decoded.is_empty());
     }
 }

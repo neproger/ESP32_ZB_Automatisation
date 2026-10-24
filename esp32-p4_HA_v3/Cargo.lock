@@ -27,3 +27,10 @@ version = "0.1.0"
 dependencies = [
  "z2m-rs",
 ]
+
+[[package]]
+name = "zigbee-frames"
+version = "0.1.0"
+dependencies = [
+ "z2m-rs",
+]
