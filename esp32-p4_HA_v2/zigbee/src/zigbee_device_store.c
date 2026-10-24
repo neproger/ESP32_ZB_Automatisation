@@ -59,9 +59,10 @@ static zb_device_slot_t *device_alloc(ha_device_uid_t uid)
     return NULL;
 }
 
-sys_error_t zigbee_device_set_model(ha_device_uid_t uid, const char *model, bool *out_changed)
+sys_error_t zigbee_device_set_identity(ha_device_uid_t uid, const char *manufacturer,
+                                       const char *model, bool *out_changed)
 {
-    if (model == NULL || out_changed == NULL) {
+    if (manufacturer == NULL || model == NULL || out_changed == NULL) {
         return zigbee_fail(SYS_CODE_INVALID_ARG);
     }
     *out_changed = false;
@@ -75,15 +76,25 @@ sys_error_t zigbee_device_set_model(ha_device_uid_t uid, const char *model, bool
         *out_changed = true;
     }
 
-    char trimmed[HA_DEVICE_MODEL_MAX] = {0};
-    size_t length = strlen(model);
+    char trimmed[HA_DEVICE_NAME_MAX] = {0};
+    size_t length = strlen(manufacturer);
     if (length >= sizeof(trimmed)) {
         length = sizeof(trimmed) - 1;
     }
-    memcpy(trimmed, model, length);
+    memcpy(trimmed, manufacturer, length);
+    if (strncmp(slot->record.manufacturer, trimmed, sizeof(slot->record.manufacturer)) != 0) {
+        memcpy(slot->record.manufacturer, trimmed, sizeof(slot->record.manufacturer));
+        *out_changed = true;
+    }
 
-    if (strncmp(slot->record.model, trimmed, sizeof(trimmed)) != 0) {
-        memcpy(slot->record.model, trimmed, sizeof(trimmed));
+    memset(trimmed, 0, sizeof(trimmed));
+    length = strlen(model);
+    if (length >= HA_DEVICE_MODEL_MAX) {
+        length = HA_DEVICE_MODEL_MAX - 1;
+    }
+    memcpy(trimmed, model, length);
+    if (strncmp(slot->record.model, trimmed, sizeof(slot->record.model)) != 0) {
+        memcpy(slot->record.model, trimmed, sizeof(slot->record.model));
         *out_changed = true;
     }
     return SYS_OK;
@@ -241,7 +252,7 @@ uint8_t zigbee_endpoint_count(ha_device_uid_t uid)
 #define ZB_STORE_MAGIC1 'M'
 #define ZB_STORE_MAGIC2 'O'
 #define ZB_STORE_MAGIC3 'D'
-#define ZB_STORE_VER 1u
+#define ZB_STORE_VER 2u /* v2: ha_device_record_t + manufacturer; старый блоб не читаем (устройства добавляются заново) */
 #define ZB_STORE_HDR 16u
 #define ZB_DEV_SIZE (8u + sizeof(ha_device_record_t))
 #define ZB_EP_SIZE (8u + 4u + sizeof(ha_endpoint_record_t))

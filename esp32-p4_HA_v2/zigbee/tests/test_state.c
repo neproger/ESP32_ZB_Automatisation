@@ -55,18 +55,18 @@ static void test_device_model_store(void)
     ha_device_record_t record = {0};
 
     CHECK(!zigbee_device_has(UID));
-    CHECK(sys_ok(zigbee_device_set_model(UID, "TS0001", &changed)));
+    CHECK(sys_ok(zigbee_device_set_identity(UID, "_TZ3000_test", "TS0001", &changed)));
     CHECK(changed);
     CHECK(zigbee_device_has(UID));
     CHECK(zigbee_device_get(UID, &record));
     CHECK(strcmp(record.model, "TS0001") == 0);
 
     /* Повтор той же модели — не изменение. */
-    CHECK(sys_ok(zigbee_device_set_model(UID, "TS0001", &changed)));
+    CHECK(sys_ok(zigbee_device_set_identity(UID, "_TZ3000_test", "TS0001", &changed)));
     CHECK(!changed);
 
     /* Повторное интервью обновляет модель. */
-    CHECK(sys_ok(zigbee_device_set_model(UID, "TS0002", &changed)));
+    CHECK(sys_ok(zigbee_device_set_identity(UID, "_TZ3000_test", "TS0002", &changed)));
     CHECK(changed);
     CHECK(zigbee_device_get(UID, &record));
     CHECK(strcmp(record.model, "TS0002") == 0);
@@ -79,8 +79,8 @@ static void test_device_model_store(void)
 static void test_store_rejects_bad_args(void)
 {
     bool changed = false;
-    CHECK(sys_is(zigbee_device_set_model(UID, NULL, &changed), SYS_CODE_INVALID_ARG));
-    CHECK(sys_is(zigbee_device_set_model(UID, "X", NULL), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(zigbee_device_set_identity(UID, NULL, "X", &changed), SYS_CODE_INVALID_ARG));
+    CHECK(sys_is(zigbee_device_set_identity(UID, "X", NULL), SYS_CODE_INVALID_ARG));
     CHECK(!zigbee_device_get(UID, NULL));
 }
 

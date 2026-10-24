@@ -26,6 +26,7 @@ extern "C" {
  */
 typedef struct {
     char name[HA_DEVICE_NAME_MAX];
+    char manufacturer[HA_DEVICE_NAME_MAX]; /* Basic 0x0004: идентификация вендора/профиля */
     char model[HA_DEVICE_MODEL_MAX];
 } ha_device_record_t;
 
@@ -74,7 +75,7 @@ static_assert(offsetof(ha_zb_state_key_t, cluster_id) == 8, "ha_zb_state_key_t: 
 static_assert(offsetof(ha_zb_state_key_t, attr_id) == 10, "ha_zb_state_key_t: layout");
 static_assert(offsetof(ha_zb_state_key_t, endpoint) == 12, "ha_zb_state_key_t: layout");
 static_assert(sizeof(ha_zb_state_record_t) == 8, "ha_zb_state_record_t: неожиданный размер");
-static_assert(sizeof(ha_device_record_t) == 64, "ha_device_record_t: неожиданный размер");
+static_assert(sizeof(ha_device_record_t) == 96, "ha_device_record_t: неожиданный размер");
 static_assert(sizeof(ha_cluster_entry_t) == 4, "ha_cluster_entry_t: неожиданный размер");
 static_assert(sizeof(ha_endpoint_record_t) == 72, "ha_endpoint_record_t: неожиданный размер");
 #else
@@ -83,7 +84,7 @@ _Static_assert(offsetof(ha_zb_state_key_t, cluster_id) == 8, "ha_zb_state_key_t:
 _Static_assert(offsetof(ha_zb_state_key_t, attr_id) == 10, "ha_zb_state_key_t: layout");
 _Static_assert(offsetof(ha_zb_state_key_t, endpoint) == 12, "ha_zb_state_key_t: layout");
 _Static_assert(sizeof(ha_zb_state_record_t) == 8, "ha_zb_state_record_t: неожиданный размер");
-_Static_assert(sizeof(ha_device_record_t) == 64, "ha_device_record_t: неожиданный размер");
+_Static_assert(sizeof(ha_device_record_t) == 96, "ha_device_record_t: неожиданный размер");
 _Static_assert(sizeof(ha_cluster_entry_t) == 4, "ha_cluster_entry_t: неожиданный размер");
 _Static_assert(sizeof(ha_endpoint_record_t) == 72, "ha_endpoint_record_t: неожиданный размер");
 #endif

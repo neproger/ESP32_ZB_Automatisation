@@ -3,6 +3,7 @@
 #include "zigbee/zigbee_adapter_ids.h"
 
 #include <string.h>
+#include "zigbee/zigbee_profiles.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -252,20 +253,19 @@ static void zigbee_publish_property_state(const zigbee_report_t *report)
     }
 }
 
-/*
- * Tuya TS0041 — однокнопочный сценарный выключатель. Прошивка устройства объявляет
- * 4 endpoint'а и OnOff как server, но кнопка одна и шлёт OnOff cmd 0xFD
- * (payload: 0=одиночное, 1=двойное, 2=удержание). Для UI/автоматизаций это кнопка,
- * а не набор из четырёх «выключателей». Многокнопочные TS004x сюда не попадают.
- */
-static bool tuya_button_model(const char *model)
+/* Профиль устройства из каталога (capability + protocol). */
+static zb_profile_match_t device_profile(const ha_device_record_t *device,
+                                         const zb_device_profile_t **out)
 {
-    return model != NULL && strncmp(model, "TS0041", 6) == 0;
+    const zb_device_signature_t signature = {.manufacturer = device->manufacturer,
+                                             .model = device->model};
+    return zb_profiles_match(&signature, out);
 }
 
 /*
  * A6.1b: canonical capabilities Entity из кластеров endpoint'а (через мост), по entity_id.
  * Cluster/attr в записи не сохраняются — web читает properties/actions напрямую.
+ * Каталог, если у него есть capability_profile, задаёт состав вместо вывода из кластеров.
  */
 static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
                                         ha_entity_id_t entity_id)
@@ -275,36 +275,32 @@ static void zigbee_publish_capabilities(ha_device_uid_t uid, uint8_t endpoint,
         return;
     }
 
-    ha_entity_capabilities_record_t caps = {0};
-    if (!semantics_endpoint_capabilities(&ep_record, &caps)) {
-        return;
-    }
-
     ha_device_record_t device = {0};
     (void)zigbee_device_get(uid, &device);
-    if (tuya_button_model(device.model)) {
-        uint8_t kept = 0;
-        for (uint8_t i = 0; i < caps.property_count; i++) {
-            if (caps.properties[i].property == HA_PROPERTY_POWER) {
-                continue; /* кнопка не управляет питанием */
-            }
-            caps.properties[kept++] = caps.properties[i];
+    const zb_device_profile_t *profile = NULL;
+    const zb_profile_match_t match = device_profile(&device, &profile);
+    const zb_capability_profile_t *cap =
+        (match != ZB_PROFILE_NONE) ? profile->capability : NULL;
+
+    ha_entity_capabilities_record_t caps = {0};
+    if (cap != NULL && cap->properties != NULL) {
+        const uint8_t count = (cap->property_count < HA_ENTITY_CAPABILITIES_MAX)
+                                  ? cap->property_count
+                                  : HA_ENTITY_CAPABILITIES_MAX;
+        for (uint8_t i = 0; i < count; i++) {
+            caps.properties[i].property = (ha_property_id_t)cap->properties[i];
         }
-        caps.property_count = kept;
-        const ha_event_id_t button_events[] = {HA_EVENT_SINGLE_PRESS, HA_EVENT_DOUBLE_PRESS,
-                                               HA_EVENT_HOLD};
-        for (size_t i = 0; i < sizeof(button_events) / sizeof(button_events[0]); i++) {
-            bool dup = false;
-            for (uint8_t k = 0; k < caps.event_count; k++) {
-                if (caps.events[k] == button_events[i]) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup && caps.event_count < HA_ENTITY_EVENTS_MAX) {
-                caps.events[caps.event_count++] = button_events[i];
-            }
+        caps.property_count = count;
+    } else if (!semantics_endpoint_capabilities(&ep_record, &caps)) {
+        return;
+    }
+    if (cap != NULL && cap->events != NULL) {
+        const uint8_t count =
+            (cap->event_count < HA_ENTITY_EVENTS_MAX) ? cap->event_count : HA_ENTITY_EVENTS_MAX;
+        for (uint8_t i = 0; i < count; i++) {
+            caps.events[i] = (ha_event_id_t)cap->events[i];
         }
+        caps.event_count = count;
     }
 
     const ha_entity_key_t key = {.id = entity_id};
@@ -323,14 +319,14 @@ typedef struct {
     ha_device_uid_t uid;
     ha_device_id_t device_id;
     uint8_t endpoint_total;
-    bool tuya_button; /* только ep1: остальные endpoint'ы у Tuya фантомные */
+    uint8_t only_endpoint; /* 0 — все; иначе единственный endpoint профиля */
 } zigbee_publish_ctx_t;
 
 static bool zigbee_publish_endpoint(uint8_t endpoint, const ha_endpoint_record_t *record, void *ctx)
 {
     (void)record;
     zigbee_publish_ctx_t *c = (zigbee_publish_ctx_t *)ctx;
-    if (c->tuya_button && endpoint != 1) {
+    if (c->only_endpoint != 0 && endpoint != c->only_endpoint) {
         return true;
     }
     ha_entity_id_t entity_id = HA_ENTITY_ID_NONE;
@@ -367,13 +363,20 @@ static void zigbee_publish_device(ha_device_uid_t uid)
         ESP_LOGW(TAG, "device register failed uid=%llx", (unsigned long long)uid);
     }
 
+    const zb_device_profile_t *profile = NULL;
+    const zb_profile_match_t match = device_profile(&device, &profile);
+    const uint8_t only_endpoint =
+        (match != ZB_PROFILE_NONE && profile->capability != NULL)
+            ? profile->capability->button_endpoint
+            : 0;
+
     zigbee_publish_ctx_t ctx = {
         .uid = uid,
         .device_id = device_id,
         .endpoint_total = zigbee_endpoint_count(uid),
-        .tuya_button = tuya_button_model(device.model),
+        .only_endpoint = only_endpoint,
     };
-    if (ctx.tuya_button) {
+    if (only_endpoint != 0) {
         ctx.endpoint_total = 1; /* имя без суффикса "- N" */
     }
     zigbee_endpoints_foreach(uid, zigbee_publish_endpoint, &ctx);

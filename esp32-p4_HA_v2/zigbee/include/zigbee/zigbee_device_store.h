@@ -32,7 +32,9 @@ typedef struct {
 } zigbee_endpoint_desc_t;
 
 /* Записать модель из Basic-кластера, сохранив имя. out_changed — модель изменилась. */
-sys_error_t zigbee_device_set_model(ha_device_uid_t uid, const char *model, bool *out_changed);
+/* Записать идентичность из Basic-кластера (manufacturer 0x0004 + model 0x0005). */
+sys_error_t zigbee_device_set_identity(ha_device_uid_t uid, const char *manufacturer,
+                                       const char *model, bool *out_changed);
 
 /* Прочитать запись устройства. false — устройства нет. */
 bool zigbee_device_get(ha_device_uid_t uid, ha_device_record_t *out);

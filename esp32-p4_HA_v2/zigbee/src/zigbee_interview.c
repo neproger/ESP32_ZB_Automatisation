@@ -56,7 +56,8 @@ sys_error_t zigbee_interview_apply(const zigbee_interview_result_t *result)
     }
 
     bool changed = false;
-    const sys_error_t device = zigbee_device_set_model(result->uid, result->model, &changed);
+    const sys_error_t device =
+        zigbee_device_set_identity(result->uid, result->manufacturer, result->model, &changed);
     if (sys_failed(device)) {
         return device;
     }

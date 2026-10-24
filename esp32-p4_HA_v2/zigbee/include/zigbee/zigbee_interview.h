@@ -25,6 +25,7 @@ typedef struct {
 
 typedef struct {
     ha_device_uid_t uid;
+    char manufacturer[HA_DEVICE_NAME_MAX];
     char model[HA_DEVICE_MODEL_MAX];
     uint8_t endpoint_count;
     zigbee_interview_endpoint_t endpoints[ZIGBEE_INTERVIEW_ENDPOINTS_MAX];

@@ -14,6 +14,7 @@ idf_component_register(
         "src/zigbee_radio_commissioning.c"
         "src/zigbee_remove_mark.c"
         "src/zigbee_semantics.c"
+        "src/zigbee_profiles.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

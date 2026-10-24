@@ -11,6 +11,7 @@
 #include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "zigbee/zigbee_adapter_ids.h"
 #include "zigbee/zigbee.h"
+#include "zigbee/zigbee_profiles.h"
 #include "zigbee/zigbee_binding.h"
 #include "zigbee/zigbee_device_store.h"
 #include "zigbee/zigbee_diag.h"
@@ -152,6 +153,7 @@ typedef struct {
     uint16_t short_addr;
     uint8_t outstanding; /* сколько ответов ещё ждём */
     uint8_t endpoint_count;
+    char manufacturer[HA_DEVICE_NAME_MAX];
     char model[HA_DEVICE_MODEL_MAX];
     zigbee_interview_endpoint_t endpoints[ZIGBEE_INTERVIEW_ENDPOINTS_MAX];
 } interview_device_t;
@@ -284,6 +286,7 @@ static void interview_finish(interview_device_t *device)
 
     zigbee_interview_result_t result = {0};
     result.uid = device->uid;
+    memcpy(result.manufacturer, device->manufacturer, sizeof(result.manufacturer));
     memcpy(result.model, device->model, sizeof(result.model));
     result.endpoint_count = device->endpoint_count;
     memcpy(result.endpoints, device->endpoints, sizeof(device->endpoints));
@@ -299,13 +302,20 @@ static void interview_finish(interview_device_t *device)
                  device->model);
     }
 
-    /* TS0041: кнопка одна, endpoint'ы 2..4 — фантомные. Конфигурируем только ep1:
-     * шквал secure-bind'ов на все endpoint'ы переполняет очередь устройства (0x408). */
-    const bool single_button = (strncmp(device->model, "TS0041", 6) == 0);
+    /* Каталог: если у профиля задан один endpoint (кнопка), конфигурируем только его.
+     * Шквал secure-bind'ов на фантомные endpoint'ы переполняет очередь устройства. */
+    const zb_device_signature_t signature = {.manufacturer = device->manufacturer,
+                                             .model = device->model};
+    const zb_device_profile_t *profile = NULL;
+    const zb_profile_match_t match = zb_profiles_match(&signature, &profile);
+    const uint8_t only_endpoint =
+        (match != ZB_PROFILE_NONE && profile->capability != NULL)
+            ? profile->capability->button_endpoint
+            : 0;
     const zigbee_interview_endpoint_t *only = NULL;
-    if (single_button) {
+    if (only_endpoint != 0) {
         for (uint8_t i = 0; i < device->endpoint_count; i++) {
-            if (device->endpoints[i].endpoint == 1) {
+            if (device->endpoints[i].endpoint == only_endpoint) {
                 only = &device->endpoints[i];
                 break;
             }
@@ -319,7 +329,7 @@ static void interview_finish(interview_device_t *device)
         zigbee_binding_apply(device->uid, device->short_addr, device->endpoints,
                              device->endpoint_count);
     }
-    interview_read_states(device, single_button ? 1 : 0);
+    interview_read_states(device, only_endpoint);
     configured_add(device->uid); /* reporting настроен в этой загрузке */
 
     device->used = false;
@@ -489,16 +499,27 @@ static void interview_on_read_attr(const ezb_zcl_cmd_read_attr_rsp_message_t *me
 
     for (const ezb_zcl_read_attr_rsp_variable_t *var = message->in.variables; var != NULL;
          var = var->next) {
-        if (var->status != EZB_ZCL_STATUS_SUCCESS ||
-            var->attr_id != EZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID || var->attr_value == NULL) {
+        if (var->status != EZB_ZCL_STATUS_SUCCESS || var->attr_value == NULL) {
+            continue;
+        }
+        char *target = NULL;
+        size_t target_size = 0;
+        if (var->attr_id == EZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID) {
+            target = device->model;
+            target_size = sizeof(device->model);
+        } else if (var->attr_id == EZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID) {
+            target = device->manufacturer;
+            target_size = sizeof(device->manufacturer);
+        }
+        if (target == NULL) {
             continue;
         }
         const uint8_t length = *(const uint8_t *)var->attr_value;
         const char *text = (const char *)var->attr_value + 1;
-        const size_t room = sizeof(device->model) - 1;
+        const size_t room = target_size - 1;
         const size_t copied = (length < room) ? length : room;
-        memcpy(device->model, text, copied);
-        device->model[copied] = '\0';
+        memcpy(target, text, copied);
+        target[copied] = '\0';
     }
 
     interview_response(device);
@@ -523,6 +544,7 @@ void interview_begin(ha_device_uid_t uid, uint16_t short_addr)
     }
 
     device->endpoint_count = 0;
+    device->manufacturer[0] = '\0';
     device->model[0] = '\0';
     device->basic_requested = false;
     device->outstanding = 1;
