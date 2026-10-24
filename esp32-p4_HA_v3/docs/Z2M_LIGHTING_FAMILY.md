@@ -98,3 +98,27 @@ composition of shared capabilities:
 All generated profiles are `PARTIAL`: lighting options (level_config, rate,
 power_on_behavior, color options/effects) are not emitted yet. Host tests cover
 composition decoding, identification and dynamic encoding.
+
+## Parametric update (current)
+
+`emit_lighting.cjs` now wraps `modernExtend.light` before loading devices and
+carries the original parameters:
+
+- **951 real profiles** (481 dim, 470 dim+CT); 682 color, 32 multi-endpoint and
+  55 definitions with unavailable light args are skipped and reported.
+- Brightness and color-temperature ranges are per profile. Examples: 153–454
+  (156 devices), 150–500 (77), 153–370 (75), 250–454 (35 IKEA), 50–1000 (7).
+  No single default range is substituted.
+- `configureReporting` is honoured: 165 profiles use Bind+Report; CT profiles
+  without it use a Read of `lightingCapabilities`/color-temp min/max (matching
+  `light.configure`); dim profiles without it have no configure plan.
+- `moveToLevelWithOnOffDisable` selects `moveToLevel`; none of the selected
+  definitions set it, but the capability and generator path exist.
+- Unsupported options are counted and keep profiles `PARTIAL`:
+  `turns_off_at_brightness_1` 365, `level_config` 89, `power_on_behavior` 16,
+  `effect` 1.
+
+Binary measurement after the catalog: text 1,633,294 B, data 16,771 B,
+bss 1,071,557 B (debug ELF; 4 MB app partition has room). Host tests cover
+parameter ranges, plan selection and level/brightness encoding; a full
+event-by-event comparison with the original ZHC converters is still pending.

@@ -1,5 +1,6 @@
-// Emit real lighting profiles from ZHC descriptors as compositions of the
-// shared Rust capabilities. No model-specific handler code.
+// Emit real lighting profiles from ZHC modernExtend descriptors, carrying the
+// original parameters (endpoint constraints, brightness/CT ranges, command and
+// reporting choices). Unsupported options are recorded, never defaulted.
 //
 // usage: node emit_lighting.cjs <zhc-package> <dist/devices-dir>
 const fs = require('node:fs');
@@ -13,6 +14,23 @@ if (!pkg || !devicesDir) {
 }
 const list = (value) => (Array.isArray(value) ? value : value == null ? [] : [value]);
 
+// Wrap light() before any device module loads, so args are associated with the
+// exact extend object a definition uses.
+const lightArgs = new Map();
+function wrapLight(owner) {
+  if (!owner || typeof owner.light !== 'function') return;
+  const original = owner.light;
+  owner.light = function (...args) {
+    const result = original.apply(this, args);
+    lightArgs.set(result, args[0] || {});
+    return result;
+  };
+}
+const modern = require(path.join(pkg, 'dist/lib/modernExtend'));
+wrapLight(modern);
+const tuya = require(path.join(pkg, 'dist/lib/tuya'));
+if (tuya.modernExtend && tuya.modernExtend.light !== modern.light) wrapLight(tuya.modernExtend);
+
 function lightExpose(raw) {
   for (const item of [...list(raw.exposes), ...list(raw.extend).flatMap((e) => list(e.exposes))]) {
     if (item && item.type === 'light') return item;
@@ -20,13 +38,12 @@ function lightExpose(raw) {
   return null;
 }
 
-function features(light) {
-  const names = new Set();
-  for (const feature of list(light.features)) if (feature && feature.name) names.add(feature.name);
-  for (const key of ['brightness', 'color_temp', 'color', 'color_hs', 'color_xy']) {
-    if (light[key]) names.add(key);
-  }
-  return names;
+function lightExtend(raw) {
+  return list(raw.extend).find((e) => list(e.exposes).some((x) => x && x.type === 'light'));
+}
+
+function feature(light, name) {
+  return list(light.features).find((item) => item && item.name === name);
 }
 
 function escape(text) {
@@ -53,7 +70,20 @@ function fingerprints(raw) {
 }
 
 const profiles = [];
-const skipped = { color: 0, no_light: 0, no_brightness: 0, no_fingerprint: 0 };
+const skipped = {
+  color: 0,
+  multi_endpoint: 0,
+  no_light: 0,
+  no_light_args: 0,
+  no_brightness: 0,
+  no_range: 0,
+  no_fingerprint: 0,
+};
+const options = {};
+function noteOption(name) {
+  options[name] = (options[name] || 0) + 1;
+}
+
 for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) {
   let mod;
   try {
@@ -68,14 +98,34 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       skipped.no_light += 1;
       continue;
     }
-    const names = features(light);
-    const hasColor = ['color', 'color_hs', 'color_xy'].some((name) => names.has(name));
-    if (hasColor) {
+    const extend = lightExtend(raw);
+    const args = extend ? lightArgs.get(extend) : undefined;
+    if (!args) {
+      skipped.no_light_args += 1;
+      continue;
+    }
+    const names = new Set(list(light.features).map((f) => f && f.name).filter(Boolean));
+    if (['color', 'color_hs', 'color_xy'].some((name) => names.has(name))) {
       skipped.color += 1;
       continue;
     }
-    if (!names.has('brightness')) {
+    if (args.endpointNames || (raw.meta && raw.meta.multiEndpoint)) {
+      skipped.multi_endpoint += 1;
+      continue;
+    }
+    const brightness = feature(light, 'brightness');
+    if (!brightness) {
       skipped.no_brightness += 1;
+      continue;
+    }
+    const ct = feature(light, 'color_temp');
+    const ctRange = ct ? [ct.value_min, ct.value_max] : args.colorTemp && args.colorTemp.range;
+    if (ct && (!Number.isFinite(ct.value_min) || !Number.isFinite(ct.value_max))) {
+      skipped.no_range += 1;
+      continue;
+    }
+    if (ct && (!Array.isArray(ctRange) || !ctRange.every(Number.isFinite))) {
+      skipped.no_range += 1;
       continue;
     }
     const fps = fingerprints(raw);
@@ -83,12 +133,30 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       skipped.no_fingerprint += 1;
       continue;
     }
-    const tier = names.has('color_temp') ? 'dim_ct' : 'dim';
+    const bmin = Number.isFinite(brightness.value_min) ? brightness.value_min : 0;
+    const bmax = Number.isFinite(brightness.value_max) ? brightness.value_max : 254;
+    const configureReporting = args.configureReporting === true;
+    const levelNoOnOff = args.moveToLevelWithOnOffDisable === true;
+    for (const option of [
+      args.levelConfig && 'level_config',
+      args.effect !== false && args.effect !== undefined && 'effect',
+      args.powerOnBehavior !== false && args.powerOnBehavior !== undefined && 'power_on_behavior',
+      args.turnsOffAtBrightness1 && 'turns_off_at_brightness_1',
+      args.configureReporting && 'configure_reporting',
+      args.moveToLevelWithOnOffDisable && 'move_to_level_without_onoff',
+    ]) {
+      if (option) noteOption(option);
+    }
     profiles.push({
       id: `zhc.${slug(path.basename(file, '.js'))}.${index}`,
       vendor: raw.vendor || path.basename(file, '.js'),
-      tier,
+      tier: ct ? 'dim_ct' : 'dim',
       fingerprints: fps,
+      bmin,
+      bmax,
+      ctRange: ct ? [Number(ct.value_min), Number(ct.value_max)] : null,
+      configureReporting,
+      levelNoOnOff,
     });
     index += 1;
   }
@@ -97,10 +165,13 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
 const lines = [];
 lines.push('// Generated by tools/z2m_spike/emit_lighting.cjs. Do not edit.');
 lines.push('use crate::capabilities::{');
-lines.push('    DIM_CONFIGURE, DIM_CT_CONFIGURE, DIM_CT_EXPOSES, DIM_CT_FROM, DIM_CT_TO, DIM_EXPOSES,');
-lines.push('    DIM_FROM, DIM_TO,');
+lines.push(
+  '    COLORTEMP_TO, DIM_CONFIGURE, DIM_CT_CONFIGURE, DIM_CT_FROM, DIM_CT_READ,',
+);
+lines.push('    DIM_FROM, LEVEL_TO, LEVEL_TO_NO_ONOFF, ONOFF_OFF, ONOFF_ON,');
 lines.push('};');
-lines.push('use crate::{Fingerprint, Manufacturer, Profile, Support};');
+lines.push('use crate::properties::{BRIGHTNESS, COLOR_TEMP, STATE};');
+lines.push('use crate::{CommandMap, Expose, Fingerprint, Manufacturer, Profile, Support, Unit};');
 lines.push('');
 for (const [index, profile] of profiles.entries()) {
   lines.push(`static FP_${index}: &[Fingerprint] = &[`);
@@ -111,16 +182,47 @@ for (const [index, profile] of profiles.entries()) {
     lines.push(`    Fingerprint { manufacturer: ${manufacturer}, model: "${escape(fp.model)}" },`);
   }
   lines.push('];');
+  lines.push(`static EXP_${index}: &[Expose] = &[`);
+  lines.push('    Expose::Binary { property: STATE },');
+  lines.push('    Expose::Numeric {');
+  lines.push('        property: BRIGHTNESS,');
+  lines.push('        unit: Unit::None,');
+  lines.push(`        min: ${profile.bmin}.0,`);
+  lines.push(`        max: ${profile.bmax}.0,`);
+  lines.push('        step: 1.0,');
+  lines.push('    },');
+  if (profile.ctRange) {
+    lines.push('    Expose::Numeric {');
+    lines.push('        property: COLOR_TEMP,');
+    lines.push('        unit: Unit::Mired,');
+    lines.push(`        min: ${profile.ctRange[0]}.0,`);
+    lines.push(`        max: ${profile.ctRange[1]}.0,`);
+    lines.push('        step: 1.0,');
+    lines.push('    },');
+  }
+  lines.push('];');
+  const level = profile.levelNoOnOff ? 'LEVEL_TO_NO_ONOFF' : 'LEVEL_TO';
+  lines.push(`static TO_${index}: &[CommandMap] = &[`);
+  lines.push('    ONOFF_ON,');
+  lines.push('    ONOFF_OFF,');
+  lines.push(`    ${level},`);
+  if (profile.ctRange) lines.push('    COLORTEMP_TO,');
+  lines.push('];');
   lines.push(`pub static ZHCL_${index}: Profile = Profile {`);
   lines.push(`    id: "${escape(profile.id)}",`);
   lines.push(`    vendor: "${escape(profile.vendor)}",`);
   lines.push(`    fingerprints: FP_${index},`);
-  lines.push(`    exposes: ${profile.tier === 'dim_ct' ? 'DIM_CT_EXPOSES' : 'DIM_EXPOSES'},`);
-  lines.push(`    from: ${profile.tier === 'dim_ct' ? 'DIM_CT_FROM' : 'DIM_FROM'},`);
-  lines.push(`    to: ${profile.tier === 'dim_ct' ? 'DIM_CT_TO' : 'DIM_TO'},`);
-  lines.push(
-    `    configure: Some(&${profile.tier === 'dim_ct' ? 'DIM_CT_CONFIGURE' : 'DIM_CONFIGURE'}),`,
-  );
+  lines.push(`    exposes: EXP_${index},`);
+  lines.push(`    from: ${profile.ctRange ? 'DIM_CT_FROM' : 'DIM_FROM'},`);
+  lines.push(`    to: TO_${index},`);
+  const configure = profile.configureReporting
+    ? profile.ctRange
+      ? 'Some(&DIM_CT_CONFIGURE)'
+      : 'Some(&DIM_CONFIGURE)'
+    : profile.ctRange
+      ? 'Some(&DIM_CT_READ)'
+      : 'None';
+  lines.push(`    configure: ${configure},`);
   lines.push(
     '    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED).union(Support::PARTIAL),',
   );
@@ -133,13 +235,20 @@ lines.push('];');
 
 const out = path.resolve(__dirname, '../../crates/z2m-rs/src/generated/lighting.rs');
 fs.writeFileSync(out, lines.join('\n'));
+fs.writeFileSync(
+  path.join(__dirname, 'lighting_manifest.json'),
+  JSON.stringify({ profiles, skipped, options }, null, 1),
+);
 console.log(
   JSON.stringify(
     {
       profiles: profiles.length,
       dim: profiles.filter((p) => p.tier === 'dim').length,
       dim_ct: profiles.filter((p) => p.tier === 'dim_ct').length,
+      configureReporting: profiles.filter((p) => p.configureReporting).length,
+      levelNoOnOff: profiles.filter((p) => p.levelNoOnOff).length,
       skipped,
+      options,
       bytes: fs.statSync(out).size,
     },
     null,

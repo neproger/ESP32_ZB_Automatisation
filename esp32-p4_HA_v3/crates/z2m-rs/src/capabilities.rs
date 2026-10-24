@@ -59,6 +59,17 @@ pub const LEVEL_TO: CommandMap = CommandMap {
     codec: CommandCodec::Level,
 };
 
+pub const LEVEL_TO_NO_ONOFF: CommandMap = CommandMap {
+    command: Command::Property {
+        property: BRIGHTNESS,
+        value: Value::Int(0),
+    },
+    cluster: 0x0008,
+    zcl_command: 0x00,
+    args: &[],
+    codec: CommandCodec::Level,
+};
+
 pub const COLORTEMP_ATTR: Converter = Converter::Attribute(AttributeRule {
     cluster: 0x0300,
     attribute: 0x0007,
@@ -126,6 +137,7 @@ pub static DIM_CONFIGURE: ConfigurePlan = ConfigurePlan {
     retries: 3,
     version: 1,
 };
+
 pub static DIM_CT_EXPOSES: &[Expose] = &[
     Expose::Binary { property: STATE },
     Expose::Numeric {
@@ -188,7 +200,25 @@ pub static DIM_CT_CONFIGURE: ConfigurePlan = ConfigurePlan {
             max: 3600,
             change: 1,
         },
+        ConfigureStep::Read {
+            endpoint: ConfigureEndpoint::First,
+            cluster: 0x0300,
+            attributes: &[0x4000, 0x4001, 0x4002],
+        },
     ],
+    timeout_ms: 30_000,
+    retries: 3,
+    version: 1,
+};
+
+/// ZHC light.configure reads color capabilities and the physical mired range;
+/// without configureReporting it performs no binding or reporting.
+pub static DIM_CT_READ: ConfigurePlan = ConfigurePlan {
+    steps: &[ConfigureStep::Read {
+        endpoint: ConfigureEndpoint::First,
+        cluster: 0x0300,
+        attributes: &[0x4000, 0x4001, 0x4002],
+    }],
     timeout_ms: 30_000,
     retries: 3,
     version: 1,
