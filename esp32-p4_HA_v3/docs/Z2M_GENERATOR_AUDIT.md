@@ -1,0 +1,51 @@
+# Z2M generator audit
+
+The two JS tools are **spikes**, not a catalog compiler:
+
+- `tools/z2m_spike/generate.cjs` records `modernExtend`/`tuya` call provenance
+  for three hardcoded targets and writes `report.json`. It does not emit Rust.
+- `tools/z2m_spike/compile.cjs` is hardcoded to `SNZB-01P`; it emits
+  `generated/snzb_01p.rs` and its golden TSV. It has no model loop and no
+  fingerprint/configure translation.
+- `generated/ts011f.rs` and the `TUYA_TS0041` profile are hand-ported fragments,
+  not generator output (despite the `@generated` header).
+
+## What the audit explains
+
+| Question | Fact |
+| --- | --- |
+| Why were `_TZ3008_`/`_TZ3210_` missing? | Fingerprints are never extracted. `compile.cjs` writes a fixed `Manufacturer::Any` for SNZB; TS011F was hand-written with one `_TZ3000_` prefix. |
+| Why was the TS011F ConfigurePlan missing? | `configure` is not compiled. `generate.cjs` only classifies it as `fragments`; `compile.cjs` maps only the SNZB battery reporting call. |
+| Which modernExtend are supported? | Only the SNZB battery fragment (`percentage/voltage/reporting`). Everything else is recorded as provenance, not translated. |
+| Why did the spike pick the wrong TS011F? | `generate.cjs` takes the first model match; for TS011F that was `zemismart.js` (ZMO-606-20A), not the Tuya `TS011F_plug_1` definition. |
+| Can incompleteness be detected? | `report.json` stores `states`, `counts` and `provenance`, but no test or build step fails on `configure: fragments`, zero exposes or missing fingerprints. |
+
+## Required mechanism (not another profile patch)
+
+1. A model manifest: `(vendor, model, manufacturer)` -> source definition. Never
+   "first file that contains the model"; disambiguate by fingerprint/priority.
+2. Fingerprints from the selected definition: every `raw.fingerprint` entry
+   (`modelID` + `manufacturerName`), `zigbeeModel`, `whiteLabel`, preserving
+   exact/prefix matching.
+3. A real translate table for supported helpers:
+   - `tuya.configureMagicPacket` -> magic Read step;
+   - `reporting.bind/onOff/...` -> Bind/Report steps;
+   - attribute `fromZigbee` rules and standard `on_off` commands -> converters;
+   - everything else -> an explicit unsupported entry (never silently dropped).
+4. Generated completeness manifest per profile: covered exposes/converters/
+   configure helpers, and unsupported ones. `PARTIAL` is derived from it.
+5. A host/CI check over the manifest: a profile marked `CONTROLLED` must have a
+   command map; a configure helper must map to a step; fingerprints must cover
+   every manufacturer listed by the selected ZHC definition. Missing coverage
+   fails the check instead of appearing only when a device is paired.
+6. Regenerate the three existing profiles from the mechanism, delete the
+   hand-written fragments, and compare their goldens.
+
+## Order of work
+
+The Command API and the generator are independent. The Command API can be built
+and host-tested against the current three profiles (`resolve_command` ->
+`RequestKind::Zcl` -> `zigbee-exec` fake), including the Desired / Operation /
+Reported split. The generator work above is a separate, larger task and should
+land before adding new device models. No JS runtime on the ESP32: keep the
+build-time conversion.
