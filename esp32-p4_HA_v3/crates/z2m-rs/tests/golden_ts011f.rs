@@ -2,7 +2,8 @@
 //! State comes from standard genOnOff attribute reports; writes are ZCL On/Off.
 
 use z2m_rs::{
-    decode, properties, resolve_command, Command, RawZcl, Support, Update, Value, TS011F,
+    decode, properties, resolve_command, Command, ConfigureEndpoint, ConfigureStep, RawZcl,
+    Support, Update, Value, TS011F, TUYA_MAGIC_ATTRIBUTES,
 };
 
 fn event(attribute: u16, payload: &[u8]) -> RawZcl<'_> {
@@ -57,6 +58,39 @@ fn onoff_commands_match_zcl() {
         };
         assert_eq!(resolve_command(&TS011F, &command), Some((0x0006, zcl)));
     }
+}
+
+#[test]
+fn plug_configures_magic_packet_bind_and_onoff_reporting() {
+    let plan = TS011F.configure.expect("configure plan");
+    assert_eq!(plan.version, 1);
+    assert!(matches!(
+        plan.steps[0],
+        ConfigureStep::Read {
+            endpoint: ConfigureEndpoint::First,
+            cluster: 0x0000,
+            attributes,
+        } if attributes == TUYA_MAGIC_ATTRIBUTES
+    ));
+    assert!(matches!(
+        plan.steps[1],
+        ConfigureStep::Bind {
+            endpoint: ConfigureEndpoint::First,
+            cluster: 0x0006,
+        }
+    ));
+    assert!(matches!(
+        plan.steps[2],
+        ConfigureStep::Report {
+            endpoint: ConfigureEndpoint::First,
+            cluster: 0x0006,
+            attribute: 0x0000,
+            attribute_type: 0x10,
+            min: 0,
+            max: 3600,
+            change: 1,
+        }
+    ));
 }
 
 #[test]

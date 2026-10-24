@@ -279,13 +279,16 @@ pub struct ConfigurePlan {
     pub version: u16,
 }
 
+/// Attributes of ZHC `tuya.configureMagicPacket` (genBasic read).
+pub static TUYA_MAGIC_ATTRIBUTES: &[u16] = &[0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE];
+
 /// ZHC `tuya.configureMagicPacket`: read Basic attributes to trigger Tuya
 /// configuration. Z2M uses `device.endpoints[0]`, the first app endpoint.
 pub static TUYA_MAGIC_PACKET: ConfigurePlan = ConfigurePlan {
     steps: &[ConfigureStep::Read {
         endpoint: ConfigureEndpoint::First,
         cluster: 0x0000,
-        attributes: &[0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE],
+        attributes: TUYA_MAGIC_ATTRIBUTES,
     }],
     timeout_ms: 30_000,
     retries: 3,
@@ -771,7 +774,7 @@ mod ts0041_battery_tests {
                 endpoint: ConfigureEndpoint::First,
                 cluster: 0x0000,
                 attributes,
-            } if attributes == [0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE].as_slice()
+            } if attributes == TUYA_MAGIC_ATTRIBUTES
         ));
     }
 }
