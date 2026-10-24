@@ -25,3 +25,7 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 
 [build-dependencies]
 embuild = "0.33.5"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["native"]
+remote_component = { name = "espressif/esp-zigbee-lib", version = ">=2.0.0" }
