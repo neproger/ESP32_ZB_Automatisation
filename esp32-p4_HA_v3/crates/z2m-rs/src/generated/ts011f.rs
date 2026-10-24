@@ -1,4 +1,5 @@
-// Hand-ported Tuya on/off fragment; the spike generator does not cover this`n// definition yet (see docs/Z2M_GENERATOR_AUDIT.md).
+// Hand-ported Tuya on/off fragment; the spike generator does not cover this
+// definition yet (see docs/Z2M_GENERATOR_AUDIT.md).
 use crate::properties::STATE;
 use crate::{
     AttributeRule, AttrType, Command, CommandMap, ConfigureEndpoint, ConfigurePlan,
