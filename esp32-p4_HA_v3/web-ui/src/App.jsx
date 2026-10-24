@@ -1,0 +1,70 @@
+import { useEffect, useState } from 'react'
+import { useStore } from './useStore.js'
+import Entities from './pages/Entities.jsx'
+import EntityDetail from './pages/EntityDetail.jsx'
+import Automations from './pages/Automations.jsx'
+import Events from './pages/Events.jsx'
+import Groups from './pages/Groups.jsx'
+import Settings from './pages/Settings.jsx'
+import SystemStatus from './components/SystemStatus.jsx'
+
+// Ручной роутинг поверх hash: сервер отдаёт один документ, навигация — на клиенте.
+function useHash() {
+  const [hash, setHash] = useState(() => location.hash || '#/entities')
+  useEffect(() => {
+    const on = () => setHash(location.hash || '#/entities')
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  return hash
+}
+
+export default function App() {
+  const store = useStore()
+  const hash = useHash()
+  const [page, arg] = hash.replace(/^#\/?/, '').split('/')
+  const current = page || 'entities'
+  const online = store.status === 'online'
+
+  return (
+    <>
+      <header>
+        <h1>ESP32-P4 HA</h1>
+        <nav>
+          <a href="#/entities" className={current === 'entities' || current === 'entity' ? 'active' : ''}>
+            Сущности
+          </a>
+          <a href="#/groups" className={current === 'groups' ? 'active' : ''}>
+            Экраны
+          </a>
+          <a href="#/events" className={current === 'events' ? 'active' : ''}>
+            События
+          </a>
+          <a href="#/automations" className={current === 'automations' ? 'active' : ''}>
+            Автоматизации
+          </a>
+          <a href="#/settings" className={current === 'settings' ? 'active' : ''}>
+            Настройки
+          </a>
+        </nav>
+        <SystemStatus />
+        <span className={'link' + (online ? ' ok' : '')}>{online ? 'подключено' : 'нет связи'}</span>
+      </header>
+      <main>
+        {current === 'automations' ? (
+          <Automations />
+        ) : current === 'settings' ? (
+          <Settings />
+        ) : current === 'groups' ? (
+          <Groups />
+        ) : current === 'events' ? (
+          <Events />
+        ) : current === 'entity' ? (
+          <EntityDetail id={arg} />
+        ) : (
+          <Entities />
+        )}
+      </main>
+    </>
+  )
+}

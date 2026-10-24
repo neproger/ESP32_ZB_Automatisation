@@ -1,5 +1,5 @@
 [workspace]
 resolver = "2"
-members = ["crates/micro-db", "crates/ha-domain"]
+members = ["crates/micro-db", "crates/ha-domain", "crates/zigbee-devices", "crates/ha-web"]
 # ESP-проект собирается своим toolchain/линкером и живёт отдельно.
-exclude = ["crates/zigbee-esp"]
+exclude = ["crates/zigbee-esp", "crates/ha-app"]
