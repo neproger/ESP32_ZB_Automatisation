@@ -1,0 +1,7 @@
+[package]
+name = "ha-domain"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+micro-db = { path = "../micro-db" }
