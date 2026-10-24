@@ -772,6 +772,7 @@ dependencies = [
  "embuild",
  "esp-idf-svc",
  "ha-domain",
+ "ha-web",
  "log",
  "zigbee-devices",
 ]
@@ -782,6 +783,10 @@ version = "0.1.0"
 dependencies = [
  "micro-db",
 ]
+
+[[package]]
+name = "ha-web"
+version = "0.1.0"
 
 [[package]]
 name = "hash32"

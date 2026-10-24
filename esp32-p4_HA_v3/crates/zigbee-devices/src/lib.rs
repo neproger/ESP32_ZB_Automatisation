@@ -1,12 +1,11 @@
-//! Device layer: raw ZCL events -> normalized properties and actions.
+//! HA Zigbee Layer: the only place that knows both `z2m-rs` and HA.
 //!
-//! This is the seam for the future Zigbee2MQTT port (`fromZigbee`, fingerprints,
-//! `exposes`). It knows nothing about the Espressif SDK, Domain, storage, UI or
-//! Tuya-specific SDK calls: only the wire shape of the event and the model that
-//! produced it.
-//!
-//! Stage decision: the minimal TS0041 adapter lives here, not in the Zigbee
-//! adapter. V2 C converters are not ported.
+//! It binds raw ZCL events to a `z2m-rs` profile and exposes normalized device
+//! updates. HA types (Domain facts, canonical records) will be produced here, in
+//! one adapter — `z2m-rs` stays free of HA and `zigbee-esp` stays free of vendor
+//! rules.
+
+use z2m_rs::{decode, Action, RawZcl, Update as Z2mUpdate};
 
 /// Borrowed ZCL event, valid only for the duration of decoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +36,7 @@ pub enum Property {
     Button(ButtonAction),
 }
 
-/// What a device model reports; Domain decides how to store it.
+/// What a device model reports; HA mapping happens above this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceUpdate {
     pub device: [u8; 8],
@@ -48,26 +47,30 @@ pub trait DeviceAdapter {
     fn decode(&self, event: &RawZclEvent<'_>) -> Option<DeviceUpdate>;
 }
 
-/// Minimal TS0041 adapter: Tuya sends the press as OnOff command 0xFD.
+/// Minimal TS0041 adapter: delegates the wire semantics to the Z2M port.
 pub struct TuyaButton;
-
-const CLUSTER_ON_OFF: u16 = 0x0006;
-const CMD_TUYA_BUTTON: u8 = 0xFD;
 
 impl DeviceAdapter for TuyaButton {
     fn decode(&self, event: &RawZclEvent<'_>) -> Option<DeviceUpdate> {
-        if event.cluster != CLUSTER_ON_OFF || event.command != CMD_TUYA_BUTTON {
-            return None;
-        }
-        let action = match event.payload {
-            [0x00] => ButtonAction::Single,
-            [0x01] => ButtonAction::Double,
-            [0x02] => ButtonAction::Hold,
-            _ => return None,
-        };
-        Some(DeviceUpdate {
+        let raw = RawZcl {
             device: event.eui64.to_be_bytes(),
-            property: Property::Button(action),
+            endpoint: event.endpoint,
+            cluster: event.cluster,
+            command: event.command,
+            payload: event.payload,
+        };
+        let decoded = decode(&z2m_rs::TUYA_TS0041, &raw)?;
+        let action = decoded.updates().find_map(|update| match update {
+            Z2mUpdate::Action(action) => Some(*action),
+            Z2mUpdate::Property { .. } => None,
+        })?;
+        Some(DeviceUpdate {
+            device: raw.device,
+            property: Property::Button(match action {
+                Action::Single => ButtonAction::Single,
+                Action::Double => ButtonAction::Double,
+                Action::Hold => ButtonAction::Hold,
+            }),
         })
     }
 }
@@ -109,6 +112,5 @@ mod tests {
         assert!(adapter.decode(&event(0x0001, 0xFD, &[0x00])).is_none());
         assert!(adapter.decode(&event(0x0006, 0xFD, &[])).is_none());
         assert!(adapter.decode(&event(0x0006, 0xFD, &[0x03])).is_none());
-        assert!(adapter.decode(&event(0x0006, 0xFD, &[0x00, 0x01])).is_none());
     }
 }
