@@ -117,3 +117,55 @@ pub fn save(ieee: u64, short: u16, manufacturer: &str, model: &str, definition_i
         Err(error) => log::error!("registry save failed: {error:?}"),
     }
 }
+
+/// A record counts as configured only for the same definition. A profile change
+/// (different definition_id) must run the new plan even at the same version.
+pub fn is_configured(ieee: u64, definition_id: &str, version: u16) -> bool {
+    let registry = REGISTRY.lock().unwrap();
+    let Some(registry) = registry.as_ref() else {
+        return false;
+    };
+    registry
+        .is_configured(ieee, definition_id, version)
+        .unwrap_or(false)
+}
+
+pub fn mark_configured(ieee: u64, definition_id: &str, version: u16) {
+    let mut flash = EspFlash;
+    let mut guard = REGISTRY.lock().unwrap();
+    let Some(registry) = guard.as_mut() else {
+        return;
+    };
+    let Ok(slot) = registry.slot(ieee) else {
+        return;
+    };
+    let Ok(record) = slot.record() else {
+        return;
+    };
+    let updated = DeviceRecord {
+        definition_id,
+        configured_version: version,
+        ..record
+    };
+    match registry.put(&mut flash, &updated) {
+        Ok(()) => log::info!("registry: configured ieee={ieee:016x} version={version}"),
+        Err(error) => log::error!("registry configured_version failed: {error:?}"),
+    }
+}
+
+pub fn device_addresses() -> ([(u64, u16); CAPACITY], usize) {
+    let registry = REGISTRY.lock().unwrap();
+    let mut out = [(0, 0); CAPACITY];
+    let mut count = 0;
+    if let Some(registry) = registry.as_ref() {
+        for slot in registry.values() {
+            if let Ok(record) = slot.record() {
+                if count < CAPACITY {
+                    out[count] = (record.ieee, record.short);
+                    count += 1;
+                }
+            }
+        }
+    }
+    (out, count)
+}

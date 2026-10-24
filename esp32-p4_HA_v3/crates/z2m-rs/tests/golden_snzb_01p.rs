@@ -3,7 +3,8 @@
 //! converter; Rust must reproduce them from raw attribute values.
 
 use z2m_rs::{
-    decode, properties, ConfigureStep, Expose, RawZcl, Support, Unit, Update, Value, SNZB_01P,
+    decode, properties, ConfigureEndpoint, ConfigureStep, Expose, RawZcl, Support, Unit, Update,
+    Value, SNZB_01P,
 };
 
 #[test]
@@ -84,15 +85,17 @@ fn battery_exposes_and_configure_are_declared() {
     let plan = SNZB_01P.configure.expect("configure plan");
     assert_eq!(plan.timeout_ms, 5000);
     assert_eq!(plan.retries, 2);
+    assert_eq!(plan.version, 1);
     assert!(matches!(
         plan.steps[0],
         ConfigureStep::Report {
             cluster: 0x0001,
             attribute: 0x0021,
+            attribute_type: 0x20,
             min: 3600,
             max: 7200,
             change: 0,
-            endpoint: 1,
+            endpoint: ConfigureEndpoint::Id(1),
         }
     ));
     assert!(matches!(

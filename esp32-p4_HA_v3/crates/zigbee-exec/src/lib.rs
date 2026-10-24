@@ -24,6 +24,7 @@ pub const MAX_RESULTS: usize = 32;
 pub const MAX_ATTEMPTS: u8 = 3;
 pub const EARLY_TTL_MS: u64 = 5_000;
 pub const RETRY_BACKOFF_MS: u64 = 200;
+pub const MAX_READ_ATTRIBUTES: usize = 8;
 
 /// Per-operation retry budget. Not every idempotent command is safe to repeat
 /// (e.g. some Tuya writes); the profile/operation decides the policy.
@@ -40,6 +41,38 @@ impl RetryPolicy {
 }
 
 pub type OperationId = u32;
+
+/// Bounded attribute list for one Read Attributes request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttributeList {
+    items: [u16; MAX_READ_ATTRIBUTES],
+    len: u8,
+}
+
+impl AttributeList {
+    pub fn new(attributes: &[u16]) -> Result<Self, ExecError> {
+        if attributes.is_empty() || attributes.len() > MAX_READ_ATTRIBUTES {
+            return Err(ExecError::TooManyAttributes);
+        }
+        let mut items = [0; MAX_READ_ATTRIBUTES];
+        items[..attributes.len()].copy_from_slice(attributes);
+        Ok(Self {
+            items,
+            len: attributes.len() as u8,
+        })
+    }
+
+    pub fn single(attribute: u16) -> Self {
+        let mut items = [0; MAX_READ_ATTRIBUTES];
+        items[0] = attribute;
+        Self { items, len: 1 }
+    }
+
+    pub fn as_slice(&self) -> &[u16] {
+        &self.items[..usize::from(self.len)]
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Payload {
@@ -83,8 +116,11 @@ pub enum RequestKind {
         payload: Payload,
         expect: Expect,
     },
-    /// Read one attribute; the response is matched as a normal ZCL response.
-    ReadAttributes { cluster: u16, attribute: u16 },
+    /// Read one or more attributes; the response is matched as a normal ZCL response.
+    ReadAttributes {
+        cluster: u16,
+        attributes: AttributeList,
+    },
     /// Configure one reporting record; response 0x07 carries the per-record status.
     ConfigureReporting {
         cluster: u16,
@@ -145,6 +181,7 @@ pub enum ExecError {
     QueueFull,
     PayloadTooLarge,
     ResultQueueFull,
+    TooManyAttributes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -889,7 +926,7 @@ mod tests {
             timeout_ms: 1_000,
             kind: RequestKind::ReadAttributes {
                 cluster: 0x0000,
-                attribute: 0x0004,
+                attributes: AttributeList::single(0x0004),
             },
         }
     }

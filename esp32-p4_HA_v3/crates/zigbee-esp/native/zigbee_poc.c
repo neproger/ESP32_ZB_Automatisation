@@ -424,9 +424,11 @@ static void exec_notify_response(const ezb_zcl_cmd_hdr_t *header, uint16_t clust
 }
 
 int zb_exec_read(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint16_t cluster,
-                 uint16_t attr)
+                 const uint16_t *attrs, uint8_t count)
 {
-    uint16_t attrs[1] = {attr};
+    if (attrs == NULL || count == 0) {
+        return -1;
+    }
     ezb_zcl_read_attr_cmd_t req = {0};
     exec_set_addr(&req.cmd_ctrl.dst_addr, eui64, short_addr);
     req.cmd_ctrl.dst_ep = ep;
@@ -435,8 +437,8 @@ int zb_exec_read(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, u
     req.cmd_ctrl.manuf_code = 0; /* standard profile */
     req.cmd_ctrl.cnf_ctx.cb = exec_confirm_cb;
     req.cmd_ctrl.cnf_ctx.user_ctx = (void *)(uintptr_t)op;
-    req.payload.attr_number = 1;
-    req.payload.attr_field = attrs;
+    req.payload.attr_number = count;
+    req.payload.attr_field = (uint16_t *)attrs;
 
     if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
         return -1;

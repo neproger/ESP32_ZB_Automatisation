@@ -113,7 +113,15 @@ extern "C" {
         >,
         zdo: Option<unsafe extern "C" fn(u32, u8)>,
     );
-    fn zb_exec_read(op: u32, eui64: u64, short: u16, ep: u8, cluster: u16, attr: u16) -> i32;
+    fn zb_exec_read(
+        op: u32,
+        eui64: u64,
+        short: u16,
+        ep: u8,
+        cluster: u16,
+        attributes: *const u16,
+        count: u8,
+    ) -> i32;
     #[allow(clippy::too_many_arguments)]
     fn zb_exec_config_report(
         op: u32,
@@ -148,14 +156,19 @@ pub struct EspTransport;
 impl Transport for EspTransport {
     fn send(&mut self, op: u32, request: &Request) -> Result<(), SendError> {
         let code = match request.kind {
-            RequestKind::ReadAttributes { cluster, attribute } => unsafe {
+            RequestKind::ReadAttributes {
+                cluster,
+                attributes,
+            } => unsafe {
+                let attributes = attributes.as_slice();
                 zb_exec_read(
                     op,
                     request.device,
                     request.short,
                     request.endpoint,
                     cluster,
-                    attribute,
+                    attributes.as_ptr(),
+                    attributes.len() as u8,
                 )
             },
             RequestKind::Zcl {
@@ -217,9 +230,13 @@ impl Transport for EspTransport {
     }
 }
 
-/// Minimal configure runner over `zigbee-exec`: sequential steps, no own waiters.
+/// Sequential ConfigurePlan runner over `zigbee-exec`: no own waiters/retries.
+/// It knows only request shapes, not models.
 pub struct ConfigRun {
     device: (u64, u16),
+    endpoint: u8,
+    definition: &'static str,
+    plan: &'static z2m_rs::ConfigurePlan,
     next: usize,
     op: Option<u32>,
     pending: Option<zigbee_exec::OperationResult>,
@@ -228,27 +245,60 @@ pub struct ConfigRun {
 }
 
 impl ConfigRun {
-    pub fn start(exec: &mut zigbee_exec::Executor, device: (u64, u16), now: u64) -> Self {
+    pub fn start(
+        exec: &mut zigbee_exec::Executor,
+        device: (u64, u16),
+        endpoint: u8,
+        definition: &'static str,
+        plan: &'static z2m_rs::ConfigurePlan,
+        now: u64,
+    ) -> Self {
         let mut run = Self {
             device,
+            endpoint,
+            definition,
+            plan,
             next: 0,
             op: None,
             pending: None,
             failed: false,
             done: false,
         };
-        log::info!("configure: start device={:016x}", device.0);
+        log::info!(
+            "configure: start device={:016x} version={}",
+            device.0,
+            plan.version
+        );
         run.schedule(exec, now);
         run
     }
 
-    pub fn on_result(&mut self, result: zigbee_exec::OperationResult) {
-        self.pending = Some(result);
+    pub fn eui(&self) -> u64 {
+        self.device.0
     }
 
-    pub fn tick(&mut self, exec: &mut zigbee_exec::Executor, now: u64) {
+    pub fn definition(&self) -> &'static str {
+        self.definition
+    }
+
+    pub fn version(&self) -> u16 {
+        self.plan.version
+    }
+
+    pub fn failed(&self) -> bool {
+        self.failed
+    }
+
+    pub fn on_result(&mut self, result: zigbee_exec::OperationResult) {
+        if self.op == Some(result.id) {
+            self.pending = Some(result);
+        }
+    }
+
+    /// Returns true when the plan is finished (done or failed).
+    pub fn tick(&mut self, exec: &mut zigbee_exec::Executor, now: u64) -> bool {
         if self.done || self.failed {
-            return;
+            return true;
         }
         if let Some(result) = self.pending.take() {
             log::info!(
@@ -265,32 +315,37 @@ impl ConfigRun {
                 other => {
                     self.failed = true;
                     log::warn!("configure: step={} failed: {other:?}", self.next);
-                    return;
+                    return true;
                 }
             }
         }
-        if self.next >= 3 {
+        if self.next >= self.plan.steps.len() {
             self.done = true;
-            log::info!("configure: done version=1 (RAM)");
-            return;
+            log::info!("configure: done version={} (RAM)", self.plan.version);
+            return true;
         }
         if self.op.is_none() {
             self.schedule(exec, now);
         }
+        self.done || self.failed
     }
 
     fn schedule(&mut self, exec: &mut zigbee_exec::Executor, now: u64) {
-        let Some(kind) = self.kind() else {
+        let Some((endpoint, kind)) = self.kind() else {
             self.failed = true;
+            log::warn!("configure: unsupported step={}", self.next);
             return;
         };
         let request = zigbee_exec::Request {
             device: self.device.0,
             short: self.device.1,
-            endpoint: 1,
-            sleepy: false,
-            retry: zigbee_exec::RetryPolicy::SAFE,
-            expiry_ms: 10_000,
+            endpoint,
+            // Battery devices must not fail a plan because they slept.
+            sleepy: true,
+            retry: zigbee_exec::RetryPolicy {
+                max_attempts: self.plan.retries.clamp(1, 3),
+            },
+            expiry_ms: self.plan.timeout_ms,
             timeout_ms: 3_000,
             kind,
         };
@@ -306,22 +361,46 @@ impl ConfigRun {
         }
     }
 
-    fn kind(&self) -> Option<zigbee_exec::RequestKind> {
-        Some(match self.next {
-            0 => zigbee_exec::RequestKind::ZdoBind { cluster: 0x0006 },
-            1 => zigbee_exec::RequestKind::ConfigureReporting {
-                cluster: 0x0001,
-                attribute: 0x0021,
-                attribute_type: 0x20,
-                min: 3600,
-                max: 7200,
-                change: 0,
+    fn kind(&self) -> Option<(u8, zigbee_exec::RequestKind)> {
+        use z2m_rs::{ConfigureEndpoint, ConfigureStep};
+        let step = self.plan.steps.get(self.next)?;
+        let endpoint = match step {
+            ConfigureStep::Read { endpoint, .. }
+            | ConfigureStep::Bind { endpoint, .. }
+            | ConfigureStep::Report { endpoint, .. }
+            | ConfigureStep::Write { endpoint, .. } => match endpoint {
+                ConfigureEndpoint::Id(id) => *id,
+                ConfigureEndpoint::First => self.endpoint,
             },
-            2 => zigbee_exec::RequestKind::ReadAttributes {
-                cluster: 0x0001,
-                attribute: 0x0021,
+        };
+        let kind = match step {
+            ConfigureStep::Read {
+                cluster, attributes, ..
+            } => zigbee_exec::RequestKind::ReadAttributes {
+                cluster: *cluster,
+                attributes: zigbee_exec::AttributeList::new(attributes).ok()?,
             },
-            _ => return None,
-        })
+            ConfigureStep::Bind { cluster, .. } => {
+                zigbee_exec::RequestKind::ZdoBind { cluster: *cluster }
+            }
+            ConfigureStep::Report {
+                cluster,
+                attribute,
+                attribute_type,
+                min,
+                max,
+                change,
+                ..
+            } => zigbee_exec::RequestKind::ConfigureReporting {
+                cluster: *cluster,
+                attribute: *attribute,
+                attribute_type: *attribute_type,
+                min: *min,
+                max: *max,
+                change: (*change).min(u32::from(u8::MAX)) as u8,
+            },
+            ConfigureStep::Write { .. } => return None,
+        };
+        Some((endpoint, kind))
     }
 }

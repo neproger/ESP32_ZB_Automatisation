@@ -234,26 +234,35 @@ pub struct CommandMap {
     pub args: &'static [u8],
 }
 
+/// Target endpoint for a configure step: a fixed id or the device's first
+/// application endpoint (resolved by the runner).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigureEndpoint {
+    Id(u8),
+    First,
+}
+
 pub enum ConfigureStep {
     Read {
-        endpoint: u8,
+        endpoint: ConfigureEndpoint,
         cluster: u16,
-        attribute: u16,
+        attributes: &'static [u16],
     },
     Bind {
-        endpoint: u8,
+        endpoint: ConfigureEndpoint,
         cluster: u16,
     },
     Report {
-        endpoint: u8,
+        endpoint: ConfigureEndpoint,
         cluster: u16,
         attribute: u16,
+        attribute_type: u8,
         min: u16,
         max: u16,
         change: u32,
     },
     Write {
-        endpoint: u8,
+        endpoint: ConfigureEndpoint,
         cluster: u16,
         attribute: u16,
         value: Value,
@@ -262,11 +271,26 @@ pub enum ConfigureStep {
 
 /// Async configuration contract: requests are correlated by seq, bounded by
 /// timeout and retries (executed by the HA Zigbee Layer, not by this crate).
+/// `version` is persisted as the record's `configured_version` on success.
 pub struct ConfigurePlan {
     pub steps: &'static [ConfigureStep],
     pub timeout_ms: u32,
     pub retries: u8,
+    pub version: u16,
 }
+
+/// ZHC `tuya.configureMagicPacket`: read Basic attributes to trigger Tuya
+/// configuration. Z2M uses `device.endpoints[0]`, the first app endpoint.
+pub static TUYA_MAGIC_PACKET: ConfigurePlan = ConfigurePlan {
+    steps: &[ConfigureStep::Read {
+        endpoint: ConfigureEndpoint::First,
+        cluster: 0x0000,
+        attributes: &[0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE],
+    }],
+    timeout_ms: 30_000,
+    retries: 3,
+    version: 1,
+};
 
 /// Coverage bitmask: identified -> decoded -> controlled; partial helpers set only the covered bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,7 +522,7 @@ pub static TUYA_TS0041: Profile = Profile {
         Expose::Action("double"),
         Expose::Action("hold"),
     ],
-    // ZHC: tuya.configureMagicPacket is not ported yet; no Bind/Reporting for this model.
+    // ZHC: tuya.configureMagicPacket; no Bind/Reporting for this model.
     support: Support::IDENTIFIED
         .union(Support::DECODED)
         .union(Support::PARTIAL),
@@ -523,7 +547,7 @@ pub static TUYA_TS0041: Profile = Profile {
         }),
     ],
     to: &[],
-    configure: None,
+    configure: Some(&TUYA_MAGIC_PACKET),
 };
 
 #[cfg(test)]
@@ -735,5 +759,19 @@ mod ts0041_battery_tests {
         let mut out = Decoded::default();
         assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x21, 0x00, 0x20, 255]), &mut out), 0);
         assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x55, 0x00, 0x20, 1]), &mut out), 0);
+    }
+    #[test]
+    fn ts0041_configure_is_tuya_magic_packet() {
+        let plan = TUYA_TS0041.configure.expect("configure plan");
+        assert_eq!(plan.version, 1);
+        assert_eq!(plan.steps.len(), 1);
+        assert!(matches!(
+            plan.steps[0],
+            ConfigureStep::Read {
+                endpoint: ConfigureEndpoint::First,
+                cluster: 0x0000,
+                attributes,
+            } if attributes == [0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE].as_slice()
+        ));
     }
 }

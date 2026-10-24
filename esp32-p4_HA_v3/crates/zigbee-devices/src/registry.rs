@@ -95,6 +95,19 @@ impl Registry {
         }))
     }
 
+    /// Configuration is bound to the definition: a different profile at the
+    /// same version still needs its own plan.
+    pub fn is_configured(
+        &self,
+        ieee: u64,
+        definition_id: &str,
+        version: u16,
+    ) -> Result<bool, Error> {
+        let slot = self.slot(ieee)?;
+        let record = slot.record()?;
+        Ok(record.definition_id == definition_id && record.configured_version >= version)
+    }
+
     pub fn set_configured<F: NorFlash>(
         &mut self,
         flash: &mut F,
@@ -112,6 +125,10 @@ impl Registry {
 
     pub fn remove<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
         self.table.remove(flash, &ieee.to_le_bytes())
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &RecordSlot> {
+        self.table.iter().map(|view| view.payload)
     }
 
     pub fn len(&self) -> usize {
@@ -182,6 +199,17 @@ mod tests {
 
         let reopened = Registry::open(&mut flash, 4).unwrap();
         assert_eq!(reopened.slot(IEEE).unwrap().record().unwrap().configured_version, 1);
+    }
+
+    #[test]
+    fn configured_flag_is_scoped_to_definition() {
+        let mut flash = flash();
+        let mut registry = Registry::format(&mut flash, 4).unwrap();
+        registry.put(&mut flash, &record()).unwrap();
+        registry.set_configured(&mut flash, IEEE, 1).unwrap();
+        assert!(registry.is_configured(IEEE, "tuya.ts0041", 1).unwrap());
+        assert!(!registry.is_configured(IEEE, "other.profile", 1).unwrap());
+        assert!(!registry.is_configured(IEEE, "tuya.ts0041", 2).unwrap());
     }
 
     #[test]

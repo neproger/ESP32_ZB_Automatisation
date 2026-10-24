@@ -20,6 +20,7 @@ mod frames;
 mod interview;
 mod store;
 mod web;
+mod configure;
 
 const DEVICE: EntityType = 1;
 const SOURCE_ZIGBEE: u8 = 1;
@@ -90,6 +91,14 @@ fn main() {
     store::init();
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut transport = exec::EspTransport;
+    let (restored, restored_count) = store::device_addresses();
+    for (eui, short) in restored.into_iter().take(restored_count) {
+        if let Some(profile) = store::lookup(eui) {
+            log::info!("registry: restored profile={} (no interview)", profile.id);
+            interview::restore(eui, profile);
+            configure::ensure(&mut executor, eui, short, now_ms());
+        }
+    }
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
@@ -110,7 +119,7 @@ fn main() {
             handle_event(&mut domain, &event, &delta_rx);
         }
         frames::process_pending();
-        if let Some(device) = frames::last_device() {
+        if let Some(device) = frames::take_last_device() {
             executor.device_awake(device.1);
             ensure_interview(&mut executor, device.0, device.1);
         }
@@ -122,8 +131,10 @@ fn main() {
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
             interview::on_operation_result(&mut executor, result, now_ms());
+            configure::on_result(&mut executor, result, now_ms());
         }
         interview::tick(&mut executor, now_ms());
+        configure::tick(&mut executor, now_ms());
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -243,12 +254,17 @@ fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
-    if eui == 0 || interview::selected_profile(eui).is_some() {
+    if eui == 0 {
+        return;
+    }
+    if interview::selected_profile(eui).is_some() {
+        configure::ensure(executor, eui, short, now_ms());
         return;
     }
     if let Some(profile) = store::lookup(eui) {
         log::info!("registry: restored profile={} (no interview)", profile.id);
         interview::restore(eui, profile);
+        configure::ensure(executor, eui, short, now_ms());
     } else {
         interview::start(executor, (eui, short), now_ms());
     }

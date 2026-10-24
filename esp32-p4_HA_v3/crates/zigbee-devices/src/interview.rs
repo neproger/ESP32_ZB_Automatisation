@@ -7,7 +7,8 @@
 
 use z2m_rs::{Interview, Profile};
 use zigbee_exec::{
-    Executor, OperationId, OperationResult, Request, RequestKind, RetryPolicy, Status,
+    AttributeList, Executor, OperationId, OperationResult, Request, RequestKind, RetryPolicy,
+    Status,
 };
 
 pub const JOB_SLOTS: usize = 8;
@@ -260,7 +261,7 @@ fn enqueue(job: &mut Job, exec: &mut Executor, now: u64) -> Result<(), ()> {
         timeout_ms: READ_TIMEOUT_MS,
         kind: RequestKind::ReadAttributes {
             cluster: BASIC_CLUSTER,
-            attribute: job.step.attr(),
+            attributes: AttributeList::single(job.step.attr()),
         },
     };
     match exec.enqueue(request, now) {
@@ -344,10 +345,8 @@ mod tests {
                 sent.request.device == eui
                     && matches!(
                         sent.request.kind,
-                        RequestKind::ReadAttributes {
-                            attribute: want,
-                            ..
-                        } if want == attribute
+                        RequestKind::ReadAttributes { attributes, .. }
+                            if attributes.as_slice() == [attribute]
                     )
             })
             .cloned()

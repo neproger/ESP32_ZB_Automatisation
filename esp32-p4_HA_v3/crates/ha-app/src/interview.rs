@@ -139,6 +139,7 @@ pub fn on_operation_result(exec: &mut Executor, result: OperationResult, now: u6
         &identified.model,
         identified.profile.id,
     );
+    crate::configure::ensure(exec, identified.eui, identified.short, now);
 }
 
 pub fn tick(exec: &mut Executor, now: u64) {

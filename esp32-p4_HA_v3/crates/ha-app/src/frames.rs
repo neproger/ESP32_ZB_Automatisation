@@ -82,8 +82,8 @@ impl Inbox {
 static INBOX: Mutex<Inbox> = Mutex::new(Inbox::new());
 static LAST_DEVICE: Mutex<Option<(u64, u16)>> = Mutex::new(None);
 
-pub fn last_device() -> Option<(u64, u16)> {
-    *LAST_DEVICE.lock().unwrap()
+pub fn take_last_device() -> Option<(u64, u16)> {
+    LAST_DEVICE.lock().unwrap().take()
 }
 
 /// Called from the C shim inside the Zigbee callback. Copies, never decodes.
