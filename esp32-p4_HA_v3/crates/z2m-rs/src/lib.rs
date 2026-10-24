@@ -38,6 +38,32 @@ pub mod properties {
     pub const STATE: PropertyId = PropertyId(3);
     pub const BRIGHTNESS: PropertyId = PropertyId(4);
     pub const COLOR_TEMP: PropertyId = PropertyId(5);
+    pub const COLOR: PropertyId = PropertyId(6);
+    pub const COLOR_MODE: PropertyId = PropertyId(7);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColorValue {
+    /// 0..1 coordinates; missing coordinates stay missing (partial frames).
+    Xy { x: Option<f32>, y: Option<f32> },
+    /// hue 0..360, saturation 0..100; missing values stay missing.
+    Hs { hue: Option<f32>, saturation: Option<f32> },
+}
+
+impl ColorValue {
+    pub const fn xy(x: f32, y: f32) -> Self {
+        Self::Xy {
+            x: Some(x),
+            y: Some(y),
+        }
+    }
+
+    pub const fn hs(hue: f32, saturation: f32) -> Self {
+        Self::Hs {
+            hue: Some(hue),
+            saturation: Some(saturation),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +73,7 @@ pub enum Value {
     Float(f32),
     Uint(u32),
     Enum(u32),
+    Color(ColorValue),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +150,7 @@ pub enum Expose {
         max: f32,
         step: f32,
     },
+    Color { property: PropertyId },
     Enumeration {
         property: PropertyId,
         values: &'static [(u32, &'static str)],
@@ -236,6 +264,12 @@ pub enum CommandCodec {
     Level,
     /// color temperature in mireds -> moveToColorTemp(mireds, transition)
     ColorTemp,
+    /// XY 0..1 -> moveToColor(x, y, transition, options)
+    ColorXy,
+    /// hue 0..360 / sat 0..100 -> moveToHueAndSaturation(hue, sat, ...)
+    ColorHs,
+    /// hue 0..360 / sat 0..100 -> enhancedMoveToHueAndSaturation(hue, sat, ...)
+    ColorHsEnhanced,
 }
 
 pub struct CommandMap {
@@ -469,6 +503,77 @@ pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<us
             out[..4].copy_from_slice(&[mireds as u8, (mireds >> 8) as u8, 0, 0]);
             Some(4)
         }
+        CommandCodec::ColorXy => {
+            let ColorValue::Xy {
+                x: Some(x),
+                y: Some(y),
+            } = color_value(command)?
+            else {
+                return None;
+            };
+            if out.len() < 8 {
+                return None;
+            }
+            let x = (x.clamp(0.0, 1.0) * 65535.0).round() as u16;
+            let y = (y.clamp(0.0, 1.0) * 65535.0).round() as u16;
+            out[..8].copy_from_slice(&[
+                x as u8,
+                (x >> 8) as u8,
+                y as u8,
+                (y >> 8) as u8,
+                0,
+                0,
+                0,
+                0,
+            ]);
+            Some(8)
+        }
+        CommandCodec::ColorHs | CommandCodec::ColorHsEnhanced => {
+            let ColorValue::Hs {
+                hue: Some(hue),
+                saturation: Some(saturation),
+            } = color_value(command)?
+            else {
+                return None;
+            };
+            let hue = hue.clamp(0.0, 360.0);
+            let saturation = saturation.clamp(0.0, 100.0);
+            if map.codec == CommandCodec::ColorHsEnhanced {
+                if out.len() < 7 {
+                    return None;
+                }
+                let hue = (hue * 65535.0 / 360.0).round() as u16;
+                let saturation = (saturation * 254.0 / 100.0).round() as u8;
+                out[..7].copy_from_slice(&[
+                    hue as u8,
+                    (hue >> 8) as u8,
+                    saturation,
+                    0,
+                    0,
+                    0,
+                    0,
+                ]);
+                Some(7)
+            } else {
+                if out.len() < 6 {
+                    return None;
+                }
+                let hue = (hue * 254.0 / 360.0).round() as u8;
+                let saturation = (saturation * 254.0 / 100.0).round() as u8;
+                out[..6].copy_from_slice(&[hue, saturation, 0, 0, 0, 0]);
+                Some(6)
+            }
+        }
+    }
+}
+
+fn color_value(command: &Command) -> Option<ColorValue> {
+    match command {
+        Command::Property {
+            value: Value::Color(color),
+            ..
+        } => Some(*color),
+        _ => None,
     }
 }
 
@@ -482,26 +587,53 @@ fn numeric_value(command: &Command) -> Option<f32> {
         Value::Uint(v) => *v as f32,
         Value::Enum(v) => *v as f32,
         Value::Bool(v) => u8::from(*v) as f32,
+        Value::Color(_) => return None,
     })
 }
 
 fn find_command<'a>(profile: &'a Profile, command: &Command) -> Option<&'a CommandMap> {
-    profile.to.iter().find(|map| {
-        if map.codec != CommandCodec::None {
-            return matches!((command, &map.command),
-                (Command::Property { property, .. }, Command::Property { property: mapped, .. }) if property == mapped);
-        }
-        match (command, &map.command) {
-        (
-            Command::Property { property, value },
-            Command::Property {
-                property: mapped,
-                value: mapped_value,
-            },
-        ) => property == mapped && value == mapped_value,
-        (Command::Action(action), Command::Action(mapped)) => action == mapped,
-        _ => false,
-        }
+    profile.to.iter().find(|map| match map.codec {
+        CommandCodec::None => match (command, &map.command) {
+            (
+                Command::Property {
+                    property: wanted,
+                    value: wanted_value,
+                },
+                Command::Property {
+                    property: mapped,
+                    value: mapped_value,
+                },
+            ) => wanted == mapped && wanted_value == mapped_value,
+            (Command::Action(action), Command::Action(mapped)) => action == mapped,
+            _ => false,
+        },
+        CommandCodec::Level | CommandCodec::ColorTemp => matches!(
+            (command, &map.command),
+            (
+                Command::Property { property, .. },
+                Command::Property { property: mapped, .. }
+            ) if property == mapped
+        ),
+        CommandCodec::ColorXy => matches!(
+            (command, &map.command),
+            (
+                Command::Property {
+                    property,
+                    value: Value::Color(ColorValue::Xy { .. }),
+                },
+                Command::Property { property: mapped, .. }
+            ) if property == mapped
+        ),
+        CommandCodec::ColorHs | CommandCodec::ColorHsEnhanced => matches!(
+            (command, &map.command),
+            (
+                Command::Property {
+                    property,
+                    value: Value::Color(ColorValue::Hs { .. }),
+                },
+                Command::Property { property: mapped, .. }
+            ) if property == mapped
+        ),
     })
 }
 

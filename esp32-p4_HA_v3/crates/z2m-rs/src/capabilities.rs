@@ -1,10 +1,11 @@
 //! Shared Zigbee capabilities. Profiles compose these fragments; they do not
 //! describe device families or models.
 
-use crate::properties::{BRIGHTNESS, COLOR_TEMP, STATE};
+use crate::properties::{BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, STATE};
 use crate::{
-    AttributeRule, AttrType, Command, CommandCodec, CommandMap, ConfigureEndpoint, ConfigurePlan,
-    ConfigureStep, Converter, Expose, Scale, Unit, Value,
+    AttributeFrameView, AttributeRule, AttrType, ColorValue, Command, CommandCodec, CommandMap,
+    ConfigureEndpoint, ConfigurePlan, ConfigureStep, Converter, Decoded, Expose, Scale, Unit,
+    Update, Value,
 };
 
 pub const ONOFF_ATTR: Converter = Converter::Attribute(AttributeRule {
@@ -224,13 +225,123 @@ pub static DIM_CT_READ: ConfigurePlan = ConfigurePlan {
     version: 1,
 };
 
+/// Assembles color from the whole ZCL frame, matching `fz.color_colortemp`.
+fn decode_color(frame: &AttributeFrameView<'_>, decoded: &mut Decoded) -> bool {
+    if frame.cluster != 0x0300 {
+        return false;
+    }
+    let mut x = None;
+    let mut y = None;
+    let mut hue = None;
+    let mut saturation = None;
+    let mut enhanced_hue = None;
+    let mut mode = None;
+    let mut color_temp = None;
+    for attr in frame.attributes() {
+        let value = attr.value;
+        match attr.id {
+            0x0000 => hue = value.first().map(|raw| f32::from(*raw) * 360.0 / 254.0),
+            0x0001 => saturation = value.first().map(|raw| f32::from(*raw) * 100.0 / 254.0),
+            0x0003 => x = u16_le(value).map(|raw| f32::from(raw) / 65535.0),
+            0x0004 => y = u16_le(value).map(|raw| f32::from(raw) / 65535.0),
+            0x0007 => color_temp = u16_le(value),
+            0x0008 => mode = value.first().copied(),
+            0x4000 => enhanced_hue = u16_le(value).map(|raw| f32::from(raw) * 360.0 / 65535.0),
+            _ => {}
+        }
+    }
+
+    let mut any = false;
+    if let Some(raw) = color_temp {
+        any |= decoded.push(Update::Property {
+            property: COLOR_TEMP,
+            value: Value::Uint(u32::from(raw)),
+        });
+    }
+    if let Some(raw) = mode {
+        any |= decoded.push(Update::Property {
+            property: COLOR_MODE,
+            value: Value::Enum(u32::from(raw)),
+        });
+    }
+
+    let hue = enhanced_hue.or(hue);
+    let color = if x.is_some() || y.is_some() {
+        match mode {
+            Some(0) if hue.is_some() || saturation.is_some() => {
+                Some(ColorValue::Hs { hue, saturation })
+            }
+            _ => Some(ColorValue::Xy { x, y }),
+        }
+    } else if hue.is_some() || saturation.is_some() {
+        Some(ColorValue::Hs { hue, saturation })
+    } else {
+        None
+    };
+    if let Some(color) = color {
+        any |= decoded.push(Update::Property {
+            property: COLOR,
+            value: Value::Color(color),
+        });
+    }
+    any
+}
+
+fn u16_le(bytes: &[u8]) -> Option<u16> {
+    (bytes.len() >= 2).then(|| u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+pub const COLOR_FRAME: Converter = Converter::Frame(decode_color);
+
+pub const COLOR_XY_TO: CommandMap = CommandMap {
+    command: Command::Property {
+        property: COLOR,
+        value: Value::Color(ColorValue::Xy {
+            x: Some(0.0),
+            y: Some(0.0),
+        }),
+    },
+    cluster: 0x0300,
+    zcl_command: 0x07,
+    args: &[],
+    codec: CommandCodec::ColorXy,
+};
+
+pub const COLOR_HS_TO: CommandMap = CommandMap {
+    command: Command::Property {
+        property: COLOR,
+        value: Value::Color(ColorValue::Hs {
+            hue: Some(0.0),
+            saturation: Some(0.0),
+        }),
+    },
+    cluster: 0x0300,
+    zcl_command: 0x06,
+    args: &[],
+    codec: CommandCodec::ColorHs,
+};
+
+pub const COLOR_ENHANCED_TO: CommandMap = CommandMap {
+    command: Command::Property {
+        property: COLOR,
+        value: Value::Color(ColorValue::Hs {
+            hue: Some(0.0),
+            saturation: Some(0.0),
+        }),
+    },
+    cluster: 0x0300,
+    zcl_command: 0x43,
+    args: &[],
+    codec: CommandCodec::ColorHsEnhanced,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::properties::{BRIGHTNESS, COLOR_TEMP};
+    use crate::properties::{BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP};
     use crate::{
-        decode, encode, Command, Fingerprint, Manufacturer, Profile, RawZcl, Support, Update,
-        Value,
+        decode, encode, AttributeFrameView, ColorValue, Command, Fingerprint, Manufacturer,
+        Profile, RawZcl, Support, Update, Value,
     };
 
     static FINGERPRINTS: &[Fingerprint] = &[Fingerprint {
@@ -250,6 +361,124 @@ mod tests {
             .union(Support::DECODED)
             .union(Support::CONTROLLED),
     };
+
+    static COLOR_PROFILE: Profile = Profile {
+        id: "test.color",
+        vendor: "test",
+        fingerprints: FINGERPRINTS,
+        exposes: &[Expose::Color { property: COLOR }],
+        from: &[COLOR_FRAME],
+        to: &[COLOR_XY_TO, COLOR_HS_TO],
+        configure: None,
+        support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+    };
+
+    static ENHANCED_PROFILE: Profile = Profile {
+        id: "test.color.enhanced",
+        vendor: "test",
+        fingerprints: FINGERPRINTS,
+        exposes: &[Expose::Color { property: COLOR }],
+        from: &[COLOR_FRAME],
+        to: &[COLOR_ENHANCED_TO],
+        configure: None,
+        support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+    };
+
+    fn color_updates<'a>(profile: &Profile, payload: &'a [u8]) -> Vec<Update> {
+        let frame = AttributeFrameView::parse(0x0300, 1, 0x0A, payload).unwrap();
+        let mut decoded = crate::Decoded::default();
+        crate::decode_frame(profile, &frame, &mut decoded);
+        decoded.updates().copied().collect()
+    }
+
+    #[test]
+    fn color_frame_assembles_xy_and_color_mode() {
+        let payload = [
+            0x03, 0x00, 0x21, 0x00, 0x7D, // currentX = 32000
+            0x04, 0x00, 0x21, 0xC0, 0x5D, // currentY = 24000
+            0x08, 0x00, 0x30, 0x01, // colorMode = xy
+        ];
+        let updates = color_updates(&COLOR_PROFILE, &payload);
+        let color = updates.iter().find_map(|update| match update {
+            Update::Property {
+                property,
+                value: Value::Color(color),
+            } if *property == COLOR => Some(*color),
+            _ => None,
+        });
+        let Some(ColorValue::Xy {
+            x: Some(x),
+            y: Some(y),
+        }) = color
+        else {
+            panic!("expected xy color, got {updates:?}");
+        };
+        assert!((x - 32000.0 / 65535.0).abs() < 1e-5);
+        assert!((y - 24000.0 / 65535.0).abs() < 1e-5);
+        assert!(updates.iter().any(|update| matches!(
+            update,
+            Update::Property { property, value: Value::Enum(1) } if *property == COLOR_MODE
+        )));
+    }
+
+    #[test]
+    fn partial_color_frame_keeps_missing_coordinate_missing() {
+        let updates = color_updates(&COLOR_PROFILE, &[0x03, 0x00, 0x21, 0x00, 0x7D]);
+        assert!(updates.iter().any(|update| matches!(
+            update,
+            Update::Property {
+                property: COLOR,
+                value: Value::Color(ColorValue::Xy { x: Some(_), y: None }),
+            }
+        )));
+    }
+
+    #[test]
+    fn hue_saturation_frame_decodes_as_hs() {
+        let payload = [
+            0x00, 0x00, 0x20, 0x7F, // currentHue = 127 -> 180
+            0x01, 0x00, 0x20, 0x7F, // currentSaturation = 127 -> 50
+            0x08, 0x00, 0x30, 0x00, // colorMode = hs
+        ];
+        let updates = color_updates(&COLOR_PROFILE, &payload);
+        let color = updates.iter().find_map(|update| match update {
+            Update::Property {
+                property,
+                value: Value::Color(color),
+            } if *property == COLOR => Some(*color),
+            _ => None,
+        });
+        let Some(ColorValue::Hs {
+            hue: Some(hue),
+            saturation: Some(saturation),
+        }) = color
+        else {
+            panic!("expected hs color");
+        };
+        assert!((hue - 180.0).abs() < 0.01);
+        assert!((saturation - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn color_commands_match_zcl_payloads() {
+        let mut out = [0u8; 12];
+        let xy = Command::Property {
+            property: COLOR,
+            value: Value::Color(ColorValue::xy(0.5, 0.25)),
+        };
+        assert_eq!(encode(&COLOR_PROFILE, &xy, &mut out), Some(8));
+        assert_eq!(&out[..8], &[0x00, 0x80, 0x00, 0x40, 0, 0, 0, 0]);
+
+        let hs = Command::Property {
+            property: COLOR,
+            value: Value::Color(ColorValue::hs(180.0, 50.0)),
+        };
+        assert_eq!(encode(&COLOR_PROFILE, &hs, &mut out), Some(6));
+        assert_eq!(&out[..6], &[127, 127, 0, 0, 0, 0]);
+
+        assert_eq!(encode(&ENHANCED_PROFILE, &hs, &mut out), Some(7));
+        assert_eq!(&out[..7], &[0x00, 0x80, 127, 0, 0, 0, 0]);
+    }
 
     #[test]
     fn composition_identifies_and_decodes() {

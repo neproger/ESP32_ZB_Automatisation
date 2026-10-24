@@ -2,7 +2,8 @@
 
 use z2m_rs::capabilities::{DIM_CT_READ, DIM_CT_CONFIGURE};
 use z2m_rs::{
-    encode, identify, properties::BRIGHTNESS, properties::COLOR_TEMP, Command, Expose, Interview,
+    decode_frame, encode, identify, properties::BRIGHTNESS, properties::COLOR,
+    properties::COLOR_TEMP, AttributeFrameView, ColorValue, Command, Decoded, Expose, Interview,
     Manufacturer, RawZcl, Support, Update, Value, LIGHTING,
 };
 
@@ -106,4 +107,44 @@ fn generated_light_identifies_and_encodes_brightness() {
     };
     assert_eq!(encode(found, &command, &mut out), Some(3));
     assert_eq!(&out[..3], &[100, 0, 0]);
+}
+#[test]
+fn generated_color_profiles_decode_and_encode() {
+    let profile = LIGHTING
+        .iter()
+        .copied()
+        .find(|profile| {
+            profile
+                .exposes
+                .iter()
+                .any(|expose| matches!(expose, Expose::Color { .. }))
+        })
+        .expect("generated color profile");
+
+    let payload = [
+        0x03, 0x00, 0x21, 0x00, 0x7D, // currentX = 32000
+        0x04, 0x00, 0x21, 0xC0, 0x5D, // currentY = 24000
+        0x08, 0x00, 0x30, 0x01, // colorMode = xy
+    ];
+    let frame = AttributeFrameView::parse(0x0300, 1, 0x0A, &payload).unwrap();
+    let mut decoded = Decoded::default();
+    decode_frame(profile, &frame, &mut decoded);
+    assert!(decoded.updates().any(|update| matches!(
+        update,
+        Update::Property {
+            property,
+            value: Value::Color(ColorValue::Xy { x: Some(_), y: Some(_) }),
+        } if *property == COLOR
+    )));
+
+    let mut out = [0u8; 12];
+    let xy = Command::Property {
+        property: COLOR,
+        value: Value::Color(ColorValue::xy(0.5, 0.25)),
+    };
+    let hs = Command::Property {
+        property: COLOR,
+        value: Value::Color(ColorValue::hs(180.0, 50.0)),
+    };
+    assert!(encode(profile, &xy, &mut out).is_some() || encode(profile, &hs, &mut out).is_some());
 }
