@@ -359,10 +359,16 @@ typedef void (*zb_exec_response_t)(uint16_t src_short, uint8_t src_ep, uint16_t 
                                    uint8_t command, uint8_t tsn, int16_t rsp_to_cmd,
                                    int16_t status);
 typedef void (*zb_exec_zdo_t)(uint32_t op, uint8_t success);
+typedef void (*zb_interview_read_t)(uint64_t ext, uint16_t short_addr, uint8_t ep,
+                                    uint16_t cluster, uint16_t attr, uint8_t type,
+                                    const uint8_t *value, uint16_t len);
 
 static zb_exec_confirm_t s_exec_confirm;
 static zb_exec_response_t s_exec_response;
 static zb_exec_zdo_t s_exec_zdo;
+static zb_interview_read_t s_interview_read;
+
+void zb_interview_set_callback(zb_interview_read_t cb) { s_interview_read = cb; }
 
 void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo)
 {
@@ -521,6 +527,42 @@ int zb_exec_bind(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t src_e
 
 /* --- end request executor bridge ----------------------------------------- */
 
+static void interview_forward(const ezb_zcl_cmd_read_attr_rsp_message_t *rsp)
+{
+    if (s_interview_read == NULL || rsp == NULL || rsp->in.header == NULL) {
+        return;
+    }
+    const ezb_zcl_cmd_hdr_t *header = rsp->in.header;
+    uint64_t ext = 0;
+    uint16_t short_addr = 0;
+    if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
+        ext = header->src_addr.u.extended_addr.u64;
+        (void)ezb_address_short_by_extended(&header->src_addr.u.extended_addr, &short_addr);
+    } else if (header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
+        short_addr = header->src_addr.u.short_addr;
+        ezb_extaddr_t uid = {0};
+        if (ezb_address_extended_by_short(short_addr, &uid) == EZB_ERR_NONE) {
+            ext = uid.u64;
+        }
+    }
+    for (const ezb_zcl_read_attr_rsp_variable_t *var = rsp->in.variables; var != NULL;
+         var = var->next) {
+        if (var->status != EZB_ZCL_STATUS_SUCCESS || var->attr_value == NULL) {
+            continue;
+        }
+        uint16_t len = 0;
+        if (var->attr_type == 0x41 || var->attr_type == 0x42) {
+            len = (uint16_t)(((const uint8_t *)var->attr_value)[0] + 1);
+        } else {
+            len = (uint16_t)zcl_value_size(var->attr_type);
+        }
+        if (len != 0) {
+            s_interview_read(ext, short_addr, header->src_ep, rsp->info.cluster_id, var->attr_id,
+                             var->attr_type, (const uint8_t *)var->attr_value, len);
+        }
+    }
+}
+
 static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
 {
     if (message == NULL) {
@@ -537,6 +579,7 @@ static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_i
         ezb_zcl_cmd_read_attr_rsp_message_t *rsp = message;
         rsp->out.result = EZB_ZCL_STATUS_SUCCESS;
         exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, -1);
+        interview_forward(rsp);
         break;
     }
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {

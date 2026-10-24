@@ -132,10 +132,19 @@ pub fn process_pending() {
                 );
                 return;
             }
+            let Some(profile) = crate::interview::selected_profile() else {
+                log::info!(
+                    "attr frame cluster=0x{:04x} attrs={} dropped={} (interview pending)",
+                    meta.cluster,
+                    attributes,
+                    dropped
+                );
+                return;
+            };
             let mut decoded = z2m_rs::Decoded::default();
-            let count = z2m_rs::decode_frame(&z2m_rs::SNZB_01P, &view, &mut decoded);
+            let count = z2m_rs::decode_frame(profile, &view, &mut decoded);
             log::info!(
-                "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile=sonoff.snzb01p(diagnostic)",
+                "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile={}",
                 meta.src_ext,
                 meta.src_ep,
                 meta.cluster,
@@ -143,7 +152,8 @@ pub fn process_pending() {
                 meta.rssi,
                 attributes,
                 count,
-                dropped
+                dropped,
+                profile.id
             );
             for update in decoded.updates() {
                 log::info!("decoded {update:?}");

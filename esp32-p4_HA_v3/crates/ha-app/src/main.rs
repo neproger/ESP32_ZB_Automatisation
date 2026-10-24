@@ -18,6 +18,7 @@ use zigbee_devices::{DeviceAdapter, Property, RawZclEvent, TuyaButton};
 
 mod exec;
 mod frames;
+mod interview;
 mod web;
 
 const DEVICE: EntityType = 1;
@@ -85,9 +86,9 @@ fn main() {
     }
     frames::install();
     exec::install();
+    interview::install();
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut transport = exec::EspTransport;
-    let mut config: Option<exec::ConfigRun> = None;
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
@@ -104,22 +105,15 @@ fn main() {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
             handle_event(&mut domain, &event, &delta_rx);
+            interview::start(&mut executor, (event.extended_addr, event.short_addr), now_ms());
         }
         frames::process_pending();
-        if config.is_none() {
-            if let Some(device) = frames::last_device() {
-                config = Some(exec::ConfigRun::start(&mut executor, device, now_ms()));
-            }
+        if let Some(device) = frames::last_device() {
+            interview::start(&mut executor, device, now_ms());
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
-            if let Some(run) = &mut config {
-                run.on_result(result);
-            }
-        }
-        if let Some(run) = &mut config {
-            run.tick(&mut executor, now_ms());
         }
         std::thread::sleep(Duration::from_millis(20));
     }
