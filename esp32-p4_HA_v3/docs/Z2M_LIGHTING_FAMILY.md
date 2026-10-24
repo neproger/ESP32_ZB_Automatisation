@@ -77,3 +77,24 @@ converters, configure, support. The missing pieces for the family:
    dimmable/CT family; emit an unsupported manifest (color, options).
 3. Golden-test decode/encode for on/off, brightness, color temperature.
 4. Only then add color and the option handlers, measured by the manifest.
+
+## Generated slice (implemented)
+
+`tools/z2m_spike/emit_lighting.cjs` emits **1031 real lighting profiles**
+(555 dim, 476 dim+color-temp) from ZHC 26.123.0, preserving vendor, model and
+all fingerprints. Color lights (689) are skipped and reported. Each profile is a
+composition of shared capabilities:
+
+- `ONOFF_ATTR/ON`, `LEVEL_ATTR/TO`, `COLORTEMP_ATTR/TO` in
+  `z2m-rs/src/capabilities.rs`;
+- `DIM_*` and `DIM_CT_*` arrays + configure plans;
+- no `LIGHT_STANDARD` handler and no per-model code.
+
+`CommandCodec::Level` encodes `brightness 0..254` as
+`moveToLevelWithOnOff(level, 0)`; `CommandCodec::ColorTemp` encodes mireds as
+`moveToColorTemp(mireds, 0)`. Incoming `0x0008/0x0000` and `0x0300/0x0007` decode to
+`BRIGHTNESS` and `COLOR_TEMP`.
+
+All generated profiles are `PARTIAL`: lighting options (level_config, rate,
+power_on_behavior, color options/effects) are not emitted yet. Host tests cover
+composition decoding, identification and dynamic encoding.

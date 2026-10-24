@@ -16,6 +16,7 @@
 
 mod frame;
 mod generated;
+pub mod capabilities;
 
 pub use frame::{AttributeFrameView, AttributeIter, AttributeView, FrameError};
 pub use generated::*;
@@ -35,6 +36,8 @@ pub mod properties {
     pub const BATTERY: PropertyId = PropertyId(1);
     pub const VOLTAGE: PropertyId = PropertyId(2);
     pub const STATE: PropertyId = PropertyId(3);
+    pub const BRIGHTNESS: PropertyId = PropertyId(4);
+    pub const COLOR_TEMP: PropertyId = PropertyId(5);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,6 +61,7 @@ pub enum Unit {
     None,
     Celsius,
     Percent,
+    Mired,
     Volt,
     MilliVolt,
     Lux,
@@ -225,13 +229,23 @@ pub enum Command {
     Action(Action),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandCodec {
+    None,
+    /// brightness 0..254 -> moveToLevelWithOnOff(level, transition)
+    Level,
+    /// color temperature in mireds -> moveToColorTemp(mireds, transition)
+    ColorTemp,
+}
+
 pub struct CommandMap {
     pub command: Command,
     pub cluster: u16,
     pub zcl_command: u8,
-    /// Fixed payload bytes for Phase A; variable encoders arrive with the first
-    /// device whose `toZigbee` needs them.
+    /// Fixed payload bytes for exact commands; empty for codecs that encode the
+    /// command value at runtime.
     pub args: &'static [u8],
+    pub codec: CommandCodec,
 }
 
 /// Target endpoint for a configure step: a fixed id or the device's first
@@ -329,7 +343,11 @@ pub struct Profile {
 pub static PROFILES: &[&Profile] = &[&TUYA_TS0041, &SNZB_01P, &TS011F];
 
 pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
-    PROFILES.iter().copied().find(|profile| {
+    PROFILES
+        .iter()
+        .chain(LIGHTING.iter())
+        .copied()
+        .find(|profile| {
         profile.fingerprints.iter().any(|fp| {
             fp.model == interview.model
                 && match fp.manufacturer {
@@ -427,15 +445,53 @@ pub fn resolve_command(profile: &Profile, command: &Command) -> Option<(u16, u8)
 
 pub fn encode(profile: &Profile, command: &Command, out: &mut [u8]) -> Option<usize> {
     let map = find_command(profile, command)?;
-    if out.len() < map.args.len() {
-        return None;
+    match map.codec {
+        CommandCodec::None => {
+            if out.len() < map.args.len() {
+                return None;
+            }
+            out[..map.args.len()].copy_from_slice(map.args);
+            Some(map.args.len())
+        }
+        CommandCodec::Level => {
+            if out.len() < 3 {
+                return None;
+            }
+            let level = numeric_value(command)?.clamp(0.0, 254.0).round() as u8;
+            out[..3].copy_from_slice(&[level, 0, 0]);
+            Some(3)
+        }
+        CommandCodec::ColorTemp => {
+            if out.len() < 4 {
+                return None;
+            }
+            let mireds = numeric_value(command)?.clamp(0.0, 65535.0).round() as u16;
+            out[..4].copy_from_slice(&[mireds as u8, (mireds >> 8) as u8, 0, 0]);
+            Some(4)
+        }
     }
-    out[..map.args.len()].copy_from_slice(map.args);
-    Some(map.args.len())
+}
+
+fn numeric_value(command: &Command) -> Option<f32> {
+    let Command::Property { value, .. } = command else {
+        return None;
+    };
+    Some(match value {
+        Value::Int(v) => *v as f32,
+        Value::Float(v) => *v,
+        Value::Uint(v) => *v as f32,
+        Value::Enum(v) => *v as f32,
+        Value::Bool(v) => u8::from(*v) as f32,
+    })
 }
 
 fn find_command<'a>(profile: &'a Profile, command: &Command) -> Option<&'a CommandMap> {
-    profile.to.iter().find(|map| match (command, &map.command) {
+    profile.to.iter().find(|map| {
+        if map.codec != CommandCodec::None {
+            return matches!((command, &map.command),
+                (Command::Property { property, .. }, Command::Property { property: mapped, .. }) if property == mapped);
+        }
+        match (command, &map.command) {
         (
             Command::Property { property, value },
             Command::Property {
@@ -445,6 +501,7 @@ fn find_command<'a>(profile: &'a Profile, command: &Command) -> Option<&'a Comma
         ) => property == mapped && value == mapped_value,
         (Command::Action(action), Command::Action(mapped)) => action == mapped,
         _ => false,
+        }
     })
 }
 
@@ -653,6 +710,7 @@ mod tests {
             cluster: 0x0006,
             zcl_command: 0x01,
             args: &[],
+            codec: CommandCodec::None,
         }];
         static PROFILE: Profile = Profile {
             id: "test.onoff",

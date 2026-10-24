@@ -2,7 +2,7 @@
 // definition yet (see docs/Z2M_GENERATOR_AUDIT.md).
 use crate::properties::STATE;
 use crate::{
-    AttributeRule, AttrType, Command, CommandMap, ConfigureEndpoint, ConfigurePlan,
+    AttributeRule, AttrType, Command, CommandCodec, CommandMap, ConfigureEndpoint, ConfigurePlan,
     ConfigureStep, Converter, Expose, Fingerprint, Manufacturer, Profile, Scale, Support, Value,
     TUYA_MAGIC_ATTRIBUTES,
 };
@@ -30,6 +30,7 @@ pub static TUYA_ON_OFF_STATE_TO: &[CommandMap] = &[
         cluster: 0x0006,
         zcl_command: 0x01,
         args: &[],
+        codec: CommandCodec::None,
     },
     CommandMap {
         command: Command::Property {
@@ -39,6 +40,7 @@ pub static TUYA_ON_OFF_STATE_TO: &[CommandMap] = &[
         cluster: 0x0006,
         zcl_command: 0x00,
         args: &[],
+        codec: CommandCodec::None,
     },
 ];
 
