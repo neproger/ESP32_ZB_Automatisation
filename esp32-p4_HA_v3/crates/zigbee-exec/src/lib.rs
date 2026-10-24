@@ -135,6 +135,9 @@ impl Status {
 pub struct OperationResult {
     pub id: OperationId,
     pub status: Status,
+    /// Owned read response bytes; only on `Confirmed` for a read request. A
+    /// failed or unmatched response never carries data.
+    pub read: Option<Payload>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +170,9 @@ pub enum Event {
         tsn: u8,
         rsp_to_cmd: Option<u8>,
         status: Option<u8>,
+        /// Bounded read result, attached by the transport only for a matched
+        /// successful read; `None` for unrelated/failed records.
+        read: Option<Payload>,
     },
     ZdoResult {
         op: OperationId,
@@ -308,6 +314,7 @@ impl Executor {
                     tsn,
                     rsp_to_cmd,
                     status,
+                    read,
                 } => self.on_response(
                     src,
                     endpoint,
@@ -316,6 +323,7 @@ impl Executor {
                     tsn,
                     rsp_to_cmd,
                     status,
+                    read,
                     now,
                 ),
                 Event::ZdoResult { op, success } => self.on_zdo_result(op, success, now),
@@ -346,7 +354,7 @@ impl Executor {
         };
 
         if expect == Expect::None {
-            self.finish(index, Status::Acknowledged);
+            self.finish(index, Status::Acknowledged, None);
             return;
         }
 
@@ -371,6 +379,7 @@ impl Executor {
         tsn: u8,
         rsp_to_cmd: Option<u8>,
         status: Option<u8>,
+        read: Option<Payload>,
         now: u64,
     ) {
         let response = Event::ZclResponse {
@@ -381,6 +390,7 @@ impl Executor {
             tsn,
             rsp_to_cmd,
             status,
+            read,
         };
         // Waiters know their TSN (confirm already arrived).
         let found = self.ops.iter().enumerate().find_map(|(index, op)| {
@@ -410,7 +420,7 @@ impl Executor {
         }
         let _ = now;
         if success {
-            self.finish(index, Status::Confirmed);
+            self.finish(index, Status::Confirmed, None);
         } else {
             self.retry_or_finish(index, Status::Failed, now);
         }
@@ -449,18 +459,15 @@ impl Executor {
     }
 
     fn apply_response(&mut self, index: usize, response: Event) {
-        let status = match response {
-            Event::ZclResponse { status, .. } => status.unwrap_or(0),
+        let (status, read) = match response {
+            Event::ZclResponse { status, read, .. } => (status.unwrap_or(0), read),
             _ => return,
         };
-        self.finish(
-            index,
-            if status == 0 {
-                Status::Confirmed
-            } else {
-                Status::Failed
-            },
-        );
+        if status == 0 {
+            self.finish(index, Status::Confirmed, read);
+        } else {
+            self.finish(index, Status::Failed, None);
+        }
     }
 
     fn buffer_early(&mut self, response: Event, now: u64) {
@@ -530,7 +537,7 @@ impl Executor {
             });
         for (index, expired) in expired.iter().enumerate() {
             if *expired {
-                self.finish(index, Status::Expired);
+                self.finish(index, Status::Expired, None);
             }
         }
     }
@@ -568,7 +575,7 @@ impl Executor {
             op.not_before = now + RETRY_BACKOFF_MS;
             return;
         }
-        self.finish(index, failure);
+        self.finish(index, failure, None);
     }
 
     fn send_queued<T: Transport>(&mut self, transport: &mut T, now: u64) {
@@ -591,7 +598,7 @@ impl Executor {
                     op.parked = false;
                 }
                 Err(SendError::Full) => return,
-                Err(_) => self.finish(index, Status::Failed),
+                Err(_) => self.finish(index, Status::Failed, None),
             }
         }
     }
@@ -627,15 +634,21 @@ impl Executor {
             .position(|op| op.as_ref().is_some_and(|op| op.id == id))
     }
 
-    fn finish(&mut self, index: usize, status: Status) {
+    fn finish(&mut self, index: usize, status: Status, read: Option<Payload>) {
         let Some(op) = self.ops[index].take() else {
             return;
         };
+        // Central guard: only a confirmed operation may expose read data.
+        let read = read.filter(|_| status == Status::Confirmed);
         if self.results.len() == MAX_RESULTS {
             self.results.pop_front();
             self.results_dropped = self.results_dropped.saturating_add(1);
         }
-        self.results.push_back(OperationResult { id: op.id, status });
+        self.results.push_back(OperationResult {
+            id: op.id,
+            status,
+            read,
+        });
     }
 }
 
@@ -683,7 +696,34 @@ pub mod fake {
                 tsn,
                 rsp_to_cmd,
                 status,
+                read: None,
             });
+        }
+
+        /// Read response carrying the attribute bytes the executor must pass on.
+        #[allow(clippy::too_many_arguments)]
+        pub fn response_read(
+            &mut self,
+            src: u16,
+            endpoint: u8,
+            cluster: u16,
+            command: u8,
+            tsn: u8,
+            status: Option<u8>,
+            read: &[u8],
+        ) -> Result<(), ExecError> {
+            let read = Payload::new(read)?;
+            self.events.push_back(Event::ZclResponse {
+                src,
+                endpoint,
+                cluster,
+                command,
+                tsn,
+                rsp_to_cmd: None,
+                status,
+                read: Some(read),
+            });
+            Ok(())
         }
 
         pub fn zdo(&mut self, op: OperationId, success: bool) {
@@ -788,6 +828,73 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_read_carries_payload() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let id = exec.enqueue(read_attr(), 0).unwrap();
+        run(&mut exec, &mut transport, 0);
+        transport.confirm(id, 9, true);
+        run(&mut exec, &mut transport, 10);
+        transport
+            .response_read(SHORT, EP, 0x0000, 0x01, 9, None, b"\x04\x42\x05_SONOFF")
+            .unwrap();
+        run(&mut exec, &mut transport, 20);
+        let result = exec.take_result().unwrap();
+        assert_eq!(result.status, Status::Confirmed);
+        assert_eq!(result.read.unwrap().as_slice(), b"\x04\x42\x05_SONOFF");
+    }
+
+    #[test]
+    fn failed_read_has_no_payload() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let id = exec.enqueue(read_attr(), 0).unwrap();
+        run(&mut exec, &mut transport, 0);
+        transport.confirm(id, 9, true);
+        run(&mut exec, &mut transport, 10);
+        transport
+            .response_read(SHORT, EP, 0x0000, 0x01, 9, Some(1), b"\x04\x42\x05_SONOFF")
+            .unwrap();
+        run(&mut exec, &mut transport, 20);
+        let result = exec.take_result().unwrap();
+        assert_eq!(result.status, Status::Failed);
+        assert!(result.read.is_none());
+    }
+
+    #[test]
+    fn early_read_payload_is_preserved() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let id = exec.enqueue(read_attr(), 0).unwrap();
+        run(&mut exec, &mut transport, 0);
+        transport
+            .response_read(SHORT, EP, 0x0000, 0x01, 42, None, b"\x04\x42\x05_SONOFF")
+            .unwrap();
+        run(&mut exec, &mut transport, 5);
+        transport.confirm(id, 42, true);
+        run(&mut exec, &mut transport, 10);
+        let result = exec.take_result().unwrap();
+        assert_eq!(result.status, Status::Confirmed);
+        assert_eq!(result.read.unwrap().as_slice(), b"\x04\x42\x05_SONOFF");
+    }
+
+    fn read_attr() -> Request {
+        Request {
+            device: 0xA4C1_383B_F9D6_2A03,
+            short: SHORT,
+            endpoint: EP,
+            sleepy: false,
+            retry: RetryPolicy::SAFE,
+            expiry_ms: 10_000,
+            timeout_ms: 1_000,
+            kind: RequestKind::ReadAttributes {
+                cluster: 0x0000,
+                attribute: 0x0004,
+            },
+        }
+    }
+
+    #[test]
     fn wrong_context_and_tsn_are_ignored() {
         let mut exec = Executor::new();
         let mut transport = FakeTransport::new();
@@ -826,7 +933,7 @@ mod tests {
     fn non_idempotent_command_is_not_retried() {
         let mut exec = Executor::new();
         let mut transport = FakeTransport::new();
-        let id = exec.enqueue(zcl(0x02, Expect::None, false), 0).unwrap();
+        let _id = exec.enqueue(zcl(0x02, Expect::None, false), 0).unwrap();
         run(&mut exec, &mut transport, 0);
         run(&mut exec, &mut transport, 1_001);
         assert_eq!(exec.take_result().unwrap().status, Status::Timeout);

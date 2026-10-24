@@ -372,18 +372,13 @@ static void forward_report(const ezb_zcl_cmd_report_attr_message_t *report)
 typedef void (*zb_exec_confirm_t)(uint32_t op, uint8_t tsn, uint8_t success);
 typedef void (*zb_exec_response_t)(uint16_t src_short, uint8_t src_ep, uint16_t cluster,
                                    uint8_t command, uint8_t tsn, int16_t rsp_to_cmd,
-                                   int16_t status);
+                                   int16_t status, const uint8_t *read, uint16_t read_len);
 typedef void (*zb_exec_zdo_t)(uint32_t op, uint8_t success);
-typedef void (*zb_interview_read_t)(uint64_t ext, uint16_t short_addr, uint8_t ep,
-                                    uint16_t cluster, uint16_t attr, uint8_t type,
-                                    const uint8_t *value, uint16_t len);
 
 static zb_exec_confirm_t s_exec_confirm;
 static zb_exec_response_t s_exec_response;
 static zb_exec_zdo_t s_exec_zdo;
-static zb_interview_read_t s_interview_read;
 
-void zb_interview_set_callback(zb_interview_read_t cb) { s_interview_read = cb; }
 void zb_poc_set_device_event_cb(zb_device_event_t cb) { s_device_event = cb; }
 
 void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo)
@@ -412,7 +407,8 @@ static void exec_set_addr(ezb_address_t *addr, uint64_t eui64, uint16_t short_ad
 }
 
 static void exec_notify_response(const ezb_zcl_cmd_hdr_t *header, uint16_t cluster,
-                                 uint8_t command, int16_t rsp_to_cmd, int16_t status)
+                                 uint8_t command, int16_t rsp_to_cmd, int16_t status,
+                                 const uint8_t *read, uint16_t read_len)
 {
     if (s_exec_response == NULL || header == NULL) {
         return;
@@ -424,7 +420,7 @@ static void exec_notify_response(const ezb_zcl_cmd_hdr_t *header, uint16_t clust
         (void)ezb_address_short_by_extended(&header->src_addr.u.extended_addr, &short_addr);
     }
     s_exec_response(short_addr, header->src_ep, cluster, command, header->tsn, rsp_to_cmd,
-                    status);
+                    status, read, read_len);
 }
 
 int zb_exec_read(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint16_t cluster,
@@ -543,40 +539,38 @@ int zb_exec_bind(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t src_e
 
 /* --- end request executor bridge ----------------------------------------- */
 
-static void interview_forward(const ezb_zcl_cmd_read_attr_rsp_message_t *rsp)
+/* Encode successful read records as `attr_id | attr_type | value`, the same
+ * attribute format `zigbee-frames` already parses. 1 = payload, 0 = no usable
+ * record, -1 = does not fit; the caller must not confirm such a read. */
+static int exec_encode_read(const ezb_zcl_cmd_read_attr_rsp_message_t *rsp, uint8_t *out,
+                            uint16_t max, uint16_t *out_len)
 {
-    if (s_interview_read == NULL || rsp == NULL || rsp->in.header == NULL) {
-        return;
-    }
-    const ezb_zcl_cmd_hdr_t *header = rsp->in.header;
-    uint64_t ext = 0;
-    uint16_t short_addr = 0;
-    if (header->src_addr.addr_mode == EZB_ADDR_MODE_EXT) {
-        ext = header->src_addr.u.extended_addr.u64;
-        (void)ezb_address_short_by_extended(&header->src_addr.u.extended_addr, &short_addr);
-    } else if (header->src_addr.addr_mode == EZB_ADDR_MODE_SHORT) {
-        short_addr = header->src_addr.u.short_addr;
-        ezb_extaddr_t uid = {0};
-        if (ezb_address_extended_by_short(short_addr, &uid) == EZB_ERR_NONE) {
-            ext = uid.u64;
-        }
-    }
+    uint16_t len = 0;
     for (const ezb_zcl_read_attr_rsp_variable_t *var = rsp->in.variables; var != NULL;
          var = var->next) {
         if (var->status != EZB_ZCL_STATUS_SUCCESS || var->attr_value == NULL) {
             continue;
         }
-        uint16_t len = 0;
+        uint16_t size = 0;
         if (var->attr_type == 0x41 || var->attr_type == 0x42) {
-            len = (uint16_t)(((const uint8_t *)var->attr_value)[0] + 1);
+            size = (uint16_t)(((const uint8_t *)var->attr_value)[0] + 1);
         } else {
-            len = (uint16_t)zcl_value_size(var->attr_type);
+            size = (uint16_t)zcl_value_size(var->attr_type);
         }
-        if (len != 0) {
-            s_interview_read(ext, short_addr, header->src_ep, rsp->info.cluster_id, var->attr_id,
-                             var->attr_type, (const uint8_t *)var->attr_value, len);
+        if (size == 0) {
+            continue;
         }
+        if ((uint32_t)len + 3u + size > max) {
+            return -1;
+        }
+        out[len++] = (uint8_t)(var->attr_id & 0xFF);
+        out[len++] = (uint8_t)(var->attr_id >> 8);
+        out[len++] = var->attr_type;
+        memcpy(&out[len], var->attr_value, size);
+        len = (uint16_t)(len + size);
     }
+    *out_len = len;
+    return len != 0 ? 1 : 0;
 }
 
 static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message)
@@ -611,14 +605,25 @@ static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_i
     case EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID: {
         ezb_zcl_cmd_read_attr_rsp_message_t *rsp = message;
         rsp->out.result = EZB_ZCL_STATUS_SUCCESS;
-        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, -1);
-        interview_forward(rsp);
+        uint8_t read[64];
+        uint16_t read_len = 0;
+        int encoded = exec_encode_read(rsp, read, sizeof(read), &read_len);
+        if (encoded < 0) {
+            /* Explicit failure: never confirm a read whose data was dropped. */
+            ESP_LOGW(TAG, "read rsp 0x%04x too large", (unsigned)rsp->info.cluster_id);
+            exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, 0x89, NULL, 0);
+        } else if (encoded == 0) {
+            exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, 0x8B, NULL, 0);
+        } else {
+            exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x01, -1, -1, read,
+                                 read_len);
+        }
         break;
     }
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
         ezb_zcl_cmd_default_rsp_message_t *rsp = message;
         exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x0B,
-                             (int16_t)rsp->in.rsp_to_cmd, (int16_t)rsp->in.status_code);
+                             (int16_t)rsp->in.rsp_to_cmd, (int16_t)rsp->in.status_code, NULL, 0);
         break;
     }
     case EZB_ZCL_CORE_CONFIG_REPORT_RSP_CB_ID: {
@@ -632,7 +637,7 @@ static void poc_core_action_handler(ezb_zcl_core_action_callback_id_t callback_i
                 break;
             }
         }
-        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x07, -1, status);
+        exec_notify_response(rsp->in.header, rsp->info.cluster_id, 0x07, -1, status, NULL, 0);
         break;
     }
     default:

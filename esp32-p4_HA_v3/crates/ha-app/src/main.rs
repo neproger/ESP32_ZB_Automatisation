@@ -121,7 +121,9 @@ fn main() {
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
+            interview::on_operation_result(result.id, result.status, result.read, now_ms());
         }
+        interview::tick(&mut executor, now_ms());
         std::thread::sleep(Duration::from_millis(20));
     }
 }

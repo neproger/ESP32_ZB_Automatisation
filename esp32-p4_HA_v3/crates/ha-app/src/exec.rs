@@ -7,7 +7,7 @@
 
 use std::sync::Mutex;
 
-use zigbee_exec::{Event, Payload, Request, RequestKind, RetryPolicy, SendError, Transport};
+use zigbee_exec::{Event, Payload, Request, RequestKind, SendError, Transport};
 
 const MAX_EVENTS: usize = 16;
 
@@ -65,7 +65,27 @@ unsafe extern "C" fn on_response(
     tsn: u8,
     rsp_to_cmd: i16,
     status: i16,
+    read: *const u8,
+    read_len: u16,
 ) {
+    let read = if read.is_null() || read_len == 0 {
+        None
+    } else {
+        let bytes = unsafe { std::slice::from_raw_parts(read, usize::from(read_len)) };
+        match Payload::new(bytes) {
+            Ok(payload) => Some(payload),
+            Err(error) => {
+                log::warn!("read payload rejected: {read_len} bytes, {error:?}");
+                None
+            }
+        }
+    };
+    // A payload we could not copy must fail the read, never confirm an empty one.
+    let status = if read.is_none() && read_len != 0 {
+        Some(0x89)
+    } else {
+        (status >= 0).then_some(status as u8)
+    };
     EVENTS.lock().unwrap().push(Event::ZclResponse {
         src: src_short,
         endpoint: src_ep,
@@ -73,7 +93,8 @@ unsafe extern "C" fn on_response(
         command,
         tsn,
         rsp_to_cmd: (rsp_to_cmd >= 0).then_some(rsp_to_cmd as u8),
-        status: (status >= 0).then_some(status as u8),
+        status,
+        read,
     });
 }
 
@@ -87,7 +108,9 @@ unsafe extern "C" fn on_zdo(op: u32, success: u8) {
 extern "C" {
     fn zb_exec_set_callbacks(
         confirm: Option<unsafe extern "C" fn(u32, u8, u8)>,
-        response: Option<unsafe extern "C" fn(u16, u8, u16, u8, u8, i16, i16)>,
+        response: Option<
+            unsafe extern "C" fn(u16, u8, u16, u8, u8, i16, i16, *const u8, u16),
+        >,
         zdo: Option<unsafe extern "C" fn(u32, u8)>,
     );
     fn zb_exec_read(op: u32, eui64: u64, short: u16, ep: u8, cluster: u16, attr: u16) -> i32;
