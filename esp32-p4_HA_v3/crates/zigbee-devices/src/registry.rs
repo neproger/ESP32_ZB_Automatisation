@@ -89,7 +89,7 @@ impl Registry {
     pub fn descriptor_for(&self, ieee: u64) -> Result<Option<DeviceDescriptor>, Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;
-        if record.signature.is_empty() {
+        if record.interview == crate::InterviewStatus::Removed || record.signature.is_empty() {
             return Ok(None);
         }
         DeviceDescriptor::decode(record.signature)
@@ -100,6 +100,9 @@ impl Registry {
     pub fn profile_for(&self, ieee: u64) -> Result<Option<&'static z2m_rs::Profile>, Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;
+        if record.interview == crate::InterviewStatus::Removed {
+            return Ok(None);
+        }
         if record.definition_id == crate::standard::STANDARD_PROFILE_ID {
             return Ok(Some(&crate::standard::STANDARD_PROFILE));
         }
@@ -118,7 +121,48 @@ impl Registry {
     pub fn model(&self, ieee: u64) -> Result<Option<String>, Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;
+        if record.interview == crate::InterviewStatus::Removed {
+            return Ok(None);
+        }
         Ok((!record.model.is_empty()).then(|| record.model.to_string()))
+    }
+
+    /// Durable deferred-leave mark: keep a tombstone instead of deleting the
+    /// row, so an announce cannot silently re-add the device.
+    pub fn mark_removed<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
+        let previous = self.slot(ieee).ok();
+        let record = previous.as_ref().and_then(|slot| slot.record().ok());
+        let tombstone = DeviceRecord {
+            ieee,
+            short: 0,
+            interview: crate::InterviewStatus::Removed,
+            definition_id: "",
+            manufacturer: record.map(|record| record.manufacturer).unwrap_or(""),
+            model: record.map(|record| record.model).unwrap_or(""),
+            definition_version: 0,
+            configured_version: 0,
+            signature: &[],
+        };
+        self.put(flash, &tombstone)
+    }
+
+    pub fn is_removed(&self, ieee: u64) -> bool {
+        let Ok(slot) = self.slot(ieee) else {
+            return false;
+        };
+        slot.record()
+            .map(|record| record.interview == crate::InterviewStatus::Removed)
+            .unwrap_or(false)
+    }
+
+    /// Clears the mark only after the leave succeeded. A row re-written by a
+    /// normal interview is left alone.
+    pub fn clear_removed<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
+        let removed = self.is_removed(ieee);
+        if !removed {
+            return Ok(());
+        }
+        self.remove(flash, ieee)
     }
 
     /// Configuration is bound to the definition: a different profile at the
@@ -278,5 +322,22 @@ mod tests {
         let reopened = Registry::open(&mut flash, 4).unwrap();
         assert_eq!(reopened.slot(IEEE), Err(Error::NotFound));
         assert_eq!(reopened.len(), 0);
+    }
+
+    #[test]
+    fn removal_mark_is_a_durable_tombstone() {
+        let mut flash = flash();
+        let mut registry = Registry::format(&mut flash, 4).unwrap();
+        registry.put(&mut flash, &record()).unwrap();
+        registry.mark_removed(&mut flash, IEEE).unwrap();
+
+        let mut reopened = Registry::open(&mut flash, 4).unwrap();
+        assert!(reopened.is_removed(IEEE));
+        assert!(reopened.profile_for(IEEE).unwrap().is_none());
+        assert!(reopened.descriptor_for(IEEE).unwrap().is_none());
+
+        reopened.clear_removed(&mut flash, IEEE).unwrap();
+        assert!(!reopened.is_removed(IEEE));
+        assert_eq!(reopened.slot(IEEE), Err(Error::NotFound));
     }
 }

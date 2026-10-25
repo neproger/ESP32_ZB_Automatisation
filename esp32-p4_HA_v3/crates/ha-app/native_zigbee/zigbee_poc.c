@@ -26,6 +26,7 @@
 #include "ezbee/zcl/zcl_core.h"
 #include "ezbee/zcl/zcl_general_cmd.h"
 #include "ezbee/zdo/zdo_bind_mgmt.h"
+#include "ezbee/zdo/zdo_nwk_mgmt.h"
 #include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -692,6 +693,40 @@ int zb_exec_active_ep(uint32_t op, uint64_t eui64, uint16_t short_addr)
     };
     esp_zigbee_lock_acquire(portMAX_DELAY);
     const ezb_err_t err = ezb_zdo_active_ep_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+static void exec_leave_cb(const ezb_zdo_nwk_mgmt_leave_req_result_t *result, void *user_ctx)
+{
+    const bool ok = result != NULL && result->error == EZB_ERR_NONE &&
+                    result->rsp != NULL && result->rsp->status == EZB_ZDP_STATUS_SUCCESS;
+    if (s_exec_zdo != NULL) {
+        s_exec_zdo((uint32_t)(uintptr_t)user_ctx, ok ? 1 : 0);
+    }
+}
+
+int zb_exec_leave(uint32_t op, uint64_t eui64, uint16_t short_addr)
+{
+    if (short_addr == 0 && eui64 != 0) {
+        ezb_extaddr_t device = {.u64 = eui64};
+        (void)ezb_address_short_by_extended(&device, &short_addr);
+    }
+    if (short_addr == 0) {
+        return -1;
+    }
+    ezb_zdo_nwk_mgmt_leave_req_t req = {0};
+    req.dst_nwk_addr = short_addr;
+    req.field.device_addr.u64 = eui64;
+    req.field.remove_children = false;
+    req.field.rejoin = false;
+    req.cb = exec_leave_cb;
+    req.user_ctx = (void *)(uintptr_t)op;
+
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
+    }
+    const ezb_err_t err = ezb_zdo_nwk_mgmt_leave_req(&req);
     esp_zigbee_lock_release();
     return err == EZB_ERR_NONE ? 0 : -1;
 }

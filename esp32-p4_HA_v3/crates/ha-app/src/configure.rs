@@ -227,6 +227,33 @@ fn queue(pending: Pending) {
     queue.push(pending);
 }
 
+/// Drop any queued/active plan for a removed device and clear its cooldown.
+pub fn forget(eui: u64) {
+    {
+        let mut run = RUN.lock().unwrap();
+        if run.as_ref().is_some_and(|run| run.eui() == eui) {
+            *run = None;
+        }
+    }
+    PENDING
+        .lock()
+        .unwrap()
+        .retain(|pending| pending.eui != eui);
+    for entry in COOLDOWN.lock().unwrap().iter_mut() {
+        if entry.0 == eui {
+            *entry = (0, 0);
+        }
+    }
+    if let Some(slot) = REFRESHED
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| **entry == Some(eui))
+    {
+        *slot = None;
+    }
+}
+
 fn pending_has(eui: u64) -> bool {
     PENDING.lock().unwrap().iter().any(|pending| pending.eui == eui)
 }

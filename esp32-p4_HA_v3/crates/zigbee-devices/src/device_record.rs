@@ -33,6 +33,9 @@ pub enum InterviewStatus {
     Partial = 1,
     Complete = 2,
     Failed = 3,
+    /// Deferred-leave tombstone: the device was removed from HA but its Zigbee
+    /// leave has not been confirmed yet.
+    Removed = 4,
 }
 
 impl InterviewStatus {
@@ -42,6 +45,7 @@ impl InterviewStatus {
             1 => Self::Partial,
             2 => Self::Complete,
             3 => Self::Failed,
+            4 => Self::Removed,
             _ => return None,
         })
     }

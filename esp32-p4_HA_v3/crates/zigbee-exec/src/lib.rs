@@ -146,6 +146,8 @@ pub enum RequestKind {
     ZdoSimpleDescriptor {
         endpoint: u8,
     },
+    /// ZDO Mgmt_Leave; also completed by the SDK callback.
+    ZdoLeave,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -416,6 +418,12 @@ impl Executor {
             .position(|(context_id, _)| *context_id == id)?;
         self.contexts.remove(index).map(|(_, request)| request)
     }
+    pub fn pending_leave(&self, device: u64) -> bool {
+        self.ops.iter().flatten().any(|op| {
+            op.request.device == device && matches!(op.request.kind, RequestKind::ZdoLeave)
+        })
+    }
+
     pub fn take_result(&mut self) -> Option<OperationResult> {
         self.results.pop_front()
     }
@@ -493,6 +501,7 @@ impl Executor {
             Some(RequestKind::ReadAttributes { .. }) => Expect::ZclResponse { command: 0x01 },
             Some(RequestKind::ConfigureReporting { .. }) => Expect::ZclResponse { command: 0x07 },
             Some(RequestKind::ZdoBind { .. })
+            | Some(RequestKind::ZdoLeave)
             | Some(RequestKind::ZdoActiveEndpoints)
             | Some(RequestKind::ZdoSimpleDescriptor { .. }) => {
                 let op = self.ops[index].as_mut().unwrap();
@@ -586,7 +595,7 @@ impl Executor {
         };
         let is_zdo = matches!(
             self.ops[index].as_ref().map(|op| op.request.kind),
-            Some(RequestKind::ZdoBind { .. })
+            Some(RequestKind::ZdoBind { .. }) | Some(RequestKind::ZdoLeave)
         );
         if !is_zdo {
             return;
@@ -615,7 +624,8 @@ impl Executor {
             }
             RequestKind::ZdoBind { .. }
             | RequestKind::ZdoActiveEndpoints
-            | RequestKind::ZdoSimpleDescriptor { .. } => return false,
+            | RequestKind::ZdoSimpleDescriptor { .. }
+            | RequestKind::ZdoLeave => return false,
         };
         let Event::ZclResponse {
             src,
@@ -1212,6 +1222,29 @@ mod tests {
         transport.zdo(id, true);
         run(&mut exec, &mut transport, 10);
         assert_eq!(exec.take_result().unwrap().status, Status::Confirmed);
+    }
+
+    #[test]
+    fn zdo_leave_finishes_on_callback_without_tsn() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let request = Request {
+            device: 1,
+            short: SHORT,
+            endpoint: 0,
+            sleepy: false,
+            retry: RetryPolicy::NEVER,
+            expiry_ms: 10_000,
+            timeout_ms: 1_000,
+            kind: RequestKind::ZdoLeave,
+        };
+        let id = exec.enqueue(request, 0).unwrap();
+        run(&mut exec, &mut transport, 0);
+        assert!(exec.pending_leave(1));
+        transport.zdo(id, true);
+        run(&mut exec, &mut transport, 10);
+        assert_eq!(exec.take_result().unwrap().status, Status::Confirmed);
+        assert!(!exec.pending_leave(1));
     }
 
     #[test]

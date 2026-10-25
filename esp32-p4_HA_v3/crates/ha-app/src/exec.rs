@@ -205,6 +205,7 @@ extern "C" {
     ) -> i32;
     fn zb_exec_active_ep(op: u32, eui64: u64, short: u16) -> i32;
     fn zb_exec_simple_desc(op: u32, eui64: u64, short: u16, ep: u8) -> i32;
+    fn zb_exec_leave(op: u32, eui64: u64, short: u16) -> i32;
 }
 
 pub fn install() {
@@ -303,6 +304,7 @@ impl Transport for EspTransport {
             RequestKind::ZdoSimpleDescriptor { endpoint } => unsafe {
                 zb_exec_simple_desc(op, request.device, request.short, endpoint)
             },
+            RequestKind::ZdoLeave => unsafe { zb_exec_leave(op, request.device, request.short) },
             RequestKind::ZdoBind { cluster } => unsafe {
                 zb_exec_bind(
                     op,

@@ -174,7 +174,7 @@ fn main() {
                     rename_device(&mut domain, device, &name)
                 }
                 intake::Request::RemoveDevice { device } => {
-                    remove_device(&mut domain, &mut bindings, device)
+                    remove_device(&mut domain, &mut bindings, &mut executor, device)
                 }
             }
         }
@@ -194,6 +194,18 @@ fn main() {
                 command_core.on_result(result.id as u64, status);
             }
             if let Some(context) = executor.take_context(result.id) {
+                if matches!(context.kind, zigbee_exec::RequestKind::ZdoLeave) {
+                    if result.status == zigbee_exec::Status::Confirmed {
+                        store::clear_removed(context.device);
+                        log::info!("registry: leave done eui={:016x}", context.device);
+                    } else {
+                        log::warn!(
+                            "registry: leave failed eui={:016x} status={:?}; mark kept",
+                            context.device,
+                            result.status
+                        );
+                    }
+                }
                 if let Some(read) = result.read {
                     ingest_read(&context, read);
                 }
@@ -519,9 +531,41 @@ fn rename_device(domain: &mut Domain, device: u64, name: &str) {
     }
 }
 
+fn request_leave(
+    executor: &mut zigbee_exec::Executor,
+    eui: u64,
+    short: u16,
+    now: u64,
+) -> bool {
+    if executor.pending_leave(eui) {
+        return true;
+    }
+    let request = zigbee_exec::Request {
+        device: eui,
+        short,
+        endpoint: 0,
+        sleepy: false,
+        retry: zigbee_exec::RetryPolicy::NEVER,
+        expiry_ms: 10_000,
+        timeout_ms: 3_000,
+        kind: zigbee_exec::RequestKind::ZdoLeave,
+    };
+    match executor.enqueue(request, now) {
+        Ok(id) => {
+            log::info!("leave queued eui={eui:016x} op={id}");
+            true
+        }
+        Err(error) => {
+            log::warn!("leave queue failed eui={eui:016x}: {error:?}");
+            false
+        }
+    }
+}
+
 fn remove_device(
     domain: &mut Domain,
     bindings: &mut Vec<zigbee_devices::Binding>,
+    executor: &mut zigbee_exec::Executor,
     device: u64,
 ) {
     let mut sink = StoreSink;
@@ -549,6 +593,20 @@ fn remove_device(
             .collect(),
         None => Vec::new(),
     };
+    let short = eui
+        .and_then(|eui| {
+            bindings
+                .iter()
+                .find(|binding| binding.eui == eui)
+                .map(|binding| binding.short)
+        })
+        .unwrap_or(0);
+    if let Some(eui) = eui {
+        if !store::mark_removed(eui) {
+            log::error!("domain: remove {device:016x} aborted: removal mark failed");
+            return;
+        }
+    }
     match adapter.remove_device_records(device) {
         Ok(count) => log::info!("domain: removed device={device:016x} records={count}"),
         Err(error) => {
@@ -563,16 +621,22 @@ fn remove_device(
     web::remove(ha_web::entity::LOGICAL_DEVICE, &device.to_le_bytes());
     if let Some(eui) = eui {
         interview::forget(eui);
-        store::remove_device(eui);
+        configure::forget(eui);
+        if !request_leave(executor, eui, short, now_ms()) {
+            log::warn!("domain: leave for {eui:016x} will retry on announce");
+        }
         bindings.retain(|binding| binding.eui != eui);
     }
-    // shortcut: removes the HA record only; the device stays paired and may be
-    // re-added on its next announce. A ZDO leave/tombstone is the follow-up.
     log::info!("domain: removed device={device:016x}");
 }
 
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
     if eui == 0 {
+        return;
+    }
+    if store::is_removed(eui) {
+        log::info!("registry: {eui:016x} marked removed; leave instead of interview");
+        let _ = request_leave(executor, eui, short, now_ms());
         return;
     }
     if let Some(profile) = store::lookup(eui) {

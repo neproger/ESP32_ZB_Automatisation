@@ -284,15 +284,40 @@ pub fn save(
     }
 }
 
-pub fn remove_device(ieee: u64) {
+/// Durable deferred-leave mark; canonical cleanup may proceed even if the
+/// immediate leave cannot be sent (the announce path retries it).
+pub fn mark_removed(ieee: u64) -> bool {
+    let mut flash = CFlash::MSTORE;
+    let mut guard = REGISTRY.lock().unwrap();
+    let Some(registry) = guard.as_mut() else {
+        return false;
+    };
+    match registry.mark_removed(&mut flash, ieee) {
+        Ok(()) => {
+            log::info!("registry: removal marked ieee={ieee:016x}");
+            true
+        }
+        Err(error) => {
+            log::error!("registry: mark removal failed ieee={ieee:016x}: {error:?}");
+            false
+        }
+    }
+}
+
+pub fn is_removed(ieee: u64) -> bool {
+    let registry = REGISTRY.lock().unwrap();
+    registry.as_ref().is_some_and(|registry| registry.is_removed(ieee))
+}
+
+pub fn clear_removed(ieee: u64) {
     let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return;
     };
-    match registry.remove(&mut flash, ieee) {
-        Ok(()) => log::info!("registry: removed ieee={ieee:016x}"),
-        Err(error) => log::error!("registry remove failed: {error:?}"),
+    match registry.clear_removed(&mut flash, ieee) {
+        Ok(()) => log::info!("registry: removal mark cleared ieee={ieee:016x}"),
+        Err(error) => log::error!("registry: clear removal failed ieee={ieee:016x}: {error:?}"),
     }
 }
 
@@ -338,6 +363,9 @@ pub fn device_addresses() -> ([(u64, u16); CAPACITY], usize) {
     if let Some(registry) = registry.as_ref() {
         for slot in registry.values() {
             if let Ok(record) = slot.record() {
+                if record.interview == InterviewStatus::Removed {
+                    continue;
+                }
                 if count < CAPACITY {
                     out[count] = (record.ieee, record.short);
                     count += 1;

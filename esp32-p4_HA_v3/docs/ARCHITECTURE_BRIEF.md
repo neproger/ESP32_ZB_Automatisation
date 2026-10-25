@@ -92,6 +92,13 @@ ha-v3/
 
 Для неизвестных устройств сохраняется диагностическая сигнатура; могут работать стандартные ZCL capabilities. recognized, supported, configured и online — разные состояния.
 
+Удаление устройства (порт V2 `device_remove` + `zigbee_remove_mark`): сначала
+durable tombstone в реестре, затем каскад canonical-записей (state, capabilities,
+entity, logical device) и ZDO Mgmt_Leave. Если устройство вне сети, tombstone
+остаётся; на announce leave повторяется, интервью не запускается. После
+подтверждённого leave tombstone снимается. Group item каскад появится вместе с
+Groups; автоматизации V2 при удалении тоже не каскадирует.
+
 ## 7. Модель конвертеров и каталог
 
 Каталог не равен полному исполнению конвертеров.
