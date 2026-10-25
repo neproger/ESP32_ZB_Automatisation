@@ -14,6 +14,98 @@ static RUN: Mutex<Option<ConfigRun>> = Mutex::new(None);
 static COOLDOWN: Mutex<[(u64, u64); COOLDOWN_SLOTS]> = Mutex::new([(0, 0); COOLDOWN_SLOTS]);
 
 pub fn ensure(exec: &mut Executor, eui: u64, short: u16, now: u64) {
+    let Some(profile) = crate::interview::selected_profile(eui) else { return; };
+    if profile.id == "standard.zcl" {
+        start_standard(exec, eui, short, now);
+        return;
+    }
+    let Some(plan) = profile.configure else { return; };
+    if crate::store::is_configured(eui, profile.id, plan.version) { return; }
+    if in_cooldown(eui, now) { return; }
+    let mut run = RUN.lock().unwrap();
+    if run.is_some() { return; }
+    *run = Some(ConfigRun::start(exec, (eui, short), FIRST_APP_ENDPOINT, profile.id, plan, now));
+}
+
+fn standard_steps(
+    endpoint: &zigbee_devices::EndpointDescriptor,
+) -> ([z2m_rs::ConfigureStep; 16], usize) {
+    use z2m_rs::{ConfigureEndpoint, ConfigureStep};
+    let placeholder = ConfigureStep::Bind { endpoint: ConfigureEndpoint::First, cluster: 0 };
+    let mut steps = [placeholder; 16];
+    let mut count = 0;
+    let mut bind = |cluster: u16, steps: &mut [ConfigureStep; 16], count: &mut usize| {
+        if *count < steps.len() {
+            steps[*count] = ConfigureStep::Bind { endpoint: ConfigureEndpoint::First, cluster };
+            *count += 1;
+        }
+    };
+    let mut report = |cluster: u16, attribute: u16, ty: u8, min: u16, max: u16, change: u32,
+                      steps: &mut [ConfigureStep; 16], count: &mut usize| {
+        if *count < steps.len() {
+            steps[*count] = ConfigureStep::Report {
+                endpoint: ConfigureEndpoint::First,
+                cluster,
+                attribute,
+                attribute_type: ty,
+                min,
+                max,
+                change,
+            };
+            *count += 1;
+        }
+    };
+    if endpoint.has_server(0x0006) {
+        bind(0x0006, &mut steps, &mut count);
+        report(0x0006, 0x0000, 0x10, 0, 3600, 1, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0008) {
+        bind(0x0008, &mut steps, &mut count);
+        report(0x0008, 0x0000, 0x20, 1, 3600, 1, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0001) {
+        bind(0x0001, &mut steps, &mut count);
+        report(0x0001, 0x0021, 0x20, 3600, 3600, 10, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0402) {
+        bind(0x0402, &mut steps, &mut count);
+        report(0x0402, 0x0000, 0x29, 10, 3600, 100, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0405) {
+        bind(0x0405, &mut steps, &mut count);
+        report(0x0405, 0x0000, 0x21, 10, 3600, 100, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0400) {
+        bind(0x0400, &mut steps, &mut count);
+        report(0x0400, 0x0000, 0x21, 10, 3600, 5, &mut steps, &mut count);
+    }
+    if endpoint.has_server(0x0406) {
+        bind(0x0406, &mut steps, &mut count);
+        report(0x0406, 0x0000, 0x18, 1, 3600, 0, &mut steps, &mut count);
+    }
+    (steps, count)
+}
+
+fn start_standard(exec: &mut Executor, eui: u64, short: u16, now: u64) {
+    let Some(descriptor) = crate::store::descriptor(eui) else { return; };
+    let Some(endpoint) = descriptor.endpoint(FIRST_APP_ENDPOINT) else { return; };
+    let (steps, count) = standard_steps(endpoint);
+    if count == 0 || crate::store::is_configured(eui, "standard.zcl", 1) || in_cooldown(eui, now) {
+        return;
+    }
+    let mut run = RUN.lock().unwrap();
+    if run.is_some() { return; }
+    *run = Some(ConfigRun::start_owned(
+        exec,
+        (eui, short),
+        FIRST_APP_ENDPOINT,
+        "standard.zcl",
+        &steps[..count],
+        1,
+        now,
+    ));
+}
+
     let Some(profile) = crate::interview::selected_profile(eui) else {
         return;
     };

@@ -329,11 +329,22 @@ impl Transport for EspTransport {
 
 /// Sequential ConfigurePlan runner over `zigbee-exec`: no own waiters/retries.
 /// It knows only request shapes, not models.
+const MAX_CONFIG_STEPS: usize = 16;
+static EMPTY_STEPS: &[z2m_rs::ConfigureStep] = &[];
+static EMPTY_PLAN: z2m_rs::ConfigurePlan = z2m_rs::ConfigurePlan {
+    steps: EMPTY_STEPS, timeout_ms: 5_000, retries: 2, version: 1,
+};
+
 pub struct ConfigRun {
     device: (u64, u16),
     endpoint: u8,
     definition: &'static str,
     plan: &'static z2m_rs::ConfigurePlan,
+    steps: [Option<z2m_rs::ConfigureStep>; MAX_CONFIG_STEPS],
+    step_count: usize,
+    version: u16,
+    timeout_ms: u32,
+    retries: u8,
     next: usize,
     op: Option<u32>,
     pending: Option<zigbee_exec::OperationResult>,
@@ -355,6 +366,11 @@ impl ConfigRun {
             endpoint,
             definition,
             plan,
+            steps: [None; MAX_CONFIG_STEPS],
+            step_count: 0,
+            version: plan.version,
+            timeout_ms: plan.timeout_ms,
+            retries: plan.retries,
             next: 0,
             op: None,
             pending: None,
@@ -366,6 +382,39 @@ impl ConfigRun {
             device.0,
             plan.version
         );
+        run.schedule(exec, now);
+        run
+    }
+
+    pub fn start_owned(
+        exec: &mut zigbee_exec::Executor,
+        device: (u64, u16),
+        endpoint: u8,
+        definition: &'static str,
+        steps: &[z2m_rs::ConfigureStep],
+        version: u16,
+        now: u64,
+    ) -> Self {
+        let mut run = Self {
+            device,
+            endpoint,
+            definition,
+            plan: &EMPTY_PLAN,
+            steps: [None; MAX_CONFIG_STEPS],
+            step_count: steps.len().min(MAX_CONFIG_STEPS),
+            version,
+            timeout_ms: 5_000,
+            retries: 2,
+            next: 0,
+            op: None,
+            pending: None,
+            failed: false,
+            done: false,
+        };
+        for (slot, step) in run.steps.iter_mut().zip(steps.iter().copied()) {
+            *slot = Some(step);
+        }
+        log::info!("configure: start standard device={:016x} steps={}", device.0, run.step_count);
         run.schedule(exec, now);
         run
     }
@@ -416,9 +465,10 @@ impl ConfigRun {
                 }
             }
         }
-        if self.next >= self.plan.steps.len() {
+        let count = if self.step_count > 0 { self.step_count } else { self.plan.steps.len() };
+        if self.next >= count {
             self.done = true;
-            log::info!("configure: done version={} (RAM)", self.plan.version);
+            log::info!("configure: done version={} (RAM)", self.version);
             return true;
         }
         if self.op.is_none() {
@@ -440,9 +490,9 @@ impl ConfigRun {
             // Battery devices must not fail a plan because they slept.
             sleepy: true,
             retry: zigbee_exec::RetryPolicy {
-                max_attempts: self.plan.retries.clamp(1, 3),
+                max_attempts: self.retries.clamp(1, 3),
             },
-            expiry_ms: self.plan.timeout_ms,
+            expiry_ms: self.timeout_ms,
             timeout_ms: 3_000,
             kind,
         };
@@ -460,7 +510,7 @@ impl ConfigRun {
 
     fn kind(&self) -> Option<(u8, zigbee_exec::RequestKind)> {
         use z2m_rs::{ConfigureEndpoint, ConfigureStep};
-        let step = self.plan.steps.get(self.next)?;
+        let step = if self.step_count > 0 { self.steps.get(self.next)?.as_ref()? } else { self.plan.steps.get(self.next)? };
         let endpoint = match step {
             ConfigureStep::Read { endpoint, .. }
             | ConfigureStep::Bind { endpoint, .. }
