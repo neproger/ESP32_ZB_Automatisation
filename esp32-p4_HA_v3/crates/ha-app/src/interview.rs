@@ -127,7 +127,6 @@ pub fn on_operation_result(exec: &mut Executor, result: OperationResult, now: u6
         identified.manufacturer,
         identified.model,
         identified.profile.id,
-        &identified.descriptor,
         identified.profile.support
     );
     PROFILES
