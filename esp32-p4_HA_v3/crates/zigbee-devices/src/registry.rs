@@ -113,6 +113,14 @@ impl Registry {
         }))
     }
 
+    /// Human-readable model from the interview; `None` when the record has no
+    /// model string (the caller falls back to the profile id).
+    pub fn model(&self, ieee: u64) -> Result<Option<String>, Error> {
+        let slot = self.slot(ieee)?;
+        let record = slot.record()?;
+        Ok((!record.model.is_empty()).then(|| record.model.to_string()))
+    }
+
     /// Configuration is bound to the definition: a different profile at the
     /// same version still needs its own plan.
     pub fn is_configured(
@@ -212,6 +220,7 @@ mod tests {
         let restarted = Registry::open(&mut flash, 4).unwrap();
         let profile = restarted.profile_for(IEEE).unwrap().unwrap();
         assert_eq!(profile.id, "tuya.ts0041");
+        assert_eq!(restarted.model(IEEE).unwrap().as_deref(), Some("TS0041"));
         let slot = restarted.slot(IEEE).unwrap();
         assert_eq!(slot.record().unwrap().manufacturer, "_TZ3000_b4awzgct");
     }

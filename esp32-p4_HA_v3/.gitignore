@@ -8,3 +8,5 @@ tools/z2m_spike/lighting_report.json
 tools/z2m_spike/lighting_manifest.json
 tools/zhc-compiler/node_modules/
 tools/zhc-compiler/out/
+/.vscode/
+/.clangd

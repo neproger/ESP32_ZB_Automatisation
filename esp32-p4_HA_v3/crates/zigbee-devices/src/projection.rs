@@ -128,11 +128,11 @@ pub fn canonical_states(
             None
         }
         Update::Property { property, value } if *property == properties::BRIGHTNESS => {
-            if let Some(raw) = numeric(value) {
+            if let Some(percent) = numeric(value).and_then(brightness_percent) {
                 states[0] = Some(StateUpdate {
                     entity,
                     property: PROPERTY_BRIGHTNESS,
-                    value: DomainValue::f32(raw * 100.0 / 254.0),
+                    value: DomainValue::f32(percent),
                 });
             }
             None
@@ -255,6 +255,13 @@ pub fn canonical_states(
         _ => None,
     };
     (states, event)
+}
+
+/// ZCL LevelControl `CurrentLevel`: 0..=254 are valid, 0xFF means "invalid".
+/// The canonical property is percent (0..=100), so an invalid sentinel is not
+/// projected as state at all.
+fn brightness_percent(raw: f32) -> Option<f32> {
+    (0.0..=254.0).contains(&raw).then(|| raw * 100.0 / 254.0)
 }
 
 fn numeric(value: &Value) -> Option<f32> {
@@ -395,6 +402,25 @@ mod tests {
         );
         assert!(event.is_none());
         assert_eq!(states[0].unwrap().value.as_f32().unwrap(), 50.0);
+
+        let (states, _) = canonical_states(
+            entity,
+            &Update::Property {
+                property: properties::BRIGHTNESS,
+                value: Value::Int(254),
+            },
+        );
+        assert_eq!(states[0].unwrap().value.as_f32().unwrap(), 100.0);
+
+        // 0xFF is the ZCL "invalid" sentinel, not a brightness value.
+        let (states, _) = canonical_states(
+            entity,
+            &Update::Property {
+                property: properties::BRIGHTNESS,
+                value: Value::Int(255),
+            },
+        );
+        assert_eq!(states, [None, None]);
 
         let (states, _) = canonical_states(
             entity,

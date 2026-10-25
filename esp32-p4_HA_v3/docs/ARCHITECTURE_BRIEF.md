@@ -117,10 +117,11 @@ Command -> Zigbee async -> real report/event -> Domain mutation
 
 micro_db остается низкоуровневым универсальным storage engine (slot/index/generation/version, RAM/Flash политики, metadata check), не знает о Zigbee и доменной логике. Rust API/порт MicroDB V2 — отдельная задача; не объявляем уже реализованным. Подтвержденное состояние не меняется при одной лишь отправке команды. Одноразовые actions (например, short/double/hold) — события, а не постоянные состояния.
 
-Статус V3: Domain сейчас **RAM-only** (`Backing::Flash` отклоняется), на flash
-хранится только реестр устройств (`zigbee-devices::Registry`). Перенос
-property state/capabilities в MicroDB — следующий этап; до него состояние
-теряется при перезагрузке.
+Статус V3: Domain остаётся RAM-кэшем, но прошивка пишет его canonical-записи в
+MicroDB и восстанавливает при старте: реестр устройств — в разделе `mstore`,
+entity/capabilities/property-state — в разделе `domain` (write-through через
+`RecordSink` в HA Zigbee Layer). `EntityDesc.backing` пока `Ram`; это осознанно,
+запись выполняет прикладной слой, а не сам Domain.
 
 ## 9. Производительность и ограничения
 

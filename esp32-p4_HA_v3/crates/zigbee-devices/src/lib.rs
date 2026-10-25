@@ -24,7 +24,7 @@ pub use descriptor::{
 pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
-pub use domain_adapter::DomainAdapter;
+pub use domain_adapter::{DomainAdapter, RecordSink};
 pub use interview::{
     Identified, InterviewManager, COOLDOWN_MS, JOB_SLOTS, MAX_ATTEMPTS, OP_DEADLINE_MS,
     RETRY_BACKOFF_MS,

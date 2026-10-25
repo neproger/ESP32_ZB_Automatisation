@@ -5,9 +5,12 @@
 //! -> bounded intake -> `CommandCore` -> `zigbee-exec` -> C transport.
 //! No async runtime: one poll loop owns the Domain, the executor and the queues.
 //!
-//! The Domain is RAM-only in V3; the device registry is the only persisted store.
+//! The Domain is a RAM cache; its canonical records are written through to
+//! MicroDB (`domain` partition) and restored at boot. The registry lives in
+//! `mstore`.
 
 use std::ffi::{c_char, CStr, CString};
+use std::io::{Read, Write};
 use std::time::Duration;
 
 use ha_domain::canonical::{
@@ -71,6 +74,10 @@ fn main() {
     exec::install();
     interview::install();
     store::init();
+    if let Err(error) = DomainAdapter::new(&mut domain) {
+        log::error!("domain: table init failed: {error:?}");
+    }
+    store::restore_domain(&mut domain);
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut command_core = CommandCore::new();
     let mut bindings: Vec<zigbee_devices::Binding> = Vec::new();
@@ -245,7 +252,8 @@ fn apply_capabilities(
     entity: u64,
     capabilities: ha_domain::canonical::CapabilitiesRecord,
 ) {
-    let Ok(mut adapter) = DomainAdapter::new(domain) else { return; };
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else { return; };
     if let Err(error) = adapter.write_capabilities(entity, &capabilities) {
         log::error!("domain: capabilities {entity:016x} failed: {error:?}");
         return;
@@ -262,7 +270,8 @@ fn apply_state(
     command_core: &mut CommandCore,
     state: zigbee_devices::StateUpdate,
 ) {
-    let Ok(mut adapter) = DomainAdapter::new(domain) else {
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
         log::error!("domain: state adapter init failed");
         return;
     };
@@ -333,14 +342,40 @@ fn start_wifi() {
     for _ in 0..120 {
         let mut buf = [0 as c_char; 32];
         if unsafe { ha_wifi_ip(buf.as_mut_ptr(), buf.len()) } != 0 {
-            let ip = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+            let ip = unsafe { CStr::from_ptr(buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
             log::info!("wifi ip={ip}");
+            match std::net::TcpStream::connect((ip.trim(), 80)) {
+                Ok(mut stream) => {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let _ = stream.write_all(b"GET / HTTP/1.0\r\n\r\n");
+                    let mut response = [0u8; 16];
+                    match stream.read(&mut response) {
+                        Ok(n) if n > 0 => log::info!("web: self-check ok ({n} bytes)"),
+                        other => log::error!("web: self-check read failed: {other:?}"),
+                    }
+                }
+                Err(error) => log::error!("web: self-check connect failed: {error}"),
+            }
             return;
         }
         std::thread::sleep(Duration::from_millis(500));
     }
     log::warn!("wifi: no IPv4 after 60 s");
 }
+struct StoreSink;
+
+impl zigbee_devices::RecordSink for StoreSink {
+    fn put(&mut self, entity: u32, key: &[u8], record: &[u8]) {
+        store::save_domain(entity, key, record);
+    }
+
+    fn remove(&mut self, entity: u32, key: &[u8]) {
+        store::remove_domain(entity, key);
+    }
+}
+
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }
@@ -352,16 +387,17 @@ fn register_device(
     short: u16,
     profile: &'static z2m_rs::Profile,
 ) {
+    let name = store::model(eui).unwrap_or_else(|| profile.id.to_string());
     let descriptor = store::descriptor(eui);
     let mut registered = false;
     if let Some(descriptor) = descriptor {
         for endpoint in descriptor.endpoints() {
-            register_domain(domain, bindings, eui, short, endpoint.endpoint, profile);
+            register_domain(domain, bindings, eui, short, endpoint.endpoint, profile, &name);
             registered = true;
         }
     }
     if !registered {
-        register_domain(domain, bindings, eui, short, 1, profile);
+        register_domain(domain, bindings, eui, short, 1, profile, &name);
     }
 }
 
@@ -372,12 +408,14 @@ fn register_domain(
     short: u16,
     endpoint: u8,
     profile: &'static z2m_rs::Profile,
+    name: &str,
 ) {
-    let Ok(mut adapter) = DomainAdapter::new(domain) else {
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
         log::error!("domain: adapter init failed");
         return;
     };
-    let device = match adapter.ensure_device(eui, profile.id) {
+    let device = match adapter.ensure_device(eui, name) {
         Ok((device, _)) => device,
         Err(error) => {
             log::error!("domain: device {eui:016x} failed: {error:?}");
@@ -390,8 +428,8 @@ fn register_domain(
         None
     };
     let entity_result = match standard_endpoint {
-        Some(descriptor) => adapter.ensure_standard_entity(eui, endpoint, profile.id, &descriptor),
-        None => adapter.ensure_entity(eui, endpoint, profile.id, profile),
+        Some(descriptor) => adapter.ensure_standard_entity(eui, endpoint, name, &descriptor),
+        None => adapter.ensure_entity(eui, endpoint, name, profile),
     };
     match entity_result {
         Ok((entity, changed)) => {
@@ -407,13 +445,13 @@ fn register_domain(
                 });
             }
             let native = format!("{eui:016x}");
-            let device_record = LogicalDeviceRecord::new(SOURCE_ZIGBEE, 0, &native, profile.id);
+            let device_record = LogicalDeviceRecord::new(SOURCE_ZIGBEE, 0, &native, name);
             web::upsert(
                 ha_web::entity::LOGICAL_DEVICE,
                 &device.to_le_bytes(),
                 &device_record.encode(),
             );
-            let entity_record = EntityRecord::new(device, profile.id);
+            let entity_record = EntityRecord::new(device, name);
             web::upsert(
                 ha_web::entity::ENTITY,
                 &entity.to_le_bytes(),
