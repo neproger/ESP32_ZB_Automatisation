@@ -46,6 +46,8 @@ struct PocEvent {
 extern "C" {
     fn ha_wifi_start(ssid: *const c_char, password: *const c_char) -> i32;
     fn ha_wifi_ip(out: *mut c_char, len: usize) -> i32;
+    fn ha_wifi_reconnect();
+    fn ha_time_start();
     fn zb_poc_start() -> i32;
     fn zb_poc_run();
     fn zb_poc_poll(event: *mut PocEvent) -> i32;
@@ -78,6 +80,8 @@ fn main() {
         log::error!("domain: table init failed: {error:?}");
     }
     store::restore_domain(&mut domain);
+    let mut automation = ha_automation::RuleEngine::boxed();
+    rebuild_rules(&domain, &mut automation);
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut command_core = CommandCore::new();
     let mut bindings: Vec<zigbee_devices::Binding> = Vec::new();
@@ -112,6 +116,7 @@ fn main() {
         .expect("wifi thread");
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
+    let mut last_minute: Option<(u16, u8)> = None;
     loop {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
@@ -176,16 +181,125 @@ fn main() {
                 intake::Request::RemoveDevice { device } => {
                     remove_device(&mut domain, &mut bindings, &mut executor, device)
                 }
+                intake::Request::Upsert {
+                    entity,
+                    key,
+                    record,
+                } => {
+                    let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
+                    let mut sink = StoreSink;
+                    let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
+                        log::error!("domain: adapter init failed");
+                        continue;
+                    };
+                    match adapter.put_record(entity, &key, &record) {
+                        Ok(changed) => {
+                            if changed {
+                                if let Ok(frame_type) = u8::try_from(entity) {
+                                    web::upsert(frame_type, &key, &record);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("domain: upsert entity={entity} failed: {error:?}")
+                        }
+                    }
+                    drop(adapter);
+                    if is_rule {
+                        rebuild_rules(&domain, &mut automation);
+                    }
+                }
+                intake::Request::Remove { entity, key } => {
+                    let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
+                    let mut sink = StoreSink;
+                    let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
+                        log::error!("domain: adapter init failed");
+                        continue;
+                    };
+                    match entity {
+                        ha_domain::canonical::ENTITY_GROUP => {
+                            let Some(id) = key
+                                .get(..8)
+                                .and_then(|bytes| bytes.try_into().ok())
+                                .map(u64::from_le_bytes)
+                            else {
+                                continue;
+                            };
+                            match adapter.remove_group(id) {
+                                Ok(count) => {
+                                    log::info!("domain: removed group={id:016x} records={count}")
+                                }
+                                Err(error) => {
+                                    log::warn!("domain: remove group={id:016x} failed: {error:?}")
+                                }
+                            }
+                            web::remove_group(id);
+                        }
+                        ha_domain::canonical::ENTITY_AUTOMATION => {
+                            let Some(id) = key
+                                .get(..8)
+                                .and_then(|bytes| bytes.try_into().ok())
+                                .map(u64::from_le_bytes)
+                            else {
+                                continue;
+                            };
+                            match adapter.remove_automation(id) {
+                                Ok(count) => log::info!(
+                                    "domain: removed automation={id:016x} records={count}"
+                                ),
+                                Err(error) => log::warn!(
+                                    "domain: remove automation={id:016x} failed: {error:?}"
+                                ),
+                            }
+                            web::remove_automation(id);
+                        }
+                        _ => match adapter.remove_record(entity, &key) {
+                            Ok(changed) => {
+                                if changed {
+                                    if let Ok(frame_type) = u8::try_from(entity) {
+                                        web::remove(frame_type, &key);
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                log::warn!("domain: remove entity={entity} failed: {error:?}")
+                            }
+                        },
+                    }
+                    drop(adapter);
+                    if is_rule {
+                        rebuild_rules(&domain, &mut automation);
+                    }
+                }
             }
         }
         while let Some(state) = bridge::take_state() {
+            let entity = state.entity;
+            let property = state.property;
+            let value = ha_automation::value_to_f64(&state.value);
             apply_state(&mut domain, &mut command_core, state);
+            if let Some(value) = value {
+                let mut actions = ha_automation::Actions::new();
+                automation.on_state(
+                    entity,
+                    property,
+                    value,
+                    &DomainState(&domain),
+                    &mut actions,
+                );
+                submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
+            }
         }
         while let Some((entity, capabilities)) = bridge::take_capabilities() {
             apply_capabilities(&mut domain, entity, capabilities);
         }
         while let Some(event) = bridge::take_event() {
+            let entity = event.entity;
+            let event_id = event.event;
             publish_event(&mut domain, event);
+            let mut actions = ha_automation::Actions::new();
+            automation.on_event(entity, event_id, &DomainState(&domain), &mut actions);
+            submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
@@ -215,6 +329,22 @@ fn main() {
         }
         interview::tick(&mut executor, now_ms());
         configure::tick(&mut executor, now_ms());
+        if let Some((minutes, weekday)) = utc_minute() {
+            if last_minute != Some((minutes, weekday)) {
+                if last_minute.is_none() {
+                    log::info!("time: UTC clock ready (time rules use UTC)");
+                }
+                last_minute = Some((minutes, weekday));
+                let mut actions = ha_automation::Actions::new();
+                automation.on_minute(
+                    minutes,
+                    1u8 << weekday,
+                    &DomainState(&domain),
+                    &mut actions,
+                );
+                submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
+            }
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -365,30 +495,47 @@ fn start_wifi() {
         log::error!("wifi start failed: {err}");
         return;
     }
-    for _ in 0..120 {
+    let mut last_ip: Option<String> = None;
+    let mut time_started = false;
+    let mut misses = 0u32;
+    loop {
         let mut buf = [0 as c_char; 32];
         if unsafe { ha_wifi_ip(buf.as_mut_ptr(), buf.len()) } != 0 {
             let ip = unsafe { CStr::from_ptr(buf.as_ptr()) }
                 .to_string_lossy()
                 .into_owned();
-            log::info!("wifi ip={ip}");
-            match std::net::TcpStream::connect((ip.trim(), 80)) {
-                Ok(mut stream) => {
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                    let _ = stream.write_all(b"GET / HTTP/1.0\r\n\r\n");
-                    let mut response = [0u8; 16];
-                    match stream.read(&mut response) {
-                        Ok(n) if n > 0 => log::info!("web: self-check ok ({n} bytes)"),
-                        other => log::error!("web: self-check read failed: {other:?}"),
-                    }
+            if last_ip.as_deref() != Some(ip.as_str()) {
+                log::info!("wifi ip={ip}");
+                if !time_started {
+                    unsafe { ha_time_start() };
+                    log::info!("time: SNTP started (UTC)");
+                    time_started = true;
                 }
-                Err(error) => log::error!("web: self-check connect failed: {error}"),
+                match std::net::TcpStream::connect((ip.trim(), 80)) {
+                    Ok(mut stream) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let _ = stream.write_all(b"GET / HTTP/1.0\r\n\r\n");
+                        let mut response = [0u8; 16];
+                        match stream.read(&mut response) {
+                            Ok(n) if n > 0 => log::info!("web: self-check ok ({n} bytes)"),
+                            other => log::error!("web: self-check read failed: {other:?}"),
+                        }
+                    }
+                    Err(error) => log::error!("web: self-check connect failed: {error}"),
+                }
+                last_ip = Some(ip);
             }
-            return;
+            misses = 0;
+        } else {
+            // V2 watchdog: two 5 s misses without an address -> retry with backoff.
+            misses += 1;
+            if misses >= 10 {
+                misses = 0;
+                unsafe { ha_wifi_reconnect() };
+            }
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    log::warn!("wifi: no IPv4 after 60 s");
 }
 struct StoreSink;
 
@@ -400,6 +547,88 @@ impl zigbee_devices::RecordSink for StoreSink {
     fn remove(&mut self, entity: u32, key: &[u8]) {
         store::remove_domain(entity, key);
     }
+}
+
+struct DomainState<'a>(&'a Domain);
+
+impl ha_automation::StateSource for DomainState<'_> {
+    fn state(&self, entity: u64, property: u32) -> Option<f64> {
+        let key = StateKey { entity, property }.to_bytes();
+        let mut bytes = [0u8; ha_domain::canonical::STATE_RECORD_LEN];
+        self.0
+            .entity_get(ha_domain::canonical::ENTITY_PROPERTY_STATE, &key, &mut bytes)
+            .ok()?;
+        let value = ha_domain::Value::from_bytes(&bytes)?;
+        ha_automation::value_to_f64(&value)
+    }
+}
+
+fn rebuild_rules(domain: &Domain, engine: &mut ha_automation::RuleEngine) {
+    engine.clear();
+    if let Err(error) = domain.entity_iter(ha_domain::canonical::ENTITY_AUTOMATION, |key, record| {
+        if key.len() == 8 && record.len() == ha_domain::canonical::AUTOMATION_RECORD_LEN {
+            let id = u64::from_le_bytes(key.try_into().expect("automation key"));
+            engine.add_rule(id, record);
+        }
+    }) {
+        log::warn!("automation: rebuild failed: {error:?}");
+    }
+    engine.build_index();
+    log::info!(
+        "automation: rules={} index={}",
+        engine.rule_count(),
+        engine.index_count()
+    );
+}
+
+fn submit_automation(
+    executor: &mut zigbee_exec::Executor,
+    command_core: &mut CommandCore,
+    bindings: &mut [zigbee_devices::Binding],
+    actions: &ha_automation::Actions,
+) {
+    if actions.is_empty() {
+        return;
+    }
+    for binding in bindings.iter_mut() {
+        binding.confirmed = interview::confirmed(binding.eui);
+    }
+    for command in actions.iter() {
+        let submitted = zigbee_devices::CommandRouter::new(executor, bindings).submit(
+            command_core,
+            command.entity,
+            command.property,
+            command.action,
+            command.value,
+            now_ms(),
+        );
+        match submitted {
+            Ok(operation) => log::info!(
+                "automation: entity={:016x} property={} op={operation}",
+                command.entity,
+                command.property
+            ),
+            Err(error) => log::warn!(
+                "automation: command rejected entity={:016x} property={} error={error:?}",
+                command.entity,
+                command.property
+            ),
+        }
+    }
+}
+
+fn utc_minute() -> Option<(u16, u8)> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    // Before SNTP the clock is at 1970; do not fire time rules at 00:00.
+    if seconds < 1_600_000_000 {
+        return None;
+    }
+    let weekday = ((seconds / 86_400 + 3) % 7) as u8;
+    let minutes = ((seconds % 86_400) / 60) as u16;
+    Some((minutes, weekday))
 }
 
 fn now_ms() -> u64 {

@@ -15,8 +15,8 @@ const CAPACITY: usize = MAX_DEVICES;
 const DEFINITION_VERSION: u16 = 1;
 
 const DOMAIN_KEY_MAX: usize = ha_domain::canonical::STATE_KEY_LEN;
-const DOMAIN_RECORD_MAX: usize = ha_domain::canonical::CAPABILITIES_LEN;
-const DOMAIN_CAPACITY: usize = 128;
+const DOMAIN_RECORD_MAX: usize = ha_domain::canonical::AUTOMATION_RECORD_LEN;
+const DOMAIN_CAPACITY: usize = 320;
 const DOMAIN_PERSIST_ID: &str = "ha_domain";
 
 struct CFlash {
@@ -210,6 +210,16 @@ fn init_domain() -> Option<DomainTable> {
                 table.len()
             );
             Some(table)
+        }
+        Err(micro_db::Error::InvalidSize) => {
+            log::warn!("domain: schema changed; formatting");
+            match DomainTable::format(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
+                Ok(table) => Some(table),
+                Err(error) => {
+                    log::error!("domain: format after schema change failed: {error:?}");
+                    None
+                }
+            }
         }
         Err(error) if erased => {
             log::warn!("domain: empty ({error:?}); initialising");

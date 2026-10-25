@@ -17,6 +17,7 @@ opt-level = "s"
 [dependencies]
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
+ha-automation = { path = "../ha-automation" }
 micro-db = { path = "../micro-db" }
 ha-web = { path = "../ha-web" }
 zigbee-devices = { path = "../zigbee-devices" }

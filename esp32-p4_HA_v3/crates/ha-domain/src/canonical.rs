@@ -19,10 +19,14 @@ pub const ISSUER_SYSTEM: IssuerId = 2;
 pub const ISSUER_ZIGBEE: IssuerId = 1;
 pub const SOURCE_ZIGBEE: SourceId = 1;
 
+pub const ENTITY_AUTOMATION: u32 = 4;
+pub const ENTITY_GROUP: u32 = 7;
+pub const ENTITY_GROUP_ITEM: u32 = 8;
 pub const ENTITY_ENTITY: u32 = 14;
 pub const ENTITY_PROPERTY_STATE: u32 = 15;
 pub const ENTITY_CAPABILITIES: u32 = 16;
 pub const ENTITY_LOGICAL_DEVICE: u32 = 17;
+pub const ENTITY_GROUP_AUTOMATION: u32 = 18;
 
 pub const PROPERTY_POWER: PropertyId = 1;
 pub const PROPERTY_BRIGHTNESS: PropertyId = 2;
@@ -60,6 +64,11 @@ pub const ENTITY_RECORD_LEN: usize = 40;
 pub const DEVICE_RECORD_LEN: usize = 80;
 pub const STATE_KEY_LEN: usize = 16;
 pub const STATE_RECORD_LEN: usize = 8;
+pub const GROUP_KEY_LEN: usize = 8;
+pub const GROUP_RECORD_LEN: usize = 32;
+pub const GROUP_ITEM_KEY_LEN: usize = 16;
+pub const GROUP_ITEM_RECORD_LEN: usize = 36;
+pub const AUTOMATION_RECORD_LEN: usize = 456;
 
 /// Fixed project key, byte-for-byte from V2 `ha_entity.c`.
 pub const SIPHASH_KEY: [u8; 16] = [

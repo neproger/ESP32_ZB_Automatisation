@@ -30,6 +30,16 @@ pub enum Request {
     RemoveDevice {
         device: u64,
     },
+    /// Generic canonical row: groups, group items/automation links, rules.
+    Upsert {
+        entity: u32,
+        key: Vec<u8>,
+        record: Vec<u8>,
+    },
+    Remove {
+        entity: u32,
+        key: Vec<u8>,
+    },
 }
 
 static QUEUE: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new());
@@ -67,6 +77,18 @@ pub fn rename_device(device: u64, name: String) -> Result<(), Error> {
 
 pub fn remove_device(device: u64) -> Result<(), Error> {
     queue(Request::RemoveDevice { device })
+}
+
+pub fn upsert(entity: u32, key: Vec<u8>, record: Vec<u8>) -> Result<(), Error> {
+    queue(Request::Upsert {
+        entity,
+        key,
+        record,
+    })
+}
+
+pub fn remove(entity: u32, key: Vec<u8>) -> Result<(), Error> {
+    queue(Request::Remove { entity, key })
 }
 
 pub fn take() -> Option<Request> {

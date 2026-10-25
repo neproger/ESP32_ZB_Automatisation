@@ -122,6 +122,10 @@ pub fn remove_entity(entity: u64) {
                         entry.key.len() >= 8
                             && u64::from_le_bytes(entry.key[..8].try_into().ok()?) == entity
                     }
+                    ha_web::entity::GROUP_ITEM => {
+                        entry.key.len() >= 16
+                            && u64::from_le_bytes(entry.key[8..16].try_into().ok()?) == entity
+                    }
                     _ => false,
                 };
                 matches_entity.then(|| (entry.frame_type, entry.key.clone()))
@@ -155,6 +159,54 @@ pub fn remove(frame_type: u8, key: &[u8]) {
     payload.push(frame_type);
     payload.extend_from_slice(key);
     broadcast_one(control::REMOVE, &payload);
+}
+
+/// Removes a screen and all of its tiles/automation links.
+pub fn remove_group(group_id: u64) {
+    let group_key = group_id.to_le_bytes();
+    let keys: Vec<(u8, Vec<u8>)> = {
+        let model = MODEL.lock().unwrap();
+        model
+            .iter()
+            .filter_map(|entry| {
+                let matches = match entry.frame_type {
+                    ha_web::entity::GROUP => entry.key.as_slice() == group_key.as_slice(),
+                    ha_web::entity::GROUP_ITEM | ha_web::entity::GROUP_AUTOMATION => {
+                        entry.key.len() >= 8 && entry.key[..8] == group_key[..]
+                    }
+                    _ => false,
+                };
+                matches.then(|| (entry.frame_type, entry.key.clone()))
+            })
+            .collect()
+    };
+    for (frame_type, key) in keys {
+        remove(frame_type, &key);
+    }
+}
+
+/// Removes an automation and every screen tile that references it.
+pub fn remove_automation(automation_id: u64) {
+    let id_key = automation_id.to_le_bytes();
+    let keys: Vec<(u8, Vec<u8>)> = {
+        let model = MODEL.lock().unwrap();
+        model
+            .iter()
+            .filter_map(|entry| {
+                let matches = match entry.frame_type {
+                    ha_web::entity::AUTOMATION => entry.key.as_slice() == id_key.as_slice(),
+                    ha_web::entity::GROUP_AUTOMATION => {
+                        entry.key.len() >= 16 && entry.key[8..16] == id_key[..]
+                    }
+                    _ => false,
+                };
+                matches.then(|| (entry.frame_type, entry.key.clone()))
+            })
+            .collect()
+    };
+    for (frame_type, key) in keys {
+        remove(frame_type, &key);
+    }
 }
 
 pub fn publish_event(entity_id: u64, event_id: u32) {
@@ -271,7 +323,7 @@ unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
 }
 
 unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
-    let mut buf = [0u8; 160];
+    let mut buf = [0u8; 640];
     let mut frame: httpd_ws_frame_t = std::mem::zeroed();
     frame.payload = buf.as_mut_ptr();
     if httpd_ws_recv_frame(req, &mut frame, buf.len()) != ESP_OK {
@@ -306,6 +358,46 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
             }
         }
         command::PROPERTY_COMMAND => property_command(&buf[9..len]),
+        command::GROUP_PUT => handle_upsert(
+            ha_web::entity::GROUP,
+            ha_domain::canonical::GROUP_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::GROUP_REMOVE => handle_remove(
+            ha_web::entity::GROUP,
+            ha_domain::canonical::GROUP_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::GROUP_ITEM_PUT => handle_upsert(
+            ha_web::entity::GROUP_ITEM,
+            ha_domain::canonical::GROUP_ITEM_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::GROUP_ITEM_REMOVE => handle_remove(
+            ha_web::entity::GROUP_ITEM,
+            ha_domain::canonical::GROUP_ITEM_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::GROUP_AUTOMATION_PUT => handle_upsert(
+            ha_web::entity::GROUP_AUTOMATION,
+            ha_domain::canonical::GROUP_ITEM_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::GROUP_AUTOMATION_REMOVE => handle_remove(
+            ha_web::entity::GROUP_AUTOMATION,
+            ha_domain::canonical::GROUP_ITEM_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::AUTOMATION_PUT => handle_upsert(
+            ha_web::entity::AUTOMATION,
+            ha_domain::canonical::GROUP_KEY_LEN,
+            &buf[9..len],
+        ),
+        command::AUTOMATION_REMOVE => handle_remove(
+            ha_web::entity::AUTOMATION,
+            ha_domain::canonical::GROUP_KEY_LEN,
+            &buf[9..len],
+        ),
         command::ENTITY_RENAME => handle_entity_rename(&buf[9..len]),
         command::DEVICE_RENAME => handle_device_rename(&buf[9..len]),
         command::LOGICAL_DEVICE_REMOVE => handle_device_remove(&buf[9..len]),
@@ -338,6 +430,24 @@ fn property_command(payload: &[u8]) {
         command.value,
     ) {
         log::warn!("command intake full, rejected: {error:?}");
+    }
+}
+
+fn handle_upsert(entity: u8, key_len: usize, payload: &[u8]) {
+    let Some((key, record)) = ha_web::parse_key_record(payload, key_len) else {
+        return;
+    };
+    if let Err(error) = crate::intake::upsert(u32::from(entity), key, record) {
+        log::warn!("upsert intake full, entity={entity}: {error:?}");
+    }
+}
+
+fn handle_remove(entity: u8, key_len: usize, payload: &[u8]) {
+    let Some(key) = ha_web::parse_key(payload, key_len) else {
+        return;
+    };
+    if let Err(error) = crate::intake::remove(u32::from(entity), key) {
+        log::warn!("remove intake full, entity={entity}: {error:?}");
     }
 }
 

@@ -3,8 +3,10 @@
 
 use ha_domain::canonical::{
     device_id_derive, zigbee_entity_id, DeviceId, EntityId, EntityRecord, LogicalDeviceRecord,
-    PropertyId, StateKey, StateRecord, ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_LOGICAL_DEVICE,
-    ENTITY_PROPERTY_STATE, SOURCE_ZIGBEE,
+    PropertyId, StateKey, StateRecord, AUTOMATION_RECORD_LEN, ENTITY_AUTOMATION,
+    ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
+    ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, GROUP_ITEM_KEY_LEN, GROUP_ITEM_RECORD_LEN,
+    GROUP_KEY_LEN, GROUP_RECORD_LEN, SOURCE_ZIGBEE,
 };
 use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
@@ -15,6 +17,10 @@ use crate::standard;
 pub const STATE_CAPACITY: usize = 64;
 pub const ENTITY_CAPACITY: usize = 16;
 pub const DEVICE_CAPACITY: usize = 16;
+pub const GROUP_CAPACITY: usize = 16;
+pub const GROUP_ITEM_CAPACITY: usize = 64;
+pub const GROUP_AUTOMATION_CAPACITY: usize = 64;
+pub const AUTOMATION_CAPACITY: usize = 16;
 
 /// Write-through port for canonical records. The firmware implements it over
 /// MicroDB; host tests can use an in-memory sink.
@@ -84,6 +90,38 @@ impl<'a> DomainAdapter<'a> {
                 key_size: ha_domain::canonical::STATE_KEY_LEN,
                 record_size: ha_domain::canonical::STATE_RECORD_LEN,
                 capacity: STATE_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_GROUP,
+                key_size: GROUP_KEY_LEN,
+                record_size: GROUP_RECORD_LEN,
+                capacity: GROUP_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_GROUP_ITEM,
+                key_size: GROUP_ITEM_KEY_LEN,
+                record_size: GROUP_ITEM_RECORD_LEN,
+                capacity: GROUP_ITEM_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_GROUP_AUTOMATION,
+                key_size: GROUP_ITEM_KEY_LEN,
+                record_size: GROUP_ITEM_RECORD_LEN,
+                capacity: GROUP_AUTOMATION_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_AUTOMATION,
+                key_size: GROUP_KEY_LEN,
+                record_size: AUTOMATION_RECORD_LEN,
+                capacity: AUTOMATION_CAPACITY,
                 backing: Backing::Ram,
                 persist_key: None,
             },
@@ -402,6 +440,7 @@ impl<'a> DomainAdapter<'a> {
             }
             let _ = self.remove_capabilities(entity);
             let _ = self.remove_states(entity);
+            let _ = self.remove_group_items(entity);
         }
         let key = device.to_le_bytes();
         if self
@@ -410,6 +449,91 @@ impl<'a> DomainAdapter<'a> {
             .is_ok()
         {
             self.remove_persist(ENTITY_LOGICAL_DEVICE, &key);
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    /// Generic canonical row, used by groups, automation rules and future types.
+    pub fn put_record(
+        &mut self,
+        entity: u32,
+        key: &[u8],
+        record: &[u8],
+    ) -> Result<bool, ha_domain::Error> {
+        let changed = self.domain.entity_put(entity, key, record, fact_meta())?;
+        if changed {
+            self.persist(entity, key, record);
+        }
+        Ok(changed)
+    }
+
+    pub fn remove_record(&mut self, entity: u32, key: &[u8]) -> Result<bool, ha_domain::Error> {
+        match self.domain.entity_remove(entity, key, fact_meta()) {
+            Ok(()) => {
+                self.remove_persist(entity, key);
+                Ok(true)
+            }
+            Err(ha_domain::Error::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// V2 `cascade_entity`: drop group tiles that reference a removed entity.
+    fn remove_group_items(&mut self, entity: EntityId) -> Result<(), ha_domain::Error> {
+        let entity_bytes = entity.to_le_bytes();
+        let mut keys = Vec::new();
+        match self.domain.entity_iter(ENTITY_GROUP_ITEM, |key, _| {
+            if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes[..] {
+                keys.push(key.to_vec());
+            }
+        }) {
+            Ok(()) | Err(ha_domain::Error::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+        for key in keys {
+            let _ = self.remove_record(ENTITY_GROUP_ITEM, &key);
+        }
+        Ok(())
+    }
+
+    pub fn remove_group(&mut self, group: u64) -> Result<usize, ha_domain::Error> {
+        let group_bytes = group.to_le_bytes();
+        let mut removed = 0;
+        for entity in [ENTITY_GROUP_ITEM, ENTITY_GROUP_AUTOMATION] {
+            let mut keys = Vec::new();
+            self.domain.entity_iter(entity, |key, _| {
+                if key.len() == GROUP_ITEM_KEY_LEN && key[..8] == group_bytes[..] {
+                    keys.push(key.to_vec());
+                }
+            })?;
+            for key in keys {
+                if self.remove_record(entity, &key)? {
+                    removed += 1;
+                }
+            }
+        }
+        if self.remove_record(ENTITY_GROUP, &group_bytes)? {
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    pub fn remove_automation(&mut self, automation: u64) -> Result<usize, ha_domain::Error> {
+        let id_bytes = automation.to_le_bytes();
+        let mut removed = 0;
+        let mut keys = Vec::new();
+        self.domain.entity_iter(ENTITY_GROUP_AUTOMATION, |key, _| {
+            if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == id_bytes[..] {
+                keys.push(key.to_vec());
+            }
+        })?;
+        for key in keys {
+            if self.remove_record(ENTITY_GROUP_AUTOMATION, &key)? {
+                removed += 1;
+            }
+        }
+        if self.remove_record(ENTITY_AUTOMATION, &id_bytes)? {
             removed += 1;
         }
         Ok(removed)
@@ -474,6 +598,48 @@ mod tests {
             .write_state(7, PROPERTY_POWER, DomainValue::bool(true))
             .unwrap());
         assert_eq!(puts.borrow().len(), 1);
+    }
+
+    #[test]
+    fn group_and_automation_removal_cascade_their_links() {
+        let mut domain = Domain::new(8, 2, 8).unwrap();
+        let mut sink = Sink {
+            puts: Rc::new(RefCell::new(Vec::new())),
+            removes: Rc::new(RefCell::new(Vec::new())),
+        };
+        let mut adapter = DomainAdapter::with_sink(&mut domain, &mut sink).unwrap();
+        let group = 0x1111u64;
+        let entity = 0x2222u64;
+        let automation = 0x3333u64;
+        adapter
+            .put_record(ENTITY_GROUP, &group.to_le_bytes(), &[1u8; GROUP_RECORD_LEN])
+            .unwrap();
+        let mut item_key = [0u8; GROUP_ITEM_KEY_LEN];
+        item_key[..8].copy_from_slice(&group.to_le_bytes());
+        item_key[8..].copy_from_slice(&entity.to_le_bytes());
+        adapter
+            .put_record(ENTITY_GROUP_ITEM, &item_key, &[2u8; GROUP_ITEM_RECORD_LEN])
+            .unwrap();
+        adapter
+            .put_record(
+                ENTITY_AUTOMATION,
+                &automation.to_le_bytes(),
+                &[3u8; AUTOMATION_RECORD_LEN],
+            )
+            .unwrap();
+        let mut link_key = [0u8; GROUP_ITEM_KEY_LEN];
+        link_key[..8].copy_from_slice(&group.to_le_bytes());
+        link_key[8..].copy_from_slice(&automation.to_le_bytes());
+        adapter
+            .put_record(
+                ENTITY_GROUP_AUTOMATION,
+                &link_key,
+                &[4u8; GROUP_ITEM_RECORD_LEN],
+            )
+            .unwrap();
+
+        assert!(adapter.remove_group(group).unwrap() >= 3);
+        assert!(adapter.remove_automation(automation).unwrap() >= 1);
     }
 
     #[test]

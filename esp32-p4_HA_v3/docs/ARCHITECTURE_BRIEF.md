@@ -61,6 +61,7 @@ ha-v3/
     ha-domain/          # доменная модель, commands, подтверждённое состояние
     micro-db/           # универсальное embedded-хранилище (ram/flash, ring)
     z2m-rs/             # порт Z2M: profiles, converters, matcher, configure plans
+    ha-automation/      # движок правил (порт V2 automation), host-тесты
     zigbee-devices/     # HA Zigbee Layer: interview, registry, canonical projection
     zigbee-exec/        # надёжная доставка запросов (TSN, retry, fake transport)
     zigbee-frames/      # ZCL-кадр для C→Rust границы
@@ -126,9 +127,15 @@ micro_db остается низкоуровневым универсальны�
 
 Статус V3: Domain остаётся RAM-кэшем, но прошивка пишет его canonical-записи в
 MicroDB и восстанавливает при старте: реестр устройств — в разделе `mstore`,
-entity/capabilities/property-state — в разделе `domain` (write-through через
-`RecordSink` в HA Zigbee Layer). `EntityDesc.backing` пока `Ram`; это осознанно,
-запись выполняет прикладной слой, а не сам Domain.
+entity/capabilities/property-state/groups/automation — в разделе `domain`
+(write-through через `RecordSink` в HA Zigbee Layer). `EntityDesc.backing` пока
+`Ram`; это осознанно, запись выполняет прикладной слой, а не сам Domain.
+
+Группы и автоматизации хранятся в Domain как canonical-записи и переживают
+reboot. `ha-automation` исполняет EVENT/STATE/TIME-триггеры: состояние и события
+приходят из моста после подтверждённой мутации, условия читают Domain, действия
+уходят в обычный CommandRouter/capability-gating. TIME-триггеры используют SNTP
+и **UTC**; локальная таймзона появится вместе с Location/Settings.
 
 ## 9. Производительность и ограничения
 

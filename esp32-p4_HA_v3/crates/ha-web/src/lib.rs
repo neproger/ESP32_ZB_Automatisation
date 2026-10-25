@@ -18,21 +18,33 @@ pub mod control {
 
 /// Entity frame types; values are the V2 canonical ABI and must not change.
 pub mod entity {
+    pub const AUTOMATION: u8 = 4;
+    pub const GROUP: u8 = 7;
+    pub const GROUP_ITEM: u8 = 8;
     pub const ENTITY: u8 = 14;
     pub const PROPERTY_STATE: u8 = 15;
     pub const CAPABILITIES: u8 = 16;
     pub const LOGICAL_DEVICE: u8 = 17;
+    pub const GROUP_AUTOMATION: u8 = 18;
 }
 
 /// Browser -> device command ids implemented by the firmware.
 pub mod command {
     pub const SNAPSHOT: u8 = 1;
     pub const SNAPSHOT_STATE: u8 = 2;
+    pub const AUTOMATION_PUT: u8 = 4;
+    pub const AUTOMATION_REMOVE: u8 = 5;
     pub const DISCOVERY: u8 = 8;
+    pub const GROUP_PUT: u8 = 9;
+    pub const GROUP_REMOVE: u8 = 10;
+    pub const GROUP_ITEM_PUT: u8 = 16;
+    pub const GROUP_ITEM_REMOVE: u8 = 17;
     pub const ENTITY_RENAME: u8 = 18;
     pub const PROPERTY_COMMAND: u8 = 19;
     pub const DEVICE_RENAME: u8 = 20;
     pub const LOGICAL_DEVICE_REMOVE: u8 = 21;
+    pub const GROUP_AUTOMATION_PUT: u8 = 22;
+    pub const GROUP_AUTOMATION_REMOVE: u8 = 23;
 }
 
 pub const HEADER_LEN: usize = 8;
@@ -107,6 +119,19 @@ pub fn parse_device_id(payload: &[u8]) -> Option<u64> {
         return None;
     }
     Some(u64::from_le_bytes(payload[0..8].try_into().ok()?))
+}
+
+/// Generic PUT: `[key][record]` with a known key length.
+pub fn parse_key_record(payload: &[u8], key_len: usize) -> Option<(Vec<u8>, Vec<u8>)> {
+    if payload.len() < key_len {
+        return None;
+    }
+    Some((payload[..key_len].to_vec(), payload[key_len..].to_vec()))
+}
+
+/// Generic REMOVE: exactly one canonical key.
+pub fn parse_key(payload: &[u8], key_len: usize) -> Option<Vec<u8>> {
+    (payload.len() == key_len).then(|| payload.to_vec())
 }
 
 /// Appends one frame to `out`; `seq` is per session.

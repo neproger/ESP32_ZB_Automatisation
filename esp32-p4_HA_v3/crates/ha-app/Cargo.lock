@@ -771,6 +771,7 @@ dependencies = [
  "embassy-time",
  "embuild",
  "esp-idf-svc",
+ "ha-automation",
  "ha-domain",
  "ha-web",
  "log",
@@ -779,6 +780,13 @@ dependencies = [
  "zigbee-devices",
  "zigbee-exec",
  "zigbee-frames",
+]
+
+[[package]]
+name = "ha-automation"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
 ]
 
 [[package]]
