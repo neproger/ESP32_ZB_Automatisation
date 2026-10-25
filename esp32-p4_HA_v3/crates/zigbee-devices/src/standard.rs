@@ -411,3 +411,19 @@ impl Confirmed {
     pub fn len(&self) -> usize { usize::from(self.len) }
     pub fn is_empty(&self) -> bool { self.len == 0 }
 }
+
+pub fn attribute_capability(cluster: u16, attribute: u16) -> Option<StandardCapability> {
+    Some(match (cluster, attribute) {
+        (ONOFF, 0x0000) => StandardCapability::Power,
+        (LEVEL, 0x0000) => StandardCapability::Brightness,
+        (COLOR, 0x0007) => StandardCapability::ColorTemperature,
+        (COLOR, 0x0003) | (COLOR, 0x0004) => StandardCapability::Color,
+        (POWER_CONFIG, 0x0021) => StandardCapability::BatteryPercent,
+        (POWER_CONFIG, 0x0020) => StandardCapability::BatteryVoltage,
+        (TEMPERATURE, 0x0000) => StandardCapability::Temperature,
+        (HUMIDITY, 0x0000) => StandardCapability::Humidity,
+        (ILLUMINANCE, 0x0000) => StandardCapability::Illuminance,
+        (OCCUPANCY, 0x0000) => StandardCapability::Occupancy,
+        _ => return None,
+    })
+}

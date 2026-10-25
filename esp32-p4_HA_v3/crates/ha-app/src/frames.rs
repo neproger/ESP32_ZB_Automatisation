@@ -167,6 +167,22 @@ pub fn process_pending() {
                 dropped,
                 profile.id
             );
+            if standard {
+                if let Some(endpoint) = standard_endpoint {
+                    if endpoint.has_server(meta.cluster) {
+                        for attr in view.attributes() {
+                            if zigbee_devices::attribute_capability(meta.cluster, attr.id).is_some() {
+                                crate::interview::confirm_attribute(
+                                    meta.src_ext,
+                                    meta.src_ep,
+                                    meta.cluster,
+                                    attr.id,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             let entity = zigbee_devices::zigbee_entity_id(meta.src_ext, meta.src_ep);
             for update in decoded.updates() {
                 if standard {

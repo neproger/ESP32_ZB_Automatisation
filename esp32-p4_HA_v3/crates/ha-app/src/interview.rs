@@ -52,6 +52,7 @@ impl ProfileMap {
 static PROFILES: Mutex<ProfileMap> = Mutex::new(ProfileMap::new());
 static IDENTIFIED: Mutex<Vec<(u64, u16, &'static z2m_rs::Profile)>> = Mutex::new(Vec::new());
 static MANAGER: Mutex<InterviewManager> = Mutex::new(InterviewManager::new());
+static CONFIRMED: Mutex<Vec<(u64, zigbee_devices::Confirmed)>> = Mutex::new(Vec::new());
 
 struct DeviceQueue {
     items: [Option<(u64, u16)>; DEVICE_QUEUE],
@@ -154,6 +155,25 @@ pub fn take_identified() -> Option<(u64, u16, &'static z2m_rs::Profile)> {
 
 pub fn tick(exec: &mut Executor, now: u64) {
     MANAGER.lock().unwrap().tick(exec, now);
+}
+
+pub fn confirm_attribute(eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
+    let mut confirmed = CONFIRMED.lock().unwrap();
+    if let Some((_, state)) = confirmed.iter_mut().find(|(id, _)| *id == eui) {
+        state.confirm(endpoint, cluster, attribute);
+        return;
+    }
+    if confirmed.len() < 8 {
+        let mut state = zigbee_devices::Confirmed::new();
+        state.confirm(endpoint, cluster, attribute);
+        confirmed.push((eui, state));
+    }
+}
+
+pub fn is_attribute_confirmed(eui: u64, endpoint: u8, cluster: u16, attribute: u16) -> bool {
+    CONFIRMED.lock().unwrap().iter().any(|(id, state)| {
+        *id == eui && state.is_confirmed(endpoint, cluster, attribute)
+    })
 }
 
 pub fn selected_profile(eui: u64) -> Option<&'static z2m_rs::Profile> {

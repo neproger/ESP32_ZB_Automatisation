@@ -1,5 +1,5 @@
 use zigbee_devices::{
-    classify_endpoint, decode_standard, update_is_discovered, ClusterRole, Confirmed, DeviceKind,
+    attribute_capability, classify_endpoint, decode_standard, update_is_discovered, ClusterRole, Confirmed, DeviceKind,
     EndpointDescriptor, StandardCapability,
 };
 use zigbee_devices::standard::{ONOFF, TEMPERATURE};
@@ -46,4 +46,14 @@ fn discovery_does_not_confirm_attributes() {
     assert!(confirmed.is_confirmed(1, ONOFF, 0x0000));
     assert!(confirmed.confirm(1, ONOFF, 0x0000));
     assert_eq!(confirmed.len(), 1);
+}
+
+#[test]
+fn attribute_confirmation_requires_a_real_attribute() {
+    let mut confirmed = Confirmed::new();
+    assert_eq!(attribute_capability(ONOFF, 0x0000), Some(StandardCapability::Power));
+    assert_eq!(attribute_capability(ONOFF, 0x0001), None);
+    assert!(confirmed.confirm(1, ONOFF, 0x0000));
+    assert!(confirmed.is_confirmed(1, ONOFF, 0x0000));
+    assert!(!confirmed.is_confirmed(1, ONOFF, 0x0001));
 }
