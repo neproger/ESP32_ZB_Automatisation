@@ -33,10 +33,12 @@ impl CommandSink for ZigbeeSink<'_> {
             retry: RetryPolicy::SAFE,
             expiry_ms: 10_000,
             timeout_ms: 3_000,
-            kind: RequestKind::Zcl {
+            kind: RequestKind::SendZcl {
                 cluster,
                 command: zcl_command,
                 payload,
+                manufacturer: None,
+                frame_control: 0x01,
                 expect: Expect::DefaultResponse {
                     to_command: zcl_command,
                 },

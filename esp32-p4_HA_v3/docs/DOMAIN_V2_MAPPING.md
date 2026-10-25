@@ -216,3 +216,17 @@ PROPERTY_STATE.
 
 Pending: a command submission entry point, `ZigbeeSink` usage in the app, and
 Generic ZCL Send for Level/ColorTemp/Color. Host tests: 132; ESP builds.
+
+## Generic SendZcl (host + on/off on ESP)
+
+`zigbee-exec` now has `RequestKind::SendZcl` with cluster, command, bounded
+payload, manufacturer code, frame control and expected response. `ZigbeeSink`
+uses it for every canonical command, so Power/Brightness/ColorTemp/XY are
+covered by FakeTransport tests (payloads verified). `ha-app` maps SendZcl OnOff
+to the existing SDK call; Level/ColorTemp/Color still need the typed Espressif
+ZCL command bridge (the SDK exposes per-cluster typed calls, not a raw standard
+ZCL send).
+
+The app still has no external command source: `CommandCore` receives operation
+results, but nothing submits canonical commands yet. That entry point and the
+typed C bridge are the remaining work.

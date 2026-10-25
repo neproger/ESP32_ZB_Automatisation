@@ -2,15 +2,16 @@
 //! and reported state from a device report.
 
 use ha_domain::canonical::{
-    CanonicalCommand, CommandValue, ACTION_ON, PROPERTY_POWER, PROPERTY_BRIGHTNESS, ACTION_SET,
+    CanonicalCommand, CommandValue, ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_COLOR,
+    PROPERTY_COLOR_TEMPERATURE, PROPERTY_POWER,
 };
 use ha_domain::command::{CommandCore, CommandStatus};
 use ha_domain::{Domain, Value as DomainValue};
 use zigbee_devices::canonical_states;
 use zigbee_devices::{status_from_exec, DomainAdapter, ZigbeeSink};
 use zigbee_exec::fake::FakeTransport;
-use zigbee_exec::{Executor, Status};
-use z2m_rs::capabilities::{COLORTEMP_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON};
+use zigbee_exec::{Executor, RequestKind, Status};
+use z2m_rs::capabilities::{COLOR_XY_TO, COLORTEMP_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON};
 use z2m_rs::{properties, Fingerprint, Manufacturer, Profile, Support, Update, Value};
 
 const UID: u64 = 0x0012_4B00_0A1B_2C3D;
@@ -25,7 +26,7 @@ static PROFILE: Profile = Profile {
     }],
     exposes: DIM_CT_EXPOSES,
     from: &[],
-    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO],
+    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO],
     configure: None,
     omit_optional_params: false,
     turns_off_at_brightness_1: false,
@@ -188,4 +189,53 @@ fn timeout_fails_operation_without_reported_change() {
     assert!(failed);
     assert!(core.is_empty());
     assert!(adapter.read_state(entity, PROPERTY_BRIGHTNESS).is_none());
+}
+fn send_one(command: CanonicalCommand) -> (u16, u8, Vec<u8>) {
+    let mut exec = Executor::new();
+    let mut transport = FakeTransport::new();
+    let mut core = CommandCore::new();
+    let _ = submit(&mut exec, &mut core, command);
+    exec.tick(&mut transport, 0);
+    let sent = transport.last().cloned().expect("request sent");
+    let request = sent.request;
+    let RequestKind::SendZcl {
+        cluster,
+        command,
+        payload,
+        ..
+    } = request.kind
+    else {
+        panic!("expected SendZcl");
+    };
+    (cluster, command, payload.as_slice().to_vec())
+}
+
+#[test]
+fn brightness_ct_xy_use_generic_zcl_send() {
+    let (cluster, command, payload) = send_one(CanonicalCommand {
+        entity: 1,
+        property: PROPERTY_BRIGHTNESS,
+        action: ACTION_SET,
+        value: CommandValue::Scalar(DomainValue::f32(50.0)),
+    });
+    assert_eq!((cluster, command), (0x0008, 0x04));
+    assert_eq!(payload, [127, 0, 0, 0, 0]);
+
+    let (cluster, command, payload) = send_one(CanonicalCommand {
+        entity: 1,
+        property: PROPERTY_COLOR_TEMPERATURE,
+        action: ACTION_SET,
+        value: CommandValue::Scalar(DomainValue::f32(4000.0)),
+    });
+    assert_eq!((cluster, command), (0x0300, 0x0A));
+    assert_eq!(payload, [250, 0, 0, 0, 0, 0]);
+
+    let (cluster, command, payload) = send_one(CanonicalCommand {
+        entity: 1,
+        property: PROPERTY_COLOR,
+        action: ACTION_SET,
+        value: CommandValue::Xy { x: 0.5, y: 0.25 },
+    });
+    assert_eq!((cluster, command), (0x0300, 0x07));
+    assert_eq!(payload, [0x00, 0x80, 0x00, 0x40, 0, 0, 0, 0]);
 }

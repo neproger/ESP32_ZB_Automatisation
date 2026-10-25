@@ -185,7 +185,20 @@ impl Transport for EspTransport {
             } => unsafe {
                 zb_exec_on_off(op, request.device, request.short, request.endpoint, 0)
             },
-            RequestKind::ConfigureReporting {
+            RequestKind::SendZcl {
+                cluster: 0x0006,
+                command: 0x01,
+                ..
+            } => unsafe {
+                zb_exec_on_off(op, request.device, request.short, request.endpoint, 1)
+            },
+            RequestKind::SendZcl {
+                cluster: 0x0006,
+                command: 0x00,
+                ..
+            } => unsafe {
+                zb_exec_on_off(op, request.device, request.short, request.endpoint, 0)
+            },            RequestKind::ConfigureReporting {
                 cluster,
                 attribute,
                 attribute_type,
