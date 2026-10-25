@@ -1,0 +1,30 @@
+name: zhc-compiler
+
+on:
+  push:
+    paths:
+      - "esp32-p4_HA_v3/tools/zhc-compiler/**"
+      - "esp32-p4_HA_v3/tools/z2m_spike/**"
+      - ".github/workflows/zhc-compiler.yml"
+  pull_request:
+    paths:
+      - "esp32-p4_HA_v3/tools/zhc-compiler/**"
+      - "esp32-p4_HA_v3/tools/z2m_spike/**"
+      - ".github/workflows/zhc-compiler.yml"
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: esp32-p4_HA_v3/tools/zhc-compiler
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: esp32-p4_HA_v3/tools/zhc-compiler/package-lock.json
+      - run: npm ci
+      - run: npm run manifest
+      - run: npm run coverage
