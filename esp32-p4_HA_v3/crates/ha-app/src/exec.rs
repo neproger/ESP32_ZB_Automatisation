@@ -345,6 +345,7 @@ pub struct ConfigRun {
     version: u16,
     timeout_ms: u32,
     retries: u8,
+    optional_reads: bool,
     next: usize,
     op: Option<u32>,
     pending: Option<zigbee_exec::OperationResult>,
@@ -371,6 +372,7 @@ impl ConfigRun {
             version: plan.version,
             timeout_ms: plan.timeout_ms,
             retries: plan.retries,
+            optional_reads: false,
             next: 0,
             op: None,
             pending: None,
@@ -405,6 +407,7 @@ impl ConfigRun {
             version,
             timeout_ms: 5_000,
             retries: 2,
+            optional_reads: true,
             next: 0,
             op: None,
             pending: None,
@@ -428,7 +431,7 @@ impl ConfigRun {
     }
 
     pub fn version(&self) -> u16 {
-        self.plan.version
+        self.version
     }
 
     pub fn current_step(&self) -> Option<z2m_rs::ConfigureStep> {
@@ -467,6 +470,13 @@ impl ConfigRun {
             );
             match result.status {
                 zigbee_exec::Status::Confirmed | zigbee_exec::Status::Acknowledged => {
+                    self.next += 1;
+                    self.op = None;
+                }
+                other if self.optional_reads
+                    && matches!(self.current_step(), Some(z2m_rs::ConfigureStep::Read { .. })) =>
+                {
+                    log::info!("configure: optional read step={} skipped: {other:?}", self.next);
                     self.next += 1;
                     self.op = None;
                 }
