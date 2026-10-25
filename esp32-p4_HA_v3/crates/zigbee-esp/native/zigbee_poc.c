@@ -17,12 +17,15 @@
 #include "ezbee/app_signals.h"
 #include "ezbee/bdb.h"
 #include "ezbee/nwk.h"
-#include "ezbee/zcl/cluster/color_control.h"`n#include "ezbee/zcl/cluster/level.h"`n#include "ezbee/zcl/cluster/on_off.h"
+#include "ezbee/zcl/cluster/color_control.h"
+#include "ezbee/zcl/cluster/level.h"
+#include "ezbee/zcl/cluster/on_off.h"
 #include "ezbee/zcl/cluster/on_off_desc.h"
 #include "ezbee/zcl/cluster/power_config_desc.h"
 #include "ezbee/zcl/zcl_core.h"
 #include "ezbee/zcl/zcl_general_cmd.h"
 #include "ezbee/zdo/zdo_bind_mgmt.h"
+#include "ezbee/zdo/zdo_dev_srv_disc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -374,18 +377,27 @@ typedef void (*zb_exec_response_t)(uint16_t src_short, uint8_t src_ep, uint16_t 
                                    uint8_t command, uint8_t tsn, int16_t rsp_to_cmd,
                                    int16_t status, const uint8_t *read, uint16_t read_len);
 typedef void (*zb_exec_zdo_t)(uint32_t op, uint8_t success);
+typedef void (*zb_exec_active_ep_t)(uint32_t op, uint8_t count, const uint8_t *endpoints);
+typedef void (*zb_exec_simple_desc_t)(uint32_t op, uint8_t endpoint, uint16_t profile,
+                                    uint16_t device, const uint16_t *server, uint8_t server_count,
+                                    const uint16_t *client, uint8_t client_count);
 
 static zb_exec_confirm_t s_exec_confirm;
 static zb_exec_response_t s_exec_response;
 static zb_exec_zdo_t s_exec_zdo;
+static zb_exec_active_ep_t s_exec_active_ep;
+static zb_exec_simple_desc_t s_exec_simple_desc;
 
 void zb_poc_set_device_event_cb(zb_device_event_t cb) { s_device_event = cb; }
 
-void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo)
+void zb_exec_set_callbacks(zb_exec_confirm_t confirm, zb_exec_response_t response, zb_exec_zdo_t zdo,
+                           zb_exec_active_ep_t active_ep, zb_exec_simple_desc_t simple_desc)
 {
     s_exec_confirm = confirm;
     s_exec_response = response;
     s_exec_zdo = zdo;
+    s_exec_active_ep = active_ep;
+    s_exec_simple_desc = simple_desc;
 }
 
 static void exec_confirm_cb(ezb_af_user_cnf_t *cnf, void *user_ctx)
@@ -653,6 +665,83 @@ int zb_exec_bind(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t src_e
     return err == EZB_ERR_NONE ? 0 : -1;
 }
 
+static void exec_active_ep_cb(const ezb_zdo_active_ep_req_result_t *result, void *user_ctx)
+{
+    uint32_t op = (uint32_t)(uintptr_t)user_ctx;
+    if (s_exec_active_ep == NULL) {
+        return;
+    }
+    const ezb_zdp_active_ep_rsp_field_t *rsp = result != NULL ? result->rsp : NULL;
+    if (result == NULL || result->error != EZB_ERR_NONE || rsp == NULL ||
+        rsp->status != EZB_ZDP_STATUS_SUCCESS || rsp->active_ep_count == 0 ||
+        rsp->active_ep_list == NULL) {
+        s_exec_active_ep(op, 0, NULL);
+        return;
+    }
+    s_exec_active_ep(op, rsp->active_ep_count, rsp->active_ep_list);
+}
+
+static void exec_simple_desc_cb(const ezb_zdo_simple_desc_req_result_t *result, void *user_ctx)
+{
+    uint32_t op = (uint32_t)(uintptr_t)user_ctx;
+    if (s_exec_simple_desc == NULL) {
+        return;
+    }
+    const ezb_zdp_simple_desc_rsp_field_t *rsp = result != NULL ? result->rsp : NULL;
+    if (result == NULL || result->error != EZB_ERR_NONE || rsp == NULL ||
+        rsp->status != EZB_ZDP_STATUS_SUCCESS) {
+        s_exec_simple_desc(op, 0, 0, 0, NULL, 0, NULL, 0);
+        return;
+    }
+    const ezb_af_simple_desc_t *desc = &rsp->desc;
+    const uint16_t *input = desc->app_cluster_list;
+    const uint16_t *output = input + desc->app_input_cluster_count;
+    s_exec_simple_desc(op, desc->ep_id, desc->app_profile_id, desc->app_device_id,
+                       input, desc->app_input_cluster_count, output,
+                       desc->app_output_cluster_count);
+}
+
+int zb_exec_active_ep(uint32_t op, uint64_t eui64, uint16_t short_addr)
+{
+    if (short_addr == 0 && eui64 != 0) {
+        ezb_extaddr_t device = {.u64 = eui64};
+        (void)ezb_address_short_by_extended(&device, &short_addr);
+    }
+    if (short_addr == 0) {
+        return -1;
+    }
+    const ezb_zdo_active_ep_req_t req = {
+        .dst_nwk_addr = short_addr,
+        .field = {.nwk_addr_of_interest = short_addr},
+        .cb = exec_active_ep_cb,
+        .user_ctx = (void *)(uintptr_t)op,
+    };
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    const ezb_err_t err = ezb_zdo_active_ep_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+int zb_exec_simple_desc(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t endpoint)
+{
+    if (short_addr == 0 && eui64 != 0) {
+        ezb_extaddr_t device = {.u64 = eui64};
+        (void)ezb_address_short_by_extended(&device, &short_addr);
+    }
+    if (short_addr == 0 || endpoint == 0) {
+        return -1;
+    }
+    const ezb_zdo_simple_desc_req_t req = {
+        .dst_nwk_addr = short_addr,
+        .field = {.nwk_addr_of_interest = short_addr, .endpoint = endpoint},
+        .cb = exec_simple_desc_cb,
+        .user_ctx = (void *)(uintptr_t)op,
+    };
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    const ezb_err_t err = ezb_zdo_simple_desc_req(&req);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
+}
 /* --- end request executor bridge ----------------------------------------- */
 
 /* Encode successful read records as `attr_id | attr_type | value`, the same

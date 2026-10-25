@@ -7,7 +7,10 @@
 
 use std::sync::Mutex;
 
-use zigbee_exec::{Event, Payload, Request, RequestKind, SendError, Transport};
+use zigbee_exec::{
+    ClusterList, EndpointList, Event, Payload, Request, RequestKind, SendError, SimpleDescriptor,
+    Transport,
+};
 
 const MAX_EVENTS: usize = 16;
 
@@ -98,6 +101,45 @@ unsafe extern "C" fn on_response(
     });
 }
 
+unsafe extern "C" fn on_zdo_active_ep(op: u32, count: u8, endpoints: *const u8) {
+    let mut list = EndpointList::new();
+    if !endpoints.is_null() {
+        for index in 0..usize::from(count).min(8) {
+            let endpoint = unsafe { *endpoints.add(index) };
+            let _ = list.push(endpoint);
+        }
+    }
+    EVENTS.lock().unwrap().push(Event::ZdoActiveEndpoints { op, endpoints: list });
+}
+
+unsafe extern "C" fn on_zdo_simple_desc(
+    op: u32,
+    endpoint: u8,
+    profile_id: u16,
+    device_id: u16,
+    server: *const u16,
+    server_count: u8,
+    client: *const u16,
+    client_count: u8,
+) {
+    let mut server_clusters = ClusterList::new();
+    let mut client_clusters = ClusterList::new();
+    if !server.is_null() {
+        for index in 0..usize::from(server_count).min(16) {
+            let _ = server_clusters.push(unsafe { *server.add(index) });
+        }
+    }
+    if !client.is_null() {
+        for index in 0..usize::from(client_count).min(16) {
+            let _ = client_clusters.push(unsafe { *client.add(index) });
+        }
+    }
+    EVENTS.lock().unwrap().push(Event::ZdoSimpleDescriptor {
+        op,
+        descriptor: SimpleDescriptor { endpoint, profile_id, device_id, server_clusters, client_clusters },
+    });
+}
+
 unsafe extern "C" fn on_zdo(op: u32, success: u8) {
     EVENTS.lock().unwrap().push(Event::ZdoResult {
         op,
@@ -112,6 +154,10 @@ extern "C" {
             unsafe extern "C" fn(u16, u8, u16, u8, u8, i16, i16, *const u8, u16),
         >,
         zdo: Option<unsafe extern "C" fn(u32, u8)>,
+        active_ep: Option<unsafe extern "C" fn(u32, u8, *const u8)>,
+        simple_desc: Option<
+            unsafe extern "C" fn(u32, u8, u16, u16, *const u16, u8, *const u16, u8),
+        >,
     );
     fn zb_exec_read(
         op: u32,
@@ -157,10 +203,20 @@ extern "C" {
         cluster: u16,
         dst_ep: u8,
     ) -> i32;
+    fn zb_exec_active_ep(op: u32, eui64: u64, short: u16) -> i32;
+    fn zb_exec_simple_desc(op: u32, eui64: u64, short: u16, ep: u8) -> i32;
 }
 
 pub fn install() {
-    unsafe { zb_exec_set_callbacks(Some(on_confirm), Some(on_response), Some(on_zdo)) };
+    unsafe {
+        zb_exec_set_callbacks(
+            Some(on_confirm),
+            Some(on_response),
+            Some(on_zdo),
+            Some(on_zdo_active_ep),
+            Some(on_zdo_simple_desc),
+        )
+    };
     log::info!("executor callbacks installed");
 }
 
@@ -240,6 +296,12 @@ impl Transport for EspTransport {
                     max,
                     change,
                 )
+            },
+            RequestKind::ZdoActiveEndpoints => unsafe {
+                zb_exec_active_ep(op, request.device, request.short)
+            },
+            RequestKind::ZdoSimpleDescriptor { endpoint } => unsafe {
+                zb_exec_simple_desc(op, request.device, request.short, endpoint)
             },
             RequestKind::ZdoBind { cluster } => unsafe {
                 zb_exec_bind(
