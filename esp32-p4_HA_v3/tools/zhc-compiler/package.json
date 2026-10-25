@@ -12,6 +12,7 @@
     "coverage:update": "node src/coverage.cjs --update-baseline",
     "lighting": "node ../z2m_spike/emit_lighting.cjs",
     "sensors": "node src/emit_sensors.cjs",
+    "sensor-differential": "node src/sensor_differential.cjs",
     "identify": "node src/identify.cjs",
     "complex": "node src/complex.cjs",
     "matcher": "node src/matcher.cjs",

@@ -41,7 +41,7 @@ pub const TEMPERATURE_ATTR: Converter = Converter::Attribute(AttributeRule {
     kind: AttrType::Int16,
     property: TEMPERATURE,
     scale: Scale { mul: 1, div: 100 },
-    skip: Some(i16::MIN as i64),
+    skip: None,
 });
 
 pub const HUMIDITY_ATTR: Converter = Converter::Attribute(AttributeRule {
@@ -50,7 +50,7 @@ pub const HUMIDITY_ATTR: Converter = Converter::Attribute(AttributeRule {
     kind: AttrType::Uint16,
     property: HUMIDITY,
     scale: Scale { mul: 1, div: 100 },
-    skip: Some(0xFFFF),
+    skip: None,
 });
 
 pub const OCCUPANCY_ATTR: Converter = Converter::Attribute(AttributeRule {

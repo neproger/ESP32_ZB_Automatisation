@@ -1,0 +1,34 @@
+'use strict';
+const fs=require('node:fs'); const path=require('node:path');
+const z=require('./zhc.cjs'); const m=require(z.packageRoot+'/dist/lib/modernExtend');
+const rows=[];
+function run(helper,args,data){const ext=m[helper](args); const c=ext.fromZigbee[0]; return c.convert({}, {data, endpoint:{ID:1}}, ()=>{}, {}, {device:{}})||{};}
+function add(kind,cluster,payload,expected){rows.push([kind,cluster.toString(16),Buffer.from(payload).toString('hex'),expected]);}
+let out=run('battery',{voltage:true},{batteryPercentageRemaining:175});
+add('battery',0x0001,[0x21,0x00,0x20,175],`f32:${out.battery}`);
+out=run('battery',{voltage:true},{batteryVoltage:30});
+add('voltage',0x0001,[0x20,0x00,0x20,30],`f32:${out.voltage}`);
+out=run('battery',{voltage:true},{batteryPercentageRemaining:255});
+add('battery',0x0001,[0x21,0x00,0x20,255],'none');
+out=run('battery',{voltage:true,dontDividePercentage:true},{batteryPercentageRemaining:175});
+add('battery_nodivide',0x0001,[0x21,0x00,0x20,175],`f32:${out.battery}`);
+out=run('temperature',{}, {measuredValue:2500});
+add('temperature',0x0402,[0x00,0x00,0x29,0xC4,0x09],`f32:${out.temperature}`);
+out=run('temperature',{}, {measuredValue:-32768});
+add('temperature',0x0402,[0x00,0x00,0x29,0x00,0x80],`f32:${out.temperature}`);
+out=run('humidity',{}, {measuredValue:2500});
+add('humidity',0x0405,[0x00,0x00,0x21,0xC4,0x09],`f32:${out.humidity}`);
+out=run('humidity',{}, {measuredValue:65535});
+add('humidity',0x0405,[0x00,0x00,0x21,0xFF,0xFF],`f32:${out.humidity}`);
+out=run('occupancy',{}, {occupancy:1});
+add('occupancy',0x0406,[0x00,0x00,0x18,0x01],`bool:${out.occupancy}`);
+out=run('occupancy',{}, {occupancy:0});
+add('occupancy',0x0406,[0x00,0x00,0x18,0x00],`bool:${out.occupancy}`);
+out=run('illuminance',{}, {measuredValue:5000});
+add('illuminance',0x0400,[0x00,0x00,0x21,0x88,0x13],`f32:${out.illuminance}`);
+out=run('illuminance',{}, {measuredValue:0});
+add('illuminance',0x0400,[0x00,0x00,0x21,0x00,0x00],`f32:${out.illuminance}`);
+const outFile=path.resolve(__dirname,'../../../crates/z2m-rs/tests/golden/sensor_conversions.tsv');
+fs.mkdirSync(path.dirname(outFile),{recursive:true});
+fs.writeFileSync(outFile,['kind\tcluster\tpayload\texpected',...rows.map(r=>r.join('\t'))].join('\n')+'\n');
+console.log(`sensor cases: ${rows.length}`);

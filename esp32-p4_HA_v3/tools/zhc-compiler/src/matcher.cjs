@@ -22,7 +22,8 @@ const sensorsFile = path.resolve(__dirname, '../out/sensors_manifest.json');
 if (fs.existsSync(sensorsFile)) {
   const sensors = JSON.parse(fs.readFileSync(sensorsFile, 'utf8'));
   for (const profile of sensors.profiles) {
-    profileBySource.set(`${profile.source.file}#${profile.source.definition_index}`, profile.symbol);
+    const key = `${profile.source.file}#${profile.source.definition_index}`;
+    if (!profileBySource.has(key)) profileBySource.set(key, profile.symbol);
   }
 }
 
