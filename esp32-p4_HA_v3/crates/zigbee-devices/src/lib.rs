@@ -12,6 +12,7 @@ mod device_record;
 mod interview;
 mod ownership;
 mod registry;
+mod standard;
 
 pub use ownership::{Claim, ClaimKey, ClaimKind, Claims, Owner, Resolution, MAX_CLAIMS};
 pub use interview::{Identified, InterviewManager, COOLDOWN_MS, JOB_SLOTS, MAX_ATTEMPTS, OP_DEADLINE_MS, RETRY_BACKOFF_MS};
@@ -27,4 +28,5 @@ pub use descriptor::{ClusterEntry, ClusterRole, DescriptorError, DeviceDescripto
 pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
+pub use standard::{classify_device, classify_endpoint, DeviceKind, EndpointClass, EndpointFeatures, StandardCapability};
 pub use registry::{RecordSlot, Registry};

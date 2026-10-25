@@ -645,6 +645,7 @@ mod tests {
             id: old_op,
             status: Status::Confirmed,
             read: Some(payload(ATTR_MANUFACTURER, "_TZ3000_b4awzgct")),
+            zdo: None,
         };
         assert!(manager.on_result(&mut exec, late, restart + 1).is_none());
         assert!(manager.is_interviewing(A));
