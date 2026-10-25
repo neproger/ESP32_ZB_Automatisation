@@ -14,7 +14,8 @@
     "identify": "node src/identify.cjs",
     "complex": "node src/complex.cjs",
     "matcher": "node src/matcher.cjs",
-    "priority": "node src/priority.cjs"
+    "priority": "node src/priority.cjs",
+    "properties": "node src/properties.cjs"
   },
   "dependencies": {
     "zigbee-herdsman-converters": "26.123.0"
