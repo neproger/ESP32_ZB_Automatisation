@@ -296,7 +296,16 @@ fn register_domain(
         log::error!("domain: device {eui:016x} failed: {error:?}");
         return;
     }
-    match adapter.ensure_entity(eui, endpoint, profile.id, profile) {
+    let standard_endpoint = if profile.id == "standard.zcl" {
+        crate::store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
+    } else {
+        None
+    };
+    let entity_result = match standard_endpoint {
+        Some(descriptor) => adapter.ensure_standard_entity(eui, endpoint, profile.id, &descriptor),
+        None => adapter.ensure_entity(eui, endpoint, profile.id, profile),
+    };
+    match entity_result {
         Ok((entity, changed)) => {
             if !bindings.iter().any(|binding| binding.entity == entity) {
                 bindings.push(zigbee_devices::Binding {
@@ -305,6 +314,7 @@ fn register_domain(
                     short,
                     endpoint,
                     profile,
+                    standard: standard_endpoint,
                 });
             }
             log::info!(

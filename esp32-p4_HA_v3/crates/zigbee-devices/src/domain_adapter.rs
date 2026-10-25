@@ -10,6 +10,7 @@ use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
 
 use crate::canonical::profile_capabilities;
+use crate::standard;
 
 pub const STATE_CAPACITY: usize = 64;
 pub const ENTITY_CAPACITY: usize = 16;
@@ -121,6 +122,32 @@ impl<'a> DomainAdapter<'a> {
                 source: SOURCE_ZIGBEE as u8,
                 value: DomainValue::NONE,
             },
+        )?;
+        Ok((entity, changed))
+    }
+
+    pub fn ensure_standard_entity(
+        &mut self,
+        uid: u64,
+        endpoint: u8,
+        name: &str,
+        descriptor: &crate::EndpointDescriptor,
+    ) -> Result<(EntityId, bool), ha_domain::Error> {
+        let device = device_id_derive(SOURCE_ZIGBEE, format!("{uid:016x}").as_bytes());
+        let entity = zigbee_entity_id(uid, endpoint);
+        let record = EntityRecord::new(device, name);
+        let mut changed = self.domain.entity_put(
+            ENTITY_ENTITY,
+            &entity.to_le_bytes(),
+            &record.encode(),
+            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
+        )?;
+        let caps = standard::capabilities(descriptor).encode();
+        changed |= self.domain.entity_put(
+            ENTITY_CAPABILITIES,
+            &entity.to_le_bytes(),
+            &caps,
+            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
         )?;
         Ok((entity, changed))
     }

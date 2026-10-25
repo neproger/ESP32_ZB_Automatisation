@@ -8,6 +8,8 @@ use zigbee_exec::{
 };
 
 use crate::canonical::{canonical_command, profile_capabilities};
+use crate::descriptor::EndpointDescriptor;
+use crate::standard;
 use z2m_rs::Profile;
 
 pub struct ZigbeeSink<'a> {
@@ -61,6 +63,7 @@ pub struct Binding {
     pub short: u16,
     pub endpoint: u8,
     pub profile: &'static Profile,
+    pub standard: Option<EndpointDescriptor>,
 }
 
 /// `short` is a network address and changes on rejoin; the EUI64 and entity are
@@ -103,7 +106,7 @@ impl<'a> CommandRouter<'a> {
             .copied()
             .ok_or(Error::NotFound)?;
         let action = command_action(property, &value).ok_or(Error::InvalidArg)?;
-        if !capability_allows(binding.profile, property, action) {
+        if !capability_allows(binding.profile, binding.standard.as_ref(), property, action) {
             return Err(Error::InvalidArg);
         }
         let mut sink = ZigbeeSink {
@@ -135,7 +138,15 @@ fn command_action(property: PropertyId, value: &CommandValue) -> Option<u32> {
     Some(ACTION_SET)
 }
 
-fn capability_allows(profile: &Profile, property: PropertyId, action: u32) -> bool {
+fn capability_allows(
+    profile: &Profile,
+    standard_endpoint: Option<&EndpointDescriptor>,
+    property: PropertyId,
+    action: u32,
+) -> bool {
+    if let Some(endpoint) = standard_endpoint {
+        return standard::capability_allows(endpoint, property, action);
+    }
     let caps = profile_capabilities(profile);
     caps.properties[..usize::from(caps.property_count)]
         .iter()

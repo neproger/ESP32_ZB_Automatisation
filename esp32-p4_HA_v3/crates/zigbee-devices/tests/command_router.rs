@@ -34,6 +34,7 @@ fn binding(profile: &'static Profile) -> Binding {
         short: SHORT,
         endpoint: 1,
         profile,
+        standard: None,
     }
 }
 

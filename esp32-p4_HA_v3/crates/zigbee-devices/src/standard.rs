@@ -319,3 +319,52 @@ pub fn update_is_discovered(endpoint: &EndpointDescriptor, update: &z2m_rs::Upda
     };
     classify_endpoint(endpoint).features.contains(feature)
 }
+
+pub fn capability_allows(endpoint: &EndpointDescriptor, property: PropertyId, action: u32) -> bool {
+    let features = classify_endpoint(endpoint).features;
+    match property {
+        PROPERTY_POWER => features.contains(StandardCapability::Power)
+            && (action == ha_domain::canonical::ACTION_ON
+                || action == ha_domain::canonical::ACTION_OFF),
+        PROPERTY_BRIGHTNESS => features.contains(StandardCapability::Brightness)
+            && action == ha_domain::canonical::ACTION_SET,
+        PROPERTY_COLOR_TEMPERATURE => features.contains(StandardCapability::ColorTemperature)
+            && action == ha_domain::canonical::ACTION_SET,
+        PROPERTY_COLOR => features.contains(StandardCapability::Color)
+            && action == ha_domain::canonical::ACTION_SET,
+        _ => false,
+    }
+}
+
+pub fn capabilities(
+    endpoint: &EndpointDescriptor,
+) -> ha_domain::canonical::CapabilitiesRecord {
+    use ha_domain::canonical::{Capability, ACTION_OFF, ACTION_ON, ACTION_SET};
+    let features = classify_endpoint(endpoint).features;
+    let mut record = ha_domain::canonical::CapabilitiesRecord::default();
+    if features.contains(StandardCapability::Power) {
+        record.push(Capability::with_actions(PROPERTY_POWER, &[ACTION_ON, ACTION_OFF]));
+    }
+    if features.contains(StandardCapability::Brightness) {
+        record.push(Capability::with_actions(PROPERTY_BRIGHTNESS, &[ACTION_SET]));
+    }
+    if features.contains(StandardCapability::ColorTemperature) {
+        record.push(Capability::with_actions(PROPERTY_COLOR_TEMPERATURE, &[ACTION_SET]));
+    }
+    if features.contains(StandardCapability::Color) {
+        record.push(Capability::with_actions(PROPERTY_COLOR, &[ACTION_SET]));
+    }
+    for (feature, property) in [
+        (StandardCapability::Temperature, ha_domain::canonical::PROPERTY_TEMPERATURE),
+        (StandardCapability::Humidity, PROPERTY_HUMIDITY),
+        (StandardCapability::Illuminance, PROPERTY_ILLUMINANCE),
+        (StandardCapability::Occupancy, PROPERTY_OCCUPANCY),
+        (StandardCapability::BatteryPercent, PROPERTY_BATTERY_PERCENT),
+        (StandardCapability::BatteryVoltage, PROPERTY_BATTERY_VOLTAGE),
+    ] {
+        if features.contains(feature) {
+            record.push(Capability::read(property));
+        }
+    }
+    record
+}
