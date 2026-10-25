@@ -112,6 +112,7 @@ pub enum AttrType {
     Int32,
     Enum8,
     Float32,
+    Bitmap8,
 }
 
 /// Multiplier/divisor for raw integer values (`0.01 °C`, battery `0.5 %`, ...).
@@ -177,6 +178,8 @@ pub struct AttributeRule {
 
 pub enum Converter {
     Attribute(AttributeRule),
+    /// Standard ZCL illuminance measuredValue -> lux (ZHC luxScale).
+    Illuminance { cluster: u16, attribute: u16 },
     /// Cluster-specific command where one payload byte selects the action.
     Command {
         cluster: u16,
@@ -426,6 +429,16 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
                     }
                 }
             }
+            Converter::Illuminance { cluster, attribute } => {
+                if event.cluster == *cluster && event.attribute == Some(*attribute) {
+                    if let Some(raw) = words(event.payload) {
+                        decoded.push(Update::Property {
+                            property: crate::properties::ILLUMINANCE,
+                            value: Value::Float(lux_from_raw(u16::from_le_bytes(raw))),
+                        });
+                    }
+                }
+            }
             Converter::Command {
                 cluster,
                 command,
@@ -459,6 +472,21 @@ pub fn decode_frame(profile: &Profile, frame: &AttributeFrameView<'_>, out: &mut
         match converter {
             Converter::Frame(handler) => {
                 let _ = handler(frame, out);
+            }
+            Converter::Illuminance { cluster, attribute } => {
+                if frame.cluster != *cluster {
+                    continue;
+                }
+                for attr in frame.attributes() {
+                    if attr.id == *attribute {
+                        if let Some(raw) = words(attr.value) {
+                            out.push(Update::Property {
+                                property: crate::properties::ILLUMINANCE,
+                                value: Value::Float(lux_from_raw(u16::from_le_bytes(raw))),
+                            });
+                        }
+                    }
+                }
             }
             Converter::Attribute(rule) => {
                 if frame.cluster != rule.cluster {
@@ -726,6 +754,10 @@ fn read_raw(kind: AttrType, payload: &[u8]) -> Option<(i64, Value)> {
             (i64::from(raw), Value::Int(raw))
         }
         AttrType::Float32 => (0, Value::Float(f32::from_le_bytes(quads(payload)?))),
+        AttrType::Bitmap8 => {
+            let raw = *payload.first()?;
+            (i64::from(raw), Value::Bool(raw & 1 != 0))
+        }
     })
 }
 
@@ -740,6 +772,14 @@ fn quads(payload: &[u8]) -> Option<[u8; 4]> {
         *payload.get(2)?,
         *payload.get(3)?,
     ])
+}
+
+fn lux_from_raw(raw: u16) -> f32 {
+    if raw == 0 {
+        0.0
+    } else {
+        10f32.powf((f32::from(raw) - 1.0) / 10000.0)
+    }
 }
 
 fn scale_value(value: Value, scale: Scale) -> Value {

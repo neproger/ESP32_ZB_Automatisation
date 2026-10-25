@@ -1,7 +1,7 @@
 //! Shared Zigbee capabilities. Profiles compose these fragments; they do not
 //! describe device families or models.
 
-use crate::properties::{BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, STATE};
+use crate::properties::{BATTERY, BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, HUMIDITY, OCCUPANCY, STATE, TEMPERATURE, VOLTAGE};
 use crate::{
     AttributeFrameView, AttributeRule, AttrType, ColorValue, Command, CommandCodec, CommandMap,
     ConfigureEndpoint, ConfigurePlan, ConfigureStep, Converter, Decoded, Expose, Scale, Unit,
@@ -16,6 +16,56 @@ pub const ONOFF_ATTR: Converter = Converter::Attribute(AttributeRule {
     scale: Scale::NONE,
     skip: None,
 });
+
+pub const BATTERY_ATTR: Converter = Converter::Attribute(AttributeRule {
+    cluster: 0x0001,
+    attribute: 0x0021,
+    kind: AttrType::Uint8,
+    property: BATTERY,
+    scale: Scale { mul: 1, div: 2 },
+    skip: Some(255),
+});
+
+pub const BATTERY_VOLTAGE_ATTR: Converter = Converter::Attribute(AttributeRule {
+    cluster: 0x0001,
+    attribute: 0x0020,
+    kind: AttrType::Uint8,
+    property: VOLTAGE,
+    scale: Scale { mul: 100, div: 1 },
+    skip: Some(255),
+});
+
+pub const TEMPERATURE_ATTR: Converter = Converter::Attribute(AttributeRule {
+    cluster: 0x0402,
+    attribute: 0x0000,
+    kind: AttrType::Int16,
+    property: TEMPERATURE,
+    scale: Scale { mul: 1, div: 100 },
+    skip: Some(i16::MIN as i64),
+});
+
+pub const HUMIDITY_ATTR: Converter = Converter::Attribute(AttributeRule {
+    cluster: 0x0405,
+    attribute: 0x0000,
+    kind: AttrType::Uint16,
+    property: HUMIDITY,
+    scale: Scale { mul: 1, div: 100 },
+    skip: Some(0xFFFF),
+});
+
+pub const OCCUPANCY_ATTR: Converter = Converter::Attribute(AttributeRule {
+    cluster: 0x0406,
+    attribute: 0x0000,
+    kind: AttrType::Bitmap8,
+    property: OCCUPANCY,
+    scale: Scale::NONE,
+    skip: None,
+});
+
+pub const ILLUMINANCE_ATTR: Converter = Converter::Illuminance {
+    cluster: 0x0400,
+    attribute: 0x0000,
+};
 
 pub const ONOFF_ON: CommandMap = CommandMap {
     command: Command::Property {
