@@ -13,6 +13,7 @@
 
 mod fact;
 pub mod canonical;
+pub mod command;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

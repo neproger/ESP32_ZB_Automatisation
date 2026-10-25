@@ -141,3 +141,31 @@ Do not add WebSocket/LVGL/automation changes in this step.
 Not yet wired: Domain entity/state writes, the Command Core pending table,
 OperationId routing, and the three lifecycle scenarios. Those are the next
 slice; the Zigbee transport and executor are unchanged.
+
+## Domain integration (host chain implemented)
+
+- `ha-domain::command`: bounded `CommandCore` (8 pending), desired value and
+  status; final failures free the slot, successful acknowledgements remain until
+  a report satisfies them. OperationId stays outside the canonical ABI.
+- `zigbee-devices::DomainAdapter`: registers LOGICAL_DEVICE/ENTITY/CAPABILITIES/
+  PROPERTY_STATE tables, idempotent by deterministic ids; writes reported state
+  only from decoded updates; reads it back from Domain.
+- `zigbee-devices::ZigbeeSink`: canonical command → z2m command →
+  `zigbee-exec` Request (Default Response expectation); OperationId returned to
+  the CommandCore. `status_from_exec` maps Confirmed/Acknowledged → Acknowledged,
+  Timeout → Timeout, Failed/Expired → Failed.
+- Host lifecycle tests (`tests/command_lifecycle.rs`):
+  1. command + AF/DefaultResponse confirmation → Operation Acknowledged, Domain
+     Reported absent; later Attribute Report writes Reported=ON and clears the
+     desired command;
+  2. acknowledged command without report → Reported remains absent;
+  3. report without command → Domain state updates, no pending command;
+  4. timeout → operation Failed, slot freed, Reported unchanged.
+
+Total host tests: 130.
+
+Not yet wired into `ha-app`: the host chain is complete, but the app loop still
+uses the old TS0041 event path; Domain registration/state routing and command
+submission are the next integration step. ESP transport currently supports
+On/Off commands only; Level/ColorTemp/Color need a generic ZCL send before the
+hardware pass. Read Attributes results can use the same update path when routed.
