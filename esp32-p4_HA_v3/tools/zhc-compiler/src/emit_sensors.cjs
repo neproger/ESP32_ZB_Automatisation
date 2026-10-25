@@ -41,6 +41,15 @@ function rustString(value) {
   return out + '"';
 }
 
+function reportStep(cluster, attribute, attributeType, config, defaults) {
+  const min = seconds(config?.min) ?? defaults.min;
+  const max = seconds(config?.max) ?? defaults.max;
+  const change = config?.change ?? defaults.change;
+  return `ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x${cluster
+    .toString(16)
+    .padStart(4, '0')}, attribute: 0x${attribute.toString(16).padStart(4, '0')}, attribute_type: 0x${attributeType.toString(16)}, min: ${min}, max: ${max}, change: ${change} },`;
+}
+
 function seconds(value) {
   if (typeof value === 'number') return value;
   const map = { MIN: 1, '10_SECONDS': 10, '1_MINUTE': 60, '10_MINUTES': 600, '1_HOUR': 3600, MAX: 3600 };
@@ -101,28 +110,32 @@ for (const file of listFiles()) {
       if (battery.voltage) {
         from.push('BATTERY_VOLTAGE_ATTR');
         exposes.push('Expose::Numeric { property: properties::VOLTAGE, unit: Unit::MilliVolt, min: 0.0, max: 5000.0, step: 1.0 },');
-        configure.push('ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x0001, attribute: 0x0020, attribute_type: 0x20, min: 3600, max: 3600, change: 10 },');
+        configure.push(reportStep(0x0001, 0x0020, 0x20, battery.voltageReportingConfig, { min: 3600, max: 3600, change: 10 }));
       }
     }
     if (has.has('modernExtend.temperature')) {
       from.push('TEMPERATURE_ATTR');
       exposes.push('Expose::Numeric { property: properties::TEMPERATURE, unit: Unit::Celsius, min: -40.0, max: 125.0, step: 0.1 },');
-      configure.push('ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x0402, attribute: 0x0000, attribute_type: 0x29, min: 60, max: 3600, change: 50 },');
+      const args = marked.find((item) => item.helper === 'modernExtend.temperature').args;
+      configure.push(reportStep(0x0402, 0x0000, 0x29, args.reporting, { min: 10, max: 3600, change: 100 }));
     }
     if (has.has('modernExtend.humidity')) {
       from.push('HUMIDITY_ATTR');
       exposes.push('Expose::Numeric { property: properties::HUMIDITY, unit: Unit::Percent, min: 0.0, max: 100.0, step: 1.0 },');
-      configure.push('ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x0405, attribute: 0x0000, attribute_type: 0x21, min: 60, max: 3600, change: 100 },');
+      const args = marked.find((item) => item.helper === 'modernExtend.humidity').args;
+      configure.push(reportStep(0x0405, 0x0000, 0x21, args.reporting, { min: 10, max: 3600, change: 100 }));
     }
     if (has.has('modernExtend.occupancy')) {
       from.push('OCCUPANCY_ATTR');
       exposes.push('Expose::Binary { property: properties::OCCUPANCY },');
-      configure.push('ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x0406, attribute: 0x0000, attribute_type: 0x18, min: 1, max: 3600, change: 0 },');
+      const args = marked.find((item) => item.helper === 'modernExtend.occupancy').args;
+      configure.push(reportStep(0x0406, 0x0000, 0x18, args.reportingConfig, { min: 1, max: 3600, change: 0 }));
     }
     if (has.has('modernExtend.illuminance')) {
       from.push('ILLUMINANCE_ATTR');
       exposes.push('Expose::Numeric { property: properties::ILLUMINANCE, unit: Unit::Lux, min: 0.0, max: 100000.0, step: 1.0 },');
-      configure.push('ConfigureStep::Report { endpoint: ConfigureEndpoint::First, cluster: 0x0400, attribute: 0x0000, attribute_type: 0x21, min: 60, max: 3600, change: 5 },');
+      const args = marked.find((item) => item.helper === 'modernExtend.illuminance').args;
+      configure.push(reportStep(0x0400, 0x0000, 0x21, args.reporting, { min: 10, max: 3600, change: 5 }));
     }
     if (has.has('modernExtend.onOff')) {
       from.push('ONOFF_ATTR');
