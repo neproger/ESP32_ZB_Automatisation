@@ -72,13 +72,14 @@ fn main() {
     store::init();
     let mut executor = Box::new(zigbee_exec::Executor::new());
     let mut commands = CommandCore::new();
+    let mut bindings: Vec<zigbee_devices::Binding> = Vec::new();
     let mut transport = exec::EspTransport;
     let (restored, restored_count) = store::device_addresses();
     for (eui, short) in restored.into_iter().take(restored_count) {
         if let Some(profile) = store::lookup(eui) {
             log::info!("registry: restored profile={} (no interview)", profile.id);
             interview::restore(eui, profile);
-            register_domain(&mut domain, eui, 1, profile);
+            register_domain(&mut domain, &mut bindings, eui, short, 1, profile);
             configure::ensure(&mut executor, eui, short, now_ms());
         }
     }
@@ -115,8 +116,8 @@ fn main() {
             executor.device_awake(short);
             ensure_interview(&mut executor, eui, short);
         }
-        while let Some((eui, _short, profile)) = interview::take_identified() {
-            register_domain(&mut domain, eui, 1, profile);
+        while let Some((eui, short, profile)) = interview::take_identified() {
+            register_domain(&mut domain, &mut bindings, eui, short, 1, profile);
         }
         while let Some(state) = canonical::take_state() {
             apply_state(&mut domain, state);
@@ -274,7 +275,9 @@ fn now_ms() -> u64 {
 }
 fn register_domain(
     domain: &mut Domain,
+    bindings: &mut Vec<zigbee_devices::Binding>,
     eui: u64,
+    short: u16,
     endpoint: u8,
     profile: &'static z2m_rs::Profile,
 ) {
@@ -287,12 +290,41 @@ fn register_domain(
         return;
     }
     match adapter.ensure_entity(eui, endpoint, profile.id, profile) {
-        Ok((entity, changed)) => log::info!(
-            "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
-            profile.id
-        ),
+        Ok((entity, changed)) => {
+            if !bindings.iter().any(|binding| binding.entity == entity) {
+                bindings.push(zigbee_devices::Binding {
+                    entity,
+                    eui,
+                    short,
+                    endpoint,
+                    profile,
+                });
+            }
+            log::info!(
+                "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
+                profile.id
+            );
+        }
         Err(error) => log::error!("domain: entity {eui:016x} failed: {error:?}"),
     }
+}
+
+#[allow(dead_code)]
+fn submit_command(
+    executor: &mut zigbee_exec::Executor,
+    bindings: &[zigbee_devices::Binding],
+    commands: &mut CommandCore,
+    entity: u64,
+    property: u32,
+    value: ha_domain::canonical::CommandValue,
+) -> Result<u64, ha_domain::Error> {
+    zigbee_devices::CommandRouter::new(executor, bindings).submit(
+        commands,
+        entity,
+        property,
+        value,
+        now_ms(),
+    )
 }
 
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {

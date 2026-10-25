@@ -243,3 +243,18 @@ registered) pass.
 No command submission entry exists yet, and no actuator is available for a
 hardware outgoing test; enhanced hue and other commands remain unsupported by
 the C bridge.
+
+## Command entry by entity id (host)
+
+`zigbee_devices::CommandRouter` is the single command entry used by
+`ha-app::submit_command`. A registration-time `Binding` carries only
+`(entity, eui, short, endpoint, profile)`; callers pass entity, property and
+`CommandValue` and never see EUI64 or ZCL. The router rejects unknown entities
+(`NotFound`) and properties/actions absent from the profile capabilities
+(`InvalidArg`) before touching the executor. Power infers ON/OFF from a boolean;
+other properties use SET. Results keep the existing Desired/Operation/Reported
+semantics, and the bounded CommandCore(8) returns `NoSpace` on overflow.
+
+Host tests cover routing, power action inference, unknown entity, missing
+capability and bounded overflow. No source calls `submit_command` yet; hardware
+outgoing confirmation still requires an actuator.

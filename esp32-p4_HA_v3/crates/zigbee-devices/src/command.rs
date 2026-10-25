@@ -1,13 +1,13 @@
 //! Bridge between HA Command Core and the universal request executor.
 
-use ha_domain::canonical::CanonicalCommand;
-use ha_domain::command::{CommandSink, CommandStatus, OperationToken};
+use ha_domain::canonical::{CanonicalCommand, CommandValue, EntityId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, PROPERTY_POWER};
+use ha_domain::command::{CommandCore, CommandSink, CommandStatus, OperationToken};
 use ha_domain::Error;
 use zigbee_exec::{
     ExecError, Executor, Expect, Payload, Request, RequestKind, RetryPolicy, Status,
 };
 
-use crate::canonical::canonical_command;
+use crate::canonical::{canonical_command, profile_capabilities};
 use z2m_rs::Profile;
 
 pub struct ZigbeeSink<'a> {
@@ -54,6 +54,83 @@ impl CommandSink for ZigbeeSink<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct Binding {
+    pub entity: EntityId,
+    pub eui: u64,
+    pub short: u16,
+    pub endpoint: u8,
+    pub profile: &'static Profile,
+}
+
+/// Single command entry: routes a canonical request by entity id to the bound
+/// device and profile, checks capabilities, then uses CommandCore/ZigbeeSink.
+pub struct CommandRouter<'a> {
+    pub executor: &'a mut Executor,
+    pub bindings: &'a [Binding],
+}
+
+impl<'a> CommandRouter<'a> {
+    pub fn new(executor: &'a mut Executor, bindings: &'a [Binding]) -> Self {
+        Self { executor, bindings }
+    }
+
+    pub fn submit(
+        &mut self,
+        core: &mut CommandCore,
+        entity: EntityId,
+        property: PropertyId,
+        value: CommandValue,
+        now: u64,
+    ) -> Result<OperationToken, Error> {
+        let binding = self
+            .bindings
+            .iter()
+            .find(|binding| binding.entity == entity)
+            .copied()
+            .ok_or(Error::NotFound)?;
+        let action = command_action(property, &value).ok_or(Error::InvalidArg)?;
+        if !capability_allows(binding.profile, property, action) {
+            return Err(Error::InvalidArg);
+        }
+        let mut sink = ZigbeeSink {
+            executor: self.executor,
+            profile: binding.profile,
+            device: (binding.eui, binding.short),
+            endpoint: binding.endpoint,
+        };
+        core.submit(
+            &mut sink,
+            CanonicalCommand {
+                entity,
+                property,
+                action,
+                value,
+            },
+            now,
+        )
+    }
+}
+
+fn command_action(property: PropertyId, value: &CommandValue) -> Option<u32> {
+    if property == PROPERTY_POWER {
+        return match value {
+            CommandValue::Scalar(v) => v.as_bool().map(|on| if on { ACTION_ON } else { ACTION_OFF }),
+            CommandValue::None | CommandValue::Xy { .. } => None,
+        };
+    }
+    Some(ACTION_SET)
+}
+
+fn capability_allows(profile: &Profile, property: PropertyId, action: u32) -> bool {
+    let caps = profile_capabilities(profile);
+    caps.properties[..usize::from(caps.property_count)]
+        .iter()
+        .any(|capability| {
+            capability.property == property
+                && capability.actions[..usize::from(capability.action_count)].contains(&action)
+        })
+}
 pub fn status_from_exec(status: Status) -> Option<CommandStatus> {
     Some(match status {
         Status::Queued | Status::Sent => CommandStatus::Sent,
