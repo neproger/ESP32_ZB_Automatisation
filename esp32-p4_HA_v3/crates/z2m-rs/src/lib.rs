@@ -42,6 +42,10 @@ pub mod properties {
     pub const COLOR_TEMP: PropertyId = PropertyId(5);
     pub const COLOR: PropertyId = PropertyId(6);
     pub const COLOR_MODE: PropertyId = PropertyId(7);
+    pub const TEMPERATURE: PropertyId = PropertyId(8);
+    pub const HUMIDITY: PropertyId = PropertyId(9);
+    pub const OCCUPANCY: PropertyId = PropertyId(10);
+    pub const ILLUMINANCE: PropertyId = PropertyId(11);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

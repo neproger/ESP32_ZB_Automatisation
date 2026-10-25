@@ -71,3 +71,13 @@ explicit unsupported diagnostic; they are not aliased to occupancy or battery.
   until that contract is decided.
 - This audit changes no V2 ABI and no V3 Domain code. It only fixes the mapping
   table that the ZHC compiler must follow.
+
+## Implemented mapping (V3, additive)
+
+`ha-domain::canonical` now exposes V2-compatible IDs 8..13 with the same names;
+existing record layouts were not changed. `zigbee-devices::canonical` maps
+`BATTERY`, `VOLTAGE`, `TEMPERATURE`, `HUMIDITY`, `ILLUMINANCE`, `OCCUPANCY`
+updates to `PROPERTY_STATE` and read-only capabilities. Voltage is stored in
+volts from the ZHC profile's millivolts. `tests/sensor_canonical.rs` covers the
+mapping. The ZHC profile generator for these mechanisms is not added yet; only
+the canonical contract is in place.

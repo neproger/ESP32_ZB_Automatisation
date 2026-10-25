@@ -31,6 +31,12 @@ pub const PROPERTY_COLOR_SATURATION: PropertyId = 4;
 pub const PROPERTY_COLOR_X: PropertyId = 5;
 pub const PROPERTY_COLOR_Y: PropertyId = 6;
 pub const PROPERTY_COLOR_TEMPERATURE: PropertyId = 7;
+pub const PROPERTY_TEMPERATURE: PropertyId = 8;
+pub const PROPERTY_HUMIDITY: PropertyId = 9;
+pub const PROPERTY_ILLUMINANCE: PropertyId = 10;
+pub const PROPERTY_OCCUPANCY: PropertyId = 11;
+pub const PROPERTY_BATTERY_VOLTAGE: PropertyId = 12;
+pub const PROPERTY_BATTERY_PERCENT: PropertyId = 13;
 pub const PROPERTY_COLOR: PropertyId = 22;
 
 pub const ACTION_ON: ActionId = 1;

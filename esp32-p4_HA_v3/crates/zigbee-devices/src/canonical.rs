@@ -4,9 +4,9 @@
 use ha_domain::canonical::{
     device_id_derive, CapabilitiesRecord, Capability, CanonicalCommand, CommandValue, EntityId,
     EventId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, EVENT_DOUBLE_PRESS, EVENT_HOLD,
-    EVENT_SINGLE_PRESS, PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_HUE,
+    EVENT_SINGLE_PRESS, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_HUE,
     PROPERTY_COLOR_SATURATION, PROPERTY_COLOR_TEMPERATURE, PROPERTY_COLOR_X, PROPERTY_COLOR_Y,
-    PROPERTY_POWER, SOURCE_ZIGBEE,
+    PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY, PROPERTY_POWER, PROPERTY_TEMPERATURE, SOURCE_ZIGBEE,
 };
 use ha_domain::Value as DomainValue;
 use z2m_rs::{
@@ -41,6 +41,24 @@ pub fn profile_capabilities(profile: &Profile) -> CapabilitiesRecord {
                     PROPERTY_COLOR_TEMPERATURE,
                     &[ACTION_SET],
                 ));
+            }
+            Expose::Numeric { property, .. } if *property == properties::BATTERY => {
+                record.push(Capability::read(PROPERTY_BATTERY_PERCENT));
+            }
+            Expose::Numeric { property, .. } if *property == properties::VOLTAGE => {
+                record.push(Capability::read(PROPERTY_BATTERY_VOLTAGE));
+            }
+            Expose::Numeric { property, .. } if *property == properties::TEMPERATURE => {
+                record.push(Capability::read(PROPERTY_TEMPERATURE));
+            }
+            Expose::Numeric { property, .. } if *property == properties::HUMIDITY => {
+                record.push(Capability::read(PROPERTY_HUMIDITY));
+            }
+            Expose::Numeric { property, .. } if *property == properties::ILLUMINANCE => {
+                record.push(Capability::read(PROPERTY_ILLUMINANCE));
+            }
+            Expose::Binary { property } if *property == properties::OCCUPANCY => {
+                record.push(Capability::read(PROPERTY_OCCUPANCY));
             }
             Expose::Color { .. } if has_xy => {
                 record.push(Capability::with_actions(PROPERTY_COLOR, &[ACTION_SET]));
@@ -128,7 +146,66 @@ pub fn canonical_states(
             }
             None
         }
-        Update::Property { property, value } if *property == properties::COLOR => {
+        Update::Property { property, value } if *property == properties::BATTERY => {
+            if let Some(percent) = numeric(value) {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_BATTERY_PERCENT,
+                    value: DomainValue::f32(percent),
+                });
+            }
+            None
+        }
+        Update::Property { property, value } if *property == properties::VOLTAGE => {
+            if let Some(millivolts) = numeric(value) {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_BATTERY_VOLTAGE,
+                    value: DomainValue::f32(millivolts / 1000.0),
+                });
+            }
+            None
+        }
+        Update::Property { property, value } if *property == properties::TEMPERATURE => {
+            if let Some(celsius) = numeric(value) {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_TEMPERATURE,
+                    value: DomainValue::f32(celsius),
+                });
+            }
+            None
+        }
+        Update::Property { property, value } if *property == properties::HUMIDITY => {
+            if let Some(percent) = numeric(value) {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_HUMIDITY,
+                    value: DomainValue::f32(percent),
+                });
+            }
+            None
+        }
+        Update::Property { property, value } if *property == properties::ILLUMINANCE => {
+            if let Some(lux) = numeric(value) {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_ILLUMINANCE,
+                    value: DomainValue::f32(lux),
+                });
+            }
+            None
+        }
+        Update::Property { property, value } if *property == properties::OCCUPANCY => {
+            if let Value::Bool(occupied) = value {
+                states[0] = Some(StateUpdate {
+                    entity,
+                    property: PROPERTY_OCCUPANCY,
+                    value: DomainValue::bool(*occupied),
+                });
+            }
+            None
+        }        Update::Property { property, value } if *property == properties::COLOR => {
             if let Value::Color(color) = value {
                 match color {
                     ColorValue::Xy {
