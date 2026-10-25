@@ -28,7 +28,7 @@ pub use descriptor::{ClusterEntry, ClusterRole, DescriptorError, DeviceDescripto
 pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
-pub use standard::{classify_device, classify_endpoint, decode_standard, update_is_discovered, capability_allows, capabilities, attribute_capability, DeviceKind, EndpointClass, EndpointFeatures, StandardCapability, Confirmed, MAX_CONFIRMED_ATTRIBUTES};
+pub use standard::{classify_device, classify_endpoint, decode_standard, update_is_discovered, capability_allows, capabilities, capabilities_confirmed, attribute_capability, DeviceKind, EndpointClass, EndpointFeatures, StandardCapability, Confirmed, MAX_CONFIRMED_ATTRIBUTES};
 #[allow(unused_imports)]
 pub use standard::STANDARD_PROFILE;
 pub use registry::{RecordSlot, Registry};

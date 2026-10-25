@@ -170,6 +170,13 @@ pub fn confirm_attribute(eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
     }
 }
 
+pub fn confirmed(eui: u64) -> zigbee_devices::Confirmed {
+    CONFIRMED.lock().unwrap().iter()
+        .find(|(id, _)| *id == eui)
+        .map(|(_, state)| *state)
+        .unwrap_or_else(zigbee_devices::Confirmed::new)
+}
+
 pub fn is_attribute_confirmed(eui: u64, endpoint: u8, cluster: u16, attribute: u16) -> bool {
     CONFIRMED.lock().unwrap().iter().any(|(id, state)| {
         *id == eui && state.is_confirmed(endpoint, cluster, attribute)

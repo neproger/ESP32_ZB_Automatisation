@@ -142,7 +142,7 @@ impl<'a> DomainAdapter<'a> {
             &record.encode(),
             FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
         )?;
-        let caps = standard::capabilities(descriptor).encode();
+        let caps = standard::capabilities_confirmed(descriptor, &crate::standard::Confirmed::new()).encode();
         changed |= self.domain.entity_put(
             ENTITY_CAPABILITIES,
             &entity.to_le_bytes(),
@@ -150,6 +150,19 @@ impl<'a> DomainAdapter<'a> {
             FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
         )?;
         Ok((entity, changed))
+    }
+
+    pub fn write_capabilities(
+        &mut self,
+        entity: EntityId,
+        capabilities: &ha_domain::canonical::CapabilitiesRecord,
+    ) -> Result<bool, ha_domain::Error> {
+        self.domain.entity_put(
+            ENTITY_CAPABILITIES,
+            &entity.to_le_bytes(),
+            &capabilities.encode(),
+            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
+        )
     }
 
     pub fn write_state(

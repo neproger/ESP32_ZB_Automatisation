@@ -184,6 +184,15 @@ pub fn process_pending() {
                 }
             }
             let entity = zigbee_devices::zigbee_entity_id(meta.src_ext, meta.src_ep);
+            if standard {
+                if let Some(endpoint) = standard_endpoint {
+                    let confirmed = crate::interview::confirmed(meta.src_ext);
+                    crate::canonical::push_capabilities(
+                        entity,
+                        zigbee_devices::standard::capabilities_confirmed(endpoint, &confirmed),
+                    );
+                }
+            }
             for update in decoded.updates() {
                 if standard {
                     let Some(endpoint) = standard_endpoint else {

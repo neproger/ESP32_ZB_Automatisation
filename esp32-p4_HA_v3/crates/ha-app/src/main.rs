@@ -129,6 +129,9 @@ fn main() {
         while let Some(state) = canonical::take_state() {
             apply_state(&mut domain, state);
         }
+        while let Some((entity, capabilities)) = canonical::take_capabilities() {
+            apply_capabilities(&mut domain, entity, capabilities);
+        }
         while let Some(event) = canonical::take_event() {
             publish_event(&mut domain, event);
         }
@@ -212,6 +215,17 @@ fn ingest_command(event: &PocEvent) {
     for update in decoded.updates() {
         log::info!("canonical command eui={:016x} {update:?}", event.extended_addr);
         canonical::push(entity, update);
+    }
+}
+
+fn apply_capabilities(
+    domain: &mut Domain,
+    entity: u64,
+    capabilities: ha_domain::canonical::CapabilitiesRecord,
+) {
+    let Ok(mut adapter) = DomainAdapter::new(domain) else { return; };
+    if let Err(error) = adapter.write_capabilities(entity, &capabilities) {
+        log::error!("domain: capabilities {entity:016x} failed: {error:?}");
     }
 }
 

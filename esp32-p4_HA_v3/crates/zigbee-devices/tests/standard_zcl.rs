@@ -57,3 +57,14 @@ fn attribute_confirmation_requires_a_real_attribute() {
     assert!(confirmed.is_confirmed(1, ONOFF, 0x0000));
     assert!(!confirmed.is_confirmed(1, ONOFF, 0x0001));
 }
+
+#[test]
+fn confirmed_attribute_upgrades_capabilities() {
+    let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
+    let mut confirmed = Confirmed::new();
+    let empty = zigbee_devices::standard::capabilities_confirmed(&relay, &confirmed);
+    assert_eq!(empty.property_count, 0);
+    assert!(confirmed.confirm(1, ONOFF, 0x0000));
+    let caps = zigbee_devices::standard::capabilities_confirmed(&relay, &confirmed);
+    assert!(caps.properties[..usize::from(caps.property_count)].iter().any(|c| c.property == 1));
+}

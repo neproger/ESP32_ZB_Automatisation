@@ -427,3 +427,38 @@ pub fn attribute_capability(cluster: u16, attribute: u16) -> Option<StandardCapa
         _ => return None,
     })
 }
+
+pub fn capabilities_confirmed(
+    endpoint: &EndpointDescriptor,
+    confirmed: &Confirmed,
+) -> ha_domain::canonical::CapabilitiesRecord {
+    use ha_domain::canonical::{Capability, ACTION_OFF, ACTION_ON, ACTION_SET};
+    let mut record = ha_domain::canonical::CapabilitiesRecord::default();
+    if confirmed.is_confirmed(endpoint.endpoint, ONOFF, 0x0000) {
+        record.push(Capability::with_actions(PROPERTY_POWER, &[ACTION_ON, ACTION_OFF]));
+    }
+    if confirmed.is_confirmed(endpoint.endpoint, LEVEL, 0x0000) {
+        record.push(Capability::with_actions(PROPERTY_BRIGHTNESS, &[ACTION_SET]));
+    }
+    if confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0007) {
+        record.push(Capability::with_actions(PROPERTY_COLOR_TEMPERATURE, &[ACTION_SET]));
+    }
+    if confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0003)
+        || confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0004)
+    {
+        record.push(Capability::with_actions(PROPERTY_COLOR, &[ACTION_SET]));
+    }
+    for (cluster, attribute, property) in [
+        (POWER_CONFIG, 0x0021, PROPERTY_BATTERY_PERCENT),
+        (POWER_CONFIG, 0x0020, PROPERTY_BATTERY_VOLTAGE),
+        (TEMPERATURE, 0x0000, ha_domain::canonical::PROPERTY_TEMPERATURE),
+        (HUMIDITY, 0x0000, PROPERTY_HUMIDITY),
+        (ILLUMINANCE, 0x0000, PROPERTY_ILLUMINANCE),
+        (OCCUPANCY, 0x0000, PROPERTY_OCCUPANCY),
+    ] {
+        if confirmed.is_confirmed(endpoint.endpoint, cluster, attribute) {
+            record.push(Capability::read(property));
+        }
+    }
+    record
+}
