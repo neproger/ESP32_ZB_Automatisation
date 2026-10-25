@@ -136,6 +136,19 @@ extern "C" {
         change: u8,
     ) -> i32;
     fn zb_exec_on_off(op: u32, eui64: u64, short: u16, ep: u8, on: u8) -> i32;
+    #[allow(clippy::too_many_arguments)]
+    fn zb_exec_send_zcl(
+        op: u32,
+        eui64: u64,
+        short: u16,
+        ep: u8,
+        cluster: u16,
+        command: u8,
+        manuf_code: u16,
+        frame_control: u8,
+        payload: *const u8,
+        len: u16,
+    ) -> i32;
     fn zb_exec_bind(
         op: u32,
         eui64: u64,
@@ -186,19 +199,28 @@ impl Transport for EspTransport {
                 zb_exec_on_off(op, request.device, request.short, request.endpoint, 0)
             },
             RequestKind::SendZcl {
-                cluster: 0x0006,
-                command: 0x01,
+                cluster,
+                command,
+                payload,
+                manufacturer,
+                frame_control,
                 ..
             } => unsafe {
-                zb_exec_on_off(op, request.device, request.short, request.endpoint, 1)
+                let bytes = payload.as_slice();
+                zb_exec_send_zcl(
+                    op,
+                    request.device,
+                    request.short,
+                    request.endpoint,
+                    cluster,
+                    command,
+                    manufacturer.unwrap_or(0),
+                    frame_control,
+                    bytes.as_ptr(),
+                    bytes.len() as u16,
+                )
             },
-            RequestKind::SendZcl {
-                cluster: 0x0006,
-                command: 0x00,
-                ..
-            } => unsafe {
-                zb_exec_on_off(op, request.device, request.short, request.endpoint, 0)
-            },            RequestKind::ConfigureReporting {
+            RequestKind::ConfigureReporting {
                 cluster,
                 attribute,
                 attribute_type,

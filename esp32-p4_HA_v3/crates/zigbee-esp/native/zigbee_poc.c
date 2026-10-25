@@ -17,7 +17,7 @@
 #include "ezbee/app_signals.h"
 #include "ezbee/bdb.h"
 #include "ezbee/nwk.h"
-#include "ezbee/zcl/cluster/on_off.h"
+#include "ezbee/zcl/cluster/color_control.h"`n#include "ezbee/zcl/cluster/level.h"`n#include "ezbee/zcl/cluster/on_off.h"
 #include "ezbee/zcl/cluster/on_off_desc.h"
 #include "ezbee/zcl/cluster/power_config_desc.h"
 #include "ezbee/zcl/zcl_core.h"
@@ -467,6 +467,120 @@ int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
     return err == EZB_ERR_NONE ? 0 : -1;
 }
 
+static void exec_cluster_ctrl(ezb_zcl_cluster_cmd_ctrl_t *ctrl, uint32_t op, uint64_t eui64,
+                              uint16_t short_addr, uint8_t ep)
+{
+    exec_set_addr(&ctrl->dst_addr, eui64, short_addr);
+    ctrl->dst_ep = ep;
+    ctrl->src_ep = POC_ENDPOINT;
+    ctrl->dis_default_rsp = false;
+    ctrl->cnf_ctx.cb = exec_confirm_cb;
+    ctrl->cnf_ctx.user_ctx = (void *)(uintptr_t)op;
+}
+
+/*
+ * Universal standard ZCL command: the Rust executor decides cluster/command and
+ * payload; the C bridge only dispatches to the typed SDK cluster calls. Returns
+ * -1 for an unsupported cluster/command, never a fake success.
+ */
+int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
+                     uint16_t cluster, uint8_t command, uint16_t manuf_code, uint8_t fc,
+                     const uint8_t *payload, uint16_t len)
+{
+    if (payload == NULL || manuf_code != 0 || (fc & 0x03u) != 1u) {
+        return -1;
+    }
+    if (cluster == 0x0006u) {
+        if (command == 0x00u) {
+            return zb_exec_on_off(op, eui64, short_addr, ep, 0);
+        }
+        if (command == 0x01u) {
+            return zb_exec_on_off(op, eui64, short_addr, ep, 1);
+        }
+        return -1;
+    }
+    if (cluster == 0x0008u) {
+        if (len < 3u) {
+            return -1;
+        }
+        ezb_zcl_level_move_to_level_cmd_t req = {0};
+        exec_cluster_ctrl(&req.cmd_ctrl, op, eui64, short_addr, ep);
+        req.payload.level = payload[0];
+        req.payload.transition_time = (uint16_t)(payload[1] | ((uint16_t)payload[2] << 8));
+        req.payload.options_mask = len >= 5u ? payload[3] : 0;
+        req.payload.options_override = len >= 5u ? payload[4] : 0;
+        if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+            return -1;
+        }
+        const ezb_err_t err = command == 0x04u
+                                  ? ezb_zcl_level_move_to_level_with_on_off_cmd_req(&req)
+                                  : ezb_zcl_level_move_to_level_cmd_req(&req);
+        esp_zigbee_lock_release();
+        return err == EZB_ERR_NONE ? 0 : -1;
+    }
+    if (cluster == 0x0300u) {
+        if (command == 0x0Au) {
+            if (len < 4u) {
+                return -1;
+            }
+            ezb_zcl_color_control_move_to_color_temperature_cmd_t req = {0};
+            exec_cluster_ctrl(&req.cmd_ctrl, op, eui64, short_addr, ep);
+            req.payload.color_temperature_mireds =
+                (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+            req.payload.transition_time =
+                (uint16_t)(payload[2] | ((uint16_t)payload[3] << 8));
+            req.payload.options_mask = len >= 6u ? payload[4] : 0;
+            req.payload.options_override = len >= 6u ? payload[5] : 0;
+            if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+                return -1;
+            }
+            const ezb_err_t err =
+                ezb_zcl_color_control_move_to_color_temperature_cmd_req(&req);
+            esp_zigbee_lock_release();
+            return err == EZB_ERR_NONE ? 0 : -1;
+        }
+        if (command == 0x07u) {
+            if (len < 6u) {
+                return -1;
+            }
+            ezb_zcl_color_control_move_to_color_cmd_t req = {0};
+            exec_cluster_ctrl(&req.cmd_ctrl, op, eui64, short_addr, ep);
+            req.payload.color_x = (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+            req.payload.color_y = (uint16_t)(payload[2] | ((uint16_t)payload[3] << 8));
+            req.payload.transition_time =
+                (uint16_t)(payload[4] | ((uint16_t)payload[5] << 8));
+            req.payload.options_mask = len >= 8u ? payload[6] : 0;
+            req.payload.options_override = len >= 8u ? payload[7] : 0;
+            if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+                return -1;
+            }
+            const ezb_err_t err = ezb_zcl_color_control_move_to_color_cmd_req(&req);
+            esp_zigbee_lock_release();
+            return err == EZB_ERR_NONE ? 0 : -1;
+        }
+        if (command == 0x06u) {
+            if (len < 4u) {
+                return -1;
+            }
+            ezb_zcl_color_control_move_to_hue_and_saturation_cmd_t req = {0};
+            exec_cluster_ctrl(&req.cmd_ctrl, op, eui64, short_addr, ep);
+            req.payload.hue = payload[0];
+            req.payload.saturation = payload[1];
+            req.payload.transition_time =
+                (uint16_t)(payload[2] | ((uint16_t)payload[3] << 8));
+            req.payload.options_mask = len >= 6u ? payload[4] : 0;
+            req.payload.options_override = len >= 6u ? payload[5] : 0;
+            if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+                return -1;
+            }
+            const ezb_err_t err =
+                ezb_zcl_color_control_move_to_hue_and_saturation_cmd_req(&req);
+            esp_zigbee_lock_release();
+            return err == EZB_ERR_NONE ? 0 : -1;
+        }
+    }
+    return -1;
+}
 int zb_exec_config_report(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
                           uint16_t cluster, uint16_t attr, uint8_t attr_type, uint16_t min,
                           uint16_t max, uint8_t change)

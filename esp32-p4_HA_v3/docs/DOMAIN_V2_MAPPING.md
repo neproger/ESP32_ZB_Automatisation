@@ -230,3 +230,16 @@ ZCL send).
 The app still has no external command source: `CommandCore` receives operation
 results, but nothing submits canonical commands yet. That entry point and the
 typed C bridge are the remaining work.
+
+## Typed ZCL bridge in C (ESP)
+
+`zb_exec_send_zcl` is the transport-side dispatch for `SendZcl`: it converts the
+bounded ZCL payload into the Espressif typed calls for OnOff, Level (0x0004/0x0000),
+ColorTemperature (0x0300/0x0A) and XY (0x0300/0x07); unsupported cluster/command,
+manufacturer-specific frames and non-cluster frame control return -1 explicitly.
+Rust `SendZcl` now calls this bridge; the ESP build and P4 boot (both devices
+registered) pass.
+
+No command submission entry exists yet, and no actuator is available for a
+hardware outgoing test; enhanced hue and other commands remain unsupported by
+the C bridge.
