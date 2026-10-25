@@ -49,3 +49,26 @@ and host-tested against the current three profiles (`resolve_command` ->
 Reported split. The generator work above is a separate, larger task and should
 land before adding new device models. No JS runtime on the ESP32: keep the
 build-time conversion.
+
+## Coverage manifest and gate (implemented)
+
+`tools/zhc-compiler/src/coverage.cjs` reads the pinned ZHC install and the
+catalog manifest, then records for every definition: exposures, from/to
+converters, configure entries, `onEvent`, `modernExtend` helpers with their
+option keys, and the translated status of each item. Definitions are classified
+as `SUPPORTED` (every item supported), `PARTIAL` (at least one supported item,
+some missing) or `UNSUPPORTED` (no supported item).
+
+The gate fails only on real losses: a supported mechanism or definition status
+dropping against `baseline/mechanisms.json`, a false `SUPPORTED` definition,
+or an unclassified item. `PARTIAL` is allowed. The baseline is updated
+explicitly with `npm run coverage:update`.
+
+Current snapshot: 76 SUPPORTED, 1143 PARTIAL, 3376 UNSUPPORTED. The largest
+unsupported groups are non-core helpers (`modernExtend.numeric`, temperature,
+humidity, electricity, Tuya-specific behavior) and configure closures that are
+not translated. This is a coverage statement, not a model-by-model port.
+
+Node >=22.12 is required in `package.json`; Node 20 prints a warning but can
+still run local analysis. Fingerprint parity between the Node selector and
+`z2m-rs::identify()` is not yet gated.

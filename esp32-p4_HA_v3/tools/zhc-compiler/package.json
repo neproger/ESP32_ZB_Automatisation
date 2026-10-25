@@ -7,7 +7,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "manifest": "node src/manifest.cjs"
+    "manifest": "node src/manifest.cjs",
+    "coverage": "node src/coverage.cjs",
+    "coverage:update": "node src/coverage.cjs --update-baseline"
   },
   "dependencies": {
     "zigbee-herdsman-converters": "26.123.0"

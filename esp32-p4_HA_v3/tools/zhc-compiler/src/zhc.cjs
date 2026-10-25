@@ -3,6 +3,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
+  console.warn(
+    `Node ${process.versions.node} is unsupported for reproducible runs; use >=22.12 (see package.json)`,
+  );
+}
+
 const packageFile = require.resolve('zigbee-herdsman-converters/package.json');
 const packageRoot = path.dirname(packageFile);
 const packageJson = JSON.parse(fs.readFileSync(packageFile, 'utf8'));
