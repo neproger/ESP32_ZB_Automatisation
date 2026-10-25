@@ -254,3 +254,17 @@ mod tests {
         assert!(!class.features.contains(StandardCapability::Temperature));
     }
 }
+/// Identity-only profile for devices with no ZHC profile. Standard capabilities
+/// come from the discovered cluster classification and ownership, not here.
+pub static STANDARD_PROFILE: z2m_rs::Profile = z2m_rs::Profile {
+    id: "standard.zcl",
+    vendor: "ZCL",
+    fingerprints: &[],
+    exposes: &[],
+    from: &[],
+    to: &[],
+    configure: None,
+    omit_optional_params: false,
+    turns_off_at_brightness_1: false,
+    support: z2m_rs::Support::PARTIAL,
+};

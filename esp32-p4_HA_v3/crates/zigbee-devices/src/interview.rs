@@ -6,9 +6,10 @@
 //! operation, so a late result from an older job cannot change a newer one.
 
 use z2m_rs::{Interview, Profile};
+use crate::descriptor::{ClusterRole, DeviceDescriptor, EndpointDescriptor};
 use zigbee_exec::{
     AttributeList, Executor, OperationId, OperationResult, Request, RequestKind, RetryPolicy,
-    Status,
+    Status, ZdoData,
 };
 
 pub const JOB_SLOTS: usize = 8;
@@ -29,6 +30,8 @@ const ATTR_MODEL: u16 = 0x0005;
 enum Step {
     Manufacturer,
     Model,
+    ActiveEndpoints,
+    SimpleDescriptor,
 }
 
 impl Step {
@@ -36,6 +39,7 @@ impl Step {
         match self {
             Self::Manufacturer => ATTR_MANUFACTURER,
             Self::Model => ATTR_MODEL,
+            Self::ActiveEndpoints | Self::SimpleDescriptor => 0,
         }
     }
 }
@@ -49,6 +53,10 @@ struct Job {
     model: [u8; 32],
     model_len: u8,
     step: Step,
+    descriptor: DeviceDescriptor,
+    active: [u8; 8],
+    active_count: u8,
+    active_index: u8,
     pending: Option<OperationId>,
     started_at: u64,
     attempts: u8,
@@ -65,6 +73,10 @@ impl Job {
             model: [0; 32],
             model_len: 0,
             step: Step::Manufacturer,
+            descriptor: DeviceDescriptor::new(),
+            active: [0; 8],
+            active_count: 0,
+            active_index: 0,
             pending: None,
             started_at: 0,
             attempts: 0,
@@ -80,6 +92,7 @@ pub struct Identified {
     pub manufacturer: String,
     pub model: String,
     pub profile: &'static Profile,
+    pub descriptor: DeviceDescriptor,
 }
 
 pub struct InterviewManager {
@@ -146,35 +159,87 @@ impl InterviewManager {
         })?;
         let job = self.jobs[slot].as_mut().unwrap();
         if result.status == Status::Confirmed {
-            let attr = job.step.attr();
-            let Some(value) = result
-                .read
-                .as_ref()
-                .and_then(|payload| find_string(payload.as_slice(), attr))
-            else {
-                return self.failed(slot, now);
-            };
-            let len = usize::from(value[0])
-                .min(value.len().saturating_sub(1))
-                .min(31);
-            if job.step == Step::Manufacturer {
-                job.manufacturer[..len].copy_from_slice(&value[1..1 + len]);
-                job.man_len = len as u8;
-                job.step = Step::Model;
-                job.attempts = 0;
-                job.pending = None;
-                if enqueue(job, exec, now).is_err() {
-                    job.retry_at = now + RETRY_BACKOFF_MS;
+            match job.step {
+                Step::Manufacturer | Step::Model => {
+                    let attr = job.step.attr();
+                    let Some(value) = result
+                        .read
+                        .as_ref()
+                        .and_then(|payload| find_string(payload.as_slice(), attr))
+                    else {
+                        return self.failed(slot, now);
+                    };
+                    let len = usize::from(value[0])
+                        .min(value.len().saturating_sub(1))
+                        .min(31);
+                    if job.step == Step::Manufacturer {
+                        job.manufacturer[..len].copy_from_slice(&value[1..1 + len]);
+                        job.man_len = len as u8;
+                        job.step = Step::Model;
+                        job.attempts = 0;
+                        job.pending = None;
+                        if enqueue(job, exec, now).is_err() {
+                            job.retry_at = now + RETRY_BACKOFF_MS;
+                        }
+                        None
+                    } else {
+                        job.model[..len].copy_from_slice(&value[1..1 + len]);
+                        job.model_len = len as u8;
+                        if let Some(identified) = identify(job) {
+                            self.jobs[slot] = None;
+                            return Some(identified);
+                        }
+                        job.step = Step::ActiveEndpoints;
+                        job.attempts = 0;
+                        job.pending = None;
+                        if enqueue(job, exec, now).is_err() {
+                            job.retry_at = now + RETRY_BACKOFF_MS;
+                        }
+                        None
+                    }
                 }
-                None
-            } else {
-                job.model[..len].copy_from_slice(&value[1..1 + len]);
-                job.model_len = len as u8;
-                let identified = identify(job);
-                self.jobs[slot] = None;
-                identified
-            }
-        } else if matches!(
+                Step::ActiveEndpoints => {
+                    let Some(ZdoData::ActiveEndpoints(endpoints)) = result.zdo else {
+                        return self.failed(slot, now);
+                    };
+                    if endpoints.len() == 0 || endpoints.len() > job.active.len() {
+                        return self.failed(slot, now);
+                    }
+                    for (index, endpoint) in endpoints.as_slice().iter().enumerate() {
+                        job.active[index] = *endpoint;
+                    }
+                    job.active_count = endpoints.len() as u8;
+                    job.active_index = 0;
+                    job.step = Step::SimpleDescriptor;
+                    job.attempts = 0;
+                    job.pending = None;
+                    if enqueue(job, exec, now).is_err() {
+                        job.retry_at = now + RETRY_BACKOFF_MS;
+                    }
+                    None
+                }
+                Step::SimpleDescriptor => {
+                    let Some(ZdoData::SimpleDescriptor(descriptor)) = result.zdo else {
+                        return self.failed(slot, now);
+                    };
+                    if !push_simple_descriptor(job, descriptor) {
+                        return self.failed(slot, now);
+                    }
+                    job.active_index += 1;
+                    if job.active_index < job.active_count {
+                        job.pending = None;
+                        job.attempts = 0;
+                        if enqueue(job, exec, now).is_err() {
+                            job.retry_at = now + RETRY_BACKOFF_MS;
+                        }
+                        None
+                    } else {
+                        let identified = identify_standard(job);
+                        self.jobs[slot] = None;
+                        identified
+                    }
+                }
+            }        } else if matches!(
             result.status,
             Status::Timeout | Status::Failed | Status::Expired
         ) {
@@ -251,18 +316,25 @@ impl InterviewManager {
 }
 
 fn enqueue(job: &mut Job, exec: &mut Executor, now: u64) -> Result<(), ()> {
+    let kind = match job.step {
+        Step::Manufacturer | Step::Model => RequestKind::ReadAttributes {
+            cluster: BASIC_CLUSTER,
+            attributes: AttributeList::single(job.step.attr()),
+        },
+        Step::ActiveEndpoints => RequestKind::ZdoActiveEndpoints,
+        Step::SimpleDescriptor => RequestKind::ZdoSimpleDescriptor {
+            endpoint: job.active[usize::from(job.active_index)],
+        },
+    };
     let request = Request {
         device: job.eui,
         short: job.short,
-        endpoint: ENDPOINT,
+        endpoint: if matches!(job.step, Step::Manufacturer | Step::Model) { ENDPOINT } else { 0 },
         sleepy: true,
         retry: RetryPolicy::SAFE,
         expiry_ms: OP_EXPIRY_MS,
         timeout_ms: READ_TIMEOUT_MS,
-        kind: RequestKind::ReadAttributes {
-            cluster: BASIC_CLUSTER,
-            attributes: AttributeList::single(job.step.attr()),
-        },
+        kind,
     };
     match exec.enqueue(request, now) {
         Ok(id) => {
@@ -275,6 +347,30 @@ fn enqueue(job: &mut Job, exec: &mut Executor, now: u64) -> Result<(), ()> {
             Err(())
         }
     }
+}
+
+fn push_simple_descriptor(job: &mut Job, descriptor: zigbee_exec::SimpleDescriptor) -> bool {
+    let mut endpoint = EndpointDescriptor::new(descriptor.endpoint, descriptor.profile_id, descriptor.device_id);
+    for cluster in descriptor.server_clusters.as_slice() {
+        if !endpoint.push(*cluster, ClusterRole::Server) { return false; }
+    }
+    for cluster in descriptor.client_clusters.as_slice() {
+        if !endpoint.push(*cluster, ClusterRole::Client) { return false; }
+    }
+    job.descriptor.push(endpoint)
+}
+fn identify_standard(job: &Job) -> Option<Identified> {
+    let manufacturer =
+        String::from_utf8_lossy(&job.manufacturer[..usize::from(job.man_len)]).to_string();
+    let model = String::from_utf8_lossy(&job.model[..usize::from(job.model_len)]).to_string();
+    Some(Identified {
+        eui: job.eui,
+        short: job.short,
+        manufacturer,
+        model,
+        profile: &crate::standard::STANDARD_PROFILE,
+        descriptor: job.descriptor,
+    })
 }
 
 fn identify(job: &Job) -> Option<Identified> {
@@ -292,6 +388,7 @@ fn identify(job: &Job) -> Option<Identified> {
         manufacturer,
         model,
         profile,
+        descriptor: job.descriptor,
     })
 }
 

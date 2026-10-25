@@ -29,4 +29,6 @@ pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
 pub use standard::{classify_device, classify_endpoint, DeviceKind, EndpointClass, EndpointFeatures, StandardCapability};
+#[allow(unused_imports)]
+pub use standard::STANDARD_PROFILE;
 pub use registry::{RecordSlot, Registry};
