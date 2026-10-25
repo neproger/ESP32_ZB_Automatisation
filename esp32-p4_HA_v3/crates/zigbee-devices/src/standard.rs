@@ -368,3 +368,46 @@ pub fn capabilities(
     }
     record
 }
+
+pub const MAX_CONFIRMED_ATTRIBUTES: usize = 64;
+
+/// Attributes proven present by a successful report/read. Cluster discovery is
+/// not enough to claim attribute support.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Confirmed {
+    entries: [Option<(u8, u16, u16)>; MAX_CONFIRMED_ATTRIBUTES],
+    len: u8,
+}
+
+impl Default for Confirmed {
+    fn default() -> Self { Self::new() }
+}
+
+impl Confirmed {
+    pub const fn new() -> Self {
+        Self { entries: [None; MAX_CONFIRMED_ATTRIBUTES], len: 0 }
+    }
+
+    pub fn confirm(&mut self, endpoint: u8, cluster: u16, attribute: u16) -> bool {
+        if self.is_confirmed(endpoint, cluster, attribute) {
+            return true;
+        }
+        let index = usize::from(self.len);
+        if index == MAX_CONFIRMED_ATTRIBUTES {
+            return false;
+        }
+        self.entries[index] = Some((endpoint, cluster, attribute));
+        self.len += 1;
+        true
+    }
+
+    pub fn is_confirmed(&self, endpoint: u8, cluster: u16, attribute: u16) -> bool {
+        self.entries[..usize::from(self.len)]
+            .iter()
+            .flatten()
+            .any(|entry| *entry == (endpoint, cluster, attribute))
+    }
+
+    pub fn len(&self) -> usize { usize::from(self.len) }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+}

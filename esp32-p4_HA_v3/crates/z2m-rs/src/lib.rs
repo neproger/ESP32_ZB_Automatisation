@@ -522,8 +522,7 @@ pub fn resolve_command(profile: &Profile, command: &Command) -> Option<(u16, u8)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EncodeOptions {
     pub transition: u16,
-    /// Z2M sends `optionsMask/optionsOverride` by default; 
-one` matches
+    /// Z2M sends `optionsMask/optionsOverride` by default; `None` matches
     /// `omitOptionalLevelAndColorParams`.
     pub options: Option<(u8, u8)>,
 }

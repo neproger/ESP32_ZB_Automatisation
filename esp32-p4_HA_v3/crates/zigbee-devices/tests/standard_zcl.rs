@@ -1,5 +1,5 @@
 use zigbee_devices::{
-    classify_endpoint, decode_standard, update_is_discovered, ClusterRole, DeviceKind,
+    classify_endpoint, decode_standard, update_is_discovered, ClusterRole, Confirmed, DeviceKind,
     EndpointDescriptor, StandardCapability,
 };
 use zigbee_devices::standard::{ONOFF, TEMPERATURE};
@@ -36,4 +36,14 @@ fn standard_temperature_is_gated_by_discovered_cluster() {
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
     assert!(!update_is_discovered(&relay, &update));
     assert!(classify_endpoint(&sensor).features.contains(StandardCapability::Temperature));
+}
+
+#[test]
+fn discovery_does_not_confirm_attributes() {
+    let mut confirmed = Confirmed::new();
+    assert!(!confirmed.is_confirmed(1, ONOFF, 0x0000));
+    assert!(confirmed.confirm(1, ONOFF, 0x0000));
+    assert!(confirmed.is_confirmed(1, ONOFF, 0x0000));
+    assert!(confirmed.confirm(1, ONOFF, 0x0000));
+    assert_eq!(confirmed.len(), 1);
 }
