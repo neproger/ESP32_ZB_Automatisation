@@ -86,6 +86,17 @@ impl Registry {
         Ok(slot)
     }
 
+    pub fn descriptor_for(&self, ieee: u64) -> Result<Option<DeviceDescriptor>, Error> {
+        let slot = self.slot(ieee)?;
+        let record = slot.record()?;
+        if record.signature.is_empty() {
+            return Ok(None);
+        }
+        DeviceDescriptor::decode(record.signature)
+            .map(Some)
+            .map_err(|_| Error::Corrupt)
+    }
+
     pub fn profile_for(&self, ieee: u64) -> Result<Option<&'static z2m_rs::Profile>, Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;

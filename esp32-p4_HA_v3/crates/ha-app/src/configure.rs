@@ -119,42 +119,6 @@ fn start_standard(exec: &mut Executor, eui: u64, short: u16, now: u64) {
     ));
 }
 
-    let Some(profile) = crate::interview::selected_profile(eui) else {
-        return;
-    };
-    let Some(plan) = profile.configure else {
-        return;
-    };
-    if crate::store::is_configured(eui, profile.id, plan.version) {
-        log::info!(
-            "configure: skip eui={eui:016x} profile={} version={} (configured)",
-            profile.id,
-            plan.version
-        );
-        return;
-    }
-    if in_cooldown(eui, now) {
-        return;
-    }
-    let mut run = RUN.lock().unwrap();
-    if run.is_some() {
-        return;
-    }
-    log::info!(
-        "configure: queued profile={} version={} eui={eui:016x}",
-        profile.id,
-        plan.version
-    );
-    *run = Some(ConfigRun::start(
-        exec,
-        (eui, short),
-        FIRST_APP_ENDPOINT,
-        profile.id,
-        plan,
-        now,
-    ));
-}
-
 pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now: u64) {
     let mut guard = RUN.lock().unwrap();
     let Some(run) = guard.as_mut() else {
