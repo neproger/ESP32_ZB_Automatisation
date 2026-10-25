@@ -359,6 +359,7 @@ mod tests {
         to: DIM_CT_TO,
         configure: Some(&DIM_CT_CONFIGURE),
         omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED
             .union(Support::DECODED)
             .union(Support::CONTROLLED),
@@ -373,6 +374,7 @@ mod tests {
         to: &[COLOR_XY_TO, COLOR_HS_TO],
         configure: None,
         omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
     };
 
@@ -385,6 +387,7 @@ mod tests {
         to: &[COLOR_ENHANCED_TO],
         configure: None,
         omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
     };
 

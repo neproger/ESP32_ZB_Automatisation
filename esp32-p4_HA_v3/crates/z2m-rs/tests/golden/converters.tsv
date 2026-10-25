@@ -8,3 +8,4 @@ color_enhanced	lightingColorCtrl	enhancedMoveToHueAndSaturation	0x43	00807f00000
 brightness_omit	genLevelCtrl	moveToLevelWithOnOff	0x04	640000
 color_temp_omit	lightingColorCtrl	moveToColorTemp	0x0a	5e010000
 color_xy_omit	lightingColorCtrl	moveToColor	0x07	008000400000
+brightness_one	genLevelCtrl	moveToLevelWithOnOff	0x04	0200000000

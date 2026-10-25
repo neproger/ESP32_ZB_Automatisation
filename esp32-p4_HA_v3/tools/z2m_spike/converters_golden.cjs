@@ -105,6 +105,9 @@ async function run(name, key, converter, message, definition) {
   const omitDef = {
     meta: { supportsHueAndSaturation: false, omitOptionalLevelAndColorParams: true },
   };
+  const turnsDef = {
+    meta: { supportsHueAndSaturation: false, turnsOffAtBrightness1: true },
+  };
   const cases = [
     ['state_on', 'state', tz.on_off, { state: 'ON' }, xyDef],
     ['state_off', 'state', tz.on_off, { state: 'OFF' }, xyDef],
@@ -116,6 +119,7 @@ async function run(name, key, converter, message, definition) {
     ['brightness_omit', 'brightness', tz.light_onoff_brightness, { brightness: 100 }, omitDef],
     ['color_temp_omit', 'color_temp', tz.light_colortemp, { color_temp: 350 }, omitDef],
     ['color_xy_omit', 'color', tz.light_color, { color: { x: 0.5, y: 0.25 } }, omitDef],
+    ['brightness_one', 'brightness', tz.light_onoff_brightness, { brightness: 1 }, turnsDef],
   ];
   const rows = [];
   for (const [name, key, converter, message, definition] of cases) {

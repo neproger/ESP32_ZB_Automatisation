@@ -373,6 +373,8 @@ pub struct Profile {
     pub configure: Option<&'static ConfigurePlan>,
     /// Z2M `omitOptionalLevelAndColorParams`: omit optionsMask/optionsOverride.
     pub omit_optional_params: bool,
+    /// Z2M turnsOffAtBrightness1: level 1 is sent as 2.
+    pub turns_off_at_brightness_1: bool,
     pub support: Support,
 }
 
@@ -530,7 +532,10 @@ pub fn encode_with_options(
             if out.len() < needed {
                 return None;
             }
-            let level = numeric_value(command)?.clamp(0.0, 254.0).round() as u8;
+            let mut level = numeric_value(command)?.clamp(0.0, 254.0).round() as u8;
+            if profile.turns_off_at_brightness_1 && level == 1 {
+                level = 2;
+            }
             out[0] = level;
             out[1..3].copy_from_slice(&transition);
             Some(with_options(out, 3, options.options))
@@ -760,6 +765,7 @@ pub static TUYA_TS0041: Profile = Profile {
     ],
     // ZHC: tuya.configureMagicPacket; no Bind/Reporting for this model.
     omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED
         .union(Support::DECODED)
         .union(Support::PARTIAL),
@@ -863,6 +869,7 @@ mod tests {
             to: &[],
             configure: None,
             omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
         };
         let bytes = (-512i16).to_le_bytes();
@@ -899,6 +906,7 @@ mod tests {
             to: TO,
             configure: None,
             omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
         };
         let mut out = [0u8; 8];

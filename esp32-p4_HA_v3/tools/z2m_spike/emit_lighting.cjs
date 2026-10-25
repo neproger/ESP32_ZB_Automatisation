@@ -150,6 +150,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
     const configureReporting = args.configureReporting === true;
     const levelNoOnOff = args.moveToLevelWithOnOffDisable === true;
     const omitOptions = !!(raw.meta && raw.meta.omitOptionalLevelAndColorParams === true);
+    const turnsOff1 = args.turnsOffAtBrightness1 === true;
     for (const option of [
       args.levelConfig && 'level_config',
       args.effect !== false && args.effect !== undefined && 'effect',
@@ -172,6 +173,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       configureReporting,
       levelNoOnOff,
       omitOptions,
+      turnsOff1,
       hasColor,
       colorModes,
       enhanced,
@@ -259,6 +261,7 @@ for (const [index, profile] of profiles.entries()) {
       : 'None';
   lines.push(`    configure: ${configure},`);
   lines.push(`    omit_optional_params: ${profile.omitOptions},`);
+  lines.push(`    turns_off_at_brightness_1: ${profile.turnsOff1},`);
   lines.push(
     '    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED).union(Support::PARTIAL),',
   );
@@ -284,6 +287,7 @@ console.log(
       configureReporting: profiles.filter((p) => p.configureReporting).length,
       levelNoOnOff: profiles.filter((p) => p.levelNoOnOff).length,
       omitOptions: profiles.filter((p) => p.omitOptions).length,
+      turnsOff1: profiles.filter((p) => p.turnsOff1).length,
       skipped,
       options,
       bytes: fs.statSync(out).size,

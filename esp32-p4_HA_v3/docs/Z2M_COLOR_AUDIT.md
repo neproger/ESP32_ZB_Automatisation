@@ -153,3 +153,15 @@ semantic fixes:
   and color_temp is not emitted twice.
 
 All 116 host tests pass.
+
+## turnsOffAtBrightness1 (implemented, differential)
+
+`Profile.turns_off_at_brightness_1` comes from `modernExtend.light`; `encode`
+maps level 1 to 2 exactly as ZHC. The differential harness case
+`brightness_one` produces `02 00 00 00 00`, matching Rust. 727 generated
+profiles carry the flag.
+
+`levelConfig` and `power_on_behavior` are **not** implemented: ZHC writes
+attributes (`genLevelCtrl` / `genOnOff` start-up attributes) rather than issuing
+cluster commands, so they require the foundation Write path and the Command API.
+They stay `PARTIAL`; lighting-family expansion is now frozen.

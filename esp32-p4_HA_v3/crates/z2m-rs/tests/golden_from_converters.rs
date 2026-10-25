@@ -17,6 +17,7 @@ static PROFILE: Profile = Profile {
     to: &[],
     configure: None,
     omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
 };
 

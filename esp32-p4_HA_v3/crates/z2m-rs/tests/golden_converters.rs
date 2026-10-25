@@ -16,6 +16,7 @@ static BASE: Profile = Profile {
     to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
     configure: None,
     omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
 };
 
@@ -28,6 +29,20 @@ static OMIT: Profile = Profile {
     to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
     configure: None,
     omit_optional_params: true,
+    turns_off_at_brightness_1: false,
+    support: Support::IDENTIFIED,
+};
+
+static TURNS: Profile = Profile {
+    id: "golden.converters.turns1",
+    vendor: "golden",
+    fingerprints: &[],
+    exposes: &[],
+    from: &[],
+    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO],
+    configure: None,
+    omit_optional_params: false,
+    turns_off_at_brightness_1: true,
     support: Support::IDENTIFIED,
 };
 
@@ -47,6 +62,7 @@ static ENHANCED: Profile = Profile {
     ],
     configure: None,
     omit_optional_params: false,
+    turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
 };
 
@@ -142,6 +158,13 @@ fn zcl_payloads_match_original_converters() {
                 Command::Property {
                     property: COLOR,
                     value: Value::Color(ColorValue::xy(0.5, 0.25)),
+                },
+            ),
+            "brightness_one" => (
+                &TURNS,
+                Command::Property {
+                    property: BRIGHTNESS,
+                    value: Value::Int(1),
                 },
             ),
             "color_enhanced" => (
