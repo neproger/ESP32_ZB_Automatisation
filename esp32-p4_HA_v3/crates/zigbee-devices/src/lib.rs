@@ -7,6 +7,7 @@
 mod canonical;
 mod command;
 mod domain_adapter;
+mod descriptor;
 mod device_record;
 mod interview;
 mod registry;
@@ -20,6 +21,7 @@ pub use canonical::{
     canonical_command, canonical_states, encode_canonical_command, profile_capabilities,
     zigbee_device_id, zigbee_entity_id, StateUpdate,
 };
+pub use descriptor::{ClusterEntry, ClusterRole, DescriptorError, DeviceDescriptor, EndpointDescriptor, MAX_CLUSTERS, MAX_ENDPOINTS, SIGNATURE_MAX};
 pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
