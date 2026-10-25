@@ -141,6 +141,8 @@ pub enum RequestKind {
     },
     /// Completed by the SDK ZDO callback; no TSN waiter is used.
     ZdoBind { cluster: u16 },
+    ZdoActiveEndpoints,
+    ZdoSimpleDescriptor { endpoint: u8 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,12 +179,82 @@ impl Status {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndpointList {
+    items: [u8; 8],
+    len: u8,
+}
+
+impl EndpointList {
+    pub const fn new() -> Self {
+        Self { items: [0; 8], len: 0 }
+    }
+    pub fn push(&mut self, endpoint: u8) -> bool {
+        let index = usize::from(self.len);
+        if index == self.items.len() {
+            return false;
+        }
+        self.items[index] = endpoint;
+        self.len += 1;
+        true
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.items[..usize::from(self.len)]
+    }
+    pub fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClusterList {
+    items: [u16; 16],
+    len: u8,
+}
+
+impl ClusterList {
+    pub const fn new() -> Self {
+        Self { items: [0; 16], len: 0 }
+    }
+    pub fn push(&mut self, cluster: u16) -> bool {
+        let index = usize::from(self.len);
+        if index == self.items.len() {
+            return false;
+        }
+        self.items[index] = cluster;
+        self.len += 1;
+        true
+    }
+    pub fn as_slice(&self) -> &[u16] {
+        &self.items[..usize::from(self.len)]
+    }
+    pub fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleDescriptor {
+    pub endpoint: u8,
+    pub profile_id: u16,
+    pub device_id: u16,
+    pub server_clusters: ClusterList,
+    pub client_clusters: ClusterList,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZdoData {
+    ActiveEndpoints(EndpointList),
+    SimpleDescriptor(SimpleDescriptor),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OperationResult {
     pub id: OperationId,
     pub status: Status,
     /// Owned read response bytes; only on `Confirmed` for a read request. A
     /// failed or unmatched response never carries data.
     pub read: Option<Payload>,
+    pub zdo: Option<ZdoData>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,6 +295,14 @@ pub enum Event {
     ZdoResult {
         op: OperationId,
         success: bool,
+    },
+    ZdoActiveEndpoints {
+        op: OperationId,
+        endpoints: EndpointList,
+    },
+    ZdoSimpleDescriptor {
+        op: OperationId,
+        descriptor: SimpleDescriptor,
     },
 }
 
@@ -387,6 +467,12 @@ impl Executor {
                     now,
                 ),
                 Event::ZdoResult { op, success } => self.on_zdo_result(op, success, now),
+                Event::ZdoActiveEndpoints { op, endpoints } => {
+                    self.on_zdo_data(op, ZdoData::ActiveEndpoints(endpoints))
+                }
+                Event::ZdoSimpleDescriptor { op, descriptor } => {
+                    self.on_zdo_data(op, ZdoData::SimpleDescriptor(descriptor))
+                }
             }
         }
     }
@@ -405,7 +491,7 @@ impl Executor {
             Some(RequestKind::SendZcl { expect, .. }) => expect,
             Some(RequestKind::ReadAttributes { .. }) => Expect::ZclResponse { command: 0x01 },
             Some(RequestKind::ConfigureReporting { .. }) => Expect::ZclResponse { command: 0x07 },
-            Some(RequestKind::ZdoBind { .. }) => {
+            Some(RequestKind::ZdoBind { .. }) | Some(RequestKind::ZdoActiveEndpoints) | Some(RequestKind::ZdoSimpleDescriptor { .. }) => {
                 let op = self.ops[index].as_mut().unwrap();
                 op.status = Status::Acknowledged;
                 op.sent_at = now;
@@ -468,6 +554,20 @@ impl Executor {
         self.buffer_early(response, now);
     }
 
+    fn on_zdo_data(&mut self, id: OperationId, data: ZdoData) {
+        let Some(index) = self.find_index(id) else { return; };
+        let matches = matches!(
+            (self.ops[index].as_ref().map(|op| op.request.kind), data),
+            (Some(RequestKind::ZdoActiveEndpoints), ZdoData::ActiveEndpoints(_))
+                | (Some(RequestKind::ZdoSimpleDescriptor { .. }), ZdoData::SimpleDescriptor(_))
+        );
+        if !matches { return; }
+        self.finish(index, Status::Confirmed, None);
+        if let Some(result) = self.results.back_mut() {
+            result.zdo = Some(data);
+        }
+    }
+
     fn on_zdo_result(&mut self, id: OperationId, success: bool, now: u64) {
         let Some(index) = self.find_index(id) else {
             return;
@@ -497,7 +597,7 @@ impl Executor {
             } => (cluster, expect),
             RequestKind::ReadAttributes { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x01 }),
             RequestKind::ConfigureReporting { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x07 }),
-            RequestKind::ZdoBind { .. } => return false,
+            RequestKind::ZdoBind { .. } | RequestKind::ZdoActiveEndpoints | RequestKind::ZdoSimpleDescriptor { .. } => return false,
         };
         let Event::ZclResponse {
             src,
@@ -712,6 +812,7 @@ impl Executor {
             id: op.id,
             status,
             read,
+            zdo: None,
         });
         if self.contexts.len() == MAX_RESULTS {
             self.contexts.pop_front();
@@ -796,6 +897,10 @@ pub mod fake {
 
         pub fn zdo(&mut self, op: OperationId, success: bool) {
             self.events.push_back(Event::ZdoResult { op, success });
+        }
+
+        pub fn push_event(&mut self, event: Event) {
+            self.events.push_back(event);
         }
 
         pub fn last(&self) -> Option<&Sent> {
@@ -1168,3 +1273,5 @@ mod tests {
         assert_eq!(exec.take_result().unwrap().status, Status::Failed);
     }
 }
+
+
