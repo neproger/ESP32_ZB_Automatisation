@@ -258,3 +258,10 @@ semantics, and the bounded CommandCore(8) returns `NoSpace` on overflow.
 Host tests cover routing, power action inference, unknown entity, missing
 capability and bounded overflow. No source calls `submit_command` yet; hardware
 outgoing confirmation still requires an actuator.
+
+## Binding address invariant
+
+`short` is refreshed by EUI64 on every observed frame, interview device and
+restored address, keeping `(entity, profile, endpoint)` unchanged across a
+Zigbee rejoin. `update_binding_short` is host-tested; the app updates bindings
+before routing continues.

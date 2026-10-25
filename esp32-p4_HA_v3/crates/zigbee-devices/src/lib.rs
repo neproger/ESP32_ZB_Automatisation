@@ -12,7 +12,9 @@ mod interview;
 mod registry;
 
 pub use interview::{Identified, InterviewManager, COOLDOWN_MS, JOB_SLOTS, MAX_ATTEMPTS, OP_DEADLINE_MS, RETRY_BACKOFF_MS};
-pub use command::{status_from_exec, Binding, CommandRouter, ZigbeeSink};
+pub use command::{
+    status_from_exec, update_binding_short, Binding, CommandRouter, ZigbeeSink,
+};
 pub use domain_adapter::DomainAdapter;
 pub use canonical::{
     canonical_command, canonical_states, encode_canonical_command, profile_capabilities,

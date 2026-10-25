@@ -63,6 +63,19 @@ pub struct Binding {
     pub profile: &'static Profile,
 }
 
+/// `short` is a network address and changes on rejoin; the EUI64 and entity are
+/// stable, so refresh every matching binding instead of re-registering it.
+pub fn update_binding_short(bindings: &mut [Binding], eui: u64, short: u16) -> bool {
+    let mut changed = false;
+    for binding in bindings.iter_mut().filter(|binding| binding.eui == eui) {
+        if binding.short != short {
+            binding.short = short;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Single command entry: routes a canonical request by entity id to the bound
 /// device and profile, checks capabilities, then uses CommandCore/ZigbeeSink.
 pub struct CommandRouter<'a> {

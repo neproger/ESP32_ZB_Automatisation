@@ -104,16 +104,23 @@ fn main() {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
             executor.device_awake(event.short_addr);
+            zigbee_devices::update_binding_short(
+                &mut bindings,
+                event.extended_addr,
+                event.short_addr,
+            );
             ensure_interview(&mut executor, event.extended_addr, event.short_addr);
             ingest_command(&event);
         }
         frames::process_pending();
         if let Some(device) = frames::take_last_device() {
             executor.device_awake(device.1);
+            zigbee_devices::update_binding_short(&mut bindings, device.0, device.1);
             ensure_interview(&mut executor, device.0, device.1);
         }
         while let Some((eui, short)) = interview::next_device() {
             executor.device_awake(short);
+            zigbee_devices::update_binding_short(&mut bindings, eui, short);
             ensure_interview(&mut executor, eui, short);
         }
         while let Some((eui, short, profile)) = interview::take_identified() {

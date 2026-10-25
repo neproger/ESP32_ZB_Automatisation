@@ -1,7 +1,7 @@
 use ha_domain::canonical::{CommandValue, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
 use ha_domain::command::CommandCore;
 use ha_domain::{Error, Value as DomainValue};
-use zigbee_devices::{Binding, CommandRouter};
+use zigbee_devices::{update_binding_short, Binding, CommandRouter};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{Executor, RequestKind};
 use z2m_rs::capabilities::{DIM_CT_EXPOSES, DIM_CT_TO};
@@ -166,4 +166,13 @@ fn full_command_core_is_bounded() {
         ),
         Err(Error::NoSpace)
     );
+}
+#[test]
+fn rejoin_updates_short_without_changing_entity() {
+    let mut bindings = [binding(&PROFILE)];
+    assert!(update_binding_short(&mut bindings, UID, 0x3002));
+    assert_eq!(bindings[0].entity, ENTITY);
+    assert_eq!(bindings[0].short, 0x3002);
+    assert!(!update_binding_short(&mut bindings, UID + 1, 0x3003));
+    assert_eq!(bindings[0].short, 0x3002);
 }
