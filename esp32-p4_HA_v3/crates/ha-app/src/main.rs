@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    EntityRecord, LogicalDeviceRecord, StateKey, StateRecord, ENTITY_ENTITY, SOURCE_ZIGBEE,
+    StateKey, StateRecord, ENTITY_ENTITY, SOURCE_ZIGBEE,
 };
 use ha_domain::command::CommandCore;
 use ha_domain::{Domain, FactMeta, FactTarget};
@@ -139,29 +139,43 @@ fn main() {
             register_device(&mut domain, &mut bindings, eui, short, profile);
         }
         while let Some(request) = intake::take() {
-            for binding in &mut bindings {
-                binding.confirmed = interview::confirmed(binding.eui);
-            }
-            let submitted = zigbee_devices::CommandRouter::new(&mut executor, &bindings).submit(
-                &mut command_core,
-                request.entity,
-                request.property,
-                request.action,
-                request.value,
-                now_ms(),
-            );
-            match submitted {
-                Ok(operation) => log::info!(
-                    "command: entity={:016x} property={} op={}",
-                    request.entity,
-                    request.property,
-                    operation
-                ),
-                Err(error) => log::warn!(
-                    "command rejected: entity={:016x} property={} error={error:?}",
-                    request.entity,
-                    request.property
-                ),
+            match request {
+                intake::Request::Command {
+                    entity,
+                    property,
+                    action,
+                    value,
+                } => {
+                    for binding in &mut bindings {
+                        binding.confirmed = interview::confirmed(binding.eui);
+                    }
+                    let submitted = zigbee_devices::CommandRouter::new(&mut executor, &bindings)
+                        .submit(
+                            &mut command_core,
+                            entity,
+                            property,
+                            action,
+                            value,
+                            now_ms(),
+                        );
+                    match submitted {
+                        Ok(operation) => log::info!(
+                            "command: entity={entity:016x} property={property} op={operation}"
+                        ),
+                        Err(error) => log::warn!(
+                            "command rejected: entity={entity:016x} property={property} error={error:?}"
+                        ),
+                    }
+                }
+                intake::Request::RenameEntity { entity, name } => {
+                    rename_entity(&mut domain, entity, &name)
+                }
+                intake::Request::RenameDevice { device, name } => {
+                    rename_device(&mut domain, device, &name)
+                }
+                intake::Request::RemoveDevice { device } => {
+                    remove_device(&mut domain, &mut bindings, device)
+                }
             }
         }
         while let Some(state) = bridge::take_state() {
@@ -444,31 +458,19 @@ fn register_domain(
                     confirmed: interview::confirmed(eui),
                 });
             }
-            let native = format!("{eui:016x}");
-            let device_record = LogicalDeviceRecord::new(SOURCE_ZIGBEE, 0, &native, name);
-            web::upsert(
-                ha_web::entity::LOGICAL_DEVICE,
-                &device.to_le_bytes(),
-                &device_record.encode(),
-            );
-            let entity_record = EntityRecord::new(device, name);
-            web::upsert(
-                ha_web::entity::ENTITY,
-                &entity.to_le_bytes(),
-                &entity_record.encode(),
-            );
-            let capabilities = match standard_endpoint {
-                Some(descriptor) => zigbee_devices::standard::capabilities_confirmed(
-                    &descriptor,
-                    &interview::confirmed(eui),
-                ),
-                None => zigbee_devices::profile_capabilities(profile),
-            };
-            web::upsert(
-                ha_web::entity::CAPABILITIES,
-                &entity.to_le_bytes(),
-                &capabilities.encode(),
-            );
+            if let Some(record) = adapter.read_device(device) {
+                web::upsert(
+                    ha_web::entity::LOGICAL_DEVICE,
+                    &device.to_le_bytes(),
+                    &record,
+                );
+            }
+            if let Some(record) = adapter.read_entity(entity) {
+                web::upsert(ha_web::entity::ENTITY, &entity.to_le_bytes(), &record);
+            }
+            if let Some(caps) = adapter.read_capabilities(entity) {
+                web::upsert(ha_web::entity::CAPABILITIES, &entity.to_le_bytes(), &caps);
+            }
             log::info!(
                 "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
                 profile.id
@@ -478,6 +480,96 @@ fn register_domain(
     }
 }
 
+
+fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        log::error!("domain: adapter init failed");
+        return;
+    };
+    match adapter.rename_entity(entity, name) {
+        Ok(_) => {
+            if let Some(record) = adapter.read_entity(entity) {
+                web::upsert(ha_web::entity::ENTITY, &entity.to_le_bytes(), &record);
+            }
+            log::info!("domain: renamed entity={entity:016x} name={name}");
+        }
+        Err(error) => log::warn!("domain: rename entity={entity:016x} failed: {error:?}"),
+    }
+}
+
+fn rename_device(domain: &mut Domain, device: u64, name: &str) {
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        log::error!("domain: adapter init failed");
+        return;
+    };
+    match adapter.rename_device(device, name) {
+        Ok(_) => {
+            if let Some(record) = adapter.read_device(device) {
+                web::upsert(
+                    ha_web::entity::LOGICAL_DEVICE,
+                    &device.to_le_bytes(),
+                    &record,
+                );
+            }
+            log::info!("domain: renamed device={device:016x} name={name}");
+        }
+        Err(error) => log::warn!("domain: rename device={device:016x} failed: {error:?}"),
+    }
+}
+
+fn remove_device(
+    domain: &mut Domain,
+    bindings: &mut Vec<zigbee_devices::Binding>,
+    device: u64,
+) {
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        log::error!("domain: adapter init failed");
+        return;
+    };
+    let eui = bindings
+        .iter()
+        .find(|binding| zigbee_devices::zigbee_device_id(binding.eui) == device)
+        .map(|binding| binding.eui)
+        .or_else(|| {
+            adapter.read_device(device).and_then(|bytes| {
+                let native = std::str::from_utf8(&bytes[12..44])
+                    .ok()?
+                    .trim_end_matches('\0');
+                u64::from_str_radix(native, 16).ok()
+            })
+        });
+    let entities: Vec<u64> = match eui {
+        Some(eui) => bindings
+            .iter()
+            .filter(|binding| binding.eui == eui)
+            .map(|binding| binding.entity)
+            .collect(),
+        None => Vec::new(),
+    };
+    match adapter.remove_device_records(device) {
+        Ok(count) => log::info!("domain: removed device={device:016x} records={count}"),
+        Err(error) => {
+            log::warn!("domain: remove device={device:016x} failed: {error:?}");
+            return;
+        }
+    }
+    drop(adapter);
+    for entity in entities {
+        web::remove_entity(entity);
+    }
+    web::remove(ha_web::entity::LOGICAL_DEVICE, &device.to_le_bytes());
+    if let Some(eui) = eui {
+        interview::forget(eui);
+        store::remove_device(eui);
+        bindings.retain(|binding| binding.eui != eui);
+    }
+    // shortcut: removes the HA record only; the device stays paired and may be
+    // re-added on its next announce. A ZDO leave/tombstone is the follow-up.
+    log::info!("domain: removed device={device:016x}");
+}
 
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
     if eui == 0 {

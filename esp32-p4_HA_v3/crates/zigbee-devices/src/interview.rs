@@ -124,6 +124,15 @@ impl InterviewManager {
         self.jobs.iter().flatten().count()
     }
 
+    /// Cancels an in-flight interview, e.g. when the HA device is removed.
+    pub fn forget(&mut self, eui: u64) {
+        for job in &mut self.jobs {
+            if job.as_ref().is_some_and(|job| job.eui == eui) {
+                *job = None;
+            }
+        }
+    }
+
     /// Starts an interview unless the device is known, already being
     /// interviewed, cooling down after a failure, or all slots are taken.
     pub fn start(

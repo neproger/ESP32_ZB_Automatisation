@@ -58,7 +58,11 @@ function onFrame(buf) {
     return
   }
   if (frame.type === MSG.SYNC_END) {
-    for (const e of pending) model.applyFrame(e.type, new DataView(e.bytes.buffer))
+    for (const e of pending) {
+      const view = new DataView(e.bytes.buffer)
+      if (e.type === MSG.REMOVE) model.applyRemove(view)
+      else model.applyFrame(e.type, view)
+    }
     pending = []
     setPhase('live')
     emit()
@@ -68,7 +72,8 @@ function onFrame(buf) {
     pending.push({ type: frame.type, bytes: copyPayload(frame.payload) })
     return
   }
-  model.applyFrame(frame.type, frame.payload)
+  if (frame.type === MSG.REMOVE) model.applyRemove(frame.payload)
+  else model.applyFrame(frame.type, frame.payload)
   emit()
 }
 

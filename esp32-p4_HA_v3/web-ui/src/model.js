@@ -224,6 +224,46 @@ export function applyFrame(type, p) {
   else if (SIZES[type]) applyEntity(type, p)
 }
 
+// REMOVE payload: [entity_type][key]. Keys use the same layout as applyEntity.
+export function applyRemove(p) {
+  if (p.byteLength < 1) return
+  const type = p.getUint8(0)
+  const key = new DataView(p.buffer, p.byteOffset + 1, p.byteLength - 1)
+  if (type === ENTITY.LOGICAL_DEVICE || type === ENTITY.ENTITY) {
+    if (key.byteLength >= 8) {
+      const id = key.getBigUint64(0, true).toString()
+      if (type === ENTITY.LOGICAL_DEVICE) semDevices.delete(id)
+      else semEntities.delete(id)
+    }
+  } else if (type === ENTITY.PROPERTY_STATE) {
+    if (key.byteLength >= 12) propStates.delete(`${key.getBigUint64(0, true)}:${key.getInt32(8, true)}`)
+  } else if (type === ENTITY.CAPABILITIES) {
+    if (key.byteLength >= 8) {
+      const id = key.getBigUint64(0, true).toString()
+      propCapabilities.delete(id)
+      propEvents.delete(id)
+    }
+  } else if (type === ENTITY.AUTOMATION) {
+    if (key.byteLength >= 8) semAutomations.delete(key.getBigUint64(0, true).toString())
+  } else if (type === ENTITY.GROUP_ITEM || type === ENTITY.GROUP_AUTOMATION) {
+    if (key.byteLength >= 16) {
+      const id = `${key.getBigUint64(0, true)}:${key.getBigUint64(8, true)}`
+      if (type === ENTITY.GROUP_ITEM) semGroupItems.delete(id)
+      else semGroupAutomations.delete(id)
+    }
+  } else if (type === ENTITY.GROUP) {
+    if (key.byteLength >= 8) groups.delete(`grp:${key.getBigUint64(0, true)}`)
+  } else if (type === ENTITY.LOCATION) {
+    if (key.byteLength >= 8) locations.delete(`loc:${key.getBigUint64(0, true)}`)
+  } else if (type === ENTITY.WEATHER) {
+    if (key.byteLength >= 8) weatherMap.delete(`weather:${key.getBigUint64(0, true)}`)
+  } else if (type === ENTITY.WIFI_STATUS) {
+    if (key.byteLength >= 8) wifiStatusMap.delete(`wifi:${key.getBigUint64(0, true)}`)
+  } else if (type === ENTITY.SETTINGS) {
+    if (key.byteLength >= 1) settingsMap.delete(`set:${key.getUint8(0)}`)
+  }
+}
+
 export function entityName(entity) {
   return semEntities.get(entity.toString())?.name ?? ''
 }

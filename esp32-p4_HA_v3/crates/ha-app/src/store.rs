@@ -284,6 +284,18 @@ pub fn save(
     }
 }
 
+pub fn remove_device(ieee: u64) {
+    let mut flash = CFlash::MSTORE;
+    let mut guard = REGISTRY.lock().unwrap();
+    let Some(registry) = guard.as_mut() else {
+        return;
+    };
+    match registry.remove(&mut flash, ieee) {
+        Ok(()) => log::info!("registry: removed ieee={ieee:016x}"),
+        Err(error) => log::error!("registry remove failed: {error:?}"),
+    }
+}
+
 /// A record counts as configured only for the same definition. A profile change
 /// (different definition_id) must run the new plan even at the same version.
 pub fn is_configured(ieee: u64, definition_id: &str, version: u16) -> bool {

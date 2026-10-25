@@ -106,6 +106,57 @@ pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
     }
 }
 
+/// Removes every cached record that belongs to one entity.
+pub fn remove_entity(entity: u64) {
+    let entity_key = entity.to_le_bytes();
+    let keys: Vec<(u8, Vec<u8>)> = {
+        let model = MODEL.lock().unwrap();
+        model
+            .iter()
+            .filter_map(|entry| {
+                let matches_entity = match entry.frame_type {
+                    ha_web::entity::ENTITY | ha_web::entity::CAPABILITIES => {
+                        entry.key.as_slice() == entity_key.as_slice()
+                    }
+                    ha_web::entity::PROPERTY_STATE => {
+                        entry.key.len() >= 8
+                            && u64::from_le_bytes(entry.key[..8].try_into().ok()?) == entity
+                    }
+                    _ => false,
+                };
+                matches_entity.then(|| (entry.frame_type, entry.key.clone()))
+            })
+            .collect()
+    };
+    for (frame_type, key) in keys {
+        remove(frame_type, &key);
+    }
+}
+
+/// Drops one cached record and tells clients to remove it too.
+pub fn remove(frame_type: u8, key: &[u8]) {
+    let changed = {
+        let mut model = MODEL.lock().unwrap();
+        match model
+            .iter()
+            .position(|entry| entry.frame_type == frame_type && entry.key.as_slice() == key)
+        {
+            Some(index) => {
+                model.remove(index);
+                true
+            }
+            None => false,
+        }
+    };
+    if !changed {
+        return;
+    }
+    let mut payload = Vec::with_capacity(1 + key.len());
+    payload.push(frame_type);
+    payload.extend_from_slice(key);
+    broadcast_one(control::REMOVE, &payload);
+}
+
 pub fn publish_event(entity_id: u64, event_id: u32) {
     // ha_event_t: id u32, padding, source_entity u64, ha_value_t NONE.
     let mut payload = [0u8; 24];
@@ -255,6 +306,9 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
             }
         }
         command::PROPERTY_COMMAND => property_command(&buf[9..len]),
+        command::ENTITY_RENAME => handle_entity_rename(&buf[9..len]),
+        command::DEVICE_RENAME => handle_device_rename(&buf[9..len]),
+        command::LOGICAL_DEVICE_REMOVE => handle_device_remove(&buf[9..len]),
         command::DISCOVERY => {
             if len >= 10 {
                 let seconds = buf[9];
@@ -277,13 +331,40 @@ fn property_command(payload: &[u8]) {
     let Some(command) = ha_web::parse_property_command(payload) else {
         return;
     };
-    if let Err(error) = crate::intake::enqueue(
+    if let Err(error) = crate::intake::command(
         command.entity,
         command.property,
         u32::from(command.action),
         command.value,
     ) {
         log::warn!("command intake full, rejected: {error:?}");
+    }
+}
+
+fn handle_entity_rename(payload: &[u8]) {
+    let Some((entity, name)) = ha_web::parse_rename(payload) else {
+        return;
+    };
+    if let Err(error) = crate::intake::rename_entity(entity, name) {
+        log::warn!("rename entity intake full: {error:?}");
+    }
+}
+
+fn handle_device_rename(payload: &[u8]) {
+    let Some((device, name)) = ha_web::parse_rename(payload) else {
+        return;
+    };
+    if let Err(error) = crate::intake::rename_device(device, name) {
+        log::warn!("rename device intake full: {error:?}");
+    }
+}
+
+fn handle_device_remove(payload: &[u8]) {
+    let Some(device) = ha_web::parse_device_id(payload) else {
+        return;
+    };
+    if let Err(error) = crate::intake::remove_device(device) {
+        log::warn!("remove device intake full: {error:?}");
     }
 }
 

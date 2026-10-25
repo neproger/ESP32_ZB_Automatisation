@@ -11,6 +11,7 @@ import { COMMAND_VALUE, VALUE_KIND } from './semantics.js'
 export const MSG = {
   SYNC_BEGIN: 0x01,
   SYNC_END: 0x02,
+  REMOVE: 0x03, // server → browser: [entity_type][key]
   EVENT: 0xE0, // device → browser: payload = ha_event_t verbatim (вне диапазона ha_entity_t)
   COMMAND: 0x20,
 }

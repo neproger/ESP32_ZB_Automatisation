@@ -10,6 +10,8 @@ pub const VER: u8 = 3;
 pub mod control {
     pub const SYNC_BEGIN: u8 = 0x01;
     pub const SYNC_END: u8 = 0x02;
+    /// Server -> browser: payload = `[entity_type u8][key]`.
+    pub const REMOVE: u8 = 0x03;
     pub const EVENT: u8 = 0xE0;
     pub const COMMAND: u8 = 0x20;
 }
@@ -27,7 +29,10 @@ pub mod command {
     pub const SNAPSHOT: u8 = 1;
     pub const SNAPSHOT_STATE: u8 = 2;
     pub const DISCOVERY: u8 = 8;
+    pub const ENTITY_RENAME: u8 = 18;
     pub const PROPERTY_COMMAND: u8 = 19;
+    pub const DEVICE_RENAME: u8 = 20;
+    pub const LOGICAL_DEVICE_REMOVE: u8 = 21;
 }
 
 pub const HEADER_LEN: usize = 8;
@@ -80,6 +85,28 @@ pub fn parse_property_command(payload: &[u8]) -> Option<PropertyCommand> {
         action,
         value,
     })
+}
+
+/// `ha_entity_rename_t` / `ha_device_rename_t`: id u64@0, name[32]@8.
+pub fn parse_rename(payload: &[u8]) -> Option<(u64, String)> {
+    if payload.len() < 40 {
+        return None;
+    }
+    let id = u64::from_le_bytes(payload[0..8].try_into().ok()?);
+    let end = payload[8..40]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(32);
+    let name = String::from_utf8_lossy(&payload[8..8 + end]).into_owned();
+    Some((id, name))
+}
+
+/// `ha_device_id_t` (8 bytes) used by LOGICAL_DEVICE_REMOVE.
+pub fn parse_device_id(payload: &[u8]) -> Option<u64> {
+    if payload.len() < 8 {
+        return None;
+    }
+    Some(u64::from_le_bytes(payload[0..8].try_into().ok()?))
 }
 
 /// Appends one frame to `out`; `seq` is per session.
@@ -204,5 +231,19 @@ mod tests {
 
         assert!(parse_property_command(&command_bytes(entity, 1, 1, 9)).is_none());
         assert!(parse_property_command(&brightness[..31]).is_none());
+    }
+
+    #[test]
+    fn rename_and_device_id_follow_the_wire_layout() {
+        let mut payload = [0u8; 40];
+        payload[0..8].copy_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+        payload[8..12].copy_from_slice(b"Lamp");
+        assert_eq!(
+            parse_rename(&payload),
+            Some((0x1122_3344_5566_7788, "Lamp".to_string()))
+        );
+        assert_eq!(parse_device_id(&payload[..8]), Some(0x1122_3344_5566_7788));
+        assert!(parse_rename(&payload[..39]).is_none());
+        assert!(parse_device_id(&payload[..7]).is_none());
     }
 }

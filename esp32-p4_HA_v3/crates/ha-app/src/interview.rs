@@ -48,6 +48,15 @@ impl ProfileMap {
         }
         log::error!("interview: profile table full, dropping profile {eui:016x}");
     }
+
+    fn remove(&mut self, eui: u64) {
+        for slot in &mut self.items {
+            if slot.as_ref().is_some_and(|(id, _)| *id == eui) {
+                *slot = None;
+                return;
+            }
+        }
+    }
 }
 
 static PROFILES: Mutex<ProfileMap> = Mutex::new(ProfileMap::new());
@@ -189,4 +198,11 @@ pub fn selected_profile(eui: u64) -> Option<&'static z2m_rs::Profile> {
 
 pub fn restore(eui: u64, profile: &'static z2m_rs::Profile) {
     PROFILES.lock().unwrap().insert(eui, profile);
+}
+
+pub fn forget(eui: u64) {
+    PROFILES.lock().unwrap().remove(eui);
+    IDENTIFIED.lock().unwrap().retain(|(id, _, _)| *id != eui);
+    CONFIRMED.lock().unwrap().retain(|(id, _)| *id != eui);
+    MANAGER.lock().unwrap().forget(eui);
 }
