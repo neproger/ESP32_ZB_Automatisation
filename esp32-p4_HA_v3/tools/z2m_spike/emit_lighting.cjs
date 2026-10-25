@@ -7,6 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pkg, devicesDir } = require('../zhc-compiler/src/cli.cjs');
+const modelsIndex = JSON.parse(fs.readFileSync(path.join(pkg, 'dist/models-index.json'), 'utf8'));
 const list = (value) => (Array.isArray(value) ? value : value == null ? [] : [value]);
 
 // Wrap light() before any device module loads, so args are associated with the
@@ -87,7 +88,10 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
     continue;
   }
   let index = 0;
+  let rawIndex = 0;
   for (const raw of list(mod.definitions)) {
+    const definitionIndex = rawIndex;
+    rawIndex += 1;
     const light = lightExpose(raw);
     if (!light) {
       skipped.no_light += 1;
@@ -135,7 +139,9 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       skipped.no_range += 1;
       continue;
     }
-    const fps = fingerprints(raw);
+    const fps = fingerprints(raw).filter((fp) =>
+      (modelsIndex[fp.model.toLowerCase()] ?? []).some(([candidateFile, candidateIndex]) => candidateFile === file && candidateIndex === definitionIndex),
+    );
     if (fps.length === 0) {
       skipped.no_fingerprint += 1;
       continue;
@@ -172,6 +178,7 @@ for (const file of fs.readdirSync(devicesDir).filter((f) => f.endsWith('.js'))) 
       hasColor,
       colorModes,
       enhanced,
+      source: { file, definition_index: definitionIndex },
     });
     index += 1;
   }

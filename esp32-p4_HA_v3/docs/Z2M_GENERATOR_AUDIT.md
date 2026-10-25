@@ -72,3 +72,23 @@ not translated. This is a coverage statement, not a model-by-model port.
 Node >=22.12 is required in `package.json`; Node 20 prints a warning but can
 still run local analysis. Fingerprint parity between the Node selector and
 `z2m-rs::identify()` is not yet gated.
+
+## Identification differential (implemented)
+
+`tools/zhc-compiler/src/identify.cjs` now executes the original ZHC
+`findDefinition` for fingerprints taken from the generated lighting profiles and
+writes `crates/z2m-rs/tests/golden/identify.tsv`. `golden_identify.rs` feeds the
+same model/manufacturer to `z2m-rs::identify()` and compares the selected
+profile id. The current golden has 3730 cases and passes.
+
+The matcher was corrected as a common mechanism, not per model: model IDs are
+normalized (NUL tail, trim), manufacturer-specific fingerprints outrank
+prefix/Any, trailing NUL/space is normalized, and model-only fallback is
+restricted to `Any` fingerprints.
+
+Not yet gated: duplicate fingerprints (collisions), profiles whose source
+definition ZHC does not select for that fingerprint (`shadowed`), and
+fingerprints not present in the ZHC index (`missing source`). They are counted
+in `out/identify_report.json` and excluded from the golden. Endpoints, regex
+fingerprints, priority fields and whiteLabel alias selection still need the
+full interview/matcher stage.

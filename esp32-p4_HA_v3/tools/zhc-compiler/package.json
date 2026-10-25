@@ -9,7 +9,9 @@
   "scripts": {
     "manifest": "node src/manifest.cjs",
     "coverage": "node src/coverage.cjs",
-    "coverage:update": "node src/coverage.cjs --update-baseline"
+    "coverage:update": "node src/coverage.cjs --update-baseline",
+    "lighting": "node ../z2m_spike/emit_lighting.cjs",
+    "identify": "node src/identify.cjs"
   },
   "dependencies": {
     "zigbee-herdsman-converters": "26.123.0"

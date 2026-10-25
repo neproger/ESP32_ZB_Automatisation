@@ -381,22 +381,48 @@ pub struct Profile {
 pub static PROFILES: &[&Profile] = &[&TUYA_TS0041, &SNZB_01P, &TS011F];
 
 pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
+    let model = normalized_model(interview.model);
+    let manufacturer = interview.manufacturer.map(normalized_model);
+    let mut best: Option<(u8, &'static Profile)> = None;
+    for profile in PROFILES.iter().chain(LIGHTING.iter()).copied() {
+        for fp in profile.fingerprints {
+            if normalized_model(fp.model) != model {
+                continue;
+            }
+            let score = match fp.manufacturer {
+                Manufacturer::Exact(name) if manufacturer == Some(normalized_model(name)) => 3,
+                Manufacturer::Prefix(prefix)
+                    if manufacturer.is_some_and(|name| name.starts_with(normalized_model(prefix))) =>
+                {
+                    2
+                }
+                Manufacturer::Any => 1,
+                _ => continue,
+            };
+            if best.map_or(true, |(best_score, _)| score > best_score) {
+                best = Some((score, profile));
+            }
+        }
+    }
+    if let Some((_, profile)) = best {
+        return Some(profile);
+    }
+    // ZHC falls back to the first candidate whose zigbeeModel matches when no
+    // fingerprint matches; mirror that for profiles sharing the model.
     PROFILES
         .iter()
         .chain(LIGHTING.iter())
         .copied()
         .find(|profile| {
-        profile.fingerprints.iter().any(|fp| {
-            fp.model == interview.model
-                && match fp.manufacturer {
-                    Manufacturer::Exact(name) => interview.manufacturer == Some(name),
-                    Manufacturer::Prefix(prefix) => interview
-                        .manufacturer
-                        .is_some_and(|name| name.starts_with(prefix)),
-                    Manufacturer::Any => true,
-                }
+            profile.fingerprints.iter().any(|fp| {
+                normalized_model(fp.model) == model && matches!(fp.manufacturer, Manufacturer::Any)
+            })
         })
-    })
+}
+
+fn normalized_model(model: &str) -> &str {
+    let end = model.find('\0').unwrap_or(model.len());
+    model[..end].trim()
 }
 
 /// `fromZigbee`: raw ZCL -> normalized properties/actions.
