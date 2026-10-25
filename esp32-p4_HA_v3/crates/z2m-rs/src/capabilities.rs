@@ -157,7 +157,7 @@ pub static DIM_CT_EXPOSES: &[Expose] = &[
     },
 ];
 
-pub static DIM_CT_FROM: &[Converter] = &[ONOFF_ATTR, LEVEL_ATTR, COLORTEMP_ATTR];
+pub static DIM_CT_FROM: &[Converter] = &[ONOFF_ATTR, LEVEL_ATTR, COLOR_FRAME];
 pub static DIM_CT_TO: &[CommandMap] = &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO];
 
 pub static DIM_CT_CONFIGURE: ConfigurePlan = ConfigurePlan {
@@ -258,6 +258,7 @@ fn decode_color(frame: &AttributeFrameView<'_>, decoded: &mut Decoded) -> bool {
             value: Value::Uint(u32::from(raw)),
         });
     }
+    let mode = mode.or_else(|| color_temp.map(|_| 2));
     if let Some(raw) = mode {
         any |= decoded.push(Update::Property {
             property: COLOR_MODE,

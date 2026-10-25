@@ -136,3 +136,20 @@ then omits `optionsMask/optionsOverride`; the differential harness covers it:
 
 11 generated profiles carry the flag. `encode_with_options` remains the
 low-level command parameter API; behavior modifiers are not folded into it.
+
+## Incoming differential (implemented)
+
+`tools/z2m_spike/from_golden.cjs` executes the original `fromZigbee`
+converters; `tests/golden/from_converters.tsv` feeds the Rust decoder.
+
+Covered and matching: state on/off, invalid onOff=2 (Z2M treats it as OFF),
+brightness, color_temp (with `color_mode=color_temp`), full/partial XY, full/
+partial HS, and an empty frame (no update). The differential exposed two
+semantic fixes:
+
+- `Bool` now maps only raw 1 to true (Z2M onOff behavior for invalid 2);
+- the color frame decoder emits `color_temp` + `color_mode=color_temp`;
+  generated CT/color profiles use the frame decoder, so the mode is not lost
+  and color_temp is not emitted twice.
+
+All 116 host tests pass.

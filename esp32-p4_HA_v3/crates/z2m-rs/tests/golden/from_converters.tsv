@@ -1,0 +1,10 @@
+state_on	0x6	0:16:1	state=ON
+state_off	0x6	0:16:0	state=OFF
+state_invalid	0x6	0:16:2	state=OFF
+brightness	0x8	0:32:127	brightness=127
+color_temp	0x300	7:33:350	color_temp=350,color_mode=color_temp
+color_xy	0x300	3:33:32000,4:33:24000,8:48:1	color_mode=xy,x=0.4883,y=0.3662
+color_x_only	0x300	3:33:32000,8:48:1	color_mode=xy,x=0.4883
+color_hs	0x300	0:32:127,1:32:127,8:48:0	color_mode=hs,hue=180,saturation=50
+color_hue_only	0x300	0:32:127,8:48:0	color_mode=hs,hue=180
+color_empty	0x300		

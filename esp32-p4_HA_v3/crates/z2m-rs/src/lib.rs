@@ -685,7 +685,7 @@ fn read_raw(kind: AttrType, payload: &[u8]) -> Option<(i64, Value)> {
     Some(match kind {
         AttrType::Bool => {
             let raw = *payload.first()?;
-            (i64::from(raw), Value::Bool(raw != 0))
+            (i64::from(raw), Value::Bool(raw == 1))
         }
         AttrType::Uint8 | AttrType::Enum8 => {
             let raw = *payload.first()?;
