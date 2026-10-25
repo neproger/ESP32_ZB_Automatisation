@@ -13,8 +13,9 @@ use std::ffi::{c_char, CStr, CString};
 use std::time::Duration;
 
 use ha_domain::canonical::{ENTITY_ENTITY, SOURCE_ZIGBEE};
+use ha_domain::command::CommandCore;
 use ha_domain::{Domain, FactMeta, FactTarget};
-use zigbee_devices::DomainAdapter;
+use zigbee_devices::{status_from_exec, DomainAdapter};
 
 mod exec;
 mod frames;
@@ -70,6 +71,7 @@ fn main() {
     interview::install();
     store::init();
     let mut executor = Box::new(zigbee_exec::Executor::new());
+    let mut commands = CommandCore::new();
     let mut transport = exec::EspTransport;
     let (restored, restored_count) = store::device_addresses();
     for (eui, short) in restored.into_iter().take(restored_count) {
@@ -125,12 +127,48 @@ fn main() {
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
+            if let Some(status) = status_from_exec(result.status) {
+                commands.on_result(result.id as u64, status);
+            }
+            if let Some(context) = executor.take_context(result.id) {
+                if let Some(read) = result.read {
+                    ingest_read(&context, read);
+                }
+            }
             interview::on_operation_result(&mut executor, result, now_ms());
             configure::on_result(&mut executor, result, now_ms());
         }
         interview::tick(&mut executor, now_ms());
         configure::tick(&mut executor, now_ms());
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn ingest_read(context: &zigbee_exec::Request, read: zigbee_exec::Payload) {
+    let zigbee_exec::RequestKind::ReadAttributes { cluster, .. } = context.kind else {
+        return;
+    };
+    let Some(profile) = interview::selected_profile(context.device) else {
+        return;
+    };
+    let Ok(frame) =
+        z2m_rs::AttributeFrameView::parse(cluster, context.endpoint, 0x0A, read.as_slice())
+    else {
+        log::warn!("read: malformed response cluster=0x{cluster:04x}");
+        return;
+    };
+    let entity = zigbee_devices::zigbee_entity_id(context.device, context.endpoint);
+    let mut decoded = z2m_rs::Decoded::default();
+    let count = z2m_rs::decode_frame(profile, &frame, &mut decoded);
+    log::info!(
+        "read: eui={:016x} ep={} cluster=0x{:04x} decoded={count}",
+        context.device,
+        context.endpoint,
+        cluster
+    );
+    for update in decoded.updates() {
+        log::info!("read decoded {update:?}");
+        canonical::push(entity, update);
     }
 }
 

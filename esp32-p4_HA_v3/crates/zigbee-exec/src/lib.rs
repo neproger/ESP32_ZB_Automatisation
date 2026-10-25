@@ -247,6 +247,10 @@ pub struct Executor {
     ops: [Option<Op>; MAX_OPS],
     early: [Option<Early>; MAX_EARLY],
     results: VecDeque<OperationResult>,
+    /// Recent completed request contexts, keyed by OperationId. Bounded like
+    /// results; `take_context` lets consumers decode Read payloads without
+    /// duplicating request data in every result.
+    contexts: VecDeque<(OperationId, Request)>,
     next_id: OperationId,
     next_seq: u32,
     early_dropped: u32,
@@ -265,6 +269,7 @@ impl Executor {
             ops: [None; MAX_OPS],
             early: [None; MAX_EARLY],
             results: VecDeque::with_capacity(MAX_RESULTS),
+            contexts: VecDeque::with_capacity(MAX_RESULTS),
             next_id: 1,
             next_seq: 0,
             early_dropped: 0,
@@ -304,6 +309,15 @@ impl Executor {
             .map(|op| op.status)
     }
 
+    /// Context of a recently completed operation (bounded). Used to decode
+    /// Read Attributes payloads through the normal profile decoder.
+    pub fn take_context(&mut self, id: OperationId) -> Option<Request> {
+        let index = self
+            .contexts
+            .iter()
+            .position(|(context_id, _)| *context_id == id)?;
+        self.contexts.remove(index).map(|(_, request)| request)
+    }
     pub fn take_result(&mut self) -> Option<OperationResult> {
         self.results.pop_front()
     }
@@ -686,6 +700,10 @@ impl Executor {
             status,
             read,
         });
+        if self.contexts.len() == MAX_RESULTS {
+            self.contexts.pop_front();
+        }
+        self.contexts.push_back((op.id, op.request));
     }
 }
 
@@ -915,6 +933,30 @@ mod tests {
         assert_eq!(result.read.unwrap().as_slice(), b"\x04\x42\x05_SONOFF");
     }
 
+    #[test]
+    fn completed_read_keeps_request_context() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let id = exec.enqueue(read_attr(), 0).unwrap();
+        run(&mut exec, &mut transport, 0);
+        transport.confirm(id, 9, true);
+        run(&mut exec, &mut transport, 10);
+        transport
+            .response_read(SHORT, EP, 0x0000, 0x01, 9, None, b"\x04\x42\x05_SONOFF")
+            .unwrap();
+        run(&mut exec, &mut transport, 20);
+        let result = exec.take_result().unwrap();
+        let context = exec.take_context(result.id).unwrap();
+        assert!(matches!(
+            context.kind,
+            RequestKind::ReadAttributes {
+                cluster: 0x0000,
+                ..
+            }
+        ));
+        assert_eq!(context.endpoint, EP);
+        assert!(exec.take_context(result.id).is_none());
+    }
     fn read_attr() -> Request {
         Request {
             device: 0xA4C1_383B_F9D6_2A03,
