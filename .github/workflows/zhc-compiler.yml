@@ -32,6 +32,7 @@ jobs:
       - run: npm run identify
       - run: npm run complex
       - run: npm run matcher
+      - run: npm run priority
       - run: git diff --exit-code -- ../../crates/z2m-rs/tests/golden/identify.tsv ../../crates/z2m-rs/tests/golden/matcher_complex_cases.rs ../../crates/z2m-rs/src/generated/lighting.rs ../../crates/z2m-rs/src/generated/matcher_data.rs
       - run: cargo test --manifest-path ../../Cargo.toml -p z2m-rs --test golden_identify
       - run: cargo test --manifest-path ../../Cargo.toml -p z2m-rs --test golden_matcher_complex

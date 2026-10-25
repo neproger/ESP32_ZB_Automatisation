@@ -13,7 +13,8 @@
     "lighting": "node ../z2m_spike/emit_lighting.cjs",
     "identify": "node src/identify.cjs",
     "complex": "node src/complex.cjs",
-    "matcher": "node src/matcher.cjs"
+    "matcher": "node src/matcher.cjs",
+    "priority": "node src/priority.cjs"
   },
   "dependencies": {
     "zigbee-herdsman-converters": "26.123.0"

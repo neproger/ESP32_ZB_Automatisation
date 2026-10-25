@@ -125,3 +125,22 @@ plus whiteLabel aliases). The earlier 3728 model/manufacturer cases remain in
 `golden_identify.rs`. Interview completeness (e.g. Simple Descriptor not yet
 collected) is separate from the matcher; missing fields simply fail the same
 fingerprint rule ZHC would fail and never produce a fabricated match.
+
+## Mechanism priority from coverage
+
+`tools/zhc-compiler/src/priority.cjs` ranks mechanisms by how many definitions
+they would unblock when they are the only remaining unsupported item. Current
+top rows (`to_partial+to_supported`, total uses):
+
+- `modernExtend.electricityMeter`: 75 unblocked, 220 uses;
+- `modernExtend.deviceAddCustomCluster`: 74, 772;
+- `modernExtend.iasZoneAlarm`: 68, 168;
+- `tuya.tuyaLight`: 34, 44;
+- `modernExtend.temperature`: 6, 219;
+- `modernExtend.occupancy`: 4, 45.
+
+This is a build-time priority report, not a claim of support. A high `uses`
+count does not mean a large transition: sensors usually also carry battery,
+identify or configure work. Domain currently exposes light/power properties
+only; electrical and sensor mechanisms therefore need a separate Domain
+decision before they become user-visible.
