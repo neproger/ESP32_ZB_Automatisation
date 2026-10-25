@@ -329,7 +329,7 @@ impl Transport for EspTransport {
 
 /// Sequential ConfigurePlan runner over `zigbee-exec`: no own waiters/retries.
 /// It knows only request shapes, not models.
-const MAX_CONFIG_STEPS: usize = 16;
+const MAX_CONFIG_STEPS: usize = 32;
 static EMPTY_STEPS: &[z2m_rs::ConfigureStep] = &[];
 static EMPTY_PLAN: z2m_rs::ConfigurePlan = z2m_rs::ConfigurePlan {
     steps: EMPTY_STEPS, timeout_ms: 5_000, retries: 2, version: 1,
@@ -429,6 +429,18 @@ impl ConfigRun {
 
     pub fn version(&self) -> u16 {
         self.plan.version
+    }
+
+    pub fn current_step(&self) -> Option<z2m_rs::ConfigureStep> {
+        if self.step_count > 0 {
+            self.steps.get(self.next).and_then(|step| *step)
+        } else {
+            self.plan.steps.get(self.next).copied()
+        }
+    }
+
+    pub fn accepts(&self, operation: u32) -> bool {
+        self.op == Some(operation)
     }
 
     pub fn failed(&self) -> bool {
