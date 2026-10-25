@@ -254,17 +254,68 @@ mod tests {
         assert!(!class.features.contains(StandardCapability::Temperature));
     }
 }
-/// Identity-only profile for devices with no ZHC profile. Standard capabilities
-/// come from the discovered cluster classification and ownership, not here.
+pub static STANDARD_FROM: &[z2m_rs::Converter] = &[
+    z2m_rs::capabilities::ONOFF_ATTR,
+    z2m_rs::capabilities::LEVEL_ATTR,
+    z2m_rs::capabilities::COLORTEMP_ATTR,
+    z2m_rs::capabilities::COLOR_FRAME,
+    z2m_rs::capabilities::BATTERY_ATTR,
+    z2m_rs::capabilities::BATTERY_VOLTAGE_ATTR,
+    z2m_rs::capabilities::TEMPERATURE_ATTR,
+    z2m_rs::capabilities::HUMIDITY_ATTR,
+    z2m_rs::capabilities::ILLUMINANCE_ATTR,
+    z2m_rs::capabilities::OCCUPANCY_ATTR,
+];
+
+pub static STANDARD_TO: &[z2m_rs::CommandMap] = &[
+    z2m_rs::capabilities::ONOFF_ON,
+    z2m_rs::capabilities::ONOFF_OFF,
+    z2m_rs::capabilities::LEVEL_TO,
+    z2m_rs::capabilities::COLORTEMP_TO,
+    z2m_rs::capabilities::COLOR_XY_TO,
+];
+
+/// Shared fallback profile. Callers gate it by the discovered endpoint features
+/// and ownership; the profile itself does not prove that an attribute exists.
 pub static STANDARD_PROFILE: z2m_rs::Profile = z2m_rs::Profile {
     id: "standard.zcl",
     vendor: "ZCL",
     fingerprints: &[],
     exposes: &[],
-    from: &[],
-    to: &[],
+    from: STANDARD_FROM,
+    to: STANDARD_TO,
     configure: None,
     omit_optional_params: false,
     turns_off_at_brightness_1: false,
     support: z2m_rs::Support::PARTIAL,
 };
+
+pub fn decode_standard(
+    endpoint: &EndpointDescriptor,
+    event: &z2m_rs::RawZcl<'_>,
+) -> Option<z2m_rs::Decoded> {
+    if !endpoint.has_server(event.cluster) {
+        return None;
+    }
+    z2m_rs::decode(&STANDARD_PROFILE, event)
+}
+
+pub fn update_is_discovered(endpoint: &EndpointDescriptor, update: &z2m_rs::Update) -> bool {
+    let z2m_rs::Update::Property { property, .. } = update else {
+        return false;
+    };
+    let feature = match *property {
+        z2m_rs::properties::STATE => StandardCapability::Power,
+        z2m_rs::properties::BRIGHTNESS => StandardCapability::Brightness,
+        z2m_rs::properties::COLOR_TEMP => StandardCapability::ColorTemperature,
+        z2m_rs::properties::COLOR => StandardCapability::Color,
+        z2m_rs::properties::TEMPERATURE => StandardCapability::Temperature,
+        z2m_rs::properties::HUMIDITY => StandardCapability::Humidity,
+        z2m_rs::properties::ILLUMINANCE => StandardCapability::Illuminance,
+        z2m_rs::properties::OCCUPANCY => StandardCapability::Occupancy,
+        z2m_rs::properties::BATTERY => StandardCapability::BatteryPercent,
+        z2m_rs::properties::VOLTAGE => StandardCapability::BatteryVoltage,
+        _ => return false,
+    };
+    classify_endpoint(endpoint).features.contains(feature)
+}

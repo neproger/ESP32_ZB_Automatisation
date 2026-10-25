@@ -106,6 +106,11 @@ pub fn lookup(ieee: u64) -> Option<&'static z2m_rs::Profile> {
     registry.as_ref()?.profile_for(ieee).ok().flatten()
 }
 
+pub fn descriptor(ieee: u64) -> Option<DeviceDescriptor> {
+    let registry = REGISTRY.lock().unwrap();
+    registry.as_ref()?.descriptor_for(ieee).ok().flatten()
+}
+
 pub fn save(
     ieee: u64,
     short: u16,

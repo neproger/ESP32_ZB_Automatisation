@@ -139,7 +139,22 @@ pub fn process_pending() {
                 return;
             };
             let mut decoded = z2m_rs::Decoded::default();
-            let count = z2m_rs::decode_frame(profile, &view, &mut decoded);
+            let standard = profile.id == "standard.zcl";
+            let descriptor = if standard { crate::store::descriptor(meta.src_ext) } else { None };
+            let standard_endpoint = descriptor.as_ref().and_then(|d| d.endpoint(meta.src_ep));
+            let count = if standard {
+                standard_endpoint
+                    .map(|_| {
+                        z2m_rs::decode_frame(
+                            &zigbee_devices::standard::STANDARD_PROFILE,
+                            &view,
+                            &mut decoded,
+                        )
+                    })
+                    .unwrap_or(0)
+            } else {
+                z2m_rs::decode_frame(profile, &view, &mut decoded)
+            };
             log::info!(
                 "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile={}",
                 meta.src_ext,
@@ -154,6 +169,14 @@ pub fn process_pending() {
             );
             let entity = zigbee_devices::zigbee_entity_id(meta.src_ext, meta.src_ep);
             for update in decoded.updates() {
+                if standard {
+                    let Some(endpoint) = standard_endpoint else {
+                        continue;
+                    };
+                    if !zigbee_devices::update_is_discovered(endpoint, update) {
+                        continue;
+                    }
+                }
                 log::info!("decoded {update:?}");
                 crate::canonical::push(entity, update);
             }
