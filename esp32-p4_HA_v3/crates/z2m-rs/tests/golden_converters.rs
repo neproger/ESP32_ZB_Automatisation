@@ -3,9 +3,7 @@
 
 use z2m_rs::capabilities::*;
 use z2m_rs::properties::{BRIGHTNESS, COLOR, COLOR_TEMP, STATE};
-use z2m_rs::{
-    encode, resolve_command, ColorValue, Command, Profile, Support, Value,
-};
+use z2m_rs::{encode, resolve_command, ColorValue, Command, Profile, Support, Value};
 
 static BASE: Profile = Profile {
     id: "golden.converters",
@@ -13,7 +11,14 @@ static BASE: Profile = Profile {
     fingerprints: &[],
     exposes: &[],
     from: &[],
-    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
+    to: &[
+        ONOFF_ON,
+        ONOFF_OFF,
+        LEVEL_TO,
+        COLORTEMP_TO,
+        COLOR_XY_TO,
+        COLOR_HS_TO,
+    ],
     configure: None,
     omit_optional_params: false,
     turns_off_at_brightness_1: false,
@@ -26,7 +31,14 @@ static OMIT: Profile = Profile {
     fingerprints: &[],
     exposes: &[],
     from: &[],
-    to: &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO, COLOR_XY_TO, COLOR_HS_TO],
+    to: &[
+        ONOFF_ON,
+        ONOFF_OFF,
+        LEVEL_TO,
+        COLORTEMP_TO,
+        COLOR_XY_TO,
+        COLOR_HS_TO,
+    ],
     configure: None,
     omit_optional_params: true,
     turns_off_at_brightness_1: false,
@@ -93,7 +105,8 @@ fn zcl_payloads_match_original_converters() {
         let case = fields.next().unwrap();
         let cluster_name = fields.next().unwrap();
         let _command_name = fields.next().unwrap();
-        let zcl: u8 = u8::from_str_radix(fields.next().unwrap().trim_start_matches("0x"), 16).unwrap();
+        let zcl: u8 =
+            u8::from_str_radix(fields.next().unwrap().trim_start_matches("0x"), 16).unwrap();
         let expected = hex(fields.next().unwrap());
 
         let (profile, command) = match case {

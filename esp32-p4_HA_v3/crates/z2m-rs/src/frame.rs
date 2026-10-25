@@ -231,9 +231,15 @@ mod tests {
     #[test]
     fn read_response_skips_failed_records() {
         // success (status 0) with uint8=5, failure (status 1), success uint8=9
-        let frame =
-            AttributeFrameView::parse(0x0001, 1, 0x01, &[0x01, 0x00, 0x00, 0x20, 5, 0x02, 0x00, 0x01, 0x03, 0x00, 0x00, 0x20, 9])
-                .unwrap();
+        let frame = AttributeFrameView::parse(
+            0x0001,
+            1,
+            0x01,
+            &[
+                0x01, 0x00, 0x00, 0x20, 5, 0x02, 0x00, 0x01, 0x03, 0x00, 0x00, 0x20, 9,
+            ],
+        )
+        .unwrap();
         let attrs: Vec<_> = frame.attributes().collect();
         assert_eq!(attrs.len(), 2);
         assert_eq!(attrs[0].id, 0x0001);

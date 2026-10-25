@@ -20,7 +20,9 @@ fn identify_matches_zhc_selection() {
                 "{model:?}/{manufacturer:?}: expected {expected}, got {}",
                 profile.id
             )),
-            None => failures.push(format!("{model:?}/{manufacturer:?}: expected {expected}, got none")),
+            None => failures.push(format!(
+                "{model:?}/{manufacturer:?}: expected {expected}, got none"
+            )),
         }
     }
     assert!(checked > 3000, "only {checked} cases checked");
@@ -29,6 +31,11 @@ fn identify_matches_zhc_selection() {
         "{} of {} identify cases differ from ZHC:\n{}",
         failures.len(),
         checked + failures.len(),
-        failures.iter().take(12).cloned().collect::<Vec<_>>().join("\n")
+        failures
+            .iter()
+            .take(12)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

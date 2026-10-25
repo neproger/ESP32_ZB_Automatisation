@@ -29,15 +29,30 @@ pub struct ClaimKey {
 
 impl ClaimKey {
     pub const fn attribute(endpoint: u8, cluster: u16, attribute: u16) -> Self {
-        Self { endpoint, cluster, attribute: Some(attribute), command: None }
+        Self {
+            endpoint,
+            cluster,
+            attribute: Some(attribute),
+            command: None,
+        }
     }
 
     pub const fn command(endpoint: u8, cluster: u16, command: u8) -> Self {
-        Self { endpoint, cluster, attribute: None, command: Some(command) }
+        Self {
+            endpoint,
+            cluster,
+            attribute: None,
+            command: Some(command),
+        }
     }
 
     pub const fn configure(endpoint: u8, cluster: u16, attribute: u16) -> Self {
-        Self { endpoint, cluster, attribute: Some(attribute), command: None }
+        Self {
+            endpoint,
+            cluster,
+            attribute: Some(attribute),
+            command: None,
+        }
     }
 }
 
@@ -52,11 +67,21 @@ pub struct Claim {
 
 impl Claim {
     pub const fn new(kind: ClaimKind, key: ClaimKey, owner: Owner) -> Self {
-        Self { kind, key, owner, suppresses_standard: false }
+        Self {
+            kind,
+            key,
+            owner,
+            suppresses_standard: false,
+        }
     }
 
     pub const fn suppress(kind: ClaimKind, key: ClaimKey) -> Self {
-        Self { kind, key, owner: Owner::Vendor, suppresses_standard: true }
+        Self {
+            kind,
+            key,
+            owner: Owner::Vendor,
+            suppresses_standard: true,
+        }
     }
 }
 
@@ -74,16 +99,25 @@ pub struct Claims {
 }
 
 impl Default for Claims {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Claims {
     pub const fn new() -> Self {
-        Self { claims: [None; MAX_CLAIMS], count: 0 }
+        Self {
+            claims: [None; MAX_CLAIMS],
+            count: 0,
+        }
     }
 
     pub fn push(&mut self, claim: Claim) -> bool {
-        if self.claims[..usize::from(self.count)].iter().flatten().any(|old| *old == claim) {
+        if self.claims[..usize::from(self.count)]
+            .iter()
+            .flatten()
+            .any(|old| *old == claim)
+        {
             return true;
         }
         let index = usize::from(self.count);
@@ -116,8 +150,12 @@ impl Claims {
         }
     }
 
-    pub fn len(&self) -> usize { usize::from(self.count) }
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn len(&self) -> usize {
+        usize::from(self.count)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 }
 
 #[cfg(test)]
@@ -131,7 +169,10 @@ mod tests {
         assert!(claims.push(Claim::new(ClaimKind::Incoming, key, Owner::Standard)));
         assert!(claims.push(Claim::new(ClaimKind::Incoming, key, Owner::Profile)));
         assert!(claims.push(Claim::new(ClaimKind::Incoming, key, Owner::Vendor)));
-        assert_eq!(claims.resolve(ClaimKind::Incoming, key), Resolution::Owned(Owner::Vendor));
+        assert_eq!(
+            claims.resolve(ClaimKind::Incoming, key),
+            Resolution::Owned(Owner::Vendor)
+        );
     }
 
     #[test]
@@ -140,7 +181,10 @@ mod tests {
         let mut claims = Claims::new();
         claims.push(Claim::new(ClaimKind::Incoming, key, Owner::Standard));
         claims.push(Claim::suppress(ClaimKind::Incoming, key));
-        assert_eq!(claims.resolve(ClaimKind::Incoming, key), Resolution::Suppressed);
+        assert_eq!(
+            claims.resolve(ClaimKind::Incoming, key),
+            Resolution::Suppressed
+        );
     }
 
     #[test]
@@ -150,10 +194,22 @@ mod tests {
         let mut claims = Claims::new();
         claims.push(Claim::new(ClaimKind::Incoming, incoming, Owner::Profile));
         claims.push(Claim::new(ClaimKind::Output, output, Owner::Profile));
-        assert_eq!(claims.resolve(ClaimKind::Incoming, incoming), Resolution::Owned(Owner::Profile));
-        assert_eq!(claims.resolve(ClaimKind::Output, output), Resolution::Owned(Owner::Profile));
-        assert_eq!(claims.resolve(ClaimKind::Incoming, output), Resolution::None);
-        assert_eq!(claims.resolve(ClaimKind::Configure, output), Resolution::None);
+        assert_eq!(
+            claims.resolve(ClaimKind::Incoming, incoming),
+            Resolution::Owned(Owner::Profile)
+        );
+        assert_eq!(
+            claims.resolve(ClaimKind::Output, output),
+            Resolution::Owned(Owner::Profile)
+        );
+        assert_eq!(
+            claims.resolve(ClaimKind::Incoming, output),
+            Resolution::None
+        );
+        assert_eq!(
+            claims.resolve(ClaimKind::Configure, output),
+            Resolution::None
+        );
     }
 
     #[test]

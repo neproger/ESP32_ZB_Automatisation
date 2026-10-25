@@ -8,8 +8,7 @@
 use core::hash::Hash;
 
 use crate::flash::{
-    persist_id_bytes, FlashError, FlashMeta, FlashTable, Geometry, NorFlash, KIND_META,
-    KIND_SET,
+    persist_id_bytes, FlashError, FlashMeta, FlashTable, Geometry, NorFlash, KIND_META, KIND_SET,
 };
 use crate::{Error, Handle, Meta, Table};
 
@@ -50,6 +49,9 @@ pub struct PersistedTable<K: Fixed, V: Fixed> {
     flash: FlashTable,
     /// Flash journal slot -> key; `None` means the slot is free/reusable.
     journal: Vec<Option<K>>,
+    /// Reused encode buffers: a write must not allocate on the hot path.
+    key_buf: Vec<u8>,
+    payload_buf: Vec<u8>,
 }
 
 impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
@@ -98,6 +100,8 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
             table,
             flash: flash_table,
             journal,
+            key_buf: vec![0u8; K::SIZE],
+            payload_buf: vec![0u8; V::SIZE],
         })
     }
 
@@ -116,6 +120,8 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
             table: Table::new(capacity)?,
             flash: flash_table,
             journal: vec![None; capacity],
+            key_buf: vec![0u8; K::SIZE],
+            payload_buf: vec![0u8; V::SIZE],
         })
     }
 
@@ -137,7 +143,11 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
         key: K,
         payload: V,
     ) -> Result<(Handle, bool), Error> {
-        let journal_slot = match self.journal.iter().position(|slot| slot.as_ref() == Some(&key)) {
+        let journal_slot = match self
+            .journal
+            .iter()
+            .position(|slot| slot.as_ref() == Some(&key))
+        {
             Some(slot) => slot,
             None => self
                 .journal
@@ -163,19 +173,20 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
         }
 
         let meta = self.table.meta(handle.slot)?;
-        let mut key_bytes = vec![0u8; K::SIZE];
-        let mut payload_bytes = vec![0u8; V::SIZE];
-        key.to_bytes(&mut key_bytes);
-        payload.to_bytes(&mut payload_bytes);
+        key.to_bytes(&mut self.key_buf);
+        payload.to_bytes(&mut self.payload_buf);
         let flash_meta = FlashMeta {
             used: true,
             generation: meta.generation,
             version: meta.version,
         };
-        match self
-            .flash
-            .append_set(flash, journal_slot as u32, flash_meta, &key_bytes, &payload_bytes)
-        {
+        match self.flash.append_set(
+            flash,
+            journal_slot as u32,
+            flash_meta,
+            &self.key_buf,
+            &self.payload_buf,
+        ) {
             Ok(()) => {
                 self.journal[journal_slot] = Some(key);
                 Ok((handle, true))

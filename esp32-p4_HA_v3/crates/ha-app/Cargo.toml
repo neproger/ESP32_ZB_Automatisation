@@ -29,9 +29,9 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 [build-dependencies]
 embuild = "0.33.5"
 
-# PoC-шим используется как есть; приложение только читает его очередь событий.
+# C-мост к esp-zigbee-lib (бывший PoC-крейт zigbee-esp).
 [[package.metadata.esp-idf-sys.extra_components]]
-component_dirs = ["../zigbee-esp/native"]
+component_dirs = ["native_zigbee"]
 remote_component = { name = "espressif/esp-zigbee-lib", version = ">=2.0.0" }
 
 [[package.metadata.esp-idf-sys.extra_components]]

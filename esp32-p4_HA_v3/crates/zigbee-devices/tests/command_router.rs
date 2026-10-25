@@ -1,11 +1,13 @@
-use ha_domain::canonical::{CommandValue, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
+use ha_domain::canonical::{
+    CommandValue, ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER,
+};
 use ha_domain::command::CommandCore;
 use ha_domain::{Error, Value as DomainValue};
-use zigbee_devices::{update_binding_short, Binding, CommandRouter};
-use zigbee_exec::fake::FakeTransport;
-use zigbee_exec::{Executor, RequestKind};
 use z2m_rs::capabilities::{DIM_CT_EXPOSES, DIM_CT_TO};
 use z2m_rs::{Fingerprint, Manufacturer, Profile, Support};
+use zigbee_devices::{update_binding_short, Binding, CommandRouter, Confirmed};
+use zigbee_exec::fake::FakeTransport;
+use zigbee_exec::{Executor, RequestKind};
 
 const ENTITY: u64 = 0x1122_3344_5566_7788;
 const UID: u64 = 0x0012_4B00_0A1B_2C3D;
@@ -35,6 +37,7 @@ fn binding(profile: &'static Profile) -> Binding {
         endpoint: 1,
         profile,
         standard: None,
+        confirmed: Confirmed::new(),
     }
 }
 
@@ -49,6 +52,7 @@ fn submits_by_entity_without_exposing_eui_or_zcl() {
             &mut core,
             ENTITY,
             PROPERTY_BRIGHTNESS,
+            ACTION_SET,
             CommandValue::Scalar(DomainValue::f32(50.0)),
             0,
         )
@@ -82,6 +86,7 @@ fn power_value_selects_on_action() {
             &mut core,
             ENTITY,
             PROPERTY_POWER,
+            ACTION_ON,
             CommandValue::Scalar(DomainValue::bool(true)),
             0,
         )
@@ -111,6 +116,7 @@ fn unknown_entity_is_not_found() {
             &mut core,
             ENTITY + 1,
             PROPERTY_BRIGHTNESS,
+            ACTION_SET,
             CommandValue::Scalar(DomainValue::f32(50.0)),
             0,
         ),
@@ -132,6 +138,7 @@ fn missing_capability_is_rejected_before_send() {
             &mut core,
             ENTITY,
             PROPERTY_BRIGHTNESS,
+            ACTION_SET,
             CommandValue::Scalar(DomainValue::f32(50.0)),
             0,
         ),
@@ -152,6 +159,7 @@ fn full_command_core_is_bounded() {
                 &mut core,
                 ENTITY,
                 PROPERTY_POWER,
+                ACTION_ON,
                 CommandValue::Scalar(DomainValue::bool(true)),
                 0,
             )
@@ -162,6 +170,7 @@ fn full_command_core_is_bounded() {
             &mut core,
             ENTITY,
             PROPERTY_POWER,
+            ACTION_ON,
             CommandValue::Scalar(DomainValue::bool(true)),
             0,
         ),

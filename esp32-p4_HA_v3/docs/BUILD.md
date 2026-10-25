@@ -2,7 +2,7 @@
 
 Два независимых контура:
 
-- **host workspace** — `crates/` без `ha-app` и `zigbee-esp`;
+- **host workspace** — `crates/` без `ha-app`;
 - **ESP32-P4 приложение** — `crates/ha-app` с ESP-IDF и C-мостом.
 
 ## 1. ESP32-P4
@@ -32,16 +32,21 @@ target-dir = C:/t/hav3
 Из корня `esp32-p4_HA_v3`:
 
 ```powershell
+$env:HA_WIFI_SSID = '...'
+$env:HA_WIFI_PASSWORD = '...'
 .\tools\build-ha-app.ps1
 ```
 
 Скрипт:
 
-1. выставляет IDF v6.1, Python 6.1, `HA_WIFI_SSID/PASSWORD`, `LIBCLANG_PATH`;
-2. прогоняет CMake для `zigbee-esp/native` (C-изменения не отслеживаются Cargo);
-3. запускает `cargo build`;
-4. при падении удаляет только stale `esp-idf-sys` CMake cache и повторяет;
-5. при повторном падении очищает `C:/t/hav3` и собирает заново.
+1. выставляет IDF v6.1, Python 6.1, `LIBCLANG_PATH`; Wi-Fi берёт из окружения
+   (без переменных собирает прошивку без Wi-Fi);
+2. собирает UI (`npm ci` при первом запуске, затем `npm run build`) — `web/ui`
+   в gitignore, но встраивается в бинарник;
+3. прогоняет CMake для `ha-app/native_zigbee` (C-изменения не отслеживаются Cargo);
+4. запускает `cargo build`;
+5. при падении удаляет только stale `esp-idf-sys` CMake cache и повторяет;
+6. при повторном падении очищает `C:/t/hav3` и собирает заново.
 
 Бинарь: `C:/t/hav3/riscv32imafc-esp-espidf/debug/ha-app`.
 
@@ -102,8 +107,8 @@ cmake --build C:/t/hav3/riscv32imafc-esp-espidf/debug/build/esp-idf-sys-*/out/bu
 cargo test --workspace
 ```
 
-`ha-app` и `zigbee-esp` исключены из workspace: у них отдельный ESP toolchain.
-Не добавляй их в workspace members.
+`ha-app` исключён из workspace: у него отдельный ESP toolchain. Не добавляй его
+в workspace members.
 
 ## 3. ZHC compiler (опционально)
 

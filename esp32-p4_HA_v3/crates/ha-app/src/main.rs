@@ -1,29 +1,30 @@
 //! First vertical HA V3 slice on hardware.
 //!
-//! Zigbee PoC (C shim + bounded queue) -> borrowed `PocEvent` -> `zigbee-devices`
-//! adapter (normalized action) -> Domain entity record -> MicroDB slot -> journal
-//! fact -> subscriber. No intermediate DTO chain and no async runtime: one poll
-//! loop owns the Domain.
+//! In: Zigbee C shim -> bounded inbox -> `z2m-rs` decode -> canonical bridge ->
+//! Domain entities/state (RAM) + web mirror -> WebSocket. Out: WS command frame
+//! -> bounded intake -> `CommandCore` -> `zigbee-exec` -> C transport.
+//! No async runtime: one poll loop owns the Domain, the executor and the queues.
 //!
-//! Device record (12 bytes, the same shape as the host test):
-//! `[0]` last button action, `[1]` reserved, `[2..4]` press count (LE),
-//! `[8..12]` reserved. Every press changes the count, so `version` must grow.
+//! The Domain is RAM-only in V3; the device registry is the only persisted store.
 
 use std::ffi::{c_char, CStr, CString};
 use std::time::Duration;
 
-use ha_domain::canonical::{ENTITY_ENTITY, SOURCE_ZIGBEE};
+use ha_domain::canonical::{
+    EntityRecord, LogicalDeviceRecord, StateKey, StateRecord, ENTITY_ENTITY, SOURCE_ZIGBEE,
+};
 use ha_domain::command::CommandCore;
 use ha_domain::{Domain, FactMeta, FactTarget};
 use zigbee_devices::{status_from_exec, DomainAdapter};
 
+mod intake;
 mod exec;
 mod frames;
 mod interview;
 mod store;
 mod web;
 mod configure;
-mod canonical;
+mod bridge;
 
 
 /// Mirror of `poc_event_t` from the C shim; copied once across the FFI boundary.
@@ -51,7 +52,7 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let mut domain = Domain::new(32, 8, 64).expect("domain");
+    let mut domain = Domain::new_with_clock(32, 8, 64, now_ms).expect("domain");
 
     unsafe {
         esp_idf_svc::sys::esp_netif_init();
@@ -71,7 +72,7 @@ fn main() {
     interview::install();
     store::init();
     let mut executor = Box::new(zigbee_exec::Executor::new());
-    let mut commands = CommandCore::new();
+    let mut command_core = CommandCore::new();
     let mut bindings: Vec<zigbee_devices::Binding> = Vec::new();
     let mut transport = exec::EspTransport;
     let (restored, restored_count) = store::device_addresses();
@@ -79,8 +80,12 @@ fn main() {
         if let Some(profile) = store::lookup(eui) {
             log::info!("registry: restored profile={} (no interview)", profile.id);
             interview::restore(eui, profile);
-            register_domain(&mut domain, &mut bindings, eui, short, 1, profile);
-            configure::ensure(&mut executor, eui, short, now_ms());
+            if store::descriptor(eui).is_some() {
+                register_device(&mut domain, &mut bindings, eui, short, profile);
+                configure::ensure(&mut executor, eui, short, now_ms());
+            } else {
+                interview::start(&mut executor, (eui, short), now_ms());
+            }
         }
     }
     if let Some(count) = option_env!("HA_FORCE_COMPACT") {
@@ -124,22 +129,48 @@ fn main() {
             ensure_interview(&mut executor, eui, short);
         }
         while let Some((eui, short, profile)) = interview::take_identified() {
-            register_domain(&mut domain, &mut bindings, eui, short, 1, profile);
+            register_device(&mut domain, &mut bindings, eui, short, profile);
         }
-        while let Some(state) = canonical::take_state() {
-            apply_state(&mut domain, state);
+        while let Some(request) = intake::take() {
+            for binding in &mut bindings {
+                binding.confirmed = interview::confirmed(binding.eui);
+            }
+            let submitted = zigbee_devices::CommandRouter::new(&mut executor, &bindings).submit(
+                &mut command_core,
+                request.entity,
+                request.property,
+                request.action,
+                request.value,
+                now_ms(),
+            );
+            match submitted {
+                Ok(operation) => log::info!(
+                    "command: entity={:016x} property={} op={}",
+                    request.entity,
+                    request.property,
+                    operation
+                ),
+                Err(error) => log::warn!(
+                    "command rejected: entity={:016x} property={} error={error:?}",
+                    request.entity,
+                    request.property
+                ),
+            }
         }
-        while let Some((entity, capabilities)) = canonical::take_capabilities() {
+        while let Some(state) = bridge::take_state() {
+            apply_state(&mut domain, &mut command_core, state);
+        }
+        while let Some((entity, capabilities)) = bridge::take_capabilities() {
             apply_capabilities(&mut domain, entity, capabilities);
         }
-        while let Some(event) = canonical::take_event() {
+        while let Some(event) = bridge::take_event() {
             publish_event(&mut domain, event);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
             if let Some(status) = status_from_exec(result.status) {
-                commands.on_result(result.id as u64, status);
+                command_core.on_result(result.id as u64, status);
             }
             if let Some(context) = executor.take_context(result.id) {
                 if let Some(read) = result.read {
@@ -159,28 +190,19 @@ fn ingest_read(context: &zigbee_exec::Request, read: zigbee_exec::Payload) {
     let zigbee_exec::RequestKind::ReadAttributes { cluster, .. } = context.kind else {
         return;
     };
-    let Some(profile) = interview::selected_profile(context.device) else {
-        return;
-    };
     let Ok(frame) =
         z2m_rs::AttributeFrameView::parse(cluster, context.endpoint, 0x0A, read.as_slice())
     else {
         log::warn!("read: malformed response cluster=0x{cluster:04x}");
         return;
     };
-    let entity = zigbee_devices::zigbee_entity_id(context.device, context.endpoint);
-    let mut decoded = z2m_rs::Decoded::default();
-    let count = z2m_rs::decode_frame(profile, &frame, &mut decoded);
+    let count = frames::ingest(context.device, context.endpoint, cluster, &frame);
     log::info!(
         "read: eui={:016x} ep={} cluster=0x{:04x} decoded={count}",
         context.device,
         context.endpoint,
         cluster
     );
-    for update in decoded.updates() {
-        log::info!("read decoded {update:?}");
-        canonical::push(entity, update);
-    }
 }
 
 fn ingest_command(event: &PocEvent) {
@@ -214,7 +236,7 @@ fn ingest_command(event: &PocEvent) {
     let entity = zigbee_devices::zigbee_entity_id(event.extended_addr, event.endpoint);
     for update in decoded.updates() {
         log::info!("canonical command eui={:016x} {update:?}", event.extended_addr);
-        canonical::push(entity, update);
+        bridge::push(entity, update);
     }
 }
 
@@ -226,25 +248,50 @@ fn apply_capabilities(
     let Ok(mut adapter) = DomainAdapter::new(domain) else { return; };
     if let Err(error) = adapter.write_capabilities(entity, &capabilities) {
         log::error!("domain: capabilities {entity:016x} failed: {error:?}");
+        return;
     }
+    web::upsert(
+        ha_web::entity::CAPABILITIES,
+        &entity.to_le_bytes(),
+        &capabilities.encode(),
+    );
 }
 
-fn apply_state(domain: &mut Domain, state: zigbee_devices::StateUpdate) {
+fn apply_state(
+    domain: &mut Domain,
+    command_core: &mut CommandCore,
+    state: zigbee_devices::StateUpdate,
+) {
     let Ok(mut adapter) = DomainAdapter::new(domain) else {
         log::error!("domain: state adapter init failed");
         return;
     };
     match adapter.write_state(state.entity, state.property, state.value) {
-        Ok(changed) => log::info!(
-            "domain: state entity={:016x} property={} changed={changed}",
-            state.entity,
-            state.property
-        ),
+        Ok(changed) => {
+            command_core.on_reported(state.entity, state.property);
+            log::info!(
+                "domain: state entity={:016x} property={} changed={changed}",
+                state.entity,
+                state.property
+            );
+            if changed {
+                let key = StateKey {
+                    entity: state.entity,
+                    property: state.property,
+                }
+                .to_bytes();
+                let record = StateRecord {
+                    value: state.value,
+                }
+                .encode();
+                web::upsert(ha_web::entity::PROPERTY_STATE, &key, &record);
+            }
+        }
         Err(error) => log::error!("domain: state write failed: {error:?}"),
     }
 }
 
-fn publish_event(domain: &mut Domain, event: canonical::CanonicalEvent) {
+fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
     let key = event.entity.to_le_bytes();
     let payload = event.event.to_le_bytes();
     match domain.payload_put(
@@ -258,11 +305,14 @@ fn publish_event(domain: &mut Domain, event: canonical::CanonicalEvent) {
         },
         &payload,
     ) {
-        Ok(reference) => log::info!(
-            "domain: event entity={:016x} id={} payload={reference}",
-            event.entity,
-            event.event
-        ),
+        Ok(reference) => {
+            log::info!(
+                "domain: event entity={:016x} id={} payload={reference}",
+                event.entity,
+                event.event
+            );
+            web::publish_event(event.entity, event.event);
+        }
         Err(error) => log::error!("domain: event write failed: {error:?}"),
     }
 }
@@ -294,6 +344,27 @@ fn start_wifi() {
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }
+
+fn register_device(
+    domain: &mut Domain,
+    bindings: &mut Vec<zigbee_devices::Binding>,
+    eui: u64,
+    short: u16,
+    profile: &'static z2m_rs::Profile,
+) {
+    let descriptor = store::descriptor(eui);
+    let mut registered = false;
+    if let Some(descriptor) = descriptor {
+        for endpoint in descriptor.endpoints() {
+            register_domain(domain, bindings, eui, short, endpoint.endpoint, profile);
+            registered = true;
+        }
+    }
+    if !registered {
+        register_domain(domain, bindings, eui, short, 1, profile);
+    }
+}
+
 fn register_domain(
     domain: &mut Domain,
     bindings: &mut Vec<zigbee_devices::Binding>,
@@ -306,11 +377,14 @@ fn register_domain(
         log::error!("domain: adapter init failed");
         return;
     };
-    if let Err(error) = adapter.ensure_device(eui, profile.id) {
-        log::error!("domain: device {eui:016x} failed: {error:?}");
-        return;
-    }
-    let standard_endpoint = if profile.id == "standard.zcl" {
+    let device = match adapter.ensure_device(eui, profile.id) {
+        Ok((device, _)) => device,
+        Err(error) => {
+            log::error!("domain: device {eui:016x} failed: {error:?}");
+            return;
+        }
+    };
+    let standard_endpoint = if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         crate::store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
     } else {
         None
@@ -329,8 +403,34 @@ fn register_domain(
                     endpoint,
                     profile,
                     standard: standard_endpoint,
+                    confirmed: interview::confirmed(eui),
                 });
             }
+            let native = format!("{eui:016x}");
+            let device_record = LogicalDeviceRecord::new(SOURCE_ZIGBEE, 0, &native, profile.id);
+            web::upsert(
+                ha_web::entity::LOGICAL_DEVICE,
+                &device.to_le_bytes(),
+                &device_record.encode(),
+            );
+            let entity_record = EntityRecord::new(device, profile.id);
+            web::upsert(
+                ha_web::entity::ENTITY,
+                &entity.to_le_bytes(),
+                &entity_record.encode(),
+            );
+            let capabilities = match standard_endpoint {
+                Some(descriptor) => zigbee_devices::standard::capabilities_confirmed(
+                    &descriptor,
+                    &interview::confirmed(eui),
+                ),
+                None => zigbee_devices::profile_capabilities(profile),
+            };
+            web::upsert(
+                ha_web::entity::CAPABILITIES,
+                &entity.to_le_bytes(),
+                &capabilities.encode(),
+            );
             log::info!(
                 "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
                 profile.id
@@ -340,37 +440,20 @@ fn register_domain(
     }
 }
 
-#[allow(dead_code)]
-fn submit_command(
-    executor: &mut zigbee_exec::Executor,
-    bindings: &[zigbee_devices::Binding],
-    commands: &mut CommandCore,
-    entity: u64,
-    property: u32,
-    value: ha_domain::canonical::CommandValue,
-) -> Result<u64, ha_domain::Error> {
-    zigbee_devices::CommandRouter::new(executor, bindings).submit(
-        commands,
-        entity,
-        property,
-        value,
-        now_ms(),
-    )
-}
 
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
     if eui == 0 {
         return;
     }
-    if interview::selected_profile(eui).is_some() {
+    if let Some(profile) = store::lookup(eui) {
+        if interview::selected_profile(eui).is_none() {
+            log::info!("registry: restored profile={} (no interview)", profile.id);
+            interview::restore(eui, profile);
+        }
+    }
+    if interview::selected_profile(eui).is_some() && store::descriptor(eui).is_some() {
         configure::ensure(executor, eui, short, now_ms());
         return;
     }
-    if let Some(profile) = store::lookup(eui) {
-        log::info!("registry: restored profile={} (no interview)", profile.id);
-        interview::restore(eui, profile);
-        configure::ensure(executor, eui, short, now_ms());
-    } else {
-        interview::start(executor, (eui, short), now_ms());
-    }
+    interview::start(executor, (eui, short), now_ms());
 }

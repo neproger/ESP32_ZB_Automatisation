@@ -8,7 +8,8 @@ use std::sync::Mutex;
 use micro_db::{FlashError, NorFlash};
 use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
-const CAPACITY: usize = 16;
+pub const MAX_DEVICES: usize = 16;
+const CAPACITY: usize = MAX_DEVICES;
 const DEFINITION_VERSION: u16 = 1;
 
 struct EspFlash;
@@ -120,7 +121,13 @@ pub fn save(
     descriptor: &DeviceDescriptor,
 ) {
     let mut signature = [0u8; SIGNATURE_MAX];
-    let signature_len = descriptor.encode(&mut signature).unwrap_or(0);
+    let signature_len = match descriptor.encode(&mut signature) {
+        Ok(len) => len,
+        Err(error) => {
+            log::error!("registry: descriptor encode failed ieee={ieee:016x}: {error:?}");
+            return;
+        }
+    };
     let record = DeviceRecord {
         ieee,
         short,

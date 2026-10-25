@@ -39,6 +39,11 @@ fn matcher_matches_zhc_for_complex_fingerprints() {
         "{} of {} complex cases differ from ZHC:\n{}",
         failures.len(),
         checked + failures.len(),
-        failures.iter().take(15).cloned().collect::<Vec<_>>().join("\n")
+        failures
+            .iter()
+            .take(15)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

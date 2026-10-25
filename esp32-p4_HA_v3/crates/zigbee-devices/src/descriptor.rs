@@ -64,15 +64,15 @@ impl EndpointDescriptor {
     }
 
     pub fn has_server(&self, cluster_id: u16) -> bool {
-        self.clusters().iter().any(|entry| {
-            entry.cluster_id == cluster_id && entry.role == ClusterRole::Server
-        })
+        self.clusters()
+            .iter()
+            .any(|entry| entry.cluster_id == cluster_id && entry.role == ClusterRole::Server)
     }
 
     pub fn has_client(&self, cluster_id: u16) -> bool {
-        self.clusters().iter().any(|entry| {
-            entry.cluster_id == cluster_id && entry.role == ClusterRole::Client
-        })
+        self.clusters()
+            .iter()
+            .any(|entry| entry.cluster_id == cluster_id && entry.role == ClusterRole::Client)
     }
 }
 
@@ -125,7 +125,8 @@ impl DeviceDescriptor {
     }
 
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, DescriptorError> {
-        let needed = 3 + usize::from(self.count) * 6
+        let needed = 3
+            + usize::from(self.count) * 6
             + self
                 .endpoints()
                 .map(|endpoint| usize::from(endpoint.cluster_count) * 3)
@@ -253,14 +254,20 @@ mod tests {
     #[test]
     fn sequence_matters_and_unknown_endpoint_is_none() {
         let device = descriptor();
-        let ids: Vec<u8> = device.endpoints().map(|endpoint| endpoint.endpoint).collect();
+        let ids: Vec<u8> = device
+            .endpoints()
+            .map(|endpoint| endpoint.endpoint)
+            .collect();
         assert_eq!(ids, [1, 2]);
         assert!(device.endpoint(3).is_none());
     }
 
     #[test]
     fn malformed_signatures_are_rejected() {
-        assert_eq!(DeviceDescriptor::decode(&[0, 0, 0]), Err(DescriptorError::BadMagic));
+        assert_eq!(
+            DeviceDescriptor::decode(&[0, 0, 0]),
+            Err(DescriptorError::BadMagic)
+        );
         assert_eq!(
             DeviceDescriptor::decode(&[SIGNATURE_MAGIC, 2, 0]),
             Err(DescriptorError::UnsupportedVersion(2))

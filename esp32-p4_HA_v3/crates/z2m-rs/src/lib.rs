@@ -15,9 +15,10 @@
 //! machine land with the devices that need them; the contracts are already here.
 
 mod frame;
+#[rustfmt::skip]
 mod generated;
-mod matcher;
 pub mod capabilities;
+mod matcher;
 
 pub use frame::{AttributeFrameView, AttributeIter, AttributeView, FrameError};
 pub use generated::*;
@@ -53,7 +54,10 @@ pub enum ColorValue {
     /// 0..1 coordinates; missing coordinates stay missing (partial frames).
     Xy { x: Option<f32>, y: Option<f32> },
     /// hue 0..360, saturation 0..100; missing values stay missing.
-    Hs { hue: Option<f32>, saturation: Option<f32> },
+    Hs {
+        hue: Option<f32>,
+        saturation: Option<f32>,
+    },
 }
 
 impl ColorValue {
@@ -149,7 +153,9 @@ pub struct Fingerprint {
 }
 
 pub enum Expose {
-    Binary { property: PropertyId },
+    Binary {
+        property: PropertyId,
+    },
     Numeric {
         property: PropertyId,
         unit: Unit,
@@ -157,7 +163,9 @@ pub enum Expose {
         max: f32,
         step: f32,
     },
-    Color { property: PropertyId },
+    Color {
+        property: PropertyId,
+    },
     Enumeration {
         property: PropertyId,
         values: &'static [(u32, &'static str)],
@@ -179,7 +187,10 @@ pub struct AttributeRule {
 pub enum Converter {
     Attribute(AttributeRule),
     /// Standard ZCL illuminance measuredValue -> lux (ZHC luxScale).
-    Illuminance { cluster: u16, attribute: u16 },
+    Illuminance {
+        cluster: u16,
+        attribute: u16,
+    },
     /// Cluster-specific command where one payload byte selects the action.
     Command {
         cluster: u16,
@@ -319,12 +330,6 @@ pub enum ConfigureStep {
         max: u16,
         change: u32,
     },
-    Write {
-        endpoint: ConfigureEndpoint,
-        cluster: u16,
-        attribute: u16,
-        value: Value,
-    },
 }
 
 /// Async configuration contract: requests are correlated by seq, bounded by
@@ -388,9 +393,16 @@ pub struct Profile {
     pub support: Support,
 }
 
-pub static PROFILES: &[&Profile] = &[&TUYA_TS0041, &SNZB_01P, &TS011F];
-
 pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
+    identify_with_endpoints(interview, &[])
+}
+
+/// Endpoint-aware identification: call it once Active Endpoints and Simple
+/// Descriptors are known, so fingerprints that differ by endpoint resolve.
+pub fn identify_with_endpoints(
+    interview: &Interview<'_>,
+    endpoints: &[EndpointIdentity<'_>],
+) -> Option<&'static Profile> {
     let device = DeviceIdentity {
         model: interview.model,
         manufacturer_name: interview.manufacturer,
@@ -403,13 +415,22 @@ pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
         hardware_version: None,
         zcl_version: None,
         ieee: None,
-        endpoints: &[],
+        endpoints,
     };
     match_definition(&device).and_then(|definition| definition.profile)
 }
-fn normalized_model(model: &str) -> &str {
-    let end = model.find('\0').unwrap_or(model.len());
-    model[..end].trim()
+
+/// Restore a previously selected profile without re-running identification.
+pub fn profile_by_id(id: &str) -> Option<&'static Profile> {
+    for profile in [&TUYA_TS0041, &SNZB_01P, &TS011F] {
+        if profile.id == id {
+            return Some(profile);
+        }
+    }
+    crate::generated::DEFINITIONS
+        .iter()
+        .find(|definition| definition.id == id)
+        .and_then(|definition| definition.profile)
 }
 
 /// `fromZigbee`: raw ZCL -> normalized properties/actions.
@@ -447,7 +468,9 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
             } => {
                 if event.cluster == *cluster && event.command == *command {
                     let first = event.payload.first().copied();
-                    if let Some(&(_, action)) = actions.iter().find(|&&(byte, _)| Some(byte) == first) {
+                    if let Some(&(_, action)) =
+                        actions.iter().find(|&&(byte, _)| Some(byte) == first)
+                    {
                         decoded.push(Update::Action(action));
                     }
                 }
@@ -876,6 +899,31 @@ mod tests {
     }
 
     #[test]
+    fn stored_definition_id_restores_the_same_profile() {
+        let profile = identify(&Interview {
+            manufacturer: Some("_TZ3000_abcd"),
+            model: "TS0041",
+        })
+        .unwrap();
+        assert_eq!(
+            profile_by_id(profile.id).map(|found| found.id),
+            Some(profile.id)
+        );
+        assert!(profile_by_id("missing.definition").is_none());
+        assert_eq!(
+            identify_with_endpoints(
+                &Interview {
+                    manufacturer: Some("_TZ3000_abcd"),
+                    model: "TS0041",
+                },
+                &[],
+            )
+            .map(|found| found.id),
+            Some(profile.id)
+        );
+    }
+
+    #[test]
     fn ts0041_payloads_decode_to_actions() {
         for (byte, action) in [
             (0x00u8, Action::Single),
@@ -883,7 +931,10 @@ mod tests {
             (0x02, Action::Hold),
         ] {
             let decoded = decode(&TUYA_TS0041, &event(0x0006, 0xFD, &[byte])).unwrap();
-            assert_eq!(decoded.updates().copied().collect::<Vec<_>>(), vec![Update::Action(action)]);
+            assert_eq!(
+                decoded.updates().copied().collect::<Vec<_>>(),
+                vec![Update::Action(action)]
+            );
         }
     }
 
@@ -916,8 +967,8 @@ mod tests {
             to: &[],
             configure: None,
             omit_optional_params: false,
-    turns_off_at_brightness_1: false,
-    support: Support::IDENTIFIED,
+            turns_off_at_brightness_1: false,
+            support: Support::IDENTIFIED,
         };
         let bytes = (-512i16).to_le_bytes();
         let mut ev = event(0x0402, 0x0A, &bytes);
@@ -953,8 +1004,8 @@ mod tests {
             to: TO,
             configure: None,
             omit_optional_params: false,
-    turns_off_at_brightness_1: false,
-    support: Support::IDENTIFIED,
+            turns_off_at_brightness_1: false,
+            support: Support::IDENTIFIED,
         };
         let mut out = [0u8; 8];
         let len = encode(
@@ -1052,8 +1103,14 @@ mod ts0041_battery_tests {
     #[test]
     fn unknown_battery_value_and_foreign_attribute_are_ignored() {
         let mut out = Decoded::default();
-        assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x21, 0x00, 0x20, 255]), &mut out), 0);
-        assert_eq!(decode_frame(&TUYA_TS0041, &frame(&[0x55, 0x00, 0x20, 1]), &mut out), 0);
+        assert_eq!(
+            decode_frame(&TUYA_TS0041, &frame(&[0x21, 0x00, 0x20, 255]), &mut out),
+            0
+        );
+        assert_eq!(
+            decode_frame(&TUYA_TS0041, &frame(&[0x55, 0x00, 0x20, 1]), &mut out),
+            0
+        );
     }
     #[test]
     fn ts0041_configure_is_tuya_magic_packet() {

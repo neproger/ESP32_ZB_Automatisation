@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+log = "0.4"
 z2m-rs = { path = "../z2m-rs" }
 micro-db = { path = "../micro-db" }
 ha-domain = { path = "../ha-domain" }

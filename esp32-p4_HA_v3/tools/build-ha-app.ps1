@@ -15,16 +15,37 @@ $cmake = Join-Path $tools 'tools\cmake\4.0.3\bin\cmake.exe'
 $env:IDF_PATH = $idf
 $env:IDF_TOOLS_PATH = $tools
 $env:IDF_PYTHON_ENV_PATH = $python
+# CMake re-run in the cached esp-idf-sys dir needs the target to match.
+$env:IDF_TARGET = 'esp32p4'
 Remove-Item Env:ESP_IDF_TOOLS_INSTALL_DIR -ErrorAction SilentlyContinue
-$env:HA_WIFI_SSID = 'ITPod'
-$env:HA_WIFI_PASSWORD = 'zxcxzzxc'
 $env:LIBCLANG_PATH = 'C:\Users\ASUS\AppData\Local\Programs\Python\Python310\lib\site-packages\clang\native'
+
+# Wi-Fi credentials come from the caller's environment, never from the repo.
+if (-not $env:HA_WIFI_SSID -or -not $env:HA_WIFI_PASSWORD) {
+    Write-Warning 'HA_WIFI_SSID/HA_WIFI_PASSWORD are not set; building without Wi-Fi.'
+}
+
+# The UI bundle is generated (web/ui is gitignored) but included by Rust.
+$ui = Join-Path $root 'web-ui'
+Push-Location $ui
+try {
+    if (-not (Test-Path (Join-Path $ui 'node_modules'))) {
+        & npm ci
+        if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+    }
+    & npm run build
+    if ($LASTEXITCODE -ne 0) { throw 'web UI build failed' }
+} finally {
+    Pop-Location
+}
 
 function Build-Sys([string]$buildRoot) {
     $out = Join-Path $buildRoot 'out\build'
     if ((Test-Path $out) -and (Test-Path $cmake)) {
         & $cmake --build $out | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "C bridge build failed: $out" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "C bridge CMake pass failed; cargo will regenerate: $out"
+        }
     }
 }
 

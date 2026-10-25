@@ -5,8 +5,8 @@
 //! A result is applied only if its `OperationId` is the job's current pending
 //! operation, so a late result from an older job cannot change a newer one.
 
-use z2m_rs::{Interview, Profile};
 use crate::descriptor::{ClusterRole, DeviceDescriptor, EndpointDescriptor};
+use z2m_rs::{EndpointIdentity, Interview, Profile};
 use zigbee_exec::{
     AttributeList, Executor, OperationId, OperationResult, Request, RequestKind, RetryPolicy,
     Status, ZdoData,
@@ -53,6 +53,7 @@ struct Job {
     model: [u8; 32],
     model_len: u8,
     step: Step,
+    profile: Option<&'static Profile>,
     descriptor: DeviceDescriptor,
     active: [u8; 8],
     active_count: u8,
@@ -73,6 +74,7 @@ impl Job {
             model: [0; 32],
             model_len: 0,
             step: Step::Manufacturer,
+            profile: None,
             descriptor: DeviceDescriptor::new(),
             active: [0; 8],
             active_count: 0,
@@ -185,10 +187,7 @@ impl InterviewManager {
                     } else {
                         job.model[..len].copy_from_slice(&value[1..1 + len]);
                         job.model_len = len as u8;
-                        if let Some(identified) = identify(job) {
-                            self.jobs[slot] = None;
-                            return Some(identified);
-                        }
+                        job.profile = identify_profile(job);
                         job.step = Step::ActiveEndpoints;
                         job.attempts = 0;
                         job.pending = None;
@@ -234,12 +233,13 @@ impl InterviewManager {
                         }
                         None
                     } else {
-                        let identified = identify_standard(job);
+                        let identified = identify_finished(job);
                         self.jobs[slot] = None;
                         identified
                     }
                 }
-            }        } else if matches!(
+            }
+        } else if matches!(
             result.status,
             Status::Timeout | Status::Failed | Status::Expired
         ) {
@@ -282,6 +282,15 @@ impl InterviewManager {
 
     fn failed(&mut self, slot: usize, now: u64) -> Option<Identified> {
         let job = self.jobs[slot].as_mut().unwrap();
+        // A known profile or a partially discovered endpoint still has a working
+        // decode path when the device does not answer the rest of ZDO.
+        if matches!(job.step, Step::ActiveEndpoints | Step::SimpleDescriptor)
+            && (job.profile.is_some() || job.descriptor.endpoints().next().is_some())
+        {
+            let identified = identify_finished(job);
+            self.jobs[slot] = None;
+            return identified;
+        }
         job.attempts = job.attempts.saturating_add(1);
         if job.attempts >= MAX_ATTEMPTS {
             let eui = job.eui;
@@ -329,7 +338,11 @@ fn enqueue(job: &mut Job, exec: &mut Executor, now: u64) -> Result<(), ()> {
     let request = Request {
         device: job.eui,
         short: job.short,
-        endpoint: if matches!(job.step, Step::Manufacturer | Step::Model) { ENDPOINT } else { 0 },
+        endpoint: if matches!(job.step, Step::Manufacturer | Step::Model) {
+            ENDPOINT
+        } else {
+            0
+        },
         sleepy: true,
         retry: RetryPolicy::SAFE,
         expiry_ms: OP_EXPIRY_MS,
@@ -350,38 +363,30 @@ fn enqueue(job: &mut Job, exec: &mut Executor, now: u64) -> Result<(), ()> {
 }
 
 fn push_simple_descriptor(job: &mut Job, descriptor: zigbee_exec::SimpleDescriptor) -> bool {
-    let mut endpoint = EndpointDescriptor::new(descriptor.endpoint, descriptor.profile_id, descriptor.device_id);
+    let mut endpoint = EndpointDescriptor::new(
+        descriptor.endpoint,
+        descriptor.profile_id,
+        descriptor.device_id,
+    );
     for cluster in descriptor.server_clusters.as_slice() {
-        if !endpoint.push(*cluster, ClusterRole::Server) { return false; }
+        if !endpoint.push(*cluster, ClusterRole::Server) {
+            return false;
+        }
     }
     for cluster in descriptor.client_clusters.as_slice() {
-        if !endpoint.push(*cluster, ClusterRole::Client) { return false; }
+        if !endpoint.push(*cluster, ClusterRole::Client) {
+            return false;
+        }
     }
     job.descriptor.push(endpoint)
 }
-fn identify_standard(job: &Job) -> Option<Identified> {
+fn identify_finished(job: &Job) -> Option<Identified> {
     let manufacturer =
         String::from_utf8_lossy(&job.manufacturer[..usize::from(job.man_len)]).to_string();
     let model = String::from_utf8_lossy(&job.model[..usize::from(job.model_len)]).to_string();
-    Some(Identified {
-        eui: job.eui,
-        short: job.short,
-        manufacturer,
-        model,
-        profile: &crate::standard::STANDARD_PROFILE,
-        descriptor: job.descriptor,
-    })
-}
-
-fn identify(job: &Job) -> Option<Identified> {
-    let manufacturer =
-        String::from_utf8_lossy(&job.manufacturer[..usize::from(job.man_len)]).to_string();
-    let model = String::from_utf8_lossy(&job.model[..usize::from(job.model_len)]).to_string();
-    let interview = Interview {
-        manufacturer: Some(&manufacturer),
-        model: &model,
-    };
-    let profile = z2m_rs::identify(&interview)?;
+    let profile = identify_with_descriptor(job, &manufacturer, &model)
+        .or(job.profile)
+        .unwrap_or(&crate::standard::STANDARD_PROFILE);
     Some(Identified {
         eui: job.eui,
         short: job.short,
@@ -389,6 +394,74 @@ fn identify(job: &Job) -> Option<Identified> {
         model,
         profile,
         descriptor: job.descriptor,
+    })
+}
+
+struct OwnedEndpoint {
+    id: u8,
+    device_id: u16,
+    profile_id: u16,
+    input: Vec<u16>,
+    output: Vec<u16>,
+}
+
+/// Fingerprints may differ only by endpoint/cluster sets; pass the discovered
+/// descriptor so the matcher can tell those definitions apart.
+fn identify_with_descriptor(
+    job: &Job,
+    manufacturer: &str,
+    model: &str,
+) -> Option<&'static Profile> {
+    let owned: Vec<OwnedEndpoint> = job
+        .descriptor
+        .endpoints()
+        .map(|endpoint| OwnedEndpoint {
+            id: endpoint.endpoint,
+            device_id: endpoint.device_id,
+            profile_id: endpoint.profile_id,
+            input: endpoint
+                .clusters()
+                .iter()
+                .filter(|entry| entry.role == ClusterRole::Server)
+                .map(|entry| entry.cluster_id)
+                .collect(),
+            output: endpoint
+                .clusters()
+                .iter()
+                .filter(|entry| entry.role == ClusterRole::Client)
+                .map(|entry| entry.cluster_id)
+                .collect(),
+        })
+        .collect();
+    if owned.is_empty() {
+        return None;
+    }
+    let endpoints: Vec<EndpointIdentity<'_>> = owned
+        .iter()
+        .map(|endpoint| EndpointIdentity {
+            id: endpoint.id,
+            device_id: Some(endpoint.device_id),
+            profile_id: Some(endpoint.profile_id),
+            input: &endpoint.input,
+            output: &endpoint.output,
+        })
+        .collect();
+    z2m_rs::identify_with_endpoints(
+        &Interview {
+            manufacturer: Some(manufacturer),
+            model,
+        },
+        &endpoints,
+    )
+}
+
+fn identify_profile(job: &Job) -> Option<&'static Profile> {
+    let manufacturer =
+        String::from_utf8_lossy(&job.manufacturer[..usize::from(job.man_len)]).to_string();
+    let model = String::from_utf8_lossy(&job.model[..usize::from(job.model_len)]).to_string();
+    z2m_rs::identify(&Interview {
+        manufacturer: Some(&manufacturer),
+        model: &model,
     })
 }
 
@@ -419,7 +492,7 @@ fn find_string(bytes: &[u8], wanted: u16) -> Option<&[u8]> {
 mod tests {
     use super::*;
     use zigbee_exec::fake::{FakeTransport, Sent};
-    use zigbee_exec::Payload;
+    use zigbee_exec::{ClusterList, EndpointList, Event, Payload, SimpleDescriptor};
 
     const A: u64 = 0x0012_4b00_0a1b_2c3d;
     const B: u64 = 0x0012_4b00_0d1e_2f40;
@@ -481,7 +554,48 @@ mod tests {
                 identified = Some(found);
             }
         }
+        if attribute == ATTR_MODEL && identified.is_none() {
+            identified = finish_discovery(exec, transport, manager, eui, now + 2);
+        }
         identified
+    }
+
+    fn finish_discovery(
+        exec: &mut Executor,
+        transport: &mut FakeTransport,
+        manager: &mut InterviewManager,
+        _eui: u64,
+        now: u64,
+    ) -> Option<Identified> {
+        exec.tick(transport, now);
+        let active = transport.last().expect("active endpoints").op;
+        let mut endpoints = EndpointList::new();
+        assert!(endpoints.push(1));
+        transport.push_event(Event::ZdoActiveEndpoints {
+            op: active,
+            endpoints,
+        });
+        exec.tick(transport, now + 1);
+        while let Some(result) = exec.take_result() {
+            assert!(manager.on_result(exec, result, now + 1).is_none());
+        }
+        exec.tick(transport, now + 2);
+        let simple = transport.last().expect("simple descriptor").op;
+        let mut server = ClusterList::new();
+        assert!(server.push(0x0006));
+        transport.push_event(Event::ZdoSimpleDescriptor {
+            op: simple,
+            descriptor: SimpleDescriptor {
+                endpoint: 1,
+                profile_id: 0x0104,
+                device_id: 0x0000,
+                server_clusters: server,
+                client_clusters: ClusterList::new(),
+            },
+        });
+        exec.tick(transport, now + 3);
+        exec.take_result()
+            .and_then(|result| manager.on_result(exec, result, now + 3))
     }
 
     #[test]
@@ -631,13 +745,7 @@ mod tests {
         let failed_at = fail_three_times(&mut exec, &mut transport, &mut manager, A);
         assert_eq!(manager.job_count(), 0);
         assert!(!manager.start(&mut exec, A, 0x1001, false, failed_at));
-        assert!(manager.start(
-            &mut exec,
-            A,
-            0x1001,
-            false,
-            failed_at + COOLDOWN_MS
-        ));
+        assert!(manager.start(&mut exec, A, 0x1001, false, failed_at + COOLDOWN_MS));
     }
 
     #[test]
@@ -682,10 +790,7 @@ mod tests {
         assert_eq!(b.profile.id, "sonoff.snzb01p");
 
         manager.tick(&mut exec, u64::from(OP_EXPIRY_MS) + RETRY_BACKOFF_MS);
-        exec.tick(
-            &mut transport,
-            u64::from(OP_EXPIRY_MS) + RETRY_BACKOFF_MS,
-        );
+        exec.tick(&mut transport, u64::from(OP_EXPIRY_MS) + RETRY_BACKOFF_MS);
         assert!(manager.is_interviewing(A));
     }
     #[test]

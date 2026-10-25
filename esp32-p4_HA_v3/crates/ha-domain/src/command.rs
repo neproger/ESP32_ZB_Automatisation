@@ -120,9 +120,7 @@ impl CommandCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical::{
-        ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER,
-    };
+    use crate::canonical::{ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
     use crate::Value;
 
     struct FakeSink {
@@ -130,7 +128,11 @@ mod tests {
     }
 
     impl CommandSink for FakeSink {
-        fn send(&mut self, _command: &CanonicalCommand, _now: u64) -> Result<OperationToken, Error> {
+        fn send(
+            &mut self,
+            _command: &CanonicalCommand,
+            _now: u64,
+        ) -> Result<OperationToken, Error> {
             self.next += 1;
             Ok(self.next)
         }
@@ -158,7 +160,10 @@ mod tests {
             .unwrap();
         assert_eq!(core.len(), 1);
         assert!(core.on_result(op, CommandStatus::Acknowledged));
-        assert_eq!(core.pending(op).unwrap().status, CommandStatus::Acknowledged);
+        assert_eq!(
+            core.pending(op).unwrap().status,
+            CommandStatus::Acknowledged
+        );
         assert_eq!(core.pending(op).unwrap().desired, CommandValue::None);
         // A report is the only thing that clears the desired command here.
         core.on_reported(9, PROPERTY_POWER);

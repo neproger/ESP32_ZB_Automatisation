@@ -6,12 +6,14 @@
 //! real report.
 
 use ha_domain::canonical::{
-    PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS, PROPERTY_COLOR,
-    PROPERTY_COLOR_TEMPERATURE, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY,
-    PROPERTY_POWER, PropertyId,
+    PropertyId, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS,
+    PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE,
+    PROPERTY_OCCUPANCY, PROPERTY_POWER,
 };
 
-use crate::descriptor::{ClusterRole, DeviceDescriptor, EndpointDescriptor};
+use crate::descriptor::EndpointDescriptor;
+
+pub const STANDARD_PROFILE_ID: &str = "standard.zcl";
 
 pub const ONOFF: u16 = 0x0006;
 pub const LEVEL: u16 = 0x0008;
@@ -175,22 +177,10 @@ pub fn classify_endpoint(endpoint: &EndpointDescriptor) -> EndpointClass {
     EndpointClass { kind, features }
 }
 
-pub fn classify_device(device: &DeviceDescriptor) -> impl Iterator<Item = EndpointClass> + '_ {
-    device.endpoints().map(classify_endpoint)
-}
-
-/// True when the endpoint advertises the cluster on the side that owns the
-/// attributes and accepts commands from the coordinator.
-pub fn has_server(endpoint: &EndpointDescriptor, cluster: u16) -> bool {
-    endpoint.clusters().iter().any(|entry| {
-        entry.cluster_id == cluster && entry.role == ClusterRole::Server
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::descriptor::EndpointDescriptor;
+    use crate::descriptor::{ClusterRole, EndpointDescriptor};
 
     fn endpoint(clusters: &[(u16, ClusterRole)]) -> EndpointDescriptor {
         let mut endpoint = EndpointDescriptor::new(1, 0x0104, 0x0000);
@@ -275,10 +265,10 @@ pub static STANDARD_TO: &[z2m_rs::CommandMap] = &[
     z2m_rs::capabilities::COLOR_XY_TO,
 ];
 
-/// Shared fallback profile. Callers gate it by the discovered endpoint features
-/// and ownership; the profile itself does not prove that an attribute exists.
+/// Shared fallback profile. Callers gate it by the discovered endpoint features;
+/// the profile itself does not prove that an attribute exists.
 pub static STANDARD_PROFILE: z2m_rs::Profile = z2m_rs::Profile {
-    id: "standard.zcl",
+    id: STANDARD_PROFILE_ID,
     vendor: "ZCL",
     fingerprints: &[],
     exposes: &[],
@@ -300,9 +290,12 @@ pub fn decode_standard(
     z2m_rs::decode(&STANDARD_PROFILE, event)
 }
 
-pub fn update_is_discovered(endpoint: &EndpointDescriptor, update: &z2m_rs::Update) -> bool {
+pub fn update_capability(
+    endpoint: &EndpointDescriptor,
+    update: &z2m_rs::Update,
+) -> Option<StandardCapability> {
     let z2m_rs::Update::Property { property, .. } = update else {
-        return false;
+        return None;
     };
     let feature = match *property {
         z2m_rs::properties::STATE => StandardCapability::Power,
@@ -315,58 +308,51 @@ pub fn update_is_discovered(endpoint: &EndpointDescriptor, update: &z2m_rs::Upda
         z2m_rs::properties::OCCUPANCY => StandardCapability::Occupancy,
         z2m_rs::properties::BATTERY => StandardCapability::BatteryPercent,
         z2m_rs::properties::VOLTAGE => StandardCapability::BatteryVoltage,
-        _ => return false,
+        _ => return None,
     };
-    classify_endpoint(endpoint).features.contains(feature)
+    classify_endpoint(endpoint)
+        .features
+        .contains(feature)
+        .then_some(feature)
 }
 
-pub fn capability_allows(endpoint: &EndpointDescriptor, property: PropertyId, action: u32) -> bool {
+pub fn update_is_discovered(endpoint: &EndpointDescriptor, update: &z2m_rs::Update) -> bool {
+    update_capability(endpoint, update).is_some()
+}
+
+pub fn capability_allows(
+    endpoint: &EndpointDescriptor,
+    confirmed: &Confirmed,
+    property: PropertyId,
+    action: u32,
+) -> bool {
     let features = classify_endpoint(endpoint).features;
+    let ep = endpoint.endpoint;
     match property {
-        PROPERTY_POWER => features.contains(StandardCapability::Power)
-            && (action == ha_domain::canonical::ACTION_ON
-                || action == ha_domain::canonical::ACTION_OFF),
-        PROPERTY_BRIGHTNESS => features.contains(StandardCapability::Brightness)
-            && action == ha_domain::canonical::ACTION_SET,
-        PROPERTY_COLOR_TEMPERATURE => features.contains(StandardCapability::ColorTemperature)
-            && action == ha_domain::canonical::ACTION_SET,
-        PROPERTY_COLOR => features.contains(StandardCapability::Color)
-            && action == ha_domain::canonical::ACTION_SET,
+        PROPERTY_POWER => {
+            features.contains(StandardCapability::Power)
+                && confirmed.is_confirmed(ep, ONOFF, 0x0000)
+                && (action == ha_domain::canonical::ACTION_ON
+                    || action == ha_domain::canonical::ACTION_OFF)
+        }
+        PROPERTY_BRIGHTNESS => {
+            features.contains(StandardCapability::Brightness)
+                && confirmed.is_confirmed(ep, LEVEL, 0x0000)
+                && action == ha_domain::canonical::ACTION_SET
+        }
+        PROPERTY_COLOR_TEMPERATURE => {
+            features.contains(StandardCapability::ColorTemperature)
+                && confirmed.is_confirmed(ep, COLOR, 0x0007)
+                && action == ha_domain::canonical::ACTION_SET
+        }
+        PROPERTY_COLOR => {
+            features.contains(StandardCapability::Color)
+                && (confirmed.is_confirmed(ep, COLOR, 0x0003)
+                    || confirmed.is_confirmed(ep, COLOR, 0x0004))
+                && action == ha_domain::canonical::ACTION_SET
+        }
         _ => false,
     }
-}
-
-pub fn capabilities(
-    endpoint: &EndpointDescriptor,
-) -> ha_domain::canonical::CapabilitiesRecord {
-    use ha_domain::canonical::{Capability, ACTION_OFF, ACTION_ON, ACTION_SET};
-    let features = classify_endpoint(endpoint).features;
-    let mut record = ha_domain::canonical::CapabilitiesRecord::default();
-    if features.contains(StandardCapability::Power) {
-        record.push(Capability::with_actions(PROPERTY_POWER, &[ACTION_ON, ACTION_OFF]));
-    }
-    if features.contains(StandardCapability::Brightness) {
-        record.push(Capability::with_actions(PROPERTY_BRIGHTNESS, &[ACTION_SET]));
-    }
-    if features.contains(StandardCapability::ColorTemperature) {
-        record.push(Capability::with_actions(PROPERTY_COLOR_TEMPERATURE, &[ACTION_SET]));
-    }
-    if features.contains(StandardCapability::Color) {
-        record.push(Capability::with_actions(PROPERTY_COLOR, &[ACTION_SET]));
-    }
-    for (feature, property) in [
-        (StandardCapability::Temperature, ha_domain::canonical::PROPERTY_TEMPERATURE),
-        (StandardCapability::Humidity, PROPERTY_HUMIDITY),
-        (StandardCapability::Illuminance, PROPERTY_ILLUMINANCE),
-        (StandardCapability::Occupancy, PROPERTY_OCCUPANCY),
-        (StandardCapability::BatteryPercent, PROPERTY_BATTERY_PERCENT),
-        (StandardCapability::BatteryVoltage, PROPERTY_BATTERY_VOLTAGE),
-    ] {
-        if features.contains(feature) {
-            record.push(Capability::read(property));
-        }
-    }
-    record
 }
 
 pub const MAX_CONFIRMED_ATTRIBUTES: usize = 64;
@@ -380,12 +366,17 @@ pub struct Confirmed {
 }
 
 impl Default for Confirmed {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Confirmed {
     pub const fn new() -> Self {
-        Self { entries: [None; MAX_CONFIRMED_ATTRIBUTES], len: 0 }
+        Self {
+            entries: [None; MAX_CONFIRMED_ATTRIBUTES],
+            len: 0,
+        }
     }
 
     pub fn confirm(&mut self, endpoint: u8, cluster: u16, attribute: u16) -> bool {
@@ -408,8 +399,12 @@ impl Confirmed {
             .any(|entry| *entry == (endpoint, cluster, attribute))
     }
 
-    pub fn len(&self) -> usize { usize::from(self.len) }
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 pub fn attribute_capability(cluster: u16, attribute: u16) -> Option<StandardCapability> {
@@ -435,13 +430,19 @@ pub fn capabilities_confirmed(
     use ha_domain::canonical::{Capability, ACTION_OFF, ACTION_ON, ACTION_SET};
     let mut record = ha_domain::canonical::CapabilitiesRecord::default();
     if confirmed.is_confirmed(endpoint.endpoint, ONOFF, 0x0000) {
-        record.push(Capability::with_actions(PROPERTY_POWER, &[ACTION_ON, ACTION_OFF]));
+        record.push(Capability::with_actions(
+            PROPERTY_POWER,
+            &[ACTION_ON, ACTION_OFF],
+        ));
     }
     if confirmed.is_confirmed(endpoint.endpoint, LEVEL, 0x0000) {
         record.push(Capability::with_actions(PROPERTY_BRIGHTNESS, &[ACTION_SET]));
     }
     if confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0007) {
-        record.push(Capability::with_actions(PROPERTY_COLOR_TEMPERATURE, &[ACTION_SET]));
+        record.push(Capability::with_actions(
+            PROPERTY_COLOR_TEMPERATURE,
+            &[ACTION_SET],
+        ));
     }
     if confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0003)
         || confirmed.is_confirmed(endpoint.endpoint, COLOR, 0x0004)
@@ -451,7 +452,11 @@ pub fn capabilities_confirmed(
     for (cluster, attribute, property) in [
         (POWER_CONFIG, 0x0021, PROPERTY_BATTERY_PERCENT),
         (POWER_CONFIG, 0x0020, PROPERTY_BATTERY_VOLTAGE),
-        (TEMPERATURE, 0x0000, ha_domain::canonical::PROPERTY_TEMPERATURE),
+        (
+            TEMPERATURE,
+            0x0000,
+            ha_domain::canonical::PROPERTY_TEMPERATURE,
+        ),
         (HUMIDITY, 0x0000, PROPERTY_HUMIDITY),
         (ILLUMINANCE, 0x0000, PROPERTY_ILLUMINANCE),
         (OCCUPANCY, 0x0000, PROPERTY_OCCUPANCY),

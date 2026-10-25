@@ -9,8 +9,8 @@ use std::sync::Mutex;
 use zigbee_devices::InterviewManager;
 use zigbee_exec::{Executor, OperationResult};
 
-const PROFILE_SLOTS: usize = 8;
-const DEVICE_QUEUE: usize = 8;
+const PROFILE_SLOTS: usize = crate::store::MAX_DEVICES;
+const DEVICE_QUEUE: usize = crate::store::MAX_DEVICES;
 
 #[derive(Clone, Copy)]
 struct ProfileMap {
@@ -46,6 +46,7 @@ impl ProfileMap {
                 _ => {}
             }
         }
+        log::error!("interview: profile table full, dropping profile {eui:016x}");
     }
 }
 
@@ -111,7 +112,8 @@ pub fn install() {
 }
 
 pub fn start(exec: &mut Executor, device: (u64, u16), now: u64) {
-    let known = selected_profile(device.0).is_some();
+    let known = selected_profile(device.0).is_some()
+        && crate::store::descriptor(device.0).is_some();
     MANAGER
         .lock()
         .unwrap()
@@ -144,8 +146,10 @@ pub fn on_operation_result(exec: &mut Executor, result: OperationResult, now: u6
     );
     crate::configure::ensure(exec, identified.eui, identified.short, now);
     let mut queue = IDENTIFIED.lock().unwrap();
-    if queue.len() < 8 {
+    if queue.len() < crate::store::MAX_DEVICES {
         queue.push((identified.eui, identified.short, identified.profile));
+    } else {
+        log::error!("interview: identified queue full, {} not registered", identified.eui);
     }
 }
 
@@ -163,10 +167,12 @@ pub fn confirm_attribute(eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
         state.confirm(endpoint, cluster, attribute);
         return;
     }
-    if confirmed.len() < 8 {
+    if confirmed.len() < crate::store::MAX_DEVICES {
         let mut state = zigbee_devices::Confirmed::new();
         state.confirm(endpoint, cluster, attribute);
         confirmed.push((eui, state));
+    } else {
+        log::error!("interview: confirmed table full, attribute {eui:016x} not tracked");
     }
 }
 
@@ -175,12 +181,6 @@ pub fn confirmed(eui: u64) -> zigbee_devices::Confirmed {
         .find(|(id, _)| *id == eui)
         .map(|(_, state)| *state)
         .unwrap_or_else(zigbee_devices::Confirmed::new)
-}
-
-pub fn is_attribute_confirmed(eui: u64, endpoint: u8, cluster: u16, attribute: u16) -> bool {
-    CONFIRMED.lock().unwrap().iter().any(|(id, state)| {
-        *id == eui && state.is_confirmed(endpoint, cluster, attribute)
-    })
 }
 
 pub fn selected_profile(eui: u64) -> Option<&'static z2m_rs::Profile> {

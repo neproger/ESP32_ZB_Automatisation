@@ -113,7 +113,8 @@ fn fingerprint_matches(rule: &FingerprintRule, device: &DeviceIdentity<'_>) -> b
         && optional_str(rule.power_source, device.power_source)
         && optional_str(rule.software_build_id, device.software_build_id)
         && optional_str(rule.date_code, device.date_code)
-        && (rule.application_version.is_none() || rule.application_version == device.application_version)
+        && (rule.application_version.is_none()
+            || rule.application_version == device.application_version)
         && (rule.hardware_version.is_none() || rule.hardware_version == device.hardware_version)
         && (rule.zcl_version.is_none() || rule.zcl_version == device.zcl_version)
         && match &rule.ieee {
@@ -126,7 +127,11 @@ fn fingerprint_matches(rule: &FingerprintRule, device: &DeviceIdentity<'_>) -> b
         && match rule.endpoints {
             None => true,
             Some(rules) => {
-                let ids: &[u8] = &device.endpoints.iter().map(|endpoint| endpoint.id).collect::<Vec<_>>();
+                let ids: &[u8] = &device
+                    .endpoints
+                    .iter()
+                    .map(|endpoint| endpoint.id)
+                    .collect::<Vec<_>>();
                 let expected: &[u8] = &rules.iter().filter_map(|rule| rule.id).collect::<Vec<_>>();
                 ids.len() == expected.len()
                     && ids.iter().all(|id| expected.contains(id))
@@ -153,9 +158,7 @@ pub fn match_definition(device: &DeviceIdentity<'_>) -> Option<&'static Definiti
         let definition = candidate(*index);
         for fingerprint in definition.fingerprints {
             let matched = fingerprint_matches(fingerprint, device);
-            if matched
-                && selected.map_or(true, |(_, priority)| fingerprint.priority > priority)
-            {
+            if matched && selected.map_or(true, |(_, priority)| fingerprint.priority > priority) {
                 selected = Some((definition, fingerprint.priority));
             }
         }

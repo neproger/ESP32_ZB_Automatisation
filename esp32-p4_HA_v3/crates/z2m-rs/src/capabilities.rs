@@ -1,9 +1,12 @@
 //! Shared Zigbee capabilities. Profiles compose these fragments; they do not
 //! describe device families or models.
 
-use crate::properties::{BATTERY, BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, HUMIDITY, OCCUPANCY, STATE, TEMPERATURE, VOLTAGE};
+use crate::properties::{
+    BATTERY, BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, HUMIDITY, OCCUPANCY, STATE, TEMPERATURE,
+    VOLTAGE,
+};
 use crate::{
-    AttributeFrameView, AttributeRule, AttrType, ColorValue, Command, CommandCodec, CommandMap,
+    AttrType, AttributeFrameView, AttributeRule, ColorValue, Command, CommandCodec, CommandMap,
     ConfigureEndpoint, ConfigurePlan, ConfigureStep, Converter, Decoded, Expose, Scale, Unit,
     Update, Value,
 };
@@ -409,8 +412,8 @@ mod tests {
         to: DIM_CT_TO,
         configure: Some(&DIM_CT_CONFIGURE),
         omit_optional_params: false,
-    turns_off_at_brightness_1: false,
-    support: Support::IDENTIFIED
+        turns_off_at_brightness_1: false,
+        support: Support::IDENTIFIED
             .union(Support::DECODED)
             .union(Support::CONTROLLED),
     };
@@ -424,8 +427,10 @@ mod tests {
         to: &[COLOR_XY_TO, COLOR_HS_TO],
         configure: None,
         omit_optional_params: false,
-    turns_off_at_brightness_1: false,
-    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+        turns_off_at_brightness_1: false,
+        support: Support::IDENTIFIED
+            .union(Support::DECODED)
+            .union(Support::CONTROLLED),
     };
 
     static ENHANCED_PROFILE: Profile = Profile {
@@ -437,8 +442,10 @@ mod tests {
         to: &[COLOR_ENHANCED_TO],
         configure: None,
         omit_optional_params: false,
-    turns_off_at_brightness_1: false,
-    support: Support::IDENTIFIED.union(Support::DECODED).union(Support::CONTROLLED),
+        turns_off_at_brightness_1: false,
+        support: Support::IDENTIFIED
+            .union(Support::DECODED)
+            .union(Support::CONTROLLED),
     };
 
     fn color_updates<'a>(profile: &Profile, payload: &'a [u8]) -> Vec<Update> {
@@ -485,7 +492,10 @@ mod tests {
             update,
             Update::Property {
                 property: COLOR,
-                value: Value::Color(ColorValue::Xy { x: Some(_), y: None }),
+                value: Value::Color(ColorValue::Xy {
+                    x: Some(_),
+                    y: None
+                }),
             }
         )));
     }

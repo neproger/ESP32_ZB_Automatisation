@@ -100,6 +100,13 @@ impl Registry {
     pub fn profile_for(&self, ieee: u64) -> Result<Option<&'static z2m_rs::Profile>, Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;
+        if record.definition_id == crate::standard::STANDARD_PROFILE_ID {
+            return Ok(Some(&crate::standard::STANDARD_PROFILE));
+        }
+        if let Some(profile) = z2m_rs::profile_by_id(record.definition_id) {
+            return Ok(Some(profile));
+        }
+        // Records written before `definition_id` was resolvable keep working.
         Ok(z2m_rs::identify(&Interview {
             manufacturer: Some(record.manufacturer),
             model: record.model,
@@ -210,6 +217,19 @@ mod tests {
     }
 
     #[test]
+    fn standard_definition_restores_standard_profile() {
+        let mut flash = flash();
+        let mut registry = Registry::format(&mut flash, 4).unwrap();
+        let mut record = record();
+        record.definition_id = crate::standard::STANDARD_PROFILE_ID;
+        registry.put(&mut flash, &record).unwrap();
+
+        let restarted = Registry::open(&mut flash, 4).unwrap();
+        let profile = restarted.profile_for(IEEE).unwrap().unwrap();
+        assert_eq!(profile.id, crate::standard::STANDARD_PROFILE_ID);
+    }
+
+    #[test]
     fn configured_version_is_explicit_and_updated() {
         let mut flash = flash();
         let mut registry = Registry::format(&mut flash, 4).unwrap();
@@ -217,7 +237,15 @@ mod tests {
         registry.set_configured(&mut flash, IEEE, 1).unwrap();
 
         let reopened = Registry::open(&mut flash, 4).unwrap();
-        assert_eq!(reopened.slot(IEEE).unwrap().record().unwrap().configured_version, 1);
+        assert_eq!(
+            reopened
+                .slot(IEEE)
+                .unwrap()
+                .record()
+                .unwrap()
+                .configured_version,
+            1
+        );
     }
 
     #[test]

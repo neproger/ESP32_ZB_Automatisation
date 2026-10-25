@@ -1,0 +1,31 @@
+name: host
+
+on:
+  push:
+    paths:
+      - "esp32-p4_HA_v3/crates/**"
+      - "esp32-p4_HA_v3/Cargo.toml"
+      - "esp32-p4_HA_v3/Cargo.lock"
+      - "esp32-p4_HA_v3/docs/**"
+      - ".github/workflows/host.yml"
+  pull_request:
+    paths:
+      - "esp32-p4_HA_v3/crates/**"
+      - "esp32-p4_HA_v3/Cargo.toml"
+      - "esp32-p4_HA_v3/Cargo.lock"
+      - "esp32-p4_HA_v3/docs/**"
+      - ".github/workflows/host.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: esp32-p4_HA_v3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace

@@ -1,47 +1,46 @@
-//! HTTP + binary WebSocket for the copied V2 UI.
+//! HTTP + binary WebSocket for the UI.
 //!
 //! The wire is V2 canonical: 8-byte header, entity frames carry `key + record`
-//! verbatim, `EVENT` carries `ha_event_t`. The UI fetches `/model.bin`; a 404 makes
-//! it fall back to a full WS snapshot, so no model file is generated yet.
-//!
-//! Stub projection: one logical device + one entity + semantic press events. The
-//! rest of the V2 model (properties/capabilities/groups/automations) is absent.
+//! verbatim, `EVENT` carries `ha_event_t`. The main loop mirrors canonical
+//! records into a bounded model cache; `/ws` sends a snapshot on connect and
+//! every change afterwards. `/model.bin` stays 404 on purpose: the UI falls back
+//! to a full WS snapshot.
 
 use std::ffi::c_char;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 
 use esp_idf_svc::sys::*;
-use ha_web::{control, entity, write_frame, HEADER_LEN};
+use ha_web::{command, control, write_frame};
 
 const INDEX: &[u8] = include_bytes!("../../../web/ui/index.html.gz");
 const APP_JS: &[u8] = include_bytes!("../../../web/ui/app.js.gz");
 const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
-const ENTITY_ID: u64 = 0x0100_0000_0000_0001;
-const DEVICE_NAME: &str = "TS0041 button";
-const DEVICE_MODEL: &str = "TS0041";
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
+const MAX_CLIENTS: usize = 4;
+const MAX_MODEL: usize = 192;
 
-#[derive(Clone, Copy, Default)]
-struct DeviceView {
-    eui64: u64,
-    action: u8,
-    count: u16,
+struct ModelEntry {
+    frame_type: u8,
+    key: Vec<u8>,
+    payload: Vec<u8>,
 }
 
-static VIEW: Mutex<DeviceView> = Mutex::new(DeviceView {
-    eui64: 0,
-    action: 0,
-    count: 0,
-});
+static MODEL: Mutex<Vec<ModelEntry>> = Mutex::new(Vec::new());
 static CLIENTS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
+static SEQ: AtomicU16 = AtomicU16::new(0);
+
+extern "C" {
+    fn zb_poc_open_network(seconds: u8) -> i32;
+}
 
 pub fn start() -> bool {
     let mut config: httpd_config_t = unsafe { std::mem::zeroed() };
     config.server_port = 80;
     config.ctrl_port = 32768;
-    config.max_open_sockets = 4;
+    config.max_open_sockets = MAX_CLIENTS as u16 + 1;
     config.max_uri_handlers = 8;
     config.max_resp_headers = 8;
     config.backlog_conn = 5;
@@ -73,42 +72,91 @@ pub fn start() -> bool {
     ok
 }
 
-pub fn publish(eui64: u64, action: u8, count: u16) {
-    {
-        let mut view = VIEW.lock().unwrap();
-        *view = DeviceView {
-            eui64,
-            action,
-            count,
-        };
+/// Mirrors one canonical record; an unchanged record is not broadcast again.
+pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
+    let mut payload = Vec::with_capacity(key.len() + record.len());
+    payload.extend_from_slice(key);
+    payload.extend_from_slice(record);
+    let changed = {
+        let mut model = MODEL.lock().unwrap();
+        match model
+            .iter_mut()
+            .find(|entry| entry.frame_type == frame_type && entry.key.as_slice() == key)
+        {
+            Some(entry) if entry.payload == payload => false,
+            Some(entry) => {
+                entry.payload = payload.clone();
+                true
+            }
+            None => {
+                if model.len() == MAX_MODEL {
+                    model.remove(0);
+                }
+                model.push(ModelEntry {
+                    frame_type,
+                    key: key.to_vec(),
+                    payload: payload.clone(),
+                });
+                true
+            }
+        }
+    };
+    if changed {
+        broadcast_one(frame_type, &payload);
     }
+}
+
+pub fn publish_event(entity_id: u64, event_id: u32) {
+    // ha_event_t: id u32, padding, source_entity u64, ha_value_t NONE.
+    let mut payload = [0u8; 24];
+    payload[0..4].copy_from_slice(&event_id.to_le_bytes());
+    payload[8..16].copy_from_slice(&entity_id.to_le_bytes());
+    broadcast_one(control::EVENT, &payload);
+}
+
+fn next_seq() -> u16 {
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+fn broadcast_one(frame_type: u8, payload: &[u8]) {
     let handle = match *SERVER.lock().unwrap() {
         Some(handle) => handle,
         None => return,
     };
-    let mut seq = 0u16;
-    let view = DeviceView {
-        eui64,
-        action,
-        count,
-    };
-    // Keep the entity known to clients opened before the first press, then the event.
-    let mut frames = snapshot_frames(&view, &mut seq);
-    frames.retain(|frame| {
-        frame.len() > HEADER_LEN && frame[1] != control::SYNC_BEGIN && frame[1] != control::SYNC_END
-    });
-    frames.push(event_frame(&view, &mut seq));
-
+    let mut frame = Vec::new();
+    write_frame(&mut frame, next_seq(), frame_type, payload);
+    let mut ws = ws_frame(&frame);
     let mut clients = CLIENTS.lock().unwrap();
-    for bytes in frames {
-        let mut frame = ws_frame(&bytes);
-        clients.retain(|fd| unsafe {
-            httpd_ws_send_frame_async(handle as httpd_handle_t, *fd, &mut frame) == ESP_OK
-        });
-        if clients.is_empty() {
-            break;
-        }
+    if clients.is_empty() {
+        return;
     }
+    clients.retain(|fd| unsafe {
+        httpd_ws_send_frame_async(handle as httpd_handle_t, *fd, &mut ws) == ESP_OK
+    });
+}
+
+fn snapshot_frames() -> Vec<Vec<u8>> {
+    let entries: Vec<(u8, Vec<u8>)> = {
+        let model = MODEL.lock().unwrap();
+        model
+            .iter()
+            .map(|entry| (entry.frame_type, entry.payload.clone()))
+            .collect()
+    };
+    let count = entries.len() as u32;
+    let mut frames = Vec::with_capacity(entries.len() + 2);
+    let mut begin = Vec::new();
+    write_frame(&mut begin, next_seq(), control::SYNC_BEGIN, &count.to_le_bytes());
+    frames.push(begin);
+    for (frame_type, payload) in entries {
+        let mut frame = Vec::new();
+        write_frame(&mut frame, next_seq(), frame_type, &payload);
+        frames.push(frame);
+    }
+    let mut end = Vec::new();
+    write_frame(&mut end, next_seq(), control::SYNC_END, &count.to_le_bytes());
+    frames.push(end);
+    frames
 }
 
 fn register(
@@ -165,14 +213,14 @@ unsafe extern "C" fn css_handler(req: *mut httpd_req_t) -> esp_err_t {
 }
 
 unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
-    // No model file yet: the UI falls back to a full WS snapshot.
+    // No model file: the UI falls back to a full WS snapshot.
     httpd_resp_set_status(req, b"404 Not Found\0".as_ptr() as *const c_char);
     httpd_resp_send(req, b"\0".as_ptr() as *const c_char, 0);
     ESP_OK
 }
 
 unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; 160];
     let mut frame: httpd_ws_frame_t = std::mem::zeroed();
     frame.payload = buf.as_mut_ptr();
     if httpd_ws_recv_frame(req, &mut frame, buf.len()) != ESP_OK {
@@ -182,30 +230,61 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
         return ESP_OK;
     }
     let len = frame.len.min(buf.len());
-    // COMMAND frame: header[0..8], payload[0] = command id.
-    if len >= 9 && buf[1] == control::COMMAND && buf[8] == command_snapshot() {
-        let fd = httpd_req_to_sockfd(req);
-        {
-            let mut clients = CLIENTS.lock().unwrap();
-            if !clients.contains(&fd) {
-                clients.push(fd);
+    if len < 9 || buf[1] != control::COMMAND {
+        return ESP_OK;
+    }
+    match buf[8] {
+        command::SNAPSHOT | command::SNAPSHOT_STATE => {
+            let fd = httpd_req_to_sockfd(req);
+            {
+                let mut clients = CLIENTS.lock().unwrap();
+                if !clients.contains(&fd) {
+                    if clients.len() < MAX_CLIENTS {
+                        clients.push(fd);
+                    } else {
+                        log::warn!("ws: client limit reached, {fd} ignored");
+                    }
+                }
+            }
+            for bytes in snapshot_frames() {
+                let mut frame = ws_frame(&bytes);
+                if httpd_ws_send_frame(req, &mut frame) != ESP_OK {
+                    log::warn!("ws snapshot send failed");
+                    break;
+                }
             }
         }
-        let view = *VIEW.lock().unwrap();
-        let mut seq = 0u16;
-        for bytes in snapshot_frames(&view, &mut seq) {
-            let mut frame = ws_frame(&bytes);
-            if httpd_ws_send_frame(req, &mut frame) != ESP_OK {
-                log::warn!("ws snapshot send failed");
-                break;
+        command::PROPERTY_COMMAND => property_command(&buf[9..len]),
+        command::DISCOVERY => {
+            if len >= 10 {
+                let seconds = buf[9];
+                let result = zb_poc_open_network(seconds);
+                if result != 0 {
+                    log::warn!("ws: open network failed ({result})");
+                } else {
+                    log::info!("ws: network open for {seconds}s");
+                }
             }
         }
+        _ => {}
     }
     ESP_OK
 }
 
-const fn command_snapshot() -> u8 {
-    ha_web::command::SNAPSHOT
+/// `ha_property_command_t` (32 bytes): entity u64@0, property i32@8, action u8@12,
+/// kind i32@16, scalar/xy @20/@24.
+fn property_command(payload: &[u8]) {
+    let Some(command) = ha_web::parse_property_command(payload) else {
+        return;
+    };
+    if let Err(error) = crate::intake::enqueue(
+        command.entity,
+        command.property,
+        u32::from(command.action),
+        command.value,
+    ) {
+        log::warn!("command intake full, rejected: {error:?}");
+    }
 }
 
 fn ws_frame(bytes: &[u8]) -> httpd_ws_frame_t {
@@ -213,54 +292,6 @@ fn ws_frame(bytes: &[u8]) -> httpd_ws_frame_t {
     frame.type_ = httpd_ws_type_t_HTTPD_WS_TYPE_BINARY;
     frame.payload = bytes.as_ptr() as *mut u8;
     frame.len = bytes.len();
-    frame
-}
-
-fn snapshot_frames(view: &DeviceView, seq: &mut u16) -> Vec<Vec<u8>> {
-    let count = u32::from(view.eui64 != 0) * 2;
-    let mut frames = Vec::with_capacity(4);
-    let mut begin = Vec::new();
-    write_frame(&mut begin, *seq, control::SYNC_BEGIN, &count.to_le_bytes());
-    *seq = seq.wrapping_add(1);
-    frames.push(begin);
-    if view.eui64 != 0 {
-        let mut payload = Vec::with_capacity(88);
-        payload.extend_from_slice(&ha_web::entity_key(view.eui64));
-        payload.extend_from_slice(&ha_web::logical_device(
-            0,
-            1, // Zigbee adapter source
-            DEVICE_MODEL,
-            DEVICE_NAME,
-        ));
-        let mut frame = Vec::new();
-        write_frame(&mut frame, *seq, entity::LOGICAL_DEVICE, &payload);
-        *seq = seq.wrapping_add(1);
-        frames.push(frame);
-
-        let mut payload = Vec::with_capacity(48);
-        payload.extend_from_slice(&ha_web::entity_key(ENTITY_ID));
-        payload.extend_from_slice(&ha_web::entity(view.eui64, "Button"));
-        let mut frame = Vec::new();
-        write_frame(&mut frame, *seq, entity::ENTITY, &payload);
-        *seq = seq.wrapping_add(1);
-        frames.push(frame);
-    }
-    let mut end = Vec::new();
-    write_frame(&mut end, *seq, control::SYNC_END, &count.to_le_bytes());
-    frames.push(end);
-    frames
-}
-
-fn event_frame(view: &DeviceView, seq: &mut u16) -> Vec<u8> {
-    // ha_event_t: id i32, padding, source_entity u64, ha_value_t (kind + union).
-    let mut payload = [0u8; 24];
-    let id = u32::from(view.action) + 1; // 1 single, 2 double, 3 hold
-    payload[0..4].copy_from_slice(&id.to_le_bytes());
-    payload[8..16].copy_from_slice(&ENTITY_ID.to_le_bytes());
-    payload[16..20].copy_from_slice(&0i32.to_le_bytes()); // HA_VALUE_NONE
-    let mut frame = Vec::new();
-    write_frame(&mut frame, *seq, control::EVENT, &payload);
-    *seq = seq.wrapping_add(1);
     frame
 }
 
@@ -281,4 +312,3 @@ unsafe fn serve(req: *mut httpd_req_t, content_type: &str, body: &'static [u8]) 
     drop(ct);
     err
 }
-

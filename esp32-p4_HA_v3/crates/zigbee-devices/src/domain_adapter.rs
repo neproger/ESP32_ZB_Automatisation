@@ -3,13 +3,13 @@
 
 use ha_domain::canonical::{
     device_id_derive, zigbee_entity_id, DeviceId, EntityId, EntityRecord, LogicalDeviceRecord,
-    PropertyId, StateKey, StateRecord, ENTITY_CAPABILITIES, ENTITY_ENTITY,
-    ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, SOURCE_ZIGBEE,
+    PropertyId, StateKey, StateRecord, ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_LOGICAL_DEVICE,
+    ENTITY_PROPERTY_STATE, SOURCE_ZIGBEE,
 };
 use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
 
-use crate::canonical::profile_capabilities;
+use crate::projection::profile_capabilities;
 use crate::standard;
 
 pub const STATE_CAPACITY: usize = 64;
@@ -98,10 +98,7 @@ impl<'a> DomainAdapter<'a> {
         name: &str,
         profile: &Profile,
     ) -> Result<(EntityId, bool), ha_domain::Error> {
-        let device = device_id_derive(
-            SOURCE_ZIGBEE,
-            format!("{uid:016x}").as_bytes(),
-        );
+        let device = device_id_derive(SOURCE_ZIGBEE, format!("{uid:016x}").as_bytes());
         let entity = zigbee_entity_id(uid, endpoint);
         let record = EntityRecord::new(device, name);
         let mut changed = self.domain.entity_put(
@@ -140,14 +137,21 @@ impl<'a> DomainAdapter<'a> {
             ENTITY_ENTITY,
             &entity.to_le_bytes(),
             &record.encode(),
-            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
+            FactMeta {
+                source: SOURCE_ZIGBEE as u8,
+                value: DomainValue::NONE,
+            },
         )?;
-        let caps = standard::capabilities_confirmed(descriptor, &crate::standard::Confirmed::new()).encode();
+        let caps = standard::capabilities_confirmed(descriptor, &crate::standard::Confirmed::new())
+            .encode();
         changed |= self.domain.entity_put(
             ENTITY_CAPABILITIES,
             &entity.to_le_bytes(),
             &caps,
-            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
+            FactMeta {
+                source: SOURCE_ZIGBEE as u8,
+                value: DomainValue::NONE,
+            },
         )?;
         Ok((entity, changed))
     }
@@ -161,7 +165,10 @@ impl<'a> DomainAdapter<'a> {
             ENTITY_CAPABILITIES,
             &entity.to_le_bytes(),
             &capabilities.encode(),
-            FactMeta { source: SOURCE_ZIGBEE as u8, value: DomainValue::NONE },
+            FactMeta {
+                source: SOURCE_ZIGBEE as u8,
+                value: DomainValue::NONE,
+            },
         )
     }
 
@@ -184,11 +191,7 @@ impl<'a> DomainAdapter<'a> {
         )
     }
 
-    pub fn read_state(
-        &self,
-        entity: EntityId,
-        property: PropertyId,
-    ) -> Option<DomainValue> {
+    pub fn read_state(&self, entity: EntityId, property: PropertyId) -> Option<DomainValue> {
         let key = StateKey { entity, property }.to_bytes();
         let mut bytes = [0u8; ha_domain::canonical::STATE_RECORD_LEN];
         self.domain
@@ -197,7 +200,10 @@ impl<'a> DomainAdapter<'a> {
         DomainValue::from_bytes(&bytes)
     }
 
-    pub fn read_capabilities(&self, entity: EntityId) -> Option<[u8; ha_domain::canonical::CAPABILITIES_LEN]> {
+    pub fn read_capabilities(
+        &self,
+        entity: EntityId,
+    ) -> Option<[u8; ha_domain::canonical::CAPABILITIES_LEN]> {
         let mut bytes = [0u8; ha_domain::canonical::CAPABILITIES_LEN];
         self.domain
             .entity_get(ENTITY_CAPABILITIES, &entity.to_le_bytes(), &mut bytes)

@@ -791,6 +791,9 @@ dependencies = [
 [[package]]
 name = "ha-web"
 version = "0.1.0"
+dependencies = [
+ "ha-domain",
+]
 
 [[package]]
 name = "hash32"
@@ -1785,6 +1788,7 @@ name = "zigbee-devices"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+ "log",
  "micro-db",
  "z2m-rs",
  "zigbee-exec",

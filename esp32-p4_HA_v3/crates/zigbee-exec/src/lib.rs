@@ -73,7 +73,6 @@ impl AttributeList {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Payload {
     bytes: [u8; MAX_PAYLOAD],
@@ -140,9 +139,13 @@ pub enum RequestKind {
         expect: Expect,
     },
     /// Completed by the SDK ZDO callback; no TSN waiter is used.
-    ZdoBind { cluster: u16 },
+    ZdoBind {
+        cluster: u16,
+    },
     ZdoActiveEndpoints,
-    ZdoSimpleDescriptor { endpoint: u8 },
+    ZdoSimpleDescriptor {
+        endpoint: u8,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,7 +189,10 @@ pub struct EndpointList {
 
 impl EndpointList {
     pub const fn new() -> Self {
-        Self { items: [0; 8], len: 0 }
+        Self {
+            items: [0; 8],
+            len: 0,
+        }
     }
     pub fn push(&mut self, endpoint: u8) -> bool {
         let index = usize::from(self.len);
@@ -213,7 +219,10 @@ pub struct ClusterList {
 
 impl ClusterList {
     pub const fn new() -> Self {
-        Self { items: [0; 16], len: 0 }
+        Self {
+            items: [0; 16],
+            len: 0,
+        }
     }
     pub fn push(&mut self, cluster: u16) -> bool {
         let index = usize::from(self.len);
@@ -456,15 +465,7 @@ impl Executor {
                     status,
                     read,
                 } => self.on_response(
-                    src,
-                    endpoint,
-                    cluster,
-                    command,
-                    tsn,
-                    rsp_to_cmd,
-                    status,
-                    read,
-                    now,
+                    src, endpoint, cluster, command, tsn, rsp_to_cmd, status, read, now,
                 ),
                 Event::ZdoResult { op, success } => self.on_zdo_result(op, success, now),
                 Event::ZdoActiveEndpoints { op, endpoints } => {
@@ -491,7 +492,9 @@ impl Executor {
             Some(RequestKind::SendZcl { expect, .. }) => expect,
             Some(RequestKind::ReadAttributes { .. }) => Expect::ZclResponse { command: 0x01 },
             Some(RequestKind::ConfigureReporting { .. }) => Expect::ZclResponse { command: 0x07 },
-            Some(RequestKind::ZdoBind { .. }) | Some(RequestKind::ZdoActiveEndpoints) | Some(RequestKind::ZdoSimpleDescriptor { .. }) => {
+            Some(RequestKind::ZdoBind { .. })
+            | Some(RequestKind::ZdoActiveEndpoints)
+            | Some(RequestKind::ZdoSimpleDescriptor { .. }) => {
                 let op = self.ops[index].as_mut().unwrap();
                 op.status = Status::Acknowledged;
                 op.sent_at = now;
@@ -555,13 +558,22 @@ impl Executor {
     }
 
     fn on_zdo_data(&mut self, id: OperationId, data: ZdoData) {
-        let Some(index) = self.find_index(id) else { return; };
+        let Some(index) = self.find_index(id) else {
+            return;
+        };
         let matches = matches!(
             (self.ops[index].as_ref().map(|op| op.request.kind), data),
-            (Some(RequestKind::ZdoActiveEndpoints), ZdoData::ActiveEndpoints(_))
-                | (Some(RequestKind::ZdoSimpleDescriptor { .. }), ZdoData::SimpleDescriptor(_))
+            (
+                Some(RequestKind::ZdoActiveEndpoints),
+                ZdoData::ActiveEndpoints(_)
+            ) | (
+                Some(RequestKind::ZdoSimpleDescriptor { .. }),
+                ZdoData::SimpleDescriptor(_)
+            )
         );
-        if !matches { return; }
+        if !matches {
+            return;
+        }
         self.finish(index, Status::Confirmed, None);
         if let Some(result) = self.results.back_mut() {
             result.zdo = Some(data);
@@ -595,9 +607,15 @@ impl Executor {
             | RequestKind::SendZcl {
                 cluster, expect, ..
             } => (cluster, expect),
-            RequestKind::ReadAttributes { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x01 }),
-            RequestKind::ConfigureReporting { cluster, .. } => (cluster, Expect::ZclResponse { command: 0x07 }),
-            RequestKind::ZdoBind { .. } | RequestKind::ZdoActiveEndpoints | RequestKind::ZdoSimpleDescriptor { .. } => return false,
+            RequestKind::ReadAttributes { cluster, .. } => {
+                (cluster, Expect::ZclResponse { command: 0x01 })
+            }
+            RequestKind::ConfigureReporting { cluster, .. } => {
+                (cluster, Expect::ZclResponse { command: 0x07 })
+            }
+            RequestKind::ZdoBind { .. }
+            | RequestKind::ZdoActiveEndpoints
+            | RequestKind::ZdoSimpleDescriptor { .. } => return false,
         };
         let Event::ZclResponse {
             src,
@@ -635,10 +653,7 @@ impl Executor {
     }
 
     fn buffer_early(&mut self, response: Event, now: u64) {
-        let entry = Early {
-            response,
-            at: now,
-        };
+        let entry = Early { response, at: now };
         if let Some(slot) = self.early.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(entry);
             return;
@@ -694,11 +709,10 @@ impl Executor {
     }
 
     fn expire(&mut self, now: u64) {
-        let expired: [bool; MAX_OPS] =
-            std::array::from_fn(|index| match &self.ops[index] {
-                Some(op) => !op.status.is_final() && now >= op.deadline,
-                None => false,
-            });
+        let expired: [bool; MAX_OPS] = std::array::from_fn(|index| match &self.ops[index] {
+            Some(op) => !op.status.is_final() && now >= op.deadline,
+            None => false,
+        });
         for (index, expired) in expired.iter().enumerate() {
             if *expired {
                 self.finish(index, Status::Expired, None);
@@ -941,7 +955,11 @@ mod tests {
             short: SHORT,
             endpoint: EP,
             sleepy: false,
-            retry: if idempotent { RetryPolicy::SAFE } else { RetryPolicy::NEVER },
+            retry: if idempotent {
+                RetryPolicy::SAFE
+            } else {
+                RetryPolicy::NEVER
+            },
             expiry_ms: 10_000,
             timeout_ms: 1_000,
             kind: RequestKind::Zcl {
@@ -1213,7 +1231,10 @@ mod tests {
         assert!(transport.sent.iter().any(|sent| sent.op == other_id));
         exec.device_awake(SHORT);
         run(&mut exec, &mut transport, 1_100);
-        assert_eq!(transport.sent.iter().filter(|sent| sent.op == id).count(), 2);
+        assert_eq!(
+            transport.sent.iter().filter(|sent| sent.op == id).count(),
+            2
+        );
         transport.confirm(id, 4, true);
         run(&mut exec, &mut transport, 1_110);
         assert_eq!(exec.take_result().unwrap().status, Status::Acknowledged);
@@ -1273,5 +1294,3 @@ mod tests {
         assert_eq!(exec.take_result().unwrap().status, Status::Failed);
     }
 }
-
-

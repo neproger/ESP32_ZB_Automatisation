@@ -3,7 +3,7 @@ use z2m_rs::capabilities::{
     TEMPERATURE_ATTR,
 };
 use z2m_rs::{
-    decode_frame, AttributeFrameView, AttrType, AttributeRule, Converter, Decoded, Profile, Scale,
+    decode_frame, AttrType, AttributeFrameView, AttributeRule, Converter, Decoded, Profile, Scale,
     Update, Value,
 };
 
@@ -58,7 +58,9 @@ fn sensor_converters_match_zhc_javascript() {
         let cluster = u16::from_str_radix(fields.next().expect("cluster"), 16).expect("cluster");
         let payload: Vec<u8> = (0..fields.next().expect("payload").len())
             .step_by(2)
-            .map(|index| u8::from_str_radix(&line.split('\t').nth(2).unwrap()[index..index + 2], 16).unwrap())
+            .map(|index| {
+                u8::from_str_radix(&line.split('\t').nth(2).unwrap()[index..index + 2], 16).unwrap()
+            })
             .collect();
         let expected = fields.next().expect("expected");
         let frame = AttributeFrameView::parse(cluster, 1, 0x0A, &payload).expect("frame");
@@ -73,14 +75,29 @@ fn sensor_converters_match_zhc_javascript() {
         if let Some(value) = expected.strip_prefix("f32:") {
             let wanted: f32 = value.parse().unwrap();
             let actual = match update {
-                Update::Property { value: Value::Float(value), .. } => *value,
-                Update::Property { value: Value::Int(value), .. } => *value as f32,
+                Update::Property {
+                    value: Value::Float(value),
+                    ..
+                } => *value,
+                Update::Property {
+                    value: Value::Int(value),
+                    ..
+                } => *value as f32,
                 _ => panic!("{kind}: expected number, got {update:?}"),
             };
-            assert!((actual - wanted).abs() < 1e-5, "{kind}: {actual} != {wanted}");
+            assert!(
+                (actual - wanted).abs() < 1e-5,
+                "{kind}: {actual} != {wanted}"
+            );
         } else if let Some(value) = expected.strip_prefix("bool:") {
             let wanted = value == "true";
-            assert_eq!(update, &Update::Property { property: z2m_rs::properties::OCCUPANCY, value: Value::Bool(wanted) });
+            assert_eq!(
+                update,
+                &Update::Property {
+                    property: z2m_rs::properties::OCCUPANCY,
+                    value: Value::Bool(wanted)
+                }
+            );
         } else {
             panic!("unknown expected {expected}");
         }

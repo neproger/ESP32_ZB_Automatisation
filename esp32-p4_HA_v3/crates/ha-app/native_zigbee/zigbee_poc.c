@@ -5,6 +5,7 @@
  * колбэки оттуда, поэтому наружу выходит только копия события в кольцевой буфер
  * фиксированного размера. Rust читает её опросом, буферы SDK не пересекают границу.
  */
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -65,6 +66,8 @@ int zb_poc_poll(poc_event_t *out)
     if (s_tail == s_head) {
         return 0;
     }
+    /* Pairs with the release fence in queue_push: read the slot after head. */
+    atomic_thread_fence(memory_order_acquire);
     *out = s_queue[s_tail % POC_QUEUE_LEN];
     s_tail++;
     return 1;
@@ -77,6 +80,8 @@ static void queue_push(const poc_event_t *event)
         return;
     }
     s_queue[s_head % POC_QUEUE_LEN] = *event;
+    /* Publish the slot before the consumer can observe the new head. */
+    atomic_thread_fence(memory_order_release);
     s_head++;
 }
 
@@ -88,46 +93,17 @@ static void open_network(void)
     }
 }
 
-static void bind_result(const ezb_zdp_bind_req_result_t *result, void *user_ctx)
+/* UI-requested join window; called from the HTTP task, hence the SDK lock. */
+int zb_poc_open_network(uint8_t seconds)
 {
-    const uint16_t cluster = (uint16_t)(uintptr_t)user_ctx;
-    if (result->error == EZB_ERR_NONE && result->rsp != NULL &&
-        result->rsp->status == EZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "bound cluster=0x%04x", (unsigned)cluster);
-        return;
+    if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+        return -1;
     }
-    ESP_LOGW(TAG, "bind failed cluster=0x%04x error=0x%x status=0x%02x", (unsigned)cluster,
-             (unsigned)result->error, result->rsp != NULL ? (unsigned)result->rsp->status : 0xFFu);
+    const ezb_err_t err = ezb_bdb_open_network(seconds);
+    esp_zigbee_lock_release();
+    return err == EZB_ERR_NONE ? 0 : -1;
 }
 
-/* Кнопка шлёт команду только по записи binding на самом устройстве. */
-static void bind_device(uint64_t uid, uint16_t short_addr, uint8_t endpoint)
-{
-    ezb_extaddr_t coordinator = {0};
-    ezb_nwk_get_extended_address(&coordinator);
-
-    const uint16_t clusters[] = {0x0006u, 0x0001u};
-    for (size_t i = 0; i < sizeof(clusters) / sizeof(clusters[0]); i++) {
-        const ezb_zdo_bind_req_t request = {
-            .dst_nwk_addr = short_addr,
-            .field =
-                {
-                    .src_addr = {.u64 = uid},
-                    .src_ep = endpoint,
-                    .cluster_id = clusters[i],
-                    .dst_addr_mode = EZB_ADDR_MODE_EXT,
-                    .dst_addr = {.extended_addr = coordinator},
-                    .dst_ep = POC_ENDPOINT,
-                },
-            .cb = bind_result,
-            .user_ctx = (void *)(uintptr_t)clusters[i],
-        };
-        if (ezb_zdo_bind_req(&request) != EZB_ERR_NONE) {
-            ESP_LOGW(TAG, "bind not sent: cluster=0x%04x ep=%u", (unsigned)clusters[i],
-                     (unsigned)endpoint);
-        }
-    }
-}
 
 static bool raw_frame_handler(const ezb_zcl_raw_frame_t *raw)
 {
@@ -220,7 +196,6 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
                  (unsigned long long)auth->device_addr.u64, (unsigned)auth->short_addr,
                  (unsigned)auth->type, (unsigned)auth->status);
         if (auth->status == 0u) {
-            bind_device(auth->device_addr.u64, auth->short_addr, POC_ENDPOINT);
             if (s_device_event != NULL) {
                 s_device_event(auth->device_addr.u64, auth->short_addr);
             }
@@ -233,7 +208,6 @@ static bool app_signal_handler(const ezb_app_signal_t *signal)
             ezb_app_signal_get_params(signal);
         ESP_LOGI(TAG, "device announced eui64=%016llx short=0x%04x",
                  (unsigned long long)annce->device_addr.u64, (unsigned)annce->short_addr);
-        bind_device(annce->device_addr.u64, annce->short_addr, POC_ENDPOINT);
         if (s_device_event != NULL) {
             s_device_event(annce->device_addr.u64, annce->short_addr);
         }

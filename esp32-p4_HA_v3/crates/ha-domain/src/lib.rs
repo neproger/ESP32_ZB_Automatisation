@@ -11,9 +11,9 @@
 //!   counts gaps instead of replaying history;
 //! * subscribers only copy a fact into their inbox (V2 `try_push` contract).
 
-mod fact;
 pub mod canonical;
 pub mod command;
+mod fact;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,6 +76,7 @@ pub struct Domain {
     payloads: Ring<Box<[u8]>>,
     payload_max_size: usize,
     commands: Vec<Command>,
+    clock: fn() -> u64,
 }
 
 impl Domain {
@@ -83,6 +84,17 @@ impl Domain {
         journal_capacity: usize,
         payload_capacity: usize,
         payload_max_size: usize,
+    ) -> Result<Self> {
+        Self::new_with_clock(journal_capacity, payload_capacity, payload_max_size, now_ms)
+    }
+
+    /// The firmware has no wall clock until SNTP: pass the same monotonic clock
+    /// the executor uses instead of `SystemTime`.
+    pub fn new_with_clock(
+        journal_capacity: usize,
+        payload_capacity: usize,
+        payload_max_size: usize,
+        clock: fn() -> u64,
     ) -> Result<Self> {
         if payload_max_size == 0 {
             return Err(Error::InvalidSize);
@@ -98,6 +110,7 @@ impl Domain {
             payloads: Ring::new(payload_capacity)?,
             payload_max_size,
             commands: Vec::new(),
+            clock,
         })
     }
 
@@ -187,12 +200,7 @@ impl Domain {
         })
     }
 
-    pub fn entity_remove(
-        &mut self,
-        entity: EntityType,
-        key: &[u8],
-        meta: FactMeta,
-    ) -> Result<()> {
+    pub fn entity_remove(&mut self, entity: EntityType, key: &[u8], meta: FactMeta) -> Result<()> {
         let (key_size, _) = self.desc(entity)?;
         check_key(key, key_size)?;
         check_source(&meta)?;
@@ -317,11 +325,7 @@ impl Domain {
         Ok(())
     }
 
-    pub fn subscribe(
-        &mut self,
-        filter: Filter,
-        sink: impl FnMut(&Fact) -> bool + Send + 'static,
-    ) {
+    pub fn subscribe(&mut self, filter: Filter, sink: impl FnMut(&Fact) -> bool + Send + 'static) {
         self.subscriptions.push(Subscription {
             filter,
             sink: Box::new(sink),
@@ -417,7 +421,7 @@ impl Domain {
         let event_id = self.journal.next_seq();
         let fact = Fact::new(
             event_id,
-            now_ms(),
+            (self.clock)(),
             kind,
             op,
             meta.source,
@@ -503,8 +507,8 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     const DEVICE: EntityType = 1;
     const OTHER: EntityType = 2;
@@ -533,6 +537,23 @@ mod tests {
             source: SOURCE_ZIGBEE,
             value,
         }
+    }
+
+    #[test]
+    fn injected_clock_sets_fact_time() {
+        let mut domain = Domain::new_with_clock(4, 1, 8, || 1_234).unwrap();
+        register_device(&mut domain);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        domain.subscribe(Filter::all(), move |fact| {
+            sink.lock().unwrap().push(fact.ts);
+            true
+        });
+        domain
+            .entity_put(DEVICE, &EUI64, &[0u8; 12], meta(Value::NONE))
+            .unwrap();
+        domain.dispatch_once();
+        assert_eq!(*seen.lock().unwrap(), vec![1_234]);
     }
 
     #[test]
@@ -580,23 +601,41 @@ mod tests {
         register_device(&mut domain);
         let record = [1u8; 12];
 
-        assert_eq!(domain.entity_put(DEVICE, &EUI64, &record, meta(Value::NONE)), Ok(true));
+        assert_eq!(
+            domain.entity_put(DEVICE, &EUI64, &record, meta(Value::NONE)),
+            Ok(true)
+        );
         assert_eq!(domain.entity_meta(DEVICE, &EUI64).unwrap().version, 1);
 
         let mut out = [0u8; 12];
         domain.entity_get(DEVICE, &EUI64, &mut out).unwrap();
         assert_eq!(out, record);
 
-        assert_eq!(domain.entity_put(DEVICE, &EUI64, &record, meta(Value::NONE)), Ok(false));
+        assert_eq!(
+            domain.entity_put(DEVICE, &EUI64, &record, meta(Value::NONE)),
+            Ok(false)
+        );
         assert_eq!(domain.entity_meta(DEVICE, &EUI64).unwrap().version, 1);
 
         let changed = [2u8; 12];
-        assert_eq!(domain.entity_put(DEVICE, &EUI64, &changed, meta(Value::NONE)), Ok(true));
+        assert_eq!(
+            domain.entity_put(DEVICE, &EUI64, &changed, meta(Value::NONE)),
+            Ok(true)
+        );
         assert_eq!(domain.entity_meta(DEVICE, &EUI64).unwrap().version, 2);
 
-        assert_eq!(domain.entity_remove(DEVICE, &EUI64, meta(Value::NONE)), Ok(()));
-        assert_eq!(domain.entity_get(DEVICE, &EUI64, &mut out), Err(Error::NotFound));
-        assert_eq!(domain.entity_remove(DEVICE, &EUI64, meta(Value::NONE)), Err(Error::NotFound));
+        assert_eq!(
+            domain.entity_remove(DEVICE, &EUI64, meta(Value::NONE)),
+            Ok(())
+        );
+        assert_eq!(
+            domain.entity_get(DEVICE, &EUI64, &mut out),
+            Err(Error::NotFound)
+        );
+        assert_eq!(
+            domain.entity_remove(DEVICE, &EUI64, meta(Value::NONE)),
+            Err(Error::NotFound)
+        );
     }
 
     #[test]
@@ -623,21 +662,26 @@ mod tests {
             ),
             Err(Error::InvalidArg)
         );
-        assert_eq!(domain.entity_meta(DEVICE, &EUI64).unwrap_err(), Error::NotFound);
+        assert_eq!(
+            domain.entity_meta(DEVICE, &EUI64).unwrap_err(),
+            Error::NotFound
+        );
     }
 
     #[test]
     fn journal_delivers_only_real_changes_to_matching_subscribers() {
         let mut domain = domain(8);
         register_device(&mut domain);
-        domain.register_entity(EntityDesc {
-            entity: OTHER,
-            key_size: 8,
-            record_size: 4,
-            capacity: 2,
-            backing: Backing::Ram,
-            persist_key: None,
-        }).unwrap();
+        domain
+            .register_entity(EntityDesc {
+                entity: OTHER,
+                key_size: 8,
+                record_size: 4,
+                capacity: 2,
+                backing: Backing::Ram,
+                persist_key: None,
+            })
+            .unwrap();
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
@@ -647,15 +691,25 @@ mod tests {
                 ..Filter::entity(DEVICE)
             },
             move |fact| {
-                sink.lock().unwrap().push((fact.entity, fact.key().to_vec(), fact.value));
+                sink.lock()
+                    .unwrap()
+                    .push((fact.entity, fact.key().to_vec(), fact.value));
                 true
             },
         );
 
-        assert!(domain.entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::NONE)).unwrap());
-        assert!(!domain.entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::NONE)).unwrap());
-        assert!(domain.entity_put(OTHER, &[7u8; 8], &[0u8; 4], meta(Value::NONE)).unwrap());
-        assert!(domain.entity_put(DEVICE, &EUI64, &[2u8; 12], meta(Value::NONE)).unwrap());
+        assert!(domain
+            .entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::NONE))
+            .unwrap());
+        assert!(!domain
+            .entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::NONE))
+            .unwrap());
+        assert!(domain
+            .entity_put(OTHER, &[7u8; 8], &[0u8; 4], meta(Value::NONE))
+            .unwrap());
+        assert!(domain
+            .entity_put(DEVICE, &EUI64, &[2u8; 12], meta(Value::NONE))
+            .unwrap());
 
         assert_eq!(domain.dispatch_once(), 2);
         let seen = seen.lock().unwrap();
@@ -680,7 +734,9 @@ mod tests {
         for value in [1u8, 2, 3] {
             let mut record = [0u8; 12];
             record[0] = value;
-            domain.entity_put(DEVICE, &EUI64, &record, meta(Value::NONE)).unwrap();
+            domain
+                .entity_put(DEVICE, &EUI64, &record, meta(Value::NONE))
+                .unwrap();
         }
         assert_eq!(domain.dispatch_once(), 2);
         assert_eq!(*seen.lock().unwrap(), 2);
@@ -696,14 +752,26 @@ mod tests {
             key: &EUI64,
         };
 
-        assert_eq!(domain.payload_put(Some(target), meta(Value::u32(1)), b"abc"), Ok(1));
-        assert_eq!(domain.payload_put(Some(target), meta(Value::u32(2)), b"defg"), Ok(2));
+        assert_eq!(
+            domain.payload_put(Some(target), meta(Value::u32(1)), b"abc"),
+            Ok(1)
+        );
+        assert_eq!(
+            domain.payload_put(Some(target), meta(Value::u32(2)), b"defg"),
+            Ok(2)
+        );
         let mut buf = [0u8; 8];
         domain.payload_get(2, &mut buf).unwrap();
         assert_eq!(&buf[..4], b"defg");
 
-        assert_eq!(domain.payload_put(Some(target), meta(Value::NONE), b"0123456789"), Err(Error::InvalidSize));
-        assert_eq!(domain.payload_put(Some(target), meta(Value::NONE), b"h"), Ok(3));
+        assert_eq!(
+            domain.payload_put(Some(target), meta(Value::NONE), b"0123456789"),
+            Err(Error::InvalidSize)
+        );
+        assert_eq!(
+            domain.payload_put(Some(target), meta(Value::NONE), b"h"),
+            Ok(3)
+        );
         assert_eq!(domain.payload_get(1, &mut buf), Err(Error::Stale));
         assert_eq!(domain.payload_get(4, &mut buf), Err(Error::NotFound));
         let mut small = [0u8; 0];
@@ -712,7 +780,9 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         domain.subscribe(Filter::kinds(FactKind::Event.bit()), move |fact| {
-            sink.lock().unwrap().push((fact.payload_ref, fact.payload_size, fact.value));
+            sink.lock()
+                .unwrap()
+                .push((fact.payload_ref, fact.payload_size, fact.value));
             true
         });
         assert_eq!(domain.dispatch_once(), 3);
@@ -738,9 +808,15 @@ mod tests {
             entity: DEVICE,
             key: &EUI64,
         };
-        assert_eq!(domain.post(7, &[0xaa, 0x01], Some(target), meta(Value::NONE)), Ok(()));
+        assert_eq!(
+            domain.post(7, &[0xaa, 0x01], Some(target), meta(Value::NONE)),
+            Ok(())
+        );
         assert_eq!(&*args_seen.lock().unwrap(), &[0xaa, 0x01]);
-        assert_eq!(domain.post(8, &[], Some(target), meta(Value::NONE)), Err(Error::NotFound));
+        assert_eq!(
+            domain.post(8, &[], Some(target), meta(Value::NONE)),
+            Err(Error::NotFound)
+        );
 
         let seen = Arc::new(Mutex::new(0u32));
         let sink = Arc::clone(&seen);
@@ -790,7 +866,10 @@ mod tests {
         assert_eq!(domain.dispatch_once(), 3);
         let deltas = deltas.lock().unwrap();
         assert_eq!(
-            deltas.iter().map(|value| value.as_enum().unwrap()).collect::<Vec<_>>(),
+            deltas
+                .iter()
+                .map(|value| value.as_enum().unwrap())
+                .collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
 

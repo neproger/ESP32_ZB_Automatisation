@@ -31,11 +31,7 @@ fn onoff_state_matches_zigbee2mqtt() {
         let decoded = decode(&TS011F, &event(attribute, &[raw])).expect("decoded");
         let updates: Vec<Update> = decoded.updates().copied().collect();
         assert_eq!(updates.len(), 1);
-        let Update::Property {
-            property,
-            value,
-        } = updates[0]
-        else {
+        let Update::Property { property, value } = updates[0] else {
             panic!("expected property");
         };
         assert_eq!(property, properties::STATE);

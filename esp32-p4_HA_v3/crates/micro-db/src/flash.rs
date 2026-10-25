@@ -77,7 +77,11 @@ impl FlashTable {
     }
 
     fn record_len(&self, kind: u8) -> usize {
-        if kind == KIND_SET { self.set_len() } else { self.meta_len() }
+        if kind == KIND_SET {
+            self.set_len()
+        } else {
+            self.meta_len()
+        }
     }
 
     fn bank_base(&self, bank: usize) -> usize {
@@ -231,8 +235,8 @@ impl FlashTable {
                 break;
             }
             let kind = prefix[2];
-            let header_ok = get_u16(&prefix, 0) == RECORD_MAGIC
-                && (kind == KIND_SET || kind == KIND_META);
+            let header_ok =
+                get_u16(&prefix, 0) == RECORD_MAGIC && (kind == KIND_SET || kind == KIND_META);
             if !header_ok {
                 self.torn = self.classify_tail(flash, offset)?;
                 break;
@@ -266,11 +270,7 @@ impl FlashTable {
         Ok(())
     }
 
-    fn classify_tail<F: NorFlash>(
-        &self,
-        flash: &mut F,
-        from: usize,
-    ) -> Result<bool, FlashError> {
+    fn classify_tail<F: NorFlash>(&self, flash: &mut F, from: usize) -> Result<bool, FlashError> {
         let base = self.active_base();
         let mut buf = [0u8; 64];
         let mut run = 0usize;
@@ -428,7 +428,8 @@ impl FlashTable {
         let Some(entry) = self.latest.get(slot as usize).and_then(|entry| *entry) else {
             return Err(FlashError::NotFound);
         };
-        if key_out.len() < self.geometry.key_size || payload_out.len() < self.geometry.payload_size {
+        if key_out.len() < self.geometry.key_size || payload_out.len() < self.geometry.payload_size
+        {
             return Err(FlashError::InvalidSize);
         }
         let base = self.active_base();
@@ -496,7 +497,12 @@ fn get_u16(buf: &[u8], offset: usize) -> u16 {
 }
 
 fn get_u32(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    u32::from_le_bytes([
+        buf[offset],
+        buf[offset + 1],
+        buf[offset + 2],
+        buf[offset + 3],
+    ])
 }
 
 /// Host NOR simulator: erase -> 0xFF, write can only clear bits.
@@ -616,8 +622,12 @@ mod tests {
             generation: 1,
             version: 1,
         };
-        table.append_set(&mut flash, 0, meta, &key(1), &[7; 12]).unwrap();
-        table.append_set(&mut flash, 1, meta, &key(2), &[8; 12]).unwrap();
+        table
+            .append_set(&mut flash, 0, meta, &key(1), &[7; 12])
+            .unwrap();
+        table
+            .append_set(&mut flash, 1, meta, &key(2), &[8; 12])
+            .unwrap();
 
         let mut restarted = FlashTable::open(&mut flash, geometry()).unwrap();
         assert_eq!(restarted.id(), persist_id_bytes("devices"));
@@ -635,10 +645,14 @@ mod tests {
             generation: 1,
             version: 2,
         };
-        restarted.append_set(&mut flash, 0, next, &key(1), &[9; 12]).unwrap();
+        restarted
+            .append_set(&mut flash, 0, next, &key(1), &[9; 12])
+            .unwrap();
         let after = FlashTable::open(&mut flash, geometry()).unwrap();
         let mut payload = [0u8; 12];
-        let (meta, _) = after.read_slot(&mut flash, 0, &mut [0; 8], &mut payload).unwrap();
+        let (meta, _) = after
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .unwrap();
         assert_eq!(meta, next);
         assert_eq!(payload, [9; 12]);
     }
@@ -652,19 +666,25 @@ mod tests {
             generation: 1,
             version: 1,
         };
-        table.append_set(&mut flash, 0, meta, &key(1), &[1; 12]).unwrap();
+        table
+            .append_set(&mut flash, 0, meta, &key(1), &[1; 12])
+            .unwrap();
         let next = FlashMeta {
             used: true,
             generation: 2,
             version: 1,
         };
-        table.append_set(&mut flash, 1, next, &key(2), &[2; 12]).unwrap();
+        table
+            .append_set(&mut flash, 1, next, &key(2), &[2; 12])
+            .unwrap();
         // Remove the commit marker of the last record (simulate power cut).
         let record = RECORD_FIXED + geometry().key_size + geometry().payload_size + RECORD_TAIL;
         let offset = HEADER_SIZE + record + record - 4;
         flash.corrupt(offset, &[0xFF, 0xFF, 0xFF, 0xFF]);
         let mut restarted = FlashTable::open(&mut flash, geometry()).unwrap();
-        assert!(restarted.read_slot(&mut flash, 0, &mut [0; 8], &mut [0; 12]).is_ok());
+        assert!(restarted
+            .read_slot(&mut flash, 0, &mut [0; 8], &mut [0; 12])
+            .is_ok());
         assert_eq!(
             restarted.read_slot(&mut flash, 1, &mut [0; 8], &mut [0; 12]),
             Err(FlashError::NotFound)
@@ -705,7 +725,9 @@ mod tests {
             version: 1,
         };
         for slot in 0..4 {
-            table.append_set(&mut flash, slot, meta, &key(slot as u8), &[0; 12]).unwrap();
+            table
+                .append_set(&mut flash, slot, meta, &key(slot as u8), &[0; 12])
+                .unwrap();
         }
         assert_eq!(
             table.append_set(&mut flash, 0, meta, &key(9), &[0; 12]),
@@ -789,12 +811,28 @@ mod tests {
             generation,
             version,
         };
-        table.append_set(&mut flash, 0, meta(1, 1), &key(1), &[1; 12]).unwrap();
-        table.append_set(&mut flash, 1, meta(1, 1), &key(2), &[2; 12]).unwrap();
-        table.append_set(&mut flash, 2, meta(1, 1), &key(3), &[3; 12]).unwrap();
-        table.append_set(&mut flash, 0, meta(2, 3), &key(1), &[9; 12]).unwrap();
         table
-            .append_meta(&mut flash, 2, FlashMeta { used: false, generation: 2, version: 2 })
+            .append_set(&mut flash, 0, meta(1, 1), &key(1), &[1; 12])
+            .unwrap();
+        table
+            .append_set(&mut flash, 1, meta(1, 1), &key(2), &[2; 12])
+            .unwrap();
+        table
+            .append_set(&mut flash, 2, meta(1, 1), &key(3), &[3; 12])
+            .unwrap();
+        table
+            .append_set(&mut flash, 0, meta(2, 3), &key(1), &[9; 12])
+            .unwrap();
+        table
+            .append_meta(
+                &mut flash,
+                2,
+                FlashMeta {
+                    used: false,
+                    generation: 2,
+                    version: 2,
+                },
+            )
             .unwrap();
         table.compact(&mut flash).unwrap();
         assert_eq!(table.active_bank, 1);
@@ -870,7 +908,11 @@ mod tests {
             .append_set(
                 &mut flash,
                 0,
-                FlashMeta { used: true, generation: 1, version: 1 },
+                FlashMeta {
+                    used: true,
+                    generation: 1,
+                    version: 1,
+                },
                 &key(1),
                 &[7; 12],
             )
@@ -914,7 +956,11 @@ mod tests {
             .append_set(
                 &mut flash,
                 0,
-                FlashMeta { used: true, generation: 1, version: 1 },
+                FlashMeta {
+                    used: true,
+                    generation: 1,
+                    version: 1,
+                },
                 &key(1),
                 &[7; 12],
             )
@@ -949,7 +995,11 @@ mod tests {
                 .append_set(
                     &mut flash,
                     0,
-                    FlashMeta { used: true, generation: 1, version },
+                    FlashMeta {
+                        used: true,
+                        generation: 1,
+                        version,
+                    },
                     &key(1),
                     &[version as u8; 12],
                 )

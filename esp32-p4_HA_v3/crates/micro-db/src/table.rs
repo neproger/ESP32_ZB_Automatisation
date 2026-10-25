@@ -83,7 +83,10 @@ impl<K, V> Table<K, V> {
         if capacity == 0 || capacity >= u32::MAX as usize {
             return Err(Error::InvalidSize);
         }
-        let index_capacity = capacity.checked_mul(2).ok_or(Error::InvalidSize)?.next_power_of_two();
+        let index_capacity = capacity
+            .checked_mul(2)
+            .ok_or(Error::InvalidSize)?
+            .next_power_of_two();
         Ok(Self {
             slots: (0..capacity).map(|_| Slot::free()).collect(),
             free: (0..capacity as u32).collect(),
@@ -222,8 +225,10 @@ impl<K, V> Table<K, V> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = View<'_, K, V>> {
-        self.slots.iter().enumerate().filter_map(move |(slot, entry)| {
-            match (&entry.data, entry.meta.used) {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(move |(slot, entry)| match (&entry.data, entry.meta.used) {
                 (Some((key, payload)), true) => Some(View {
                     slot: slot as u32,
                     meta: entry.meta,
@@ -231,8 +236,7 @@ impl<K, V> Table<K, V> {
                     payload,
                 }),
                 _ => None,
-            }
-        })
+            })
     }
 
     /// Discards every slot (canonical bytes and derived state).
@@ -280,10 +284,7 @@ impl<K, V> Table<K, V> {
             .ok_or(Error::Overflow)?;
         let slot = self.free.swap_remove(position);
         let entry = &mut self.slots[slot as usize];
-        entry.meta = Meta {
-            used: true,
-            ..meta
-        };
+        entry.meta = Meta { used: true, ..meta };
         entry.data = Some((key, payload));
         self.index_insert(slot);
         self.live_count += 1;
@@ -324,15 +325,16 @@ impl<K, V> Table<K, V> {
     where
         K: Hash,
     {
-        let key = &self.slots[slot as usize].data.as_ref().expect("live slot").0;
+        let key = &self.slots[slot as usize]
+            .data
+            .as_ref()
+            .expect("live slot")
+            .0;
         let mut bucket = self.home(key);
         while self.index[bucket as usize].is_some() {
             bucket = self.next_bucket(bucket);
         }
-        self.index[bucket as usize] = Some(IndexEntry {
-            slot,
-            home: bucket,
-        });
+        self.index[bucket as usize] = Some(IndexEntry { slot, home: bucket });
         self.index_of_slot[slot as usize] = bucket;
     }
 
@@ -375,7 +377,11 @@ impl Hasher for Fnv1a {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let mut hash = if self.0 == 0 { 0xcbf29ce484222325 } else { self.0 };
+        let mut hash = if self.0 == 0 {
+            0xcbf29ce484222325
+        } else {
+            self.0
+        };
         for byte in bytes {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x100000001b3);
@@ -434,8 +440,26 @@ mod tests {
     fn stale_and_free_handles_are_rejected() {
         let mut t = table();
         let h = t.allocate(7, (1, 1)).unwrap();
-        assert_eq!(t.update(Handle { slot: h.slot, generation: h.generation + 1 }, (0, 0)), Err(Error::Stale));
-        assert_eq!(t.update(Handle { slot: 99, generation: 1 }, (0, 0)), Err(Error::InvalidArg));
+        assert_eq!(
+            t.update(
+                Handle {
+                    slot: h.slot,
+                    generation: h.generation + 1
+                },
+                (0, 0)
+            ),
+            Err(Error::Stale)
+        );
+        assert_eq!(
+            t.update(
+                Handle {
+                    slot: 99,
+                    generation: 1
+                },
+                (0, 0)
+            ),
+            Err(Error::InvalidArg)
+        );
         t.free(h).unwrap();
         assert_eq!(t.read(h.slot), Err(Error::Stale));
         assert_eq!(t.update(h, (0, 0)), Err(Error::Stale));

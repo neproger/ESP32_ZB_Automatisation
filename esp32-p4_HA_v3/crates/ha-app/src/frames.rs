@@ -4,6 +4,8 @@
 //! Report Attributes) into a bounded inbox slot and returns; the SDK buffer never
 //! crosses the boundary. The main loop drains the inbox, parses borrowed views
 //! and runs `z2m-rs` without allocation.
+//!
+//! `ingest` is the single decode path for both reports and read responses.
 
 use std::sync::Mutex;
 
@@ -107,109 +109,110 @@ pub fn install() {
     log::info!("attribute report sink installed");
 }
 
-/// Drains at most one frame; called from the main loop.
-pub fn process_pending() {
-    let item = INBOX.lock().unwrap().pop();
-    let Some((meta, frame, dropped)) = item else {
-        return;
+/// Decode one attribute frame and push canonical updates. Returns the number of
+/// updates produced. Unknown devices are ignored (interview still pending).
+pub fn ingest(
+    eui: u64,
+    endpoint: u8,
+    cluster: u16,
+    view: &z2m_rs::AttributeFrameView<'_>,
+) -> usize {
+    let Some(profile) = crate::interview::selected_profile(eui) else {
+        return 0;
     };
-
-    if meta.src_ext != 0 {
-        *LAST_DEVICE.lock().unwrap() = Some((meta.src_ext, meta.src_short));
-    }
-
-    match frame.parse() {
-        Ok(view) => {
-            let attributes = view.attributes().count();
-            if meta.cluster == 0x0006 {
+    let mut decoded = z2m_rs::Decoded::default();
+    let standard = profile.id == zigbee_devices::STANDARD_PROFILE_ID;
+    let descriptor = if standard { crate::store::descriptor(eui) } else { None };
+    let standard_endpoint = descriptor.as_ref().and_then(|d| d.endpoint(endpoint));
+    let count = if standard {
+        standard_endpoint
+            .map(|_| {
+                z2m_rs::decode_frame(&zigbee_devices::standard::STANDARD_PROFILE, view, &mut decoded)
+            })
+            .unwrap_or(0)
+    } else {
+        z2m_rs::decode_frame(profile, view, &mut decoded)
+    };
+    let entity = zigbee_devices::zigbee_entity_id(eui, endpoint);
+    if standard {
+        if let Some(ep) = standard_endpoint {
+            if ep.has_server(cluster) {
                 for attr in view.attributes() {
-                    log::debug!(
-                        "attr 0x{:04x} type=0x{:02x} value={:02x?}",
-                        attr.id, attr.zcl_type, attr.value
-                    );
-                }
-            }
-            let Some(profile) = crate::interview::selected_profile(meta.src_ext) else {
-                log::info!(
-                    "attr frame cluster=0x{:04x} attrs={} dropped={} (interview pending)",
-                    meta.cluster,
-                    attributes,
-                    dropped
-                );
-                return;
-            };
-            let mut decoded = z2m_rs::Decoded::default();
-            let standard = profile.id == "standard.zcl";
-            let descriptor = if standard { crate::store::descriptor(meta.src_ext) } else { None };
-            let standard_endpoint = descriptor.as_ref().and_then(|d| d.endpoint(meta.src_ep));
-            let count = if standard {
-                standard_endpoint
-                    .map(|_| {
-                        z2m_rs::decode_frame(
-                            &zigbee_devices::standard::STANDARD_PROFILE,
-                            &view,
-                            &mut decoded,
-                        )
-                    })
-                    .unwrap_or(0)
-            } else {
-                z2m_rs::decode_frame(profile, &view, &mut decoded)
-            };
-            log::info!(
-                "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile={}",
-                meta.src_ext,
-                meta.src_ep,
-                meta.cluster,
-                meta.tsn,
-                meta.rssi,
-                attributes,
-                count,
-                dropped,
-                profile.id
-            );
-            if standard {
-                if let Some(endpoint) = standard_endpoint {
-                    if endpoint.has_server(meta.cluster) {
-                        for attr in view.attributes() {
-                            if zigbee_devices::attribute_capability(meta.cluster, attr.id).is_some() {
-                                crate::interview::confirm_attribute(
-                                    meta.src_ext,
-                                    meta.src_ep,
-                                    meta.cluster,
-                                    attr.id,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            let entity = zigbee_devices::zigbee_entity_id(meta.src_ext, meta.src_ep);
-            if standard {
-                if let Some(endpoint) = standard_endpoint {
-                    let confirmed = crate::interview::confirmed(meta.src_ext);
-                    crate::canonical::push_capabilities(
-                        entity,
-                        zigbee_devices::standard::capabilities_confirmed(endpoint, &confirmed),
-                    );
-                }
-            }
-            for update in decoded.updates() {
-                if standard {
-                    let Some(endpoint) = standard_endpoint else {
+                    let Some(feature) = zigbee_devices::attribute_capability(cluster, attr.id) else {
                         continue;
                     };
-                    if !zigbee_devices::update_is_discovered(endpoint, update) {
-                        continue;
+                    let decoded_feature = decoded
+                        .updates()
+                        .any(|update| zigbee_devices::update_capability(ep, update) == Some(feature));
+                    if decoded_feature {
+                        crate::interview::confirm_attribute(eui, endpoint, cluster, attr.id);
                     }
                 }
-                log::info!("decoded {update:?}");
-                crate::canonical::push(entity, update);
+            }
+            let confirmed = crate::interview::confirmed(eui);
+            crate::bridge::push_capabilities(
+                entity,
+                zigbee_devices::standard::capabilities_confirmed(ep, &confirmed),
+            );
+        }
+    }
+    for update in decoded.updates() {
+        if standard {
+            let Some(ep) = standard_endpoint else { continue; };
+            if !zigbee_devices::update_is_discovered(ep, update) {
+                continue;
             }
         }
-        Err(error) => log::warn!(
-            "malformed attr frame eui64={:016x} cluster=0x{:04x}: {error:?}",
-            meta.src_ext,
-            meta.cluster
-        ),
+        log::info!("decoded {update:?}");
+        crate::bridge::push(entity, update);
+    }
+    count
+}
+
+/// Drains the inbox; called from the main loop. Bounded by `SLOTS` per call.
+pub fn process_pending() {
+    loop {
+        let item = INBOX.lock().unwrap().pop();
+        let Some((meta, frame, dropped)) = item else {
+            return;
+        };
+
+        if meta.src_ext != 0 {
+            *LAST_DEVICE.lock().unwrap() = Some((meta.src_ext, meta.src_short));
+        }
+
+        match frame.parse() {
+            Ok(view) => {
+                let attributes = view.attributes().count();
+                if meta.cluster == 0x0006 {
+                    for attr in view.attributes() {
+                        log::debug!(
+                            "attr 0x{:04x} type=0x{:02x} value={:02x?}",
+                            attr.id, attr.zcl_type, attr.value
+                        );
+                    }
+                }
+                let count = ingest(meta.src_ext, meta.src_ep, meta.cluster, &view);
+                log::info!(
+                    "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile={}",
+                    meta.src_ext,
+                    meta.src_ep,
+                    meta.cluster,
+                    meta.tsn,
+                    meta.rssi,
+                    attributes,
+                    count,
+                    dropped,
+                    crate::interview::selected_profile(meta.src_ext)
+                        .map(|profile| profile.id)
+                        .unwrap_or("interview")
+                );
+            }
+            Err(error) => log::warn!(
+                "malformed attr frame eui64={:016x} cluster=0x{:04x}: {error:?}",
+                meta.src_ext,
+                meta.cluster
+            ),
+        }
     }
 }

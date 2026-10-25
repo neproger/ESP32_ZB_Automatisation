@@ -137,7 +137,7 @@ function decodeValue(payload, atKind, atBits) {
 }
 
 export function clearModel() {
-  for (const m of [semDevices, semEntities, propCapabilities, semAutomations, semGroupItems, semGroupAutomations, groups, locations, settingsMap]) m.clear()
+  for (const m of [semDevices, semEntities, propCapabilities, propEvents, semAutomations, semGroupItems, semGroupAutomations, groups, locations, settingsMap]) m.clear()
 }
 export function clearState() {
   for (const m of [propStates, weatherMap, wifiStatusMap]) m.clear()

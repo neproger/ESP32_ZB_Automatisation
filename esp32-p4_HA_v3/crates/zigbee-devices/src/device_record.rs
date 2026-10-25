@@ -219,7 +219,10 @@ mod tests {
     fn truncation_and_bad_schema_are_rejected() {
         let mut buf = [0u8; MAX_RECORD];
         let len = record(&[9]).encode(&mut buf).unwrap();
-        assert_eq!(DeviceRecord::parse(&buf[..len - 1]), Err(RecordError::Truncated));
+        assert_eq!(
+            DeviceRecord::parse(&buf[..len - 1]),
+            Err(RecordError::Truncated)
+        );
         assert_eq!(
             DeviceRecord::parse(&buf[..HEADER_LEN - 1]),
             Err(RecordError::Truncated)

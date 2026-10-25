@@ -1,15 +1,15 @@
 //! Bridge between HA Command Core and the universal request executor.
 
-use ha_domain::canonical::{CanonicalCommand, CommandValue, EntityId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, PROPERTY_POWER};
+use ha_domain::canonical::{ActionId, CanonicalCommand, CommandValue, EntityId, PropertyId};
 use ha_domain::command::{CommandCore, CommandSink, CommandStatus, OperationToken};
 use ha_domain::Error;
 use zigbee_exec::{
     ExecError, Executor, Expect, Payload, Request, RequestKind, RetryPolicy, Status,
 };
 
-use crate::canonical::{canonical_command, profile_capabilities};
 use crate::descriptor::EndpointDescriptor;
-use crate::standard;
+use crate::projection::{canonical_command, profile_capabilities};
+use crate::standard::{self, Confirmed};
 use z2m_rs::Profile;
 
 pub struct ZigbeeSink<'a> {
@@ -21,7 +21,7 @@ pub struct ZigbeeSink<'a> {
 
 impl CommandSink for ZigbeeSink<'_> {
     fn send(&mut self, command: &CanonicalCommand, now: u64) -> Result<OperationToken, Error> {
-        let mapped = canonical_command(self.profile, command).ok_or(Error::InvalidArg)?;
+        let mapped = canonical_command(command).ok_or(Error::InvalidArg)?;
         let (cluster, zcl_command) =
             z2m_rs::resolve_command(self.profile, &mapped).ok_or(Error::InvalidArg)?;
         let mut bytes = [0u8; 16];
@@ -64,6 +64,7 @@ pub struct Binding {
     pub endpoint: u8,
     pub profile: &'static Profile,
     pub standard: Option<EndpointDescriptor>,
+    pub confirmed: Confirmed,
 }
 
 /// `short` is a network address and changes on rejoin; the EUI64 and entity are
@@ -96,6 +97,7 @@ impl<'a> CommandRouter<'a> {
         core: &mut CommandCore,
         entity: EntityId,
         property: PropertyId,
+        action: ActionId,
         value: CommandValue,
         now: u64,
     ) -> Result<OperationToken, Error> {
@@ -105,8 +107,13 @@ impl<'a> CommandRouter<'a> {
             .find(|binding| binding.entity == entity)
             .copied()
             .ok_or(Error::NotFound)?;
-        let action = command_action(property, &value).ok_or(Error::InvalidArg)?;
-        if !capability_allows(binding.profile, binding.standard.as_ref(), property, action) {
+        if !capability_allows(
+            binding.profile,
+            binding.standard.as_ref(),
+            &binding.confirmed,
+            property,
+            action,
+        ) {
             return Err(Error::InvalidArg);
         }
         let mut sink = ZigbeeSink {
@@ -128,24 +135,15 @@ impl<'a> CommandRouter<'a> {
     }
 }
 
-fn command_action(property: PropertyId, value: &CommandValue) -> Option<u32> {
-    if property == PROPERTY_POWER {
-        return match value {
-            CommandValue::Scalar(v) => v.as_bool().map(|on| if on { ACTION_ON } else { ACTION_OFF }),
-            CommandValue::None | CommandValue::Xy { .. } => None,
-        };
-    }
-    Some(ACTION_SET)
-}
-
 fn capability_allows(
     profile: &Profile,
     standard_endpoint: Option<&EndpointDescriptor>,
+    confirmed: &Confirmed,
     property: PropertyId,
     action: u32,
 ) -> bool {
     if let Some(endpoint) = standard_endpoint {
-        return standard::capability_allows(endpoint, property, action);
+        return standard::capability_allows(endpoint, confirmed, property, action);
     }
     let caps = profile_capabilities(profile);
     caps.properties[..usize::from(caps.property_count)]

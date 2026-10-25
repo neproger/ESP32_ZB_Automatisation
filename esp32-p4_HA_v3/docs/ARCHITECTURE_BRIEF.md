@@ -58,25 +58,24 @@ ESP32-C6: ot_rcp — только IEEE 802.15.4 радио
 ```text
 ha-v3/
   crates/
-    zigbee-core/        # протокол приложения, interview, ZCL, network abstractions
-    zigbee-devices/     # fingerprints, device definitions, converters, Tuya
-    zigbee-transport/   # абстракция координатора (FFI + fake для host-тестов)
-    zigbee-esp/         # P4: ESP-IDF/FFI-адаптер к esp-zigbee-lib (SDK — C)
-    domain/             # доменная модель, commands, confirmed state, delta
-    micro-db/           # универсальное embedded-хранилище
-    automation/         # правила и реакции на события
-    mqtt/               # необязательная независимая интеграция, позднее
+    ha-domain/          # доменная модель, commands, подтверждённое состояние
+    micro-db/           # универсальное embedded-хранилище (ram/flash, ring)
+    z2m-rs/             # порт Z2M: profiles, converters, matcher, configure plans
+    zigbee-devices/     # HA Zigbee Layer: interview, registry, canonical projection
+    zigbee-exec/        # надёжная доставка запросов (TSN, retry, fake transport)
+    zigbee-frames/      # ZCL-кадр для C→Rust границы
+    ha-web/             # бинарный протокол UI (кадры, canonical records)
+    ha-app/             # ESP32-P4 прошивка + C-мост native_zigbee (вне workspace)
   tools/
-    zb-catalog/         # pinned upstream import, генерация, отчёты
+    zhc-compiler/       # pinned upstream import, генерация, отчёты
+    z2m_spike/          # разовые аудиты и golden-фикстуры ZHC
 ```
-
-Названия crates условные; API и физическую структуру репозитория необходимо проверить на практике.
 
 ### Границы модулей
 
 - zigbee-core и zigbee-devices не знают о HA V3, Domain Store, WebSocket, MQTT.
 - zigbee-transport определяет переносимые интерфейсы запросов, ответов и уведомлений координатора.
-- zigbee-esp реализует платформенный транспорт/интеграцию SDK.
+- ha-app/native_zigbee реализует платформенный транспорт/интеграцию SDK.
 - domain принимает нормализованные Zigbee events и обновляет подтверждённое состояние через MicroDB.
 - MQTT, если появится, подписывается на Domain Delta, а не используется как обязательная часть Zigbee.
 
@@ -117,6 +116,11 @@ Command -> Zigbee async -> real report/event -> Domain mutation
 ```
 
 micro_db остается низкоуровневым универсальным storage engine (slot/index/generation/version, RAM/Flash политики, metadata check), не знает о Zigbee и доменной логике. Rust API/порт MicroDB V2 — отдельная задача; не объявляем уже реализованным. Подтвержденное состояние не меняется при одной лишь отправке команды. Одноразовые actions (например, short/double/hold) — события, а не постоянные состояния.
+
+Статус V3: Domain сейчас **RAM-only** (`Backing::Flash` отклоняется), на flash
+хранится только реестр устройств (`zigbee-devices::Registry`). Перенос
+property state/capabilities в MicroDB — следующий этап; до него состояние
+теряется при перезагрузке.
 
 ## 9. Производительность и ограничения
 
@@ -176,7 +180,7 @@ I (179) zigbee_esp: Hello, world!
 - Консоль — `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`.
 - Windows: `libclang` для bindgen (`LIBCLANG_PATH`), `target-dir` вне глубокого
   пути (ограничение esp-idf-sys).
-- Проект: `crates/zigbee-esp` (сборка — см. `README.md`).
+- Проект: `crates/ha-app` (C-мост — `native_zigbee`); сборка — `docs/BUILD.md`.
 
 Следующий шаг PoC: FFI к `esp-zigbee-lib` (P4 coordinator, UART/Spinel к C6),
 C-callback → bounded queue → Rust, событие TS0041.
@@ -196,7 +200,8 @@ WebSocket, UART и LVGL используют одни типы и записи �
 - **`z2m-rs`** — порт системы совместимости Zigbee2MQTT: fingerprints, profiles,
   converters, Tuya DP, CommandMap, configure plans. Не зависит от Domain,
   MicroDB, UI, ESP-IDF и протокола HA; пригоден вне этого проекта;
-- **`zigbee-esp`** — транспорт Espressif SDK (C FFI, Spinel/UART, coordinator);
+- **`ha-app/native_zigbee`** — транспорт Espressif SDK (C FFI, Spinel/UART,
+  coordinator); бывший PoC-крейт `zigbee-esp` теперь часть прошивки;
 - **HA Zigbee Layer** (`zigbee-devices`) — единственный адаптер, который знает обе
   стороны: `z2m-rs` и канонические типы HA. Здесь происходит преобразование
   `DeviceEvent/Action` → `PropertyChanged/Action`, и только здесь.

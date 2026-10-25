@@ -7,12 +7,14 @@ use ha_domain::canonical::{
 };
 use ha_domain::command::{CommandCore, CommandStatus};
 use ha_domain::{Domain, Value as DomainValue};
+use z2m_rs::capabilities::{
+    COLORTEMP_TO, COLOR_XY_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON,
+};
+use z2m_rs::{properties, Fingerprint, Manufacturer, Profile, Support, Update, Value};
 use zigbee_devices::canonical_states;
 use zigbee_devices::{status_from_exec, DomainAdapter, ZigbeeSink};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{Executor, RequestKind, Status};
-use z2m_rs::capabilities::{COLOR_XY_TO, COLORTEMP_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON};
-use z2m_rs::{properties, Fingerprint, Manufacturer, Profile, Support, Update, Value};
 
 const UID: u64 = 0x0012_4B00_0A1B_2C3D;
 const SHORT: u16 = 0x2001;
@@ -70,9 +72,13 @@ fn registration_is_idempotent_and_power_command_does_not_set_reported() {
     let mut adapter = DomainAdapter::new(&mut domain).unwrap();
     assert!(adapter.ensure_device(UID, "Test light").unwrap().1);
     assert!(!adapter.ensure_device(UID, "Test light").unwrap().1);
-    let (entity, changed) = adapter.ensure_entity(UID, 1, "Test light", &PROFILE).unwrap();
+    let (entity, changed) = adapter
+        .ensure_entity(UID, 1, "Test light", &PROFILE)
+        .unwrap();
     assert!(changed);
-    let (again, changed) = adapter.ensure_entity(UID, 1, "Test light", &PROFILE).unwrap();
+    let (again, changed) = adapter
+        .ensure_entity(UID, 1, "Test light", &PROFILE)
+        .unwrap();
     assert_eq!(again, entity);
     assert!(!changed);
     assert!(adapter.read_capabilities(entity).is_some());
@@ -105,7 +111,9 @@ fn registration_is_idempotent_and_power_command_does_not_set_reported() {
         },
     );
     let state = states[0].unwrap();
-    assert!(adapter.write_state(state.entity, state.property, state.value).unwrap());
+    assert!(adapter
+        .write_state(state.entity, state.property, state.value)
+        .unwrap());
     assert_eq!(
         adapter.read_state(entity, PROPERTY_POWER),
         Some(DomainValue::bool(true))
@@ -149,7 +157,9 @@ fn report_without_command_updates_domain() {
         },
     );
     let state = states[0].unwrap();
-    adapter.write_state(state.entity, state.property, state.value).unwrap();
+    adapter
+        .write_state(state.entity, state.property, state.value)
+        .unwrap();
     assert_eq!(
         adapter.read_state(entity, PROPERTY_POWER),
         Some(DomainValue::bool(true))

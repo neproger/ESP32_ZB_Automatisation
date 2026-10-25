@@ -2,11 +2,12 @@
 //! derives canonical ids, projects capabilities and translates values/commands.
 
 use ha_domain::canonical::{
-    device_id_derive, CapabilitiesRecord, Capability, CanonicalCommand, CommandValue, EntityId,
+    device_id_derive, CanonicalCommand, CapabilitiesRecord, Capability, CommandValue, EntityId,
     EventId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, EVENT_DOUBLE_PRESS, EVENT_HOLD,
-    EVENT_SINGLE_PRESS, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_HUE,
-    PROPERTY_COLOR_SATURATION, PROPERTY_COLOR_TEMPERATURE, PROPERTY_COLOR_X, PROPERTY_COLOR_Y,
-    PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY, PROPERTY_POWER, PROPERTY_TEMPERATURE, SOURCE_ZIGBEE,
+    EVENT_SINGLE_PRESS, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS,
+    PROPERTY_COLOR, PROPERTY_COLOR_HUE, PROPERTY_COLOR_SATURATION, PROPERTY_COLOR_TEMPERATURE,
+    PROPERTY_COLOR_X, PROPERTY_COLOR_Y, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE,
+    PROPERTY_OCCUPANCY, PROPERTY_POWER, PROPERTY_TEMPERATURE, SOURCE_ZIGBEE,
 };
 use ha_domain::Value as DomainValue;
 use z2m_rs::{
@@ -24,7 +25,10 @@ pub fn zigbee_device_id(uid: u64) -> ha_domain::canonical::DeviceId {
 
 pub fn profile_capabilities(profile: &Profile) -> CapabilitiesRecord {
     let mut record = CapabilitiesRecord::default();
-    let has_xy = profile.to.iter().any(|map| map.codec == CommandCodec::ColorXy);
+    let has_xy = profile
+        .to
+        .iter()
+        .any(|map| map.codec == CommandCodec::ColorXy);
     for expose in profile.exposes {
         match expose {
             Expose::Binary { property } if *property == properties::STATE => {
@@ -65,8 +69,7 @@ pub fn profile_capabilities(profile: &Profile) -> CapabilitiesRecord {
             }
             Expose::Action(name) => {
                 if let Some(event) = event_for(name) {
-                    let already = record.events[..usize::from(record.event_count)]
-                        .contains(&event);
+                    let already = record.events[..usize::from(record.event_count)].contains(&event);
                     if !already {
                         record.push_event(event);
                     }
@@ -76,8 +79,8 @@ pub fn profile_capabilities(profile: &Profile) -> CapabilitiesRecord {
                 for expose in *inner {
                     if let Expose::Action(name) = expose {
                         if let Some(event) = event_for(name) {
-                            let already = record.events[..usize::from(record.event_count)]
-                                .contains(&event);
+                            let already =
+                                record.events[..usize::from(record.event_count)].contains(&event);
                             if !already {
                                 record.push_event(event);
                             }
@@ -205,7 +208,8 @@ pub fn canonical_states(
                 });
             }
             None
-        }        Update::Property { property, value } if *property == properties::COLOR => {
+        }
+        Update::Property { property, value } if *property == properties::COLOR => {
             if let Value::Color(color) = value {
                 match color {
                     ColorValue::Xy {
@@ -268,11 +272,13 @@ fn scalar(value: &CommandValue) -> Option<f32> {
     let CommandValue::Scalar(value) = value else {
         return None;
     };
-    value.as_f32().or_else(|| value.as_i32().map(|v| v as f32))
+    value
+        .as_f32()
+        .or_else(|| value.as_i32().map(|v| v as f32))
         .or_else(|| value.as_u32().map(|v| v as f32))
 }
 
-pub fn canonical_command(_profile: &Profile, request: &CanonicalCommand) -> Option<Z2mCommand> {
+pub fn canonical_command(request: &CanonicalCommand) -> Option<Z2mCommand> {
     if request.property == PROPERTY_POWER {
         return match request.action {
             ACTION_ON => Some(Z2mCommand::Property {
@@ -321,7 +327,7 @@ pub fn encode_canonical_command(
     request: &CanonicalCommand,
     out: &mut [u8],
 ) -> Option<(u16, u8, usize)> {
-    let command = canonical_command(profile, request)?;
+    let command = canonical_command(request)?;
     let (cluster, zcl_command) = z2m_rs::resolve_command(profile, &command)?;
     let len = z2m_rs::encode(profile, &command, out)?;
     Some((cluster, zcl_command, len))
@@ -333,9 +339,7 @@ mod tests {
     use ha_domain::canonical::{
         ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_COLOR_TEMPERATURE, PROPERTY_POWER,
     };
-    use z2m_rs::capabilities::{
-        COLORTEMP_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON,
-    };
+    use z2m_rs::capabilities::{COLORTEMP_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON};
     use z2m_rs::{Fingerprint, Manufacturer, Profile, Support};
 
     static PROFILE: Profile = Profile {
@@ -367,7 +371,9 @@ mod tests {
     fn capabilities_map_profile_properties() {
         let caps = profile_capabilities(&PROFILE);
         assert_eq!(caps.property_count, 3);
-        assert!(caps.properties[..3].iter().any(|c| c.property == PROPERTY_POWER));
+        assert!(caps.properties[..3]
+            .iter()
+            .any(|c| c.property == PROPERTY_POWER));
         assert!(caps.properties[..3]
             .iter()
             .any(|c| c.property == PROPERTY_BRIGHTNESS));
@@ -427,7 +433,10 @@ mod tests {
             action: ACTION_ON,
             value: CommandValue::None,
         };
-        assert_eq!(encode_canonical_command(&PROFILE, &power, &mut out), Some((0x0006, 0x01, 0)));
+        assert_eq!(
+            encode_canonical_command(&PROFILE, &power, &mut out),
+            Some((0x0006, 0x01, 0))
+        );
 
         let brightness = CanonicalCommand {
             entity: 1,

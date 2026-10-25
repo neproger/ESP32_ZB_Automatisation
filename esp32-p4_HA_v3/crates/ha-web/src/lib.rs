@@ -18,15 +18,69 @@ pub mod control {
 pub mod entity {
     pub const ENTITY: u8 = 14;
     pub const PROPERTY_STATE: u8 = 15;
+    pub const CAPABILITIES: u8 = 16;
     pub const LOGICAL_DEVICE: u8 = 17;
 }
 
-/// Browser -> device command ids used by the current slice.
+/// Browser -> device command ids implemented by the firmware.
 pub mod command {
     pub const SNAPSHOT: u8 = 1;
+    pub const SNAPSHOT_STATE: u8 = 2;
+    pub const DISCOVERY: u8 = 8;
+    pub const PROPERTY_COMMAND: u8 = 19;
 }
 
 pub const HEADER_LEN: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PropertyCommand {
+    pub entity: u64,
+    pub property: u32,
+    pub action: u8,
+    pub value: ha_domain::canonical::CommandValue,
+}
+
+/// `ha_property_command_t` (32 bytes) as sent by the browser:
+/// entity u64@0, property u32@8, action u8@12, value kind u32@16,
+/// scalar kind u32@20, value/xy @24.
+pub fn parse_property_command(payload: &[u8]) -> Option<PropertyCommand> {
+    use ha_domain::canonical::CommandValue;
+    use ha_domain::Value;
+
+    if payload.len() < 32 {
+        return None;
+    }
+    let entity = u64::from_le_bytes(payload[0..8].try_into().ok()?);
+    let property = u32::from_le_bytes(payload[8..12].try_into().ok()?);
+    let action = payload[12];
+    let kind = u32::from_le_bytes(payload[16..20].try_into().ok()?);
+    let value = match kind {
+        1 => {
+            let scalar = u32::from_le_bytes(payload[20..24].try_into().ok()?);
+            let bytes: [u8; 4] = payload[24..28].try_into().ok()?;
+            let value = match scalar {
+                2 => Value::i32(i32::from_le_bytes(bytes)),
+                3 => Value::u32(u32::from_le_bytes(bytes)),
+                4 => Value::f32(f32::from_le_bytes(bytes)),
+                5 => Value::enum_(u32::from_le_bytes(bytes)),
+                _ => return None,
+            };
+            CommandValue::Scalar(value)
+        }
+        2 => CommandValue::Xy {
+            x: f32::from_le_bytes(payload[20..24].try_into().ok()?),
+            y: f32::from_le_bytes(payload[24..28].try_into().ok()?),
+        },
+        0 => CommandValue::None,
+        _ => return None,
+    };
+    Some(PropertyCommand {
+        entity,
+        property,
+        action,
+        value,
+    })
+}
 
 /// Appends one frame to `out`; `seq` is per session.
 pub fn write_frame(out: &mut Vec<u8>, seq: u16, frame_type: u8, payload: &[u8]) {
@@ -111,5 +165,44 @@ mod tests {
         let record = entity(1, "0123456789012345678901234567890123456789");
         assert_eq!(record[8 + 31], 0);
         assert_eq!(record.len(), 40);
+    }
+
+    fn command_bytes(entity: u64, property: u32, action: u8, kind: u32) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[0..8].copy_from_slice(&entity.to_le_bytes());
+        out[8..12].copy_from_slice(&property.to_le_bytes());
+        out[12] = action;
+        out[16..20].copy_from_slice(&kind.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn property_command_reads_power_value_and_color() {
+        use ha_domain::canonical::CommandValue;
+        use ha_domain::Value;
+
+        let entity = 0x1122_3344_5566_7788;
+        let power = parse_property_command(&command_bytes(entity, 1, 1, 0)).unwrap();
+        assert_eq!(power.value, CommandValue::None);
+        assert_eq!(power.action, 1);
+
+        let mut brightness = command_bytes(entity, 2, 4, 1);
+        brightness[20..24].copy_from_slice(&4u32.to_le_bytes());
+        brightness[24..28].copy_from_slice(&50.0f32.to_le_bytes());
+        assert_eq!(
+            parse_property_command(&brightness).unwrap().value,
+            CommandValue::Scalar(Value::f32(50.0))
+        );
+
+        let mut color = command_bytes(entity, 22, 4, 2);
+        color[20..24].copy_from_slice(&0.25f32.to_le_bytes());
+        color[24..28].copy_from_slice(&0.5f32.to_le_bytes());
+        assert_eq!(
+            parse_property_command(&color).unwrap().value,
+            CommandValue::Xy { x: 0.25, y: 0.5 }
+        );
+
+        assert!(parse_property_command(&command_bytes(entity, 1, 1, 9)).is_none());
+        assert!(parse_property_command(&brightness[..31]).is_none());
     }
 }

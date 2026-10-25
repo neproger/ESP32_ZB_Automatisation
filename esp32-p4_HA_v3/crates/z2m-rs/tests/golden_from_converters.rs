@@ -55,7 +55,10 @@ fn normalized(decoded: &Decoded) -> BTreeMap<String, Normalized> {
         };
         if *property == STATE {
             if let Value::Bool(on) = value {
-                out.insert("state".into(), Normalized::Text(if *on { "ON" } else { "OFF" }.into()));
+                out.insert(
+                    "state".into(),
+                    Normalized::Text(if *on { "ON" } else { "OFF" }.into()),
+                );
             }
         } else if *property == BRIGHTNESS {
             if let Value::Int(v) = value {
@@ -125,7 +128,8 @@ fn from_converters_match_normalized_values() {
         }
         let mut fields = line.split('\t');
         let case = fields.next().unwrap();
-        let cluster = u16::from_str_radix(fields.next().unwrap().trim_start_matches("0x"), 16).unwrap();
+        let cluster =
+            u16::from_str_radix(fields.next().unwrap().trim_start_matches("0x"), 16).unwrap();
         let attrs = attrs(fields.next().unwrap());
         let expected = expected(fields.next().unwrap());
 
@@ -134,14 +138,21 @@ fn from_converters_match_normalized_values() {
         decode_frame(&PROFILE, &frame, &mut decoded);
         let actual = normalized(&decoded);
 
-        assert_eq!(actual.len(), expected.len(), "{case}: {actual:?} vs {expected:?}");
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{case}: {actual:?} vs {expected:?}"
+        );
         for (key, want) in &expected {
             match (actual.get(key), want) {
                 (Some(Normalized::Text(got)), Normalized::Text(want)) => {
                     assert_eq!(got, want, "{case}:{key}")
                 }
                 (Some(Normalized::Number(got)), Normalized::Number(want)) => {
-                    assert!((got - want).abs() < 0.001, "{case}:{key} => {got} vs {want}")
+                    assert!(
+                        (got - want).abs() < 0.001,
+                        "{case}:{key} => {got} vs {want}"
+                    )
                 }
                 (got, _) => panic!("{case}:{key} missing/mismatched: {got:?}"),
             }
