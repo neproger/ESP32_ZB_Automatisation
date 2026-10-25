@@ -200,3 +200,19 @@ with no property state for the press. Boot/reboot registration remains stable.
 Pending: Read Attributes values to the same state path (executor results do not
 yet carry cluster/attribute), CommandCore → ZigbeeSink in the app loop, and
 Generic ZCL Send.
+
+## Read Attributes context and CommandCore results in ha-app
+
+`zigbee-exec` keeps a bounded map of completed `(OperationId, Request)` contexts
+(`take_context`), so Read Attributes results can be decoded through the same
+profile decoder as reports without duplicating request data in every result.
+`ha-app` parses successful read payloads as an Attribute frame and pushes the
+decoded updates into the same canonical state path (`ingest_read`).
+
+The app loop also feeds every `OperationResult` into `CommandCore` via
+`status_from_exec`; no command source is wired yet, so this only completes the
+result half of the lifecycle. Confirmed/Acknowledged still do not write
+PROPERTY_STATE.
+
+Pending: a command submission entry point, `ZigbeeSink` usage in the app, and
+Generic ZCL Send for Level/ColorTemp/Color. Host tests: 132; ESP builds.
