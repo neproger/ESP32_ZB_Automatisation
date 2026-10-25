@@ -169,3 +169,18 @@ uses the old TS0041 event path; Domain registration/state routing and command
 submission are the next integration step. ESP transport currently supports
 On/Off commands only; Level/ColorTemp/Color need a generic ZCL send before the
 hardware pass. Read Attributes results can use the same update path when routed.
+
+## ESP boot registration (hardware)
+
+`ha-app` registers restored devices through `DomainAdapter` after `store::init`
+and registers newly identified devices from the interview queue. On P4 both
+existing devices appear in Domain with deterministic canonical entity ids:
+
+- TS0041 EUI a4c1383bf9d62a03 → entity 3fa2248091211240;
+- SNZB-01P EUI 20a716fffef70d5d → entity 274002a78a9cd8bb.
+
+Ids are identical across reboots (Domain is RAM, so it is populated again; the
+identity does not change and no second entity is created for the same seed).
+Button/state routing through the canonical adapter and the command submission
+path are the remaining app wiring; the host lifecycle tests already cover the
+semantics.

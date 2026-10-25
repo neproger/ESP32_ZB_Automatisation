@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
+use zigbee_devices::DomainAdapter;
 
 mod exec;
 mod frames;
@@ -96,6 +97,7 @@ fn main() {
         if let Some(profile) = store::lookup(eui) {
             log::info!("registry: restored profile={} (no interview)", profile.id);
             interview::restore(eui, profile);
+            register_domain(&mut domain, eui, 1, profile);
             configure::ensure(&mut executor, eui, short, now_ms());
         }
     }
@@ -131,6 +133,9 @@ fn main() {
         while let Some((eui, short)) = interview::next_device() {
             executor.device_awake(short);
             ensure_interview(&mut executor, eui, short);
+        }
+        while let Some((eui, _short, profile)) = interview::take_identified() {
+            register_domain(&mut domain, eui, 1, profile);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
@@ -258,6 +263,29 @@ fn start_wifi() {
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
 }
+fn register_domain(
+    domain: &mut Domain,
+    eui: u64,
+    endpoint: u8,
+    profile: &'static z2m_rs::Profile,
+) {
+    let Ok(mut adapter) = DomainAdapter::new(domain) else {
+        log::error!("domain: adapter init failed");
+        return;
+    };
+    if let Err(error) = adapter.ensure_device(eui, profile.id) {
+        log::error!("domain: device {eui:016x} failed: {error:?}");
+        return;
+    }
+    match adapter.ensure_entity(eui, endpoint, profile.id, profile) {
+        Ok((entity, changed)) => log::info!(
+            "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
+            profile.id
+        ),
+        Err(error) => log::error!("domain: entity {eui:016x} failed: {error:?}"),
+    }
+}
+
 fn ensure_interview(executor: &mut zigbee_exec::Executor, eui: u64, short: u16) {
     if eui == 0 {
         return;

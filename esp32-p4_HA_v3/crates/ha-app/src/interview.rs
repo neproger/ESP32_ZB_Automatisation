@@ -50,6 +50,7 @@ impl ProfileMap {
 }
 
 static PROFILES: Mutex<ProfileMap> = Mutex::new(ProfileMap::new());
+static IDENTIFIED: Mutex<Vec<(u64, u16, &'static z2m_rs::Profile)>> = Mutex::new(Vec::new());
 static MANAGER: Mutex<InterviewManager> = Mutex::new(InterviewManager::new());
 
 struct DeviceQueue {
@@ -140,6 +141,14 @@ pub fn on_operation_result(exec: &mut Executor, result: OperationResult, now: u6
         identified.profile.id,
     );
     crate::configure::ensure(exec, identified.eui, identified.short, now);
+    let mut queue = IDENTIFIED.lock().unwrap();
+    if queue.len() < 8 {
+        queue.push((identified.eui, identified.short, identified.profile));
+    }
+}
+
+pub fn take_identified() -> Option<(u64, u16, &'static z2m_rs::Profile)> {
+    IDENTIFIED.lock().unwrap().pop()
 }
 
 pub fn tick(exec: &mut Executor, now: u64) {
