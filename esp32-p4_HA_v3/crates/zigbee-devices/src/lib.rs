@@ -10,8 +10,10 @@ mod domain_adapter;
 mod descriptor;
 mod device_record;
 mod interview;
+mod ownership;
 mod registry;
 
+pub use ownership::{Claim, ClaimKey, ClaimKind, Claims, Owner, Resolution, MAX_CLAIMS};
 pub use interview::{Identified, InterviewManager, COOLDOWN_MS, JOB_SLOTS, MAX_ATTEMPTS, OP_DEADLINE_MS, RETRY_BACKOFF_MS};
 pub use command::{
     status_from_exec, update_binding_short, Binding, CommandRouter, ZigbeeSink,
