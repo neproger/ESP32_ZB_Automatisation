@@ -9,6 +9,9 @@ const { findDefinition, setLogger } = require(path.join(pkg, 'dist/index.js'));
 setLogger({ debug() {}, info() {}, warn() {}, error() {} });
 const modelsIndex = JSON.parse(fs.readFileSync(path.join(pkg, 'dist/models-index.json'), 'utf8'));
 const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../out/catalog_manifest.json'), 'utf8'));
+const idBySource = new Map(
+  manifest.definitions.map((definition) => [`${definition.file}#${definition.index}`, definition.id]),
+);
 
 function normalize(model) {
   return model.replace(/\0(.|\n)*$/g, '').trim();
@@ -73,6 +76,8 @@ function device(fingerprint) {
 
 const categories = {};
 const examples = [];
+const cases = [];
+const seenCases = new Set();
 function note(category, item) {
   const bucket = (categories[category] ??= { cases: 0, matched: 0, different: 0, missing: 0 });
   bucket.cases += 1;
@@ -82,7 +87,55 @@ function note(category, item) {
   if (item.result !== 'matched' && examples.length < 20) examples.push({ category, ...item });
 }
 
-async function check(category, fingerprint, expected, model) {
+function rustString(value) {
+  let out = '"';
+  for (const char of String(value)) {
+    const code = char.codePointAt(0);
+    if (char === '"') out += '\\"';
+    else if (char === '\\') out += '\\\\';
+    else if (char === '\n') out += '\\n';
+    else if (char === '\r') out += '\\r';
+    else if (char === '\t') out += '\\t';
+    else if (code < 0x20) out += `\\x${code.toString(16).padStart(2, '0')}`;
+    else out += char;
+  }
+  return out + '"';
+}
+
+function option(value, render) {
+  return value === null || value === undefined || value === '' ? 'None' : `Some(${render(value)})`;
+}
+
+function caseLiteral(category, fingerprint, expectedId) {
+  const endpoints = list(fingerprint.endpoints)
+    .map(
+      (endpoint) =>
+        `EndpointIdentity { id: ${endpoint.ID ?? 0}, device_id: ${
+          endpoint.deviceID === undefined ? 'None' : `Some(${endpoint.deviceID})`
+        }, ` +
+        `profile_id: ${
+          endpoint.profileID === undefined ? 'None' : `Some(${endpoint.profileID})`
+        }, input: &[${list(endpoint.inputClusters).join(', ')}], ` +
+        `output: &[${list(endpoint.outputClusters).join(', ')}] }`,
+    )
+    .join(', ');
+  const ieee = regexValue(fingerprint.ieeeAddr);
+  return (
+    `    Case { category: ${rustString(category)}, model: ${rustString(fingerprint.modelID)}, ` +
+    `manufacturer_name: ${option(fingerprint.manufacturerName, rustString)}, ` +
+    `manufacturer_id: ${option(fingerprint.manufacturerID, (value) => value)}, ` +
+    `type_: ${option(fingerprint.type, rustString)}, power_source: ${option(fingerprint.powerSource, rustString)}, ` +
+    `software_build_id: ${option(fingerprint.softwareBuildID, rustString)}, ` +
+    `date_code: ${option(fingerprint.dateCode, rustString)}, ` +
+    `application_version: ${option(fingerprint.applicationVersion, (value) => value)}, ` +
+    `hardware_version: ${option(fingerprint.hardwareVersion, (value) => value)}, ` +
+    `zcl_version: ${option(fingerprint.zclVersion, (value) => value)}, ` +
+    `ieee: ${option(ieee, rustString)}, endpoints: &[${endpoints}], expected: ${rustString(expectedId)} },`
+  );
+}
+
+async function check(category, fingerprint, expected, model, expectedId) {
+  if (!model) return;
   if (!model) return;
   const selected = await findDefinition(device(fingerprint), false);
   const source = sourceOf(selected, model);
@@ -91,12 +144,32 @@ async function check(category, fingerprint, expected, model) {
     return;
   }
   const sourceId = `${source.file}#${source.index}`;
+  const matched = sourceId === expected;
   note(category, {
-    result: sourceId === expected ? 'matched' : 'different',
+    result: matched ? 'matched' : 'different',
     model,
     expected,
     selected: sourceId,
   });
+}
+
+async function emitSelected(category, fingerprint) {
+  if (!fingerprint || !fingerprint.modelID) return;
+  const selected = await findDefinition(device(fingerprint), false);
+  const source = sourceOf(selected, fingerprint.modelID);
+  if (!source) {
+    note(category, { result: 'missing', model: fingerprint.modelID, expected: 'unknown' });
+    return;
+  }
+  const sourceKey = `${source.file}#${source.index}`;
+  const expectedId = idBySource.get(sourceKey);
+  if (!expectedId) throw new Error(`selected definition missing from manifest: ${sourceKey}`);
+  note(category, { result: 'matched', model: fingerprint.modelID, expected: sourceKey, selected: sourceKey });
+  const key = JSON.stringify(fingerprint);
+  if (!seenCases.has(key)) {
+    seenCases.add(key);
+    cases.push(caseLiteral(category, fingerprint, expectedId));
+  }
 }
 
 (async () => {
@@ -104,22 +177,52 @@ async function check(category, fingerprint, expected, model) {
     const expected = `${definition.file}#${definition.index}`;
     for (const fingerprint of list(definition.fingerprint)) {
       if (!fingerprint || !fingerprint.modelID) continue;
+      await emitSelected('all', fingerprint);
       const flags = [];
       if (fingerprint.endpoints) flags.push('endpoints');
       if (fingerprint.ieeeAddr) flags.push('regex');
       if (fingerprint.priority !== undefined) flags.push('priority');
-      for (const flag of flags) await check(flag, fingerprint, expected, fingerprint.modelID);
+      for (const flag of flags) await check(flag, fingerprint, expected, fingerprint.modelID, definition.id);
     }
     for (const whiteLabel of list(definition.whiteLabel)) {
       for (const fingerprint of list(whiteLabel && whiteLabel.fingerprint)) {
         if (!fingerprint || !fingerprint.modelID) continue;
-        await check('whiteLabel', fingerprint, expected, fingerprint.modelID);
+        await emitSelected('whiteLabel', fingerprint);
+        await check('whiteLabel', fingerprint, expected, fingerprint.modelID, definition.id);
       }
     }
   }
 
   const report = { package: manifest.package?.version ?? '26.123.0', categories, examples };
   fs.writeFileSync(path.resolve(__dirname, '../out/identify_complex_report.json'), JSON.stringify(report, null, 1));
+  const caseFile = path.resolve(__dirname, '../../../crates/z2m-rs/tests/golden/matcher_complex_cases.rs');
+  fs.mkdirSync(path.dirname(caseFile), { recursive: true });
+  fs.writeFileSync(
+    caseFile,
+    `use z2m_rs::EndpointIdentity;
+
+struct Case {
+    category: &'static str,
+    model: &'static str,
+    manufacturer_name: Option<&'static str>,
+    manufacturer_id: Option<u16>,
+    type_: Option<&'static str>,
+    power_source: Option<&'static str>,
+    software_build_id: Option<&'static str>,
+    date_code: Option<&'static str>,
+    application_version: Option<u16>,
+    hardware_version: Option<u16>,
+    zcl_version: Option<u16>,
+    ieee: Option<&'static str>,
+    endpoints: &'static [EndpointIdentity<'static>],
+    expected: &'static str,
+}
+
+static CASES: &[Case] = &[
+${cases.join('\n')}
+];
+`
+  );
   for (const [category, bucket] of Object.entries(categories)) {
     console.log(`${category}: ${bucket.cases} cases, ${bucket.matched} matched, ${bucket.different} different, ${bucket.missing} missing`);
   }

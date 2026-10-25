@@ -16,10 +16,12 @@
 
 mod frame;
 mod generated;
+mod matcher;
 pub mod capabilities;
 
 pub use frame::{AttributeFrameView, AttributeIter, AttributeView, FrameError};
 pub use generated::*;
+pub use matcher::*;
 
 pub const MAX_UPDATES: usize = 8;
 
@@ -381,45 +383,22 @@ pub struct Profile {
 pub static PROFILES: &[&Profile] = &[&TUYA_TS0041, &SNZB_01P, &TS011F];
 
 pub fn identify(interview: &Interview<'_>) -> Option<&'static Profile> {
-    let model = normalized_model(interview.model);
-    let manufacturer = interview.manufacturer.map(normalized_model);
-    let mut best: Option<(u8, &'static Profile)> = None;
-    for profile in PROFILES.iter().chain(LIGHTING.iter()).copied() {
-        for fp in profile.fingerprints {
-            if normalized_model(fp.model) != model {
-                continue;
-            }
-            let score = match fp.manufacturer {
-                Manufacturer::Exact(name) if manufacturer == Some(normalized_model(name)) => 3,
-                Manufacturer::Prefix(prefix)
-                    if manufacturer.is_some_and(|name| name.starts_with(normalized_model(prefix))) =>
-                {
-                    2
-                }
-                Manufacturer::Any => 1,
-                _ => continue,
-            };
-            if best.map_or(true, |(best_score, _)| score > best_score) {
-                best = Some((score, profile));
-            }
-        }
-    }
-    if let Some((_, profile)) = best {
-        return Some(profile);
-    }
-    // ZHC falls back to the first candidate whose zigbeeModel matches when no
-    // fingerprint matches; mirror that for profiles sharing the model.
-    PROFILES
-        .iter()
-        .chain(LIGHTING.iter())
-        .copied()
-        .find(|profile| {
-            profile.fingerprints.iter().any(|fp| {
-                normalized_model(fp.model) == model && matches!(fp.manufacturer, Manufacturer::Any)
-            })
-        })
+    let device = DeviceIdentity {
+        model: interview.model,
+        manufacturer_name: interview.manufacturer,
+        manufacturer_id: None,
+        type_: None,
+        power_source: None,
+        software_build_id: None,
+        date_code: None,
+        application_version: None,
+        hardware_version: None,
+        zcl_version: None,
+        ieee: None,
+        endpoints: &[],
+    };
+    match_definition(&device).and_then(|definition| definition.profile)
 }
-
 fn normalized_model(model: &str) -> &str {
     let end = model.find('\0').unwrap_or(model.len());
     model[..end].trim()
@@ -835,21 +814,18 @@ mod tests {
     }
 
     #[test]
-    fn fingerprints_match_model_and_manufacturer() {
-        let profile = identify(&Interview {
-            manufacturer: Some("_TZ3000_abcd"),
-            model: "TS0041",
-        })
-        .unwrap();
-        assert_eq!(profile.id, "tuya.ts0041");
-        assert!(identify(&Interview {
-            manufacturer: Some("Other"),
-            model: "TS0041"
-        })
-        .is_none());
+    fn identify_mirrors_zhc_model_fallback() {
+        for manufacturer in [Some("_TZ3000_abcd"), Some("Other"), None] {
+            let profile = identify(&Interview {
+                manufacturer,
+                model: "TS0041",
+            })
+            .unwrap();
+            assert_eq!(profile.id, "tuya.ts0041");
+        }
         assert!(identify(&Interview {
             manufacturer: None,
-            model: "TS0041"
+            model: "UNKNOWN-MODEL",
         })
         .is_none());
     }

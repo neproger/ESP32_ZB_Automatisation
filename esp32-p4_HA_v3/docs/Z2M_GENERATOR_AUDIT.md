@@ -107,3 +107,21 @@ The remaining 15 duplicate-fingerprint collisions and 33 shadowed profiles are
 reported by `identify.cjs`; they are not yet represented by the profile-list
 matcher. The missing whiteLabel aliases are a source/index coverage gap, not a
 matcher decision.
+
+## Matcher index (implemented)
+
+`tools/zhc-compiler/src/matcher.cjs` generates
+`crates/z2m-rs/src/generated/matcher_data.rs` from `models-index.json`:
+candidate order, full fingerprint rules (model/manufacturer/type/power source,
+versions, regex `ieeeAddr`, endpoints/clusters, priority), zigbeeModel fallback
+and whiteLabel metadata. Entries reference existing `Profile` values; no
+converters are copied. `z2m-rs::identify()` now selects through
+`match_definition()`, which mirrors ZHC `findDefinition()` including the
+single-candidate shortcut, highest-priority fingerprint and model fallback.
+
+`complex.cjs` emits `matcher_complex_cases.rs` with the full device features;
+the Rust golden checks 2899 cases (all ZHC fingerprints with a resolved source,
+plus whiteLabel aliases). The earlier 3728 model/manufacturer cases remain in
+`golden_identify.rs`. Interview completeness (e.g. Simple Descriptor not yet
+collected) is separate from the matcher; missing fields simply fail the same
+fingerprint rule ZHC would fail and never produce a fabricated match.

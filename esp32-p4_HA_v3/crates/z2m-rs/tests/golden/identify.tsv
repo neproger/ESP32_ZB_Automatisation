@@ -594,7 +594,6 @@ HBUniversalCFRemote		zhc.hampton_bay.0
 HDC52EastwindFan\0suffix		zhc.hampton_bay.0
 ETI 12-in Puff light		zhc.hampton_bay.1
 ETI 12-in Puff light\0suffix		zhc.hampton_bay.1
-Dimmer-Switch-ZB3.0	Heatit Controls AB	zhc.heatit.0
 TemperLight		zhc.heiman.0
 TemperLight\0suffix		zhc.heiman.0
 ColorLight		zhc.heiman.1
@@ -656,7 +655,6 @@ VIYU_GU10_350_CCT_10454470		zhc.hornbach.12
 VIYU_GU10_350_CCT_10454470\0suffix		zhc.hornbach.12
 VIYU_MUSICA_CCT_10447293		zhc.hornbach.13
 VIYU_MUSICA_CCT_10447293\0suffix		zhc.hornbach.13
-Dimmer-Switch-ZB3.0	Shyugj	zhc.hzc_electric.0
 Meter-Dimmer-Switch-ZB3.0		zhc.hzc_electric.1
 Meter-Dimmer-Switch-ZB3.0\0suffix		zhc.hzc_electric.1
 ICZB-IW11D		zhc.icasa.0

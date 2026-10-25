@@ -34,12 +34,8 @@ async function sourceOf(selected, modelID) {
 
 function device(modelID, manufacturerName) {
   return {
-    type: 'Router',
     modelID,
     manufacturerName: manufacturerName || undefined,
-    powerSource: 'Mains (single phase)',
-    ieeeAddr: '0x00124b0000000000',
-    endpoints: [{ ID: 1, inputClusters: [], outputClusters: [] }],
   };
 }
 
