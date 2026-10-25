@@ -1,9 +1,10 @@
 # Сборка HA V3
 
-Два независимых контура:
+Три независимых контура:
 
 - **host workspace** — `crates/` без `ha-app`;
-- **ESP32-P4 приложение** — `crates/ha-app` с ESP-IDF и C-мостом.
+- **ESP32-P4 приложение** — `crates/ha-app` с ESP-IDF и C-мостом;
+- **C3 Wi-Fi CP** — `tools/esp_hosted_c3_cp` (ESP-Hosted-сопроцессор для Wi-Fi).
 
 ## 1. ESP32-P4
 
@@ -69,7 +70,8 @@ espflash flash --port COM11 --baud 921600 `
 
 - board A (V2, Wi-Fi C3): MAC `80:f1:b2:d3:62:7e`, обычно COM4 — не трогать;
 - board B (P4 test): MAC `80:f1:b2:d1:18:77`, обычно COM11;
-- C6 RCP — COM12 (не прошивать без необходимости).
+- C3 Wi-Fi CP: COM12 (`esp32c3`), не прошивать P4 через этот порт;
+- C6 RCP: внутренний UART1 (GPIO14/15), не через COM12.
 
 ### Типовые ошибки
 
@@ -98,6 +100,22 @@ $env:IDF_PATH='C:\Users\ASUS\.espressif\esp-idf\v6.1'
 $env:IDF_TOOLS_PATH='C:\Users\ASUS\.espressif'
 cmake --build C:/t/hav3/riscv32imafc-esp-espidf/debug/build/esp-idf-sys-*/out/build
 ```
+
+## 1a. C3 Wi-Fi CP (ESP-Hosted)
+
+C3 — внешний Wi-Fi-сопроцессор P4; отдельный ESP-IDF-проект, не Cargo:
+
+```powershell
+cd tools/esp_hosted_c3_cp
+idf.py set-target esp32c3
+idf.py build
+idf.py -p COM12 flash
+```
+
+IDF — 6.1, как в §1. Версия `espressif/esp_hosted` (**3.0.10**) должна совпадать
+с хостом V3. После прошивки C3 перезагрузи P4 и проверь в логе
+`host=3.0.10 coprocessor=3.0.10 (match)`. Пины, питание и проверка — в
+`tools/esp_hosted_c3_cp/README.md`.
 
 ## 2. Host workspace
 
