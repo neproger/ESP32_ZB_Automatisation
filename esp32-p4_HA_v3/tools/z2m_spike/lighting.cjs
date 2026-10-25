@@ -1,16 +1,11 @@
 // Lighting family inventory: what a standard on/off + brightness + color-temp
 // template would cover, and what blocks the rest.
 //
-// usage: node lighting.cjs <zhc-package> <dist/devices-dir>
+// usage: node lighting.cjs [zhc-package] [dist/devices-dir]
+// Defaults come from tools/zhc-compiler's pinned npm dependency.
 const fs = require('node:fs');
 const path = require('node:path');
-
-const pkg = process.argv[2];
-const devicesDir = process.argv[3];
-if (!pkg || !devicesDir) {
-  console.error('usage: node lighting.cjs <zhc-package> <dist/devices-dir>');
-  process.exit(2);
-}
+const { pkg, devicesDir } = require('../zhc-compiler/src/cli.cjs');
 const fz = require(path.join(pkg, 'dist/converters/fromZigbee'));
 const tz = require(path.join(pkg, 'dist/converters/toZigbee'));
 const list = (value) => (Array.isArray(value) ? value : value == null ? [] : [value]);

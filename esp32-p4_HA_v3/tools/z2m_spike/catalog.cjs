@@ -1,16 +1,11 @@
 // Catalog inventory: every ZHC definition -> identifiable / translatable level.
 // Diagnostics only; it does not emit Rust yet. Output: catalog_report.json + stdout summary.
 //
-// usage: node catalog.cjs <zhc-package> <dist/devices-dir>
+// usage: node catalog.cjs [zhc-package] [dist/devices-dir]
+// Defaults come from tools/zhc-compiler's pinned npm dependency.
 const fs = require('node:fs');
 const path = require('node:path');
-
-const pkg = process.argv[2];
-const devicesDir = process.argv[3];
-if (!pkg || !devicesDir) {
-  console.error('usage: node catalog.cjs <zhc-package> <dist/devices-dir>');
-  process.exit(2);
-}
+const { pkg, devicesDir } = require('../zhc-compiler/src/cli.cjs');
 
 const fz = require(path.join(pkg, 'dist/converters/fromZigbee'));
 const tz = require(path.join(pkg, 'dist/converters/toZigbee'));

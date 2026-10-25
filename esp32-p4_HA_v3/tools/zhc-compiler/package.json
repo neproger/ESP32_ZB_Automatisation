@@ -1,0 +1,15 @@
+{
+  "name": "ha-v3-zhc-compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "manifest": "node src/manifest.cjs"
+  },
+  "dependencies": {
+    "zigbee-herdsman-converters": "26.123.0"
+  }
+}

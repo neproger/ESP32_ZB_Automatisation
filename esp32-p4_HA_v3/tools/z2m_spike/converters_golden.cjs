@@ -1,15 +1,11 @@
 // Differential golden: execute original ZHC toZigbee converters with a mock
 // endpoint and emit the expected ZCL command + payload for the Rust tests.
 //
-// usage: node converters_golden.cjs <zhc-package>
+// usage: node converters_golden.cjs [zhc-package]
+// Defaults come from tools/zhc-compiler's pinned npm dependency.
 const fs = require('node:fs');
 const path = require('node:path');
-
-const pkg = process.argv[2];
-if (!pkg) {
-  console.error('usage: node converters_golden.cjs <zhc-package>');
-  process.exit(2);
-}
+const { pkg } = require('../zhc-compiler/src/cli.cjs');
 const tz = require(path.join(pkg, 'dist/converters/toZigbee'));
 
 class Endpoint {}

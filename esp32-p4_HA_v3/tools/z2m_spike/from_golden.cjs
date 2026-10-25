@@ -1,15 +1,11 @@
 // Incoming differential: execute ZHC fromZigbee converters and emit normalized
 // values for the Rust decoder tests.
 //
-// usage: node from_golden.cjs <zhc-package>
+// usage: node from_golden.cjs [zhc-package]
+// Defaults come from tools/zhc-compiler's pinned npm dependency.
 const fs = require('node:fs');
 const path = require('node:path');
-
-const pkg = process.argv[2];
-if (!pkg) {
-  console.error('usage: node from_golden.cjs <zhc-package>');
-  process.exit(2);
-}
+const { pkg } = require('../zhc-compiler/src/cli.cjs');
 const fz = require(path.join(pkg, 'dist/converters/fromZigbee'));
 
 class Endpoint {}

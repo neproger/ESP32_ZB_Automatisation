@@ -2,16 +2,11 @@
 // original parameters (endpoint constraints, brightness/CT ranges, command and
 // reporting choices). Unsupported options are recorded, never defaulted.
 //
-// usage: node emit_lighting.cjs <zhc-package> <dist/devices-dir>
+// usage: node emit_lighting.cjs [zhc-package] [dist/devices-dir]
+// Defaults come from tools/zhc-compiler's pinned npm dependency.
 const fs = require('node:fs');
 const path = require('node:path');
-
-const pkg = process.argv[2];
-const devicesDir = process.argv[3];
-if (!pkg || !devicesDir) {
-  console.error('usage: node emit_lighting.cjs <zhc-package> <dist/devices-dir>');
-  process.exit(2);
-}
+const { pkg, devicesDir } = require('../zhc-compiler/src/cli.cjs');
 const list = (value) => (Array.isArray(value) ? value : value == null ? [] : [value]);
 
 // Wrap light() before any device module loads, so args are associated with the
