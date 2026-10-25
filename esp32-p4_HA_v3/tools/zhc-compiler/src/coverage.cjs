@@ -100,6 +100,9 @@ function extendStatus(helper, args) {
       : ['partial', 'non-state binary or custom values'];
   }
   if (helper === 'modernExtend.bindCluster') return ['supported', 'cluster bind'];
+  if (['modernExtend.temperature', 'modernExtend.humidity', 'modernExtend.occupancy', 'modernExtend.illuminance'].includes(helper)) {
+    return ['partial', 'core decode and basic reporting; non-default options not covered'];
+  }
   if (['modernExtend.identify', 'modernExtend.poll', 'modernExtend.deviceEndpoints', 'modernExtend.forcePowerSource', 'modernExtend.forceDeviceType'].includes(helper)) {
     return ['partial', 'optional identify/addressing behavior not implemented'];
   }

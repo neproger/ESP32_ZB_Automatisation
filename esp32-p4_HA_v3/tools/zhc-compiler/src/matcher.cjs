@@ -18,6 +18,13 @@ for (const [index, profile] of lighting.profiles.entries()) {
 profileBySource.set('tuya.js#150', 'TUYA_TS0041');
 profileBySource.set('sonoff.js#25', 'SNZB_01P');
 profileBySource.set('tuya.js#229', 'TS011F');
+const sensorsFile = path.resolve(__dirname, '../out/sensors_manifest.json');
+if (fs.existsSync(sensorsFile)) {
+  const sensors = JSON.parse(fs.readFileSync(sensorsFile, 'utf8'));
+  for (const profile of sensors.profiles) {
+    profileBySource.set(`${profile.source.file}#${profile.source.definition_index}`, profile.symbol);
+  }
+}
 
 const bySource = new Map();
 manifest.definitions.forEach((definition, index) => {
@@ -134,7 +141,7 @@ const output = [
   'use crate::matcher::{Definition, EndpointRule, FingerprintRule, IeeeRule, WhiteLabel};',
   'use crate::{SNZB_01P, TS011F, TUYA_TS0041};',
   `use super::{${[...new Set(profileBySource.values())]
-    .filter((name) => name.startsWith('ZHCL_'))
+    .filter((name) => name.startsWith('ZHCL_') || name.startsWith('SENSOR_'))
     .sort()
     .join(', ')}};`,
   '',
