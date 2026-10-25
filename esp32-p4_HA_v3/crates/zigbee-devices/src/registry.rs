@@ -8,7 +8,7 @@
 use micro_db::{Error, Fixed, NorFlash, PersistedTable};
 use z2m_rs::Interview;
 
-use crate::{DeviceRecord, RecordError, MAX_RECORD};
+use crate::{DeviceDescriptor, DescriptorError, DeviceRecord, RecordError, MAX_RECORD};
 
 const PERSIST_ID: &str = "ha_zigbee_devices";
 pub const RECORD_SLOT_SIZE: usize = 2 + MAX_RECORD;

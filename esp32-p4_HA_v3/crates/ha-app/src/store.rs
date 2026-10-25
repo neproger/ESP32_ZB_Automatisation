@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 
 use micro_db::{FlashError, NorFlash};
-use zigbee_devices::{DeviceRecord, InterviewStatus, Registry};
+use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
 const CAPACITY: usize = 16;
 const DEFINITION_VERSION: u16 = 1;
@@ -106,7 +106,16 @@ pub fn lookup(ieee: u64) -> Option<&'static z2m_rs::Profile> {
     registry.as_ref()?.profile_for(ieee).ok().flatten()
 }
 
-pub fn save(ieee: u64, short: u16, manufacturer: &str, model: &str, definition_id: &str) {
+pub fn save(
+    ieee: u64,
+    short: u16,
+    manufacturer: &str,
+    model: &str,
+    definition_id: &str,
+    descriptor: &DeviceDescriptor,
+) {
+    let mut signature = [0u8; SIGNATURE_MAX];
+    let signature_len = descriptor.encode(&mut signature).unwrap_or(0);
     let record = DeviceRecord {
         ieee,
         short,
@@ -116,7 +125,7 @@ pub fn save(ieee: u64, short: u16, manufacturer: &str, model: &str, definition_i
         model,
         definition_version: DEFINITION_VERSION,
         configured_version: 0,
-        signature: &[],
+        signature: &signature[..signature_len],
     };
     let mut flash = EspFlash;
     let mut guard = REGISTRY.lock().unwrap();
