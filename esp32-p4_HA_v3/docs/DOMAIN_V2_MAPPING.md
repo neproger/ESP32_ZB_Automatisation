@@ -120,3 +120,24 @@ The adapter table keeps those fields without polluting Domain state.
    command, command without report, timeout; then one hardware pass.
 
 Do not add WebSocket/LVGL/automation changes in this step.
+
+## Implemented first slice (host)
+
+- `ha-domain::canonical`: V2 ids/records and the exact SipHash-2-4 key/derivation.
+  Golden: Zigbee `(0x00124B000A1B2C3D, endpoint 1)` →
+  `0xdf803cbaf588876d`. Records: entity 40, device 80, state key 16,
+  state 8, capability 24, capabilities 216.
+- `zigbee-devices::canonical`: EUI64+endpoint → entity id, EUI64 → device id,
+  `Profile.exposes` → capabilities (POWER ON/OFF, BRIGHTNESS SET,
+  COLOR_TEMPERATURE SET, COLOR SET XY when the profile has the XY codec, action
+  events), and state conversions:
+  brightness 254-scale → percent, mireds → Kelvin, XY/HS → scalar pairs.
+- Canonical command mapping: Power ON/OFF, Brightness SET percent→254,
+  ColorTemp SET Kelvin→mireds, Color SET XY; `resolve_command` + `encode`
+  produce cluster/command/payload. Individual HUE/SAT SET and TOGGLE remain
+  explicit `None` (profiles do not expose those commands).
+- Host: 123 tests total, 21 in `zigbee-devices`, 11 in `ha-domain`.
+
+Not yet wired: Domain entity/state writes, the Command Core pending table,
+OperationId routing, and the three lifecycle scenarios. Those are the next
+slice; the Zigbee transport and executor are unchanged.

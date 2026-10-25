@@ -4,11 +4,16 @@
 //! `z2m-rs`; this crate holds the HA-side record layout and the registry over
 //! MicroDB. No model-specific decoding belongs here.
 
+mod canonical;
 mod device_record;
 mod interview;
 mod registry;
 
 pub use interview::{Identified, InterviewManager, COOLDOWN_MS, JOB_SLOTS, MAX_ATTEMPTS, OP_DEADLINE_MS, RETRY_BACKOFF_MS};
+pub use canonical::{
+    canonical_command, canonical_states, encode_canonical_command, profile_capabilities,
+    zigbee_device_id, zigbee_entity_id, StateUpdate,
+};
 pub use device_record::{
     DeviceRecord, InterviewStatus, RecordError, DEVICE_SCHEMA, HEADER_LEN, MAX_RECORD,
 };
