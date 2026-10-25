@@ -30,5 +30,6 @@ jobs:
       - run: npm run coverage
       - run: npm run lighting
       - run: npm run identify
+      - run: npm run complex
       - run: git diff --exit-code -- ../../crates/z2m-rs/tests/golden/identify.tsv ../../crates/z2m-rs/src/generated/lighting.rs
       - run: cargo test --manifest-path ../../Cargo.toml -p z2m-rs --test golden_identify

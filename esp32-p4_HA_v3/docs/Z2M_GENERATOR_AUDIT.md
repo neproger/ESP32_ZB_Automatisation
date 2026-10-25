@@ -92,3 +92,18 @@ fingerprints not present in the ZHC index (`missing source`). They are counted
 in `out/identify_report.json` and excluded from the golden. Endpoints, regex
 fingerprints, priority fields and whiteLabel alias selection still need the
 full interview/matcher stage.
+
+## Complex matcher diagnostics (current)
+
+`tools/zhc-compiler/src/complex.cjs` feeds ZHC `findDefinition` the full fields of
+complex fingerprints and records the selected source definition. Current run:
+
+- endpoints: 68 cases, all matched;
+- regex (simple `ieeeAddr` patterns): 21 cases, all matched;
+- priority: 14 cases, all matched;
+- whiteLabel: 252 cases, 241 matched, 11 missing from the model index.
+
+The remaining 15 duplicate-fingerprint collisions and 33 shadowed profiles are
+reported by `identify.cjs`; they are not yet represented by the profile-list
+matcher. The missing whiteLabel aliases are a source/index coverage gap, not a
+matcher decision.
