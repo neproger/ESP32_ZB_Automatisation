@@ -129,17 +129,6 @@ pub fn process_pending() {
                     );
                 }
             }
-            if meta.cluster != 0x0001 {
-                log::info!(
-                    "attr frame eui64={:016x} ep={} cluster=0x{:04x} attrs={} dropped={} (no profile)",
-                    meta.src_ext,
-                    meta.src_ep,
-                    meta.cluster,
-                    attributes,
-                    dropped
-                );
-                return;
-            }
             let Some(profile) = crate::interview::selected_profile(meta.src_ext) else {
                 log::info!(
                     "attr frame cluster=0x{:04x} attrs={} dropped={} (interview pending)",
@@ -163,8 +152,10 @@ pub fn process_pending() {
                 dropped,
                 profile.id
             );
+            let entity = zigbee_devices::zigbee_entity_id(meta.src_ext, meta.src_ep);
             for update in decoded.updates() {
                 log::info!("decoded {update:?}");
+                crate::canonical::push(entity, update);
             }
         }
         Err(error) => log::warn!(

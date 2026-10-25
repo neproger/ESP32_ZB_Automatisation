@@ -184,3 +184,19 @@ identity does not change and no second entity is created for the same seed).
 Button/state routing through the canonical adapter and the command submission
 path are the remaining app wiring; the host lifecycle tests already cover the
 semantics.
+
+## Incoming event/state path on P4 (hardware verified)
+
+`ha-app` decodes Attribute Reports and button ZCL commands through `z2m-rs`;
+`zigbee-devices::canonical_states` produces either PROPERTY_STATE values or
+canonical events. Events are published as ephemeral Domain payload facts
+(EVENT), never as PROPERTY_STATE, so a reboot does not replay a press. The old
+TS0041 press-count/web path is removed.
+
+Hardware: five TS0041 presses produced exactly five
+`canonical command Action(Single)` lines and five `domain: event id=1` facts,
+with no property state for the press. Boot/reboot registration remains stable.
+
+Pending: Read Attributes values to the same state path (executor results do not
+yet carry cluster/attribute), CommandCore → ZigbeeSink in the app loop, and
+Generic ZCL Send.

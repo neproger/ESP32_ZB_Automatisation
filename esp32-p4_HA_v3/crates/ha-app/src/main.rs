@@ -10,10 +10,10 @@
 //! `[8..12]` reserved. Every press changes the count, so `version` must grow.
 
 use std::ffi::{c_char, CStr, CString};
-use std::sync::mpsc;
 use std::time::Duration;
 
-use ha_domain::{Domain, EntityDesc, EntityType, Error, Fact, FactKind, FactMeta, Filter, Value};
+use ha_domain::canonical::{ENTITY_ENTITY, SOURCE_ZIGBEE};
+use ha_domain::{Domain, FactMeta, FactTarget};
 use zigbee_devices::DomainAdapter;
 
 mod exec;
@@ -22,10 +22,8 @@ mod interview;
 mod store;
 mod web;
 mod configure;
+mod canonical;
 
-const DEVICE: EntityType = 1;
-const SOURCE_ZIGBEE: u8 = 1;
-const DEVICE_RECORD_LEN: usize = 12;
 
 /// Mirror of `poc_event_t` from the C shim; copied once across the FFI boundary.
 #[repr(C)]
@@ -53,25 +51,6 @@ fn main() {
     esp_idf_svc::log::EspLogger::initialize_default();
 
     let mut domain = Domain::new(32, 8, 64).expect("domain");
-    domain
-        .register_entity(EntityDesc {
-            entity: DEVICE,
-            key_size: 8,
-            record_size: DEVICE_RECORD_LEN,
-            capacity: 16,
-            backing: ha_domain::Backing::Ram,
-            persist_key: None,
-        })
-        .expect("device table");
-
-    let (delta_tx, delta_rx) = mpsc::channel::<Fact>();
-    domain.subscribe(
-        Filter {
-            kind_mask: FactKind::EntityUpserted.bit(),
-            ..Filter::entity(DEVICE)
-        },
-        move |fact| delta_tx.send(*fact).is_ok(),
-    );
 
     unsafe {
         esp_idf_svc::sys::esp_netif_init();
@@ -123,7 +102,7 @@ fn main() {
         if unsafe { zb_poc_poll(&mut event) } != 0 {
             executor.device_awake(event.short_addr);
             ensure_interview(&mut executor, event.extended_addr, event.short_addr);
-            handle_event(&mut domain, &event, &delta_rx);
+            ingest_command(&event);
         }
         frames::process_pending();
         if let Some(device) = frames::take_last_device() {
@@ -137,6 +116,12 @@ fn main() {
         while let Some((eui, _short, profile)) = interview::take_identified() {
             register_domain(&mut domain, eui, 1, profile);
         }
+        while let Some(state) = canonical::take_state() {
+            apply_state(&mut domain, state);
+        }
+        while let Some(event) = canonical::take_event() {
+            publish_event(&mut domain, event);
+        }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
             log::info!("exec op={} status={:?}", result.id, result.status);
@@ -149,7 +134,7 @@ fn main() {
     }
 }
 
-fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<Fact>) {
+fn ingest_command(event: &PocEvent) {
     let payload_len = usize::from(event.payload_len.min(8));
     let Some(profile) = interview::selected_profile(event.extended_addr) else {
         log::info!(
@@ -177,64 +162,50 @@ fn handle_event(domain: &mut Domain, event: &PocEvent, deltas: &mpsc::Receiver<F
         );
         return;
     };
-    let Some(action) = decoded.updates().find_map(|update| match update {
-        z2m_rs::Update::Action(action) => Some(*action),
-        _ => None,
-    }) else {
-        log::info!("no action in decoded event");
-        return;
-    };
-    let code = match action {
-        z2m_rs::Action::Single => 0u32,
-        z2m_rs::Action::Double => 1,
-        z2m_rs::Action::Hold => 2,
-    };
-    let key = event.extended_addr.to_be_bytes();
-
-    let mut record = [0u8; DEVICE_RECORD_LEN];
-    match domain.entity_get(DEVICE, &key, &mut record) {
-        Ok(()) | Err(Error::NotFound) => {}
-        Err(err) => {
-            log::error!("device record read failed: {err:?}");
-            return;
-        }
+    let entity = zigbee_devices::zigbee_entity_id(event.extended_addr, event.endpoint);
+    for update in decoded.updates() {
+        log::info!("canonical command eui={:016x} {update:?}", event.extended_addr);
+        canonical::push(entity, update);
     }
-
-    let count = u16::from_le_bytes([record[2], record[3]]).wrapping_add(1);
-    record[0] = code as u8;
-    record[2..4].copy_from_slice(&count.to_le_bytes());
-
-    let changed = match domain.entity_put(
-        DEVICE,
-        &key,
-        &record,
-        FactMeta {
-            source: SOURCE_ZIGBEE,
-            value: Value::enum_(code),
-        },
-    ) {
-        Ok(changed) => changed,
-        Err(err) => {
-            log::error!("device record write failed: {err:?}");
-            return;
-        }
-    };
-    let version = domain
-        .entity_meta(DEVICE, &key)
-        .map_or(0, |meta| meta.version);
-
-    web::publish(event.extended_addr, code as u8, count);
-    let delivered = domain.dispatch_once();
-    let mut journal = Vec::new();
-    while let Ok(fact) = deltas.try_recv() {
-        journal.push(fact.event_id);
-    }
-    log::info!(
-        "device={:016x} press={action:?} count={count} changed={changed} version={version} deltas={delivered} journal={journal:?}",
-        event.extended_addr
-    );
 }
 
+fn apply_state(domain: &mut Domain, state: zigbee_devices::StateUpdate) {
+    let Ok(mut adapter) = DomainAdapter::new(domain) else {
+        log::error!("domain: state adapter init failed");
+        return;
+    };
+    match adapter.write_state(state.entity, state.property, state.value) {
+        Ok(changed) => log::info!(
+            "domain: state entity={:016x} property={} changed={changed}",
+            state.entity,
+            state.property
+        ),
+        Err(error) => log::error!("domain: state write failed: {error:?}"),
+    }
+}
+
+fn publish_event(domain: &mut Domain, event: canonical::CanonicalEvent) {
+    let key = event.entity.to_le_bytes();
+    let payload = event.event.to_le_bytes();
+    match domain.payload_put(
+        Some(FactTarget {
+            entity: ENTITY_ENTITY,
+            key: &key,
+        }),
+        FactMeta {
+            source: SOURCE_ZIGBEE as u8,
+            value: ha_domain::Value::NONE,
+        },
+        &payload,
+    ) {
+        Ok(reference) => log::info!(
+            "domain: event entity={:016x} id={} payload={reference}",
+            event.entity,
+            event.event
+        ),
+        Err(error) => log::error!("domain: event write failed: {error:?}"),
+    }
+}
 fn start_wifi() {
     let (Some(ssid), Some(password)) = (option_env!("HA_WIFI_SSID"), option_env!("HA_WIFI_PASSWORD"))
     else {

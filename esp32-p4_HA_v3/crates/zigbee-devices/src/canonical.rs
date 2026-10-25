@@ -334,6 +334,14 @@ mod tests {
     }
 
     #[test]
+    fn action_is_an_event_not_state() {
+        let entity = 11;
+        let (states, event) = canonical_states(entity, &Update::Action(z2m_rs::Action::Single));
+        assert_eq!(states, [None, None]);
+        assert_eq!(event, Some(ha_domain::canonical::EVENT_SINGLE_PRESS));
+    }
+
+    #[test]
     fn commands_convert_and_encode() {
         let mut out = [0u8; 16];
         let power = CanonicalCommand {
