@@ -19,8 +19,11 @@ pub mod control {
 /// Entity frame types; values are the V2 canonical ABI and must not change.
 pub mod entity {
     pub const AUTOMATION: u8 = 4;
+    pub const LOCATION: u8 = 6;
     pub const GROUP: u8 = 7;
     pub const GROUP_ITEM: u8 = 8;
+    pub const WEATHER: u8 = 9;
+    pub const SETTINGS: u8 = 13;
     pub const ENTITY: u8 = 14;
     pub const PROPERTY_STATE: u8 = 15;
     pub const CAPABILITIES: u8 = 16;
@@ -37,6 +40,7 @@ pub mod command {
     pub const DISCOVERY: u8 = 8;
     pub const GROUP_PUT: u8 = 9;
     pub const GROUP_REMOVE: u8 = 10;
+    pub const LOCATION_PUT: u8 = 13;
     pub const GROUP_ITEM_PUT: u8 = 16;
     pub const GROUP_ITEM_REMOVE: u8 = 17;
     pub const ENTITY_RENAME: u8 = 18;

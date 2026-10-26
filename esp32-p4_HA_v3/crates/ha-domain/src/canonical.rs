@@ -13,15 +13,26 @@ pub type EventId = u32;
 
 pub const ENTITY_ID_NONE: EntityId = 0;
 pub const DEVICE_ID_NONE: DeviceId = 0;
+/// V2 `HA_SYSTEM_DEVICE_ID`: key of the single Location record.
+pub const SYSTEM_DEVICE_UID: DeviceId = 0x5359_5354_454d_0001;
 pub const ENTITY_ID_SOURCE: EntityId = u64::MAX;
 
 pub const ISSUER_SYSTEM: IssuerId = 2;
 pub const ISSUER_ZIGBEE: IssuerId = 1;
 pub const SOURCE_ZIGBEE: SourceId = 1;
+pub const SOURCE_SYSTEM: SourceId = 2;
+
+/// Synthetic system entity (V2 `ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM)`).
+pub const ENTITY_SYSTEM: EntityId = 0x9229_b477_04a2_45b5;
+/// Synthetic weather record key (ASCII "WTHR" in the high bytes).
+pub const WEATHER_DEVICE_UID: DeviceId = 0x5754_4852_0000_0001;
 
 pub const ENTITY_AUTOMATION: u32 = 4;
+pub const ENTITY_LOCATION: u32 = 6;
 pub const ENTITY_GROUP: u32 = 7;
 pub const ENTITY_GROUP_ITEM: u32 = 8;
+pub const ENTITY_WEATHER: u32 = 9;
+pub const ENTITY_SETTINGS: u32 = 13;
 pub const ENTITY_ENTITY: u32 = 14;
 pub const ENTITY_PROPERTY_STATE: u32 = 15;
 pub const ENTITY_CAPABILITIES: u32 = 16;
@@ -41,6 +52,14 @@ pub const PROPERTY_ILLUMINANCE: PropertyId = 10;
 pub const PROPERTY_OCCUPANCY: PropertyId = 11;
 pub const PROPERTY_BATTERY_VOLTAGE: PropertyId = 12;
 pub const PROPERTY_BATTERY_PERCENT: PropertyId = 13;
+pub const PROPERTY_SYSTEM_TIME_UTC: PropertyId = 14;
+pub const PROPERTY_SYSTEM_TIME_STATUS: PropertyId = 15;
+pub const PROPERTY_SYSTEM_HOUR: PropertyId = 16;
+pub const PROPERTY_SYSTEM_MINUTE: PropertyId = 17;
+pub const PROPERTY_SYSTEM_WEEKDAY: PropertyId = 18;
+pub const PROPERTY_SYSTEM_WEEKDAY_MASK: PropertyId = 19;
+pub const PROPERTY_SYSTEM_MINUTES_OF_DAY: PropertyId = 20;
+pub const PROPERTY_SYSTEM_TZ_OFFSET: PropertyId = 21;
 pub const PROPERTY_COLOR: PropertyId = 22;
 
 pub const ACTION_ON: ActionId = 1;
@@ -51,6 +70,11 @@ pub const ACTION_SET: ActionId = 4;
 pub const EVENT_SINGLE_PRESS: EventId = 1;
 pub const EVENT_DOUBLE_PRESS: EventId = 2;
 pub const EVENT_HOLD: EventId = 3;
+pub const EVENT_MINUTE_TICK: EventId = 4;
+pub const EVENT_HALF_HOUR_TICK: EventId = 5;
+pub const EVENT_HOUR_TICK: EventId = 6;
+pub const EVENT_DAY_TICK: EventId = 7;
+pub const EVENT_WEATHER_CHANGED: EventId = 8;
 
 pub const ENTITY_NAME_MAX: usize = 32;
 pub const NATIVE_ID_MAX: usize = 32;
@@ -69,6 +93,71 @@ pub const GROUP_RECORD_LEN: usize = 32;
 pub const GROUP_ITEM_KEY_LEN: usize = 16;
 pub const GROUP_ITEM_RECORD_LEN: usize = 36;
 pub const AUTOMATION_RECORD_LEN: usize = 456;
+pub const LOCATION_KEY_LEN: usize = 8;
+pub const LOCATION_RECORD_LEN: usize = 60;
+pub const LOCATION_NAME_MAX: usize = 48;
+pub const WEATHER_RECORD_LEN: usize = 16;
+pub const SETTINGS_KEY_LEN: usize = 1;
+pub const SETTINGS_RECORD_LEN: usize = 8;
+pub const SETTINGS_ID: u8 = 0;
+
+/// `ha_settings_record_t` (8): timeout u32@0, brightness u8@4, palette u8@5.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsRecord {
+    pub screensaver_timeout_ms: u32,
+    pub brightness_pct: u8,
+    pub palette_id: u8,
+}
+
+impl Default for SettingsRecord {
+    fn default() -> Self {
+        Self {
+            screensaver_timeout_ms: 0,
+            brightness_pct: 80,
+            palette_id: 0,
+        }
+    }
+}
+
+impl SettingsRecord {
+    pub fn encode(self) -> [u8; SETTINGS_RECORD_LEN] {
+        let mut out = [0u8; SETTINGS_RECORD_LEN];
+        out[..4].copy_from_slice(&self.screensaver_timeout_ms.to_le_bytes());
+        out[4] = self.brightness_pct;
+        out[5] = self.palette_id;
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < SETTINGS_RECORD_LEN {
+            return None;
+        }
+        Some(Self {
+            screensaver_timeout_ms: u32::from_le_bytes(bytes[..4].try_into().ok()?),
+            brightness_pct: bytes[4],
+            palette_id: bytes[5],
+        })
+    }
+}
+
+/* Weather conditions (V2 ha_weather_condition_t). */
+pub const WEATHER_UNKNOWN: u8 = 0;
+pub const WEATHER_CLEAR: u8 = 1;
+pub const WEATHER_CLEAR_NIGHT: u8 = 2;
+pub const WEATHER_PARTLYCLOUDY: u8 = 3;
+pub const WEATHER_CLOUDY: u8 = 4;
+pub const WEATHER_OVERCAST: u8 = 5;
+pub const WEATHER_FOG: u8 = 6;
+pub const WEATHER_RAINY: u8 = 7;
+pub const WEATHER_POURING: u8 = 8;
+pub const WEATHER_SNOWY: u8 = 9;
+pub const WEATHER_SNOWY_RAINY: u8 = 10;
+pub const WEATHER_HAIL: u8 = 11;
+pub const WEATHER_LIGHTNING: u8 = 12;
+pub const WEATHER_LIGHTNING_RAINY: u8 = 13;
+pub const WEATHER_WINDY: u8 = 14;
+pub const WEATHER_WINDY_VARIANT: u8 = 15;
+pub const WEATHER_EXCEPTIONAL: u8 = 16;
 
 /// Fixed project key, byte-for-byte from V2 `ha_entity.c`.
 pub const SIPHASH_KEY: [u8; 16] = [
@@ -348,6 +437,114 @@ impl CapabilitiesRecord {
     }
 }
 
+/// `ha_location_record_t` (60): latitude f32@0, longitude f32@4, tz_offset_min
+/// i16@8, flags u8@10 (bit0 tz_auto, bit1 pos_auto), name[48]@12.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocationRecord {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub tz_offset_min: i16,
+    pub tz_auto: bool,
+    pub pos_auto: bool,
+    pub name: [u8; LOCATION_NAME_MAX],
+}
+
+impl Default for LocationRecord {
+    fn default() -> Self {
+        Self {
+            latitude: 0.0,
+            longitude: 0.0,
+            tz_offset_min: 0,
+            tz_auto: true,
+            pos_auto: true,
+            name: [0; LOCATION_NAME_MAX],
+        }
+    }
+}
+
+impl LocationRecord {
+    pub fn encode(self) -> [u8; LOCATION_RECORD_LEN] {
+        let mut out = [0u8; LOCATION_RECORD_LEN];
+        out[..4].copy_from_slice(&self.latitude.to_le_bytes());
+        out[4..8].copy_from_slice(&self.longitude.to_le_bytes());
+        out[8..10].copy_from_slice(&self.tz_offset_min.to_le_bytes());
+        let mut flags = 0u8;
+        if self.tz_auto {
+            flags |= 1;
+        }
+        if self.pos_auto {
+            flags |= 2;
+        }
+        out[10] = flags;
+        out[12..].copy_from_slice(&self.name);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < LOCATION_RECORD_LEN {
+            return None;
+        }
+        let mut name = [0u8; LOCATION_NAME_MAX];
+        name.copy_from_slice(&bytes[12..LOCATION_RECORD_LEN]);
+        let flags = bytes[10];
+        Some(Self {
+            latitude: f32::from_le_bytes(bytes[..4].try_into().ok()?),
+            longitude: f32::from_le_bytes(bytes[4..8].try_into().ok()?),
+            tz_offset_min: i16::from_le_bytes(bytes[8..10].try_into().ok()?),
+            tz_auto: flags & 1 != 0,
+            pos_auto: flags & 2 != 0,
+            name,
+        })
+    }
+
+    /// Auto timezone is filled by the system service (GeoIP); with no data it is 0 (UTC).
+    pub fn effective_tz_offset_min(self) -> i16 {
+        self.tz_offset_min
+    }
+}
+
+/// `ha_weather_record_t` (16): condition/cloud u8@0/1, temp i16@2, humidity u16@4,
+/// pressure u16@6, wind u16@8, wind dir u16@10, reserved[4].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WeatherRecord {
+    pub condition: u8,
+    pub cloud_pct: u8,
+    pub temperature_c100: i16,
+    pub humidity_p100: u16,
+    pub pressure_hpa: u16,
+    pub wind_kmh10: u16,
+    pub wind_dir_deg: u16,
+}
+
+impl WeatherRecord {
+    pub fn encode(self) -> [u8; WEATHER_RECORD_LEN] {
+        let mut out = [0u8; WEATHER_RECORD_LEN];
+        out[0] = self.condition;
+        out[1] = self.cloud_pct;
+        out[2..4].copy_from_slice(&self.temperature_c100.to_le_bytes());
+        out[4..6].copy_from_slice(&self.humidity_p100.to_le_bytes());
+        out[6..8].copy_from_slice(&self.pressure_hpa.to_le_bytes());
+        out[8..10].copy_from_slice(&self.wind_kmh10.to_le_bytes());
+        out[10..12].copy_from_slice(&self.wind_dir_deg.to_le_bytes());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < WEATHER_RECORD_LEN {
+            return None;
+        }
+        Some(Self {
+            condition: bytes[0],
+            cloud_pct: bytes[1],
+            temperature_c100: i16::from_le_bytes(bytes[2..4].try_into().ok()?),
+            humidity_p100: u16::from_le_bytes(bytes[4..6].try_into().ok()?),
+            pressure_hpa: u16::from_le_bytes(bytes[6..8].try_into().ok()?),
+            wind_kmh10: u16::from_le_bytes(bytes[8..10].try_into().ok()?),
+            wind_dir_deg: u16::from_le_bytes(bytes[10..12].try_into().ok()?),
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommandValue {
     None,
@@ -411,5 +608,47 @@ mod tests {
         )));
         assert!(caps.push_event(EVENT_SINGLE_PRESS));
         assert_eq!(caps.encode().len(), CAPABILITIES_LEN);
+    }
+
+    #[test]
+    fn location_layout_and_flags_match_v2() {
+        let mut name = [0u8; LOCATION_NAME_MAX];
+        name[..6].copy_from_slice(b"Moscow");
+        let location = LocationRecord {
+            latitude: 1.5,
+            longitude: -2.25,
+            tz_offset_min: 180,
+            tz_auto: false,
+            pos_auto: false,
+            name,
+        };
+        let bytes = location.encode();
+        assert_eq!(bytes.len(), LOCATION_RECORD_LEN);
+        assert_eq!(bytes[10], 0);
+        assert_eq!(LocationRecord::decode(&bytes), Some(location));
+        assert_eq!(location.effective_tz_offset_min(), 180);
+
+        let auto = LocationRecord::default();
+        assert_eq!(auto.encode()[10], 3);
+        assert_eq!(auto.effective_tz_offset_min(), 0);
+        assert!(LocationRecord::decode(&bytes[..59]).is_none());
+    }
+
+    #[test]
+    fn weather_layout_matches_v2() {
+        let weather = WeatherRecord {
+            condition: WEATHER_PARTLYCLOUDY,
+            cloud_pct: 40,
+            temperature_c100: 2_150,
+            humidity_p100: 6_100,
+            pressure_hpa: 1_013,
+            wind_kmh10: 125,
+            wind_dir_deg: 270,
+        };
+        let bytes = weather.encode();
+        assert_eq!(bytes.len(), WEATHER_RECORD_LEN);
+        assert_eq!(&bytes[2..4], &2_150i16.to_le_bytes());
+        assert_eq!(WeatherRecord::decode(&bytes), Some(weather));
+        assert!(WeatherRecord::decode(&bytes[..15]).is_none());
     }
 }

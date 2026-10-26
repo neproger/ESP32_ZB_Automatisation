@@ -30,6 +30,17 @@ pub enum Request {
     RemoveDevice {
         device: u64,
     },
+    SetAutomationEnabled {
+        automation: u64,
+        enabled: bool,
+    },
+    SetSettings {
+        brightness: u8,
+    },
+    WifiConnect {
+        ssid: String,
+        password: String,
+    },
     /// Generic canonical row: groups, group items/automation links, rules.
     Upsert {
         entity: u32,
@@ -77,6 +88,21 @@ pub fn rename_device(device: u64, name: String) -> Result<(), Error> {
 
 pub fn remove_device(device: u64) -> Result<(), Error> {
     queue(Request::RemoveDevice { device })
+}
+
+pub fn set_automation_enabled(automation: u64, enabled: bool) -> Result<(), Error> {
+    queue(Request::SetAutomationEnabled {
+        automation,
+        enabled,
+    })
+}
+
+pub fn set_settings(brightness: u8) -> Result<(), Error> {
+    queue(Request::SetSettings { brightness })
+}
+
+pub fn wifi_connect(ssid: String, password: String) -> Result<(), Error> {
+    queue(Request::WifiConnect { ssid, password })
 }
 
 pub fn upsert(entity: u32, key: Vec<u8>, record: Vec<u8>) -> Result<(), Error> {

@@ -15,6 +15,16 @@ $cmake = Join-Path $tools 'tools\cmake\4.0.3\bin\cmake.exe'
 $env:IDF_PATH = $idf
 $env:IDF_TOOLS_PATH = $tools
 $env:IDF_PYTHON_ENV_PATH = $python
+# esp-idf-sys stores components_<target>.lock under PROJECT_DIR (its CMake pass
+# needs the same value; missing it yields the unwritable path \components_*.lock).
+$env:PROJECT_DIR = $app.Replace('\', '/')
+# Same as [package.metadata.esp-idf-sys.extra_components]; without it the manual
+# CMake pass silently drops native_net/native_zigbee from the build.
+$env:EXTRA_COMPONENT_DIRS = @(
+    (Join-Path $app 'native_zigbee'),
+    (Join-Path $app 'native_net')
+) -join ';'
+$env:EXTRA_COMPONENT_DIRS = $env:EXTRA_COMPONENT_DIRS.Replace('\', '/')
 # CMake re-run in the cached esp-idf-sys dir needs the target to match.
 $env:IDF_TARGET = 'esp32p4'
 Remove-Item Env:ESP_IDF_TOOLS_INSTALL_DIR -ErrorAction SilentlyContinue

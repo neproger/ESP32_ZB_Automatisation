@@ -19,6 +19,8 @@ ESP_IDF_TOOLS_INSTALL_DIR = "global"
 IDF_PATH = { value = "C:/Users/ASUS/.espressif/esp-idf/v6.1", force = true }
 IDF_TOOLS_PATH = { value = "C:/Users/ASUS/.espressif", force = true }
 IDF_PYTHON_ENV_PATH = { value = "C:/Users/ASUS/.espressif/python_env/idf6.1_py3.10_env", force = true }
+# bindgen (LVGL Rust bindings) needs libclang.
+LIBCLANG_PATH = { value = "C:/Users/ASUS/AppData/Local/Programs/Python/Python310/lib/site-packages/clang/native", force = true }
 
 # Обязательно при вынесенном target-dir (ограничение embuild, см. шаблон esp-rs).
 CARGO_WORKSPACE_DIR = { value = "", relative = true }

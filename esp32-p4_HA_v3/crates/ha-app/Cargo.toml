@@ -24,11 +24,13 @@ zigbee-devices = { path = "../zigbee-devices" }
 z2m-rs = { path = "../z2m-rs" }
 zigbee-exec = { path = "../zigbee-exec" }
 zigbee-frames = { path = "../zigbee-frames" }
-esp-idf-svc = { version = "0.53", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }
+embedded-svc = "0.29"
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 
 [build-dependencies]
 embuild = "0.33.5"
+bindgen = "0.71"
 
 # C-мост к esp-zigbee-lib (бывший PoC-крейт zigbee-esp).
 [[package.metadata.esp-idf-sys.extra_components]]
@@ -38,3 +40,14 @@ remote_component = { name = "espressif/esp-zigbee-lib", version = ">=2.0.0" }
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["native_net"]
 remote_component = { name = "espressif/esp_hosted", version = "*" }
+
+# Display: драйвер/настройки панели в C, LVGL-UI — из Rust.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["native_display"]
+remote_component = { name = "lvgl/lvgl", version = ">=9.2,<10" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_lvgl_port", version = "^2" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_lcd_touch_gt911", version = "^1" }

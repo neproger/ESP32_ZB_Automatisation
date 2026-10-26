@@ -1,10 +1,13 @@
-# HA V3: app 4M (бинарник ~1.5M), mstore под MicroDB Registry, domain под
-# подтверждённое состояние Domain, zb_storage под Zigbee.
-# nvs сохранён в исходном месте/размере — сеть Zigbee PoC не теряется при смене таблицы.
+# HA V3: app 8M, mstore под MicroDB Registry, domain под подтверждённое
+# состояние Domain, zb_storage под Zigbee. Flash 16 МБ: после domain остаётся
+# ~7 МБ свободных. nvs сохранён в исходном месте/размере — сеть Zigbee PoC
+# не теряется при смене таблицы.
+# При переходе с 4M mstore/zb/domain переносятся (read-flash/write-bin), данные
+# не теряются.
 # Name,      Type, SubType, Offset,   Size,  Flags
 nvs,         data, nvs,     0x9000,   0x6000,
 phy_init,    data, phy,     0xf000,   0x1000,
-factory,     app,  factory, 0x10000,  4M,
-mstore,      data, fat,     0x410000, 0x60000,
-zb_storage,  data, nvs,     0x470000, 16K,
-domain,      data, fat,     0x480000, 0x80000,
+factory,     app,  factory, 0x10000,  8M,
+mstore,      data, fat,     0x810000, 0x60000,
+zb_storage,  data, nvs,     0x870000, 16K,
+domain,      data, fat,     0x880000, 0x80000,

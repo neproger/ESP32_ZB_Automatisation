@@ -368,6 +368,11 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
             ha_domain::canonical::GROUP_KEY_LEN,
             &buf[9..len],
         ),
+        command::LOCATION_PUT => handle_upsert(
+            ha_web::entity::LOCATION,
+            ha_domain::canonical::LOCATION_KEY_LEN,
+            &buf[9..len],
+        ),
         command::GROUP_ITEM_PUT => handle_upsert(
             ha_web::entity::GROUP_ITEM,
             ha_domain::canonical::GROUP_ITEM_KEY_LEN,

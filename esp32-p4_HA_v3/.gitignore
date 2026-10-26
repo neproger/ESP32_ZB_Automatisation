@@ -10,3 +10,5 @@ tools/zhc-compiler/node_modules/
 tools/zhc-compiler/out/
 /.vscode/
 /.clangd
+
+/crates/ha-app/components_*.lock

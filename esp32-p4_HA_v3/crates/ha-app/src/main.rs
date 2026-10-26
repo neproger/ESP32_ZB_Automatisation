@@ -14,7 +14,13 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    StateKey, StateRecord, ENTITY_ENTITY, SOURCE_ZIGBEE,
+    LocationRecord, SettingsRecord, StateKey, StateRecord, WeatherRecord, ENTITY_ENTITY,
+    ENTITY_LOCATION, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER,
+    EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_SYSTEM_HOUR, PROPERTY_SYSTEM_MINUTE,
+    PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS, PROPERTY_SYSTEM_TIME_UTC,
+    PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY, PROPERTY_SYSTEM_WEEKDAY_MASK,
+    SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
+    WEATHER_DEVICE_UID,
 };
 use ha_domain::command::CommandCore;
 use ha_domain::{Domain, FactMeta, FactTarget};
@@ -28,6 +34,8 @@ mod store;
 mod web;
 mod configure;
 mod bridge;
+mod display;
+mod system;
 
 
 /// Mirror of `poc_event_t` from the C shim; copied once across the FFI boundary.
@@ -46,7 +54,13 @@ struct PocEvent {
 extern "C" {
     fn ha_wifi_start(ssid: *const c_char, password: *const c_char) -> i32;
     fn ha_wifi_ip(out: *mut c_char, len: usize) -> i32;
-    fn ha_wifi_reconnect();
+    fn ha_wifi_rssi(rssi: *mut i32) -> i32;
+    fn ha_wifi_scan_start() -> i32;
+    fn ha_wifi_scan_ready() -> i32;
+    fn ha_wifi_scan_clear();
+    fn ha_wifi_scan_count() -> i32;
+    fn ha_wifi_scan_get(index: i32, ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
+    fn ha_wifi_connect_ssid(ssid: *const c_char, password: *const c_char) -> i32;
     fn ha_time_start();
     fn zb_poc_start() -> i32;
     fn zb_poc_run();
@@ -80,6 +94,8 @@ fn main() {
         log::error!("domain: table init failed: {error:?}");
     }
     store::restore_domain(&mut domain);
+    ensure_system_location(&mut domain);
+    ensure_settings(&mut domain);
     let mut automation = ha_automation::RuleEngine::boxed();
     rebuild_rules(&domain, &mut automation);
     let mut executor = Box::new(zigbee_exec::Executor::new());
@@ -104,6 +120,14 @@ fn main() {
             store::compact_for_test();
         }
     }
+    if display::start() {
+        if let Some(location) = read_location(&domain) {
+            display::set_location(&location_name(&location));
+        }
+        display::set_brightness(read_settings(&domain).brightness_pct);
+        display::rebuild(&domain);
+    }
+    system::start(read_location(&domain).unwrap_or_default());
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
@@ -117,6 +141,8 @@ fn main() {
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
     let mut last_minute: Option<(u16, u8)> = None;
+    let mut last_wifi_poll = 0u64;
+    let mut last_weather: Option<u8> = None;
     loop {
         let mut event = PocEvent::default();
         if unsafe { zb_poc_poll(&mut event) } != 0 {
@@ -140,9 +166,15 @@ fn main() {
             zigbee_devices::update_binding_short(&mut bindings, eui, short);
             ensure_interview(&mut executor, eui, short);
         }
+        let mut identified = false;
         while let Some((eui, short, profile)) = interview::take_identified() {
             register_device(&mut domain, &mut bindings, eui, short, profile);
+            identified = true;
         }
+        if identified {
+            display::rebuild(&domain);
+        }
+        let mut display_dirty = false;
         while let Some(request) = intake::take() {
             match request {
                 intake::Request::Command {
@@ -173,13 +205,84 @@ fn main() {
                     }
                 }
                 intake::Request::RenameEntity { entity, name } => {
-                    rename_entity(&mut domain, entity, &name)
+                    rename_entity(&mut domain, entity, &name);
+                    display_dirty = true;
                 }
                 intake::Request::RenameDevice { device, name } => {
-                    rename_device(&mut domain, device, &name)
+                    rename_device(&mut domain, device, &name);
+                    display_dirty = true;
                 }
                 intake::Request::RemoveDevice { device } => {
-                    remove_device(&mut domain, &mut bindings, &mut executor, device)
+                    remove_device(&mut domain, &mut bindings, &mut executor, device);
+                    display_dirty = true;
+                }
+                intake::Request::SetAutomationEnabled {
+                    automation: id,
+                    enabled,
+                } => {
+                    let key = id.to_le_bytes();
+                    let mut record = [0u8; ha_domain::canonical::AUTOMATION_RECORD_LEN];
+                    if domain
+                        .entity_get(
+                            ha_domain::canonical::ENTITY_AUTOMATION,
+                            &key,
+                            &mut record,
+                        )
+                        .is_err()
+                    {
+                        log::warn!("display: automation {id:016x} not found");
+                        continue;
+                    }
+                    record[384] = u8::from(enabled);
+                    let mut sink = StoreSink;
+                    let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
+                        continue;
+                    };
+                    if let Err(error) = adapter.put_record(
+                        ha_domain::canonical::ENTITY_AUTOMATION,
+                        &key,
+                        &record,
+                    ) {
+                        log::warn!("display: automation {id:016x} write failed: {error:?}");
+                        continue;
+                    }
+                    drop(adapter);
+                    web::upsert(ha_web::entity::AUTOMATION, &key, &record);
+                    rebuild_rules(&domain, &mut automation);
+                    display_dirty = true;
+                }
+                intake::Request::SetSettings { brightness } => {
+                    let key = [SETTINGS_ID];
+                    let mut settings = read_settings(&domain);
+                    settings.brightness_pct = brightness;
+                    let record = settings.encode();
+                    let mut sink = StoreSink;
+                    let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
+                        continue;
+                    };
+                    if let Err(error) =
+                        adapter.put_record(ENTITY_SETTINGS, &key, &record)
+                    {
+                        log::warn!("display: settings write failed: {error:?}");
+                        continue;
+                    }
+                    drop(adapter);
+                    web::upsert(ha_web::entity::SETTINGS, &key, &record);
+                    display::set_brightness(brightness);
+                }
+                intake::Request::WifiConnect { ssid, password } => {
+                    let Ok(ssid_c) = CString::new(ssid) else {
+                        continue;
+                    };
+                    let password_c = CString::new(password).unwrap_or_default();
+                    let rc = unsafe {
+                        ha_wifi_connect_ssid(ssid_c.as_ptr(), password_c.as_ptr())
+                    };
+                    if rc != 0 {
+                        log::warn!("wifi: connect request rejected ({rc})");
+                    } else {
+                        log::info!("wifi: connect requested");
+                    }
                 }
                 intake::Request::Upsert {
                     entity,
@@ -187,6 +290,8 @@ fn main() {
                     record,
                 } => {
                     let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
+                    let is_location = entity == ha_domain::canonical::ENTITY_LOCATION;
+                    display_dirty |= display_relevant(entity);
                     let mut sink = StoreSink;
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         log::error!("domain: adapter init failed");
@@ -208,9 +313,16 @@ fn main() {
                     if is_rule {
                         rebuild_rules(&domain, &mut automation);
                     }
+                    if is_location {
+                        if let Some(location) = read_location(&domain) {
+                            display::set_location(&location_name(&location));
+                            system::set_location(location);
+                        }
+                    }
                 }
                 intake::Request::Remove { entity, key } => {
                     let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
+                    display_dirty |= display_relevant(entity);
                     let mut sink = StoreSink;
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         log::error!("domain: adapter init failed");
@@ -273,6 +385,61 @@ fn main() {
                 }
             }
         }
+        if display_dirty {
+            display::rebuild(&domain);
+        }
+        while let Some(nav) = display::take_nav() {
+            match nav {
+                display::Nav::WifiScan => {
+                    let rc = unsafe { ha_wifi_scan_start() };
+                    if rc != 0 {
+                        log::warn!("wifi: scan request rejected ({rc})");
+                    } else {
+                        log::info!("wifi: scan requested");
+                        display::wifi_scan_requested(&domain);
+                    }
+                }
+                display::Nav::OpenWifi => {
+                    let results = collect_wifi_scan();
+                    if !results.is_empty() {
+                        display::set_wifi_scan(results);
+                    }
+                    display::navigate(&domain, display::Nav::OpenWifi);
+                }
+                _ => display::navigate(&domain, nav),
+            }
+        }
+        if unsafe { ha_wifi_scan_ready() } != 0 {
+            let results = collect_wifi_scan();
+            log::info!("wifi: scan result {} networks", results.len());
+            display::wifi_scan_done(&domain, results);
+            unsafe { ha_wifi_scan_clear() };
+        }
+        while let Some(update) = system::take() {
+            match update {
+                system::Update::Location(location) => apply_system_location(&mut domain, location),
+                system::Update::Weather(weather) => {
+                    let changed = last_weather != Some(weather.condition);
+                    last_weather = Some(weather.condition);
+                    apply_weather(&mut domain, weather);
+                    if changed {
+                        let mut actions = ha_automation::Actions::new();
+                        automation.on_event(
+                            ENTITY_SYSTEM,
+                            EVENT_WEATHER_CHANGED,
+                            &DomainState(&domain),
+                            &mut actions,
+                        );
+                        submit_automation(
+                            &mut executor,
+                            &mut command_core,
+                            &mut bindings,
+                            &actions,
+                        );
+                    }
+                }
+            }
+        }
         while let Some(state) = bridge::take_state() {
             let entity = state.entity;
             let property = state.property;
@@ -329,12 +496,14 @@ fn main() {
         }
         interview::tick(&mut executor, now_ms());
         configure::tick(&mut executor, now_ms());
-        if let Some((minutes, weekday)) = utc_minute() {
+        if let Some((minutes, weekday)) = local_minute(&domain) {
             if last_minute != Some((minutes, weekday)) {
                 if last_minute.is_none() {
-                    log::info!("time: UTC clock ready (time rules use UTC)");
+                    log::info!("time: local clock ready (time rules use Location tz)");
                 }
                 last_minute = Some((minutes, weekday));
+                display::set_clock((minutes / 60) as u8, (minutes % 60) as u8);
+                publish_system_time(&mut domain, minutes, weekday);
                 let mut actions = ha_automation::Actions::new();
                 automation.on_minute(
                     minutes,
@@ -344,6 +513,13 @@ fn main() {
                 );
                 submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
             }
+        }
+        let now = now_ms();
+        if now.saturating_sub(last_wifi_poll) >= 2000 {
+            last_wifi_poll = now;
+            let mut rssi = 0i32;
+            let up = unsafe { ha_wifi_rssi(&mut rssi) } != 0;
+            display::set_wifi(up.then_some(rssi as i16));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -419,6 +595,8 @@ fn apply_capabilities(
         &entity.to_le_bytes(),
         &capabilities.encode(),
     );
+    drop(adapter);
+    display::rebuild(domain);
 }
 
 fn apply_state(
@@ -439,6 +617,7 @@ fn apply_state(
                 state.entity,
                 state.property
             );
+            display::on_state(state.entity, state.property, state.value);
             if changed {
                 let key = StateKey {
                     entity: state.entity,
@@ -482,13 +661,10 @@ fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
     }
 }
 fn start_wifi() {
-    let (Some(ssid), Some(password)) = (option_env!("HA_WIFI_SSID"), option_env!("HA_WIFI_PASSWORD"))
-    else {
-        log::warn!("wifi disabled: set HA_WIFI_SSID/HA_WIFI_PASSWORD at build time");
-        return;
-    };
-    let ssid = CString::new(ssid).expect("ssid");
-    let password = CString::new(password).expect("password");
+    /* Until provisioning exists the known list lives in ha_wifi.c; the build-time
+     * env pair only adds/overrides one entry. */
+    let ssid = CString::new(option_env!("HA_WIFI_SSID").unwrap_or("")).expect("ssid");
+    let password = CString::new(option_env!("HA_WIFI_PASSWORD").unwrap_or("")).expect("password");
 
     let err = unsafe { ha_wifi_start(ssid.as_ptr(), password.as_ptr()) };
     if err != 0 {
@@ -497,7 +673,6 @@ fn start_wifi() {
     }
     let mut last_ip: Option<String> = None;
     let mut time_started = false;
-    let mut misses = 0u32;
     loop {
         let mut buf = [0 as c_char; 32];
         if unsafe { ha_wifi_ip(buf.as_mut_ptr(), buf.len()) } != 0 {
@@ -524,14 +699,6 @@ fn start_wifi() {
                     Err(error) => log::error!("web: self-check connect failed: {error}"),
                 }
                 last_ip = Some(ip);
-            }
-            misses = 0;
-        } else {
-            // V2 watchdog: two 5 s misses without an address -> retry with backoff.
-            misses += 1;
-            if misses >= 10 {
-                misses = 0;
-                unsafe { ha_wifi_reconnect() };
             }
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -617,7 +784,206 @@ fn submit_automation(
     }
 }
 
-fn utc_minute() -> Option<(u16, u8)> {
+/// Seed the singleton Location so the UI can edit it before the first save.
+fn ensure_system_location(domain: &mut Domain) {
+    let key = SYSTEM_DEVICE_UID.to_le_bytes();
+    let mut current = [0u8; LOCATION_RECORD_LEN];
+    if domain.entity_get(ENTITY_LOCATION, &key, &mut current).is_ok() {
+        return;
+    }
+    let record = LocationRecord::default().encode();
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        log::error!("domain: location table init failed");
+        return;
+    };
+    match adapter.put_record(ENTITY_LOCATION, &key, &record) {
+        Ok(changed) => {
+            if changed {
+                web::upsert(ha_web::entity::LOCATION, &key, &record);
+            }
+            log::info!("domain: location seeded");
+        }
+        Err(error) => log::warn!("domain: location seed failed: {error:?}"),
+    }
+}
+
+/// Local wall-clock minute for automation Time triggers. A manual offset is
+/// applied; auto timezone falls back to UTC until GeoIP exists.
+fn display_relevant(entity: u32) -> bool {
+    matches!(
+        entity,
+        ha_domain::canonical::ENTITY_GROUP
+            | ha_domain::canonical::ENTITY_GROUP_ITEM
+            | ha_domain::canonical::ENTITY_GROUP_AUTOMATION
+            | ha_domain::canonical::ENTITY_ENTITY
+            | ha_domain::canonical::ENTITY_CAPABILITIES
+            | ha_domain::canonical::ENTITY_AUTOMATION
+    )
+}
+
+fn collect_wifi_scan() -> Vec<(String, i8)> {
+    let count = unsafe { ha_wifi_scan_count() };
+    let mut results = Vec::new();
+    for index in 0..count {
+        let mut ssid = [0 as c_char; 33];
+        let mut rssi = 0i32;
+        let ok = unsafe { ha_wifi_scan_get(index, ssid.as_mut_ptr(), ssid.len(), &mut rssi) };
+        if ok != 0 {
+            let ssid = unsafe { CStr::from_ptr(ssid.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            results.push((ssid, rssi as i8));
+        }
+    }
+    results
+}
+
+fn read_settings(domain: &Domain) -> SettingsRecord {
+    let key = [SETTINGS_ID];
+    let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+    domain
+        .entity_get(ENTITY_SETTINGS, &key, &mut bytes)
+        .ok()
+        .and_then(|()| SettingsRecord::decode(&bytes))
+        .unwrap_or_default()
+}
+
+fn ensure_settings(domain: &mut Domain) {
+    let key = [SETTINGS_ID];
+    let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+    if domain.entity_get(ENTITY_SETTINGS, &key, &mut bytes).is_ok() {
+        return;
+    }
+    let record = SettingsRecord::default().encode();
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        return;
+    };
+    match adapter.put_record(ENTITY_SETTINGS, &key, &record) {
+        Ok(changed) => {
+            if changed {
+                web::upsert(ha_web::entity::SETTINGS, &key, &record);
+            }
+            log::info!("domain: settings seeded");
+        }
+        Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
+    }
+}
+
+fn read_location(domain: &Domain) -> Option<LocationRecord> {
+    let mut bytes = [0u8; LOCATION_RECORD_LEN];
+    domain
+        .entity_get(ENTITY_LOCATION, &SYSTEM_DEVICE_UID.to_le_bytes(), &mut bytes)
+        .ok()?;
+    LocationRecord::decode(&bytes)
+}
+
+fn location_name(location: &LocationRecord) -> String {
+    let end = location
+        .name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(location.name.len());
+    String::from_utf8_lossy(&location.name[..end]).into_owned()
+}
+
+fn apply_system_location(domain: &mut Domain, location: LocationRecord) {
+    let key = SYSTEM_DEVICE_UID.to_le_bytes();
+    let record = location.encode();
+    let mut sink = StoreSink;
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
+        return;
+    };
+    match adapter.put_record(ENTITY_LOCATION, &key, &record) {
+        Ok(changed) => {
+            if changed {
+                web::upsert(ha_web::entity::LOCATION, &key, &record);
+            }
+        }
+        Err(error) => log::warn!("system: location write failed: {error:?}"),
+    }
+    drop(adapter);
+    display::set_location(&location_name(&location));
+    system::set_location(location);
+}
+
+fn apply_weather(domain: &mut Domain, weather: WeatherRecord) {
+    let key = WEATHER_DEVICE_UID.to_le_bytes();
+    let record = weather.encode();
+    let meta = FactMeta {
+        source: SOURCE_SYSTEM as u8,
+        value: ha_domain::Value::NONE,
+    };
+    if let Err(error) = domain.entity_put(ENTITY_WEATHER, &key, &record, meta) {
+        log::warn!("system: weather write failed: {error:?}");
+        return;
+    }
+    web::upsert(ha_web::entity::WEATHER, &key, &record);
+    display::set_weather(
+        weather.condition,
+        f32::from(weather.temperature_c100) / 100.0,
+        f32::from(weather.humidity_p100) / 100.0,
+    );
+}
+
+/// Publish the V2 system time properties (RAM only, no flash writes every minute).
+fn publish_system_time(domain: &mut Domain, minutes: u16, weekday: u8) {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as u32);
+    let offset = read_location(domain)
+        .map(|location| i32::from(location.effective_tz_offset_min()))
+        .unwrap_or(0);
+    let entries = [
+        (PROPERTY_SYSTEM_TIME_UTC, ha_domain::Value::u32(seconds)),
+        (
+            PROPERTY_SYSTEM_TIME_STATUS,
+            ha_domain::Value::u32(2),
+        ),
+        (
+            PROPERTY_SYSTEM_HOUR,
+            ha_domain::Value::u32(u32::from(minutes / 60)),
+        ),
+        (
+            PROPERTY_SYSTEM_MINUTE,
+            ha_domain::Value::u32(u32::from(minutes % 60)),
+        ),
+        (
+            PROPERTY_SYSTEM_WEEKDAY,
+            ha_domain::Value::u32(u32::from(weekday)),
+        ),
+        (
+            PROPERTY_SYSTEM_WEEKDAY_MASK,
+            ha_domain::Value::u32(1u32 << weekday),
+        ),
+        (
+            PROPERTY_SYSTEM_MINUTES_OF_DAY,
+            ha_domain::Value::u32(u32::from(minutes)),
+        ),
+        (PROPERTY_SYSTEM_TZ_OFFSET, ha_domain::Value::i32(offset)),
+    ];
+    let meta = FactMeta {
+        source: SOURCE_SYSTEM as u8,
+        value: ha_domain::Value::NONE,
+    };
+    for (property, value) in entries {
+        let key = StateKey {
+            entity: ENTITY_SYSTEM,
+            property,
+        }
+        .to_bytes();
+        let record = StateRecord { value }.encode();
+        if domain
+            .entity_put(ENTITY_PROPERTY_STATE, &key, &record, meta)
+            .is_ok()
+        {
+            web::upsert(ha_web::entity::PROPERTY_STATE, &key, &record);
+        }
+    }
+}
+
+fn local_minute(domain: &Domain) -> Option<(u16, u8)> {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
@@ -626,8 +992,20 @@ fn utc_minute() -> Option<(u16, u8)> {
     if seconds < 1_600_000_000 {
         return None;
     }
-    let weekday = ((seconds / 86_400 + 3) % 7) as u8;
-    let minutes = ((seconds % 86_400) / 60) as u16;
+    let mut bytes = [0u8; LOCATION_RECORD_LEN];
+    let offset = domain
+        .entity_get(ENTITY_LOCATION, &SYSTEM_DEVICE_UID.to_le_bytes(), &mut bytes)
+        .ok()
+        .and_then(|()| LocationRecord::decode(&bytes))
+        .map(|location| location.effective_tz_offset_min())
+        .unwrap_or(0);
+    let local = i64::try_from(seconds).ok()? + i64::from(offset) * 60;
+    if local < 0 {
+        return None;
+    }
+    let local = local as u64;
+    let weekday = ((local / 86_400 + 3) % 7) as u8;
+    let minutes = ((local % 86_400) / 60) as u16;
     Some((minutes, weekday))
 }
 

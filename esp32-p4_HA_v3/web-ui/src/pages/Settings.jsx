@@ -29,7 +29,7 @@ export default function Settings() {
   const [saved, setSaved] = useState(false)
 
   const tzOptions = useMemo(() => {
-    const out = [{ value: 'auto', label: 'Авто (по региону)' }]
+    const out = [{ value: 'auto', label: 'Авто (UTC)' }]
     for (let m = -12 * 60; m <= 14 * 60; m += 30) {
       out.push({ value: String(m), label: tzLabel(m) })
     }
@@ -107,7 +107,7 @@ export default function Settings() {
               ))}
             </select>
             <span className="muted">
-              {timezone === 'auto' ? 'определяется по сети' : tzLabel(timezone)}
+              {timezone === 'auto' ? 'UTC (GeoIP позже)' : tzLabel(timezone)}
             </span>
           </div>
         </div>
@@ -155,7 +155,7 @@ export default function Settings() {
       </div>
 
       <div className="settings-actions">
-        <button className="primary" onClick={save} disabled={!loc}>Сохранить</button>
+        <button className="primary" onClick={save}>Сохранить</button>
         {saved && <span className="saved">сохранено</span>}
         <span className="muted">
           {loc

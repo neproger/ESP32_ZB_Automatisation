@@ -5,8 +5,9 @@ use ha_domain::canonical::{
     device_id_derive, zigbee_entity_id, DeviceId, EntityId, EntityRecord, LogicalDeviceRecord,
     PropertyId, StateKey, StateRecord, AUTOMATION_RECORD_LEN, ENTITY_AUTOMATION,
     ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
-    ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, GROUP_ITEM_KEY_LEN, GROUP_ITEM_RECORD_LEN,
-    GROUP_KEY_LEN, GROUP_RECORD_LEN, SOURCE_ZIGBEE,
+    ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_WEATHER,
+    GROUP_ITEM_KEY_LEN, GROUP_ITEM_RECORD_LEN, GROUP_KEY_LEN, GROUP_RECORD_LEN, LOCATION_KEY_LEN,
+    LOCATION_RECORD_LEN, SETTINGS_RECORD_LEN, SOURCE_ZIGBEE, WEATHER_RECORD_LEN,
 };
 use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
@@ -21,6 +22,9 @@ pub const GROUP_CAPACITY: usize = 16;
 pub const GROUP_ITEM_CAPACITY: usize = 64;
 pub const GROUP_AUTOMATION_CAPACITY: usize = 64;
 pub const AUTOMATION_CAPACITY: usize = 16;
+pub const LOCATION_CAPACITY: usize = 4;
+pub const WEATHER_CAPACITY: usize = 4;
+pub const SETTINGS_CAPACITY: usize = 2;
 
 /// Write-through port for canonical records. The firmware implements it over
 /// MicroDB; host tests can use an in-memory sink.
@@ -122,6 +126,30 @@ impl<'a> DomainAdapter<'a> {
                 key_size: GROUP_KEY_LEN,
                 record_size: AUTOMATION_RECORD_LEN,
                 capacity: AUTOMATION_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_LOCATION,
+                key_size: LOCATION_KEY_LEN,
+                record_size: LOCATION_RECORD_LEN,
+                capacity: LOCATION_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_WEATHER,
+                key_size: 8,
+                record_size: WEATHER_RECORD_LEN,
+                capacity: WEATHER_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_SETTINGS,
+                key_size: 1,
+                record_size: SETTINGS_RECORD_LEN,
+                capacity: SETTINGS_CAPACITY,
                 backing: Backing::Ram,
                 persist_key: None,
             },
@@ -556,7 +584,7 @@ fn fact_meta() -> FactMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ha_domain::canonical::PROPERTY_POWER;
+    use ha_domain::canonical::{LocationRecord, PROPERTY_POWER, SYSTEM_DEVICE_UID};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -598,6 +626,42 @@ mod tests {
             .write_state(7, PROPERTY_POWER, DomainValue::bool(true))
             .unwrap());
         assert_eq!(puts.borrow().len(), 1);
+    }
+
+    #[test]
+    fn location_is_written_through_and_read_back() {
+        let mut domain = Domain::new(8, 2, 8).unwrap();
+        let puts = Rc::new(RefCell::new(Vec::new()));
+        let mut sink = Sink {
+            puts: Rc::clone(&puts),
+            removes: Rc::new(RefCell::new(Vec::new())),
+        };
+        let mut adapter = DomainAdapter::with_sink(&mut domain, &mut sink).unwrap();
+        let key = SYSTEM_DEVICE_UID.to_le_bytes();
+        let mut name = [0u8; ha_domain::canonical::LOCATION_NAME_MAX];
+        name[..6].copy_from_slice(b"Moscow");
+        let record = LocationRecord {
+            latitude: 55.75,
+            longitude: 37.62,
+            tz_offset_min: 180,
+            tz_auto: false,
+            pos_auto: false,
+            name,
+        }
+        .encode();
+        assert!(adapter.put_record(ENTITY_LOCATION, &key, &record).unwrap());
+        drop(adapter);
+
+        assert!(puts.borrow().iter().any(|(entity, put_key, put)| {
+            *entity == ENTITY_LOCATION
+                && put_key.as_slice() == key.as_slice()
+                && put.as_slice() == record.as_slice()
+        }));
+        let mut saved = [0u8; LOCATION_RECORD_LEN];
+        domain
+            .entity_get(ENTITY_LOCATION, &key, &mut saved)
+            .unwrap();
+        assert_eq!(saved, record);
     }
 
     #[test]

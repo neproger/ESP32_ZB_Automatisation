@@ -134,8 +134,9 @@ entity/capabilities/property-state/groups/automation — в разделе `doma
 Группы и автоматизации хранятся в Domain как canonical-записи и переживают
 reboot. `ha-automation` исполняет EVENT/STATE/TIME-триггеры: состояние и события
 приходят из моста после подтверждённой мутации, условия читают Domain, действия
-уходят в обычный CommandRouter/capability-gating. TIME-триггеры используют SNTP
-и **UTC**; локальная таймзона появится вместе с Location/Settings.
+уходят в обычный CommandRouter/capability-gating. TIME-триггеры используют SNTP;
+`Location`/`Settings` задают ручное смещение для локального времени (auto пока
+UTC, GeoIP в V3 нет).
 
 ## 9. Производительность и ограничения
 

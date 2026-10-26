@@ -68,3 +68,17 @@ CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=64
 CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=64
 CONFIG_WIFI_RMT_TX_BA_WIN=16
 CONFIG_WIFI_RMT_RX_BA_WIN=16
+
+# Display (порт V2): кадровый буфер DSI 480x800x2 = 768 КБ не влезает в internal.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# LVGL 9 (managed-компонент): RGB565 и 8 стопов градиента для цветного виджета.
+CONFIG_LV_COLOR_FORMAT_RGB565=y
+CONFIG_LV_COLOR_DEPTH=16
+CONFIG_LV_GRADIENT_MAX_STOPS=8
+
+# esp_lcd/esp_lcd_touch тянут legacy-драйвер i2c вместе с esp_driver_i2c.
+# Используется только новый драйвер, поэтому стартовый конфликт-чек выключаем.
+CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
