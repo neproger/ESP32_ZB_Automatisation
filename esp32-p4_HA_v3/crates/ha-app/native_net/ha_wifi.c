@@ -1,13 +1,11 @@
 /*
  * Wi-Fi service on ESP-Hosted (P4 host, C3 slave).
  *
- * Ported from V2 wifi/src/wifi.c: one owner task, known-AP list, autoconnect to
- * the strongest known AP, exponential backoff and a link watchdog. Radio calls
- * never run in an event or timer callback, so a stuck connect cannot block the
- * reconnect path.
+ * One owner task: known-AP list, autoconnect to the strongest known AP,
+ * exponential backoff and a link watchdog. Radio calls never run in an event
+ * or timer callback, so a stuck connect cannot block the reconnect path.
  *
- * Provisioning does not exist yet (no display): known APs are hardcoded here and
- * the build-time HA_WIFI_SSID/HA_WIFI_PASSWORD pair is appended at start.
+ * Provisioning is done from the display; known APs are kept in NVS.
  */
 #include <stdio.h>
 #include <string.h>
@@ -18,7 +16,8 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_sntp.h"
-#include "esp_timer.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -60,13 +59,6 @@ typedef struct {
     char password[WIFI_PASSWORD_MAX];
 } wifi_req_t;
 
-/* Hardcoded list for builds without HA_WIFI_SSID/HA_WIFI_PASSWORD. Keep
- * credentials out of git: an empty password means an open network. */
-static const wifi_known_t s_builtin_known[] = {
-    /* Add networks here for a build without the env pair. */
-    {"", ""},
-};
-
 static TaskHandle_t s_task;
 static QueueHandle_t s_queue;
 static SemaphoreHandle_t s_scan_mutex;
@@ -86,10 +78,10 @@ static TickType_t s_last_connect_at;
 
 static void store_scan_results(const wifi_scan_ap_t *aps, size_t count);
 
-int ha_wifi_link_up(void)
+static bool link_up(void)
 {
     wifi_ap_record_t ap;
-    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? 1 : 0;
+    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
 }
 
 /* RSSI активной точки; 0 — связи нет. */
@@ -124,26 +116,95 @@ static bool ssid_equals(const char *a, const char *b)
     return strncmp(a, b, WIFI_SSID_MAX) == 0;
 }
 
-static void known_add(const char *ssid, const char *password)
+static bool known_add_raw(const char *ssid, const char *password)
 {
     if (ssid == NULL || ssid[0] == '\0') {
-        return;
+        return false;
     }
+    const char *pass = password != NULL ? password : "";
     for (size_t i = 0; i < s_known_count; ++i) {
         if (ssid_equals(s_known[i].ssid, ssid)) {
-            strlcpy(s_known[i].password, password != NULL ? password : "",
-                    sizeof(s_known[i].password));
-            return;
+            if (strncmp(s_known[i].password, pass, WIFI_PASSWORD_MAX) == 0) {
+                return false;
+            }
+            strlcpy(s_known[i].password, pass, sizeof(s_known[i].password));
+            return true;
         }
     }
     if (s_known_count >= WIFI_KNOWN_MAX) {
         ESP_LOGW(TAG, "known list full, \"%s\" not saved", ssid);
-        return;
+        return false;
     }
     strlcpy(s_known[s_known_count].ssid, ssid, sizeof(s_known[0].ssid));
-    strlcpy(s_known[s_known_count].password, password != NULL ? password : "",
-            sizeof(s_known[0].password));
+    strlcpy(s_known[s_known_count].password, pass, sizeof(s_known[0].password));
     s_known_count++;
+    return true;
+}
+
+static void known_save(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("ha_wifi", NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "known APs not saved: %s", esp_err_to_name(err));
+        return;
+    }
+    err = nvs_set_u8(handle, "count", (uint8_t)s_known_count);
+    for (size_t i = 0; err == ESP_OK && i < s_known_count; ++i) {
+        char key[8];
+        snprintf(key, sizeof(key), "ssid%u", (unsigned)i);
+        err = nvs_set_str(handle, key, s_known[i].ssid);
+        if (err == ESP_OK) {
+            snprintf(key, sizeof(key), "pass%u", (unsigned)i);
+            err = nvs_set_str(handle, key, s_known[i].password);
+        }
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "known APs not saved: %s", esp_err_to_name(err));
+    }
+    nvs_close(handle);
+}
+
+static void known_add(const char *ssid, const char *password)
+{
+    if (known_add_raw(ssid, password)) {
+        known_save();
+    }
+}
+
+static void known_load(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("ha_wifi", NVS_READONLY, &handle) != ESP_OK) {
+        return;
+    }
+    uint8_t count = 0;
+    if (nvs_get_u8(handle, "count", &count) != ESP_OK) {
+        count = 0;
+    }
+    if (count > WIFI_KNOWN_MAX) {
+        count = WIFI_KNOWN_MAX;
+    }
+    for (uint8_t i = 0; i < count; ++i) {
+        char key[8];
+        char ssid[WIFI_SSID_MAX];
+        char pass[WIFI_PASSWORD_MAX];
+        size_t len = sizeof(ssid);
+        snprintf(key, sizeof(key), "ssid%u", (unsigned)i);
+        ssid[0] = '\0';
+        if (nvs_get_str(handle, key, ssid, &len) != ESP_OK || ssid[0] == '\0') {
+            continue;
+        }
+        len = sizeof(pass);
+        pass[0] = '\0';
+        snprintf(key, sizeof(key), "pass%u", (unsigned)i);
+        (void)nvs_get_str(handle, key, pass, &len);
+        (void)known_add_raw(ssid, pass);
+    }
+    nvs_close(handle);
 }
 
 /* --- Radio --------------------------------------------------------------- */
@@ -182,7 +243,7 @@ static bool scan_now(wifi_scan_ap_t *aps, size_t *count)
     return true;
 }
 
-/* Strongest known AP in range (V2 wifi_select_known). */
+/* Strongest known AP in range. */
 static bool select_known(const wifi_scan_ap_t *aps, size_t count, size_t *out_index,
                          int8_t *out_rssi, size_t *out_ap)
 {
@@ -219,7 +280,7 @@ static void do_connect_ap(const char *ssid, const char *password, const wifi_sca
     wifi_config_t config = {0};
     strlcpy((char *)config.sta.ssid, ssid, sizeof(config.sta.ssid));
     strlcpy((char *)config.sta.password, password, sizeof(config.sta.password));
-    /* Same as the working S3 gateway: no auth threshold and no PMF claim. */
+    /* Connect by SSID; prefer the scanned BSSID/channel when available. */
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     if (ap != NULL && ap->channel != 0) {
         config.sta.bssid_set = true;
@@ -230,7 +291,7 @@ static void do_connect_ap(const char *ssid, const char *password, const wifi_sca
         config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     }
 
-    /* V2 parity: WPA2 minimum, PMF advertised, SAE-H2E for WPA3 APs. */
+    /* WPA2 minimum; PMF capable (not required); SAE H2E for WPA3. */
     config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     config.sta.pmf_cfg.capable = true;
     config.sta.pmf_cfg.required = false;
@@ -274,7 +335,7 @@ static void do_connect(const char *ssid, const char *password)
 /* Rescan and reconnect to the strongest known AP. */
 static void autoconnect(void)
 {
-    if (ha_wifi_link_up()) {
+    if (link_up()) {
         return;
     }
     if (s_known_count == 0) {
@@ -313,7 +374,7 @@ static void do_reconnect(void)
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
     s_reconnect_pending = false;
-    if (ha_wifi_link_up()) {
+    if (link_up()) {
         return;
     }
     autoconnect();
@@ -431,9 +492,8 @@ static void store_scan_results(const wifi_scan_ap_t *aps, size_t count)
 
 static void scan_and_store(void)
 {
-    /* A scan in the middle of auth/assoc returns no APs; clear the half-state
-     * first (same order as V2: radio is idle for the scan). */
-    if (!ha_wifi_link_up()) {
+    /* A scan in the middle of auth/assoc returns no APs; idle the radio first. */
+    if (!link_up()) {
         (void)esp_wifi_disconnect();
         vTaskDelay(pdMS_TO_TICKS(150));
     }
@@ -443,7 +503,7 @@ static void scan_and_store(void)
     if (ok) {
         store_scan_results(aps, count);
     }
-    /* A failed scan must not wipe the cached list (V2 keeps the last scan). */
+    /* Keep the last scan when a scan fails. */
     if (s_scan_mutex != NULL) {
         xSemaphoreTake(s_scan_mutex, portMAX_DELAY);
     }
@@ -511,57 +571,23 @@ static esp_err_t wifi_init_stack(void)
         (err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK || (err = esp_wifi_start()) != ESP_OK) {
         return err;
     }
-    /* With power save on, the STA misses auth frames and gets reason=2 even
-     * with a strong signal (V2 lesson). */
+    /* Power save drops auth frames even with a strong signal. */
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
     (void)esp_wifi_set_country_code("RU", true);
     return ESP_OK;
 }
 
-/* SPI link check: each call is one host<->CP RPC round-trip. */
-static void rpc_probe(int iterations)
-{
-    if (iterations <= 0) {
-        iterations = 50;
-    }
-    uint8_t primary = 0;
-    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
-    int errors = 0;
-    int64_t sum = 0;
-    int64_t max = 0;
-    int64_t min = -1;
-    for (int i = 0; i < iterations; ++i) {
-        const int64_t start = esp_timer_get_time();
-        const esp_err_t err = esp_wifi_get_channel(&primary, &second);
-        const int64_t dt = esp_timer_get_time() - start;
-        if (err != ESP_OK) {
-            errors++;
-        }
-        if (min < 0 || dt < min) {
-            min = dt;
-        }
-        if (dt > max) {
-            max = dt;
-        }
-        sum += dt;
-    }
-    ESP_LOGI(TAG, "spi rpc probe: n=%d avg=%lldus min=%lldus max=%lldus err=%d", iterations,
-             (long long)(sum / iterations), (long long)min, (long long)max, errors);
-}
-
-esp_err_t ha_wifi_start(const char *ssid, const char *password)
+esp_err_t ha_wifi_start(void)
 {
     if (s_task != NULL) {
         return ESP_OK; /* already started */
     }
-    for (size_t i = 0; i < sizeof(s_builtin_known) / sizeof(s_builtin_known[0]); ++i) {
-        known_add(s_builtin_known[i].ssid, s_builtin_known[i].password);
+    const esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err != ESP_OK && nvs_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "nvs init failed: %s; known APs will not persist",
+                 esp_err_to_name(nvs_err));
     }
-    known_add(ssid, password);
-    if (s_known_count == 0) {
-        ESP_LOGE(TAG, "no known networks; Wi-Fi disabled");
-        return ESP_ERR_INVALID_ARG;
-    }
+    known_load();
 
     const esp_err_t err = wifi_init_stack();
     if (err != ESP_OK) {
@@ -575,7 +601,6 @@ esp_err_t ha_wifi_start(const char *ssid, const char *password)
                  sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]);
     }
 
-    rpc_probe(50);
     s_queue = xQueueCreate(4, sizeof(wifi_req_t));
     s_scan_mutex = xSemaphoreCreateMutex();
     if (s_queue == NULL || s_scan_mutex == NULL) {
@@ -588,14 +613,6 @@ esp_err_t ha_wifi_start(const char *ssid, const char *password)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
-}
-
-/* Called from the Rust watchdog thread: request a reconnect, never touch the radio. */
-void ha_wifi_reconnect(void)
-{
-    if (!ha_wifi_link_up()) {
-        schedule_reconnect();
-    }
 }
 
 /* --- UI provisioning (scan / connect / status) ------------------------- */

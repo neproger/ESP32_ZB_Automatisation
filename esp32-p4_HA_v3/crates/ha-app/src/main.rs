@@ -52,7 +52,7 @@ struct PocEvent {
 }
 
 extern "C" {
-    fn ha_wifi_start(ssid: *const c_char, password: *const c_char) -> i32;
+    fn ha_wifi_start() -> i32;
     fn ha_wifi_ip(out: *mut c_char, len: usize) -> i32;
     fn ha_wifi_rssi(rssi: *mut i32) -> i32;
     fn ha_wifi_scan_start() -> i32;
@@ -661,12 +661,7 @@ fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
     }
 }
 fn start_wifi() {
-    /* Until provisioning exists the known list lives in ha_wifi.c; the build-time
-     * env pair only adds/overrides one entry. */
-    let ssid = CString::new(option_env!("HA_WIFI_SSID").unwrap_or("")).expect("ssid");
-    let password = CString::new(option_env!("HA_WIFI_PASSWORD").unwrap_or("")).expect("password");
-
-    let err = unsafe { ha_wifi_start(ssid.as_ptr(), password.as_ptr()) };
+    let err = unsafe { ha_wifi_start() };
     if err != 0 {
         log::error!("wifi start failed: {err}");
         return;

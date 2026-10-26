@@ -30,11 +30,6 @@ $env:IDF_TARGET = 'esp32p4'
 Remove-Item Env:ESP_IDF_TOOLS_INSTALL_DIR -ErrorAction SilentlyContinue
 $env:LIBCLANG_PATH = 'C:\Users\ASUS\AppData\Local\Programs\Python\Python310\lib\site-packages\clang\native'
 
-# Wi-Fi credentials come from the caller's environment, never from the repo.
-if (-not $env:HA_WIFI_SSID -or -not $env:HA_WIFI_PASSWORD) {
-    Write-Warning 'HA_WIFI_SSID/HA_WIFI_PASSWORD are not set; building without Wi-Fi.'
-}
-
 # The UI bundle is generated (web/ui is gitignored) but included by Rust.
 $ui = Join-Path $root 'web-ui'
 Push-Location $ui

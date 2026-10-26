@@ -33,15 +33,13 @@ target-dir = C:/t/hav3
 Из корня `esp32-p4_HA_v3`:
 
 ```powershell
-$env:HA_WIFI_SSID = '...'
-$env:HA_WIFI_PASSWORD = '...'
 .\tools\build-ha-app.ps1
 ```
 
 Скрипт:
 
-1. выставляет IDF v6.1, Python 6.1, `LIBCLANG_PATH`; Wi-Fi берёт из окружения
-   (без переменных собирает прошивку без Wi-Fi);
+1. выставляет IDF v6.1, Python 6.1, `LIBCLANG_PATH`; Wi-Fi при сборке не
+   задаётся — сеть вводится на дисплее и хранится в NVS;
 2. собирает UI (`npm ci` при первом запуске, затем `npm run build`) — `web/ui`
    в gitignore, но встраивается в бинарник;
 3. прогоняет CMake для `ha-app/native_zigbee` (C-изменения не отслеживаются Cargo);
