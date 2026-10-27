@@ -6,6 +6,8 @@
 - **ESP32-P4 приложение** — `crates/ha-app` с ESP-IDF и C-мостом;
 - **C3 Wi-Fi CP** — `tools/esp_hosted_c3_cp` (ESP-Hosted-сопроцессор для Wi-Fi).
 
+Wi-Fi/AUTH_EXPIRE и подбор TX power: [WIFI.md](WIFI.md).
+
 ## 1. ESP32-P4
 
 ### Требования

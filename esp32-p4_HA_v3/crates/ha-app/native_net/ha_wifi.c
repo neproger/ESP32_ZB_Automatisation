@@ -34,6 +34,8 @@ static const char *TAG = "ha_net";
 #define WIFI_SCAN_MAX 16
 #define WIFI_SSID_MAX 33
 #define WIFI_PASSWORD_MAX 65
+/* 0.25 dBm units. C3 CP on IDF 6.1 gets AUTH_EXPIRE at full power; see docs/WIFI.md. */
+#define WIFI_MAX_TX_POWER 34
 
 typedef struct {
     char ssid[WIFI_SSID_MAX];
@@ -574,6 +576,10 @@ static esp_err_t wifi_init_stack(void)
     /* Power save drops auth frames even with a strong signal. */
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
     (void)esp_wifi_set_country_code("RU", true);
+    const int8_t max_tx_power = WIFI_MAX_TX_POWER;
+    const esp_err_t tx_err = esp_wifi_set_max_tx_power(max_tx_power);
+    ESP_LOGI(TAG, "max tx power=%d (%.1f dBm): %s", max_tx_power,
+             (double)max_tx_power * 0.25, esp_err_to_name(tx_err));
     return ESP_OK;
 }
 
