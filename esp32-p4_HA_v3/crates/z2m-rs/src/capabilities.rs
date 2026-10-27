@@ -2,8 +2,8 @@
 //! describe device families or models.
 
 use crate::properties::{
-    BATTERY, BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, HUMIDITY, OCCUPANCY, STATE, TEMPERATURE,
-    VOLTAGE,
+    BATTERY, BRIGHTNESS, COLOR, COLOR_MODE, COLOR_TEMP, HUMIDITY, ILLUMINANCE, OCCUPANCY, STATE,
+    TEMPERATURE, VOLTAGE,
 };
 use crate::{
     AttrType, AttributeFrameView, AttributeRule, ColorValue, Command, CommandCodec, CommandMap,
@@ -92,6 +92,15 @@ pub const ONOFF_OFF: CommandMap = CommandMap {
     codec: CommandCodec::None,
 };
 
+/// Z2M `onOff` accepts `state: TOGGLE`; ZCL OnOff Toggle is command 0x02.
+pub const ONOFF_TOGGLE: CommandMap = CommandMap {
+    command: Command::Toggle,
+    cluster: 0x0006,
+    zcl_command: 0x02,
+    args: &[],
+    codec: CommandCodec::None,
+};
+
 pub const LEVEL_ATTR: Converter = Converter::Attribute(AttributeRule {
     cluster: 0x0008,
     attribute: 0x0000,
@@ -156,7 +165,7 @@ pub static DIM_EXPOSES: &[Expose] = &[
 ];
 
 pub static DIM_FROM: &[Converter] = &[ONOFF_ATTR, LEVEL_ATTR];
-pub static DIM_TO: &[CommandMap] = &[ONOFF_ON, ONOFF_OFF, LEVEL_TO];
+pub static DIM_TO: &[CommandMap] = &[ONOFF_ON, ONOFF_OFF, ONOFF_TOGGLE, LEVEL_TO];
 
 pub static DIM_CONFIGURE: ConfigurePlan = ConfigurePlan {
     steps: &[
@@ -211,7 +220,101 @@ pub static DIM_CT_EXPOSES: &[Expose] = &[
 ];
 
 pub static DIM_CT_FROM: &[Converter] = &[ONOFF_ATTR, LEVEL_ATTR, COLOR_FRAME];
-pub static DIM_CT_TO: &[CommandMap] = &[ONOFF_ON, ONOFF_OFF, LEVEL_TO, COLORTEMP_TO];
+pub static DIM_CT_TO: &[CommandMap] = &[ONOFF_ON, ONOFF_OFF, ONOFF_TOGGLE, LEVEL_TO, COLORTEMP_TO];
+
+pub const STANDARD_PROFILE_ID: &str = "standard.zcl";
+
+/// Generic standard ZCL profile: every standard cluster we can decode.
+/// Endpoint discovery + confirmed attributes select what a device actually has.
+pub static STANDARD_EXPOSES: &[Expose] = &[
+    Expose::Binary { property: STATE },
+    Expose::Numeric {
+        property: BRIGHTNESS,
+        unit: Unit::None,
+        min: 0.0,
+        max: 254.0,
+        step: 1.0,
+    },
+    Expose::Numeric {
+        property: COLOR_TEMP,
+        unit: Unit::Mired,
+        min: 153.0,
+        max: 500.0,
+        step: 1.0,
+    },
+    Expose::Color { property: COLOR },
+    Expose::Numeric {
+        property: BATTERY,
+        unit: Unit::Percent,
+        min: 0.0,
+        max: 100.0,
+        step: 1.0,
+    },
+    Expose::Numeric {
+        property: VOLTAGE,
+        unit: Unit::Volt,
+        min: 0.0,
+        max: 5.0,
+        step: 0.1,
+    },
+    Expose::Numeric {
+        property: TEMPERATURE,
+        unit: Unit::Celsius,
+        min: -40.0,
+        max: 125.0,
+        step: 0.01,
+    },
+    Expose::Numeric {
+        property: HUMIDITY,
+        unit: Unit::Percent,
+        min: 0.0,
+        max: 100.0,
+        step: 0.01,
+    },
+    Expose::Numeric {
+        property: ILLUMINANCE,
+        unit: Unit::Lux,
+        min: 0.0,
+        max: 100000.0,
+        step: 1.0,
+    },
+    Expose::Binary { property: OCCUPANCY },
+];
+
+pub static STANDARD_FROM: &[Converter] = &[
+    ONOFF_ATTR,
+    LEVEL_ATTR,
+    COLORTEMP_ATTR,
+    COLOR_FRAME,
+    BATTERY_ATTR,
+    BATTERY_VOLTAGE_ATTR,
+    TEMPERATURE_ATTR,
+    HUMIDITY_ATTR,
+    ILLUMINANCE_ATTR,
+    OCCUPANCY_ATTR,
+];
+
+pub static STANDARD_TO: &[CommandMap] = &[
+    ONOFF_ON,
+    ONOFF_OFF,
+    ONOFF_TOGGLE,
+    LEVEL_TO,
+    COLORTEMP_TO,
+    COLOR_XY_TO,
+];
+
+pub static STANDARD_PROFILE: crate::Profile = crate::Profile {
+    id: STANDARD_PROFILE_ID,
+    vendor: "ZCL",
+    fingerprints: &[],
+    exposes: STANDARD_EXPOSES,
+    from: STANDARD_FROM,
+    to: STANDARD_TO,
+    configure: None,
+    omit_optional_params: false,
+    turns_off_at_brightness_1: false,
+    support: crate::Support::PARTIAL,
+};
 
 pub static DIM_CT_CONFIGURE: ConfigurePlan = ConfigurePlan {
     steps: &[

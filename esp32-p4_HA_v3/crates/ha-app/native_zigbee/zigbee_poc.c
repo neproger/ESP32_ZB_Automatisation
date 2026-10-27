@@ -435,7 +435,8 @@ int zb_exec_read(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, u
     return err == EZB_ERR_NONE ? 0 : -1;
 }
 
-int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint8_t on)
+static int zb_exec_on_off_cmd(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
+                              uint8_t command)
 {
     ezb_zcl_on_off_cmd_t req = {0};
     exec_set_addr(&req.cmd_ctrl.dst_addr, eui64, short_addr);
@@ -448,10 +449,28 @@ int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep,
     if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
         return -1;
     }
-    const ezb_err_t err =
-        on ? ezb_zcl_on_off_on_cmd_req(&req) : ezb_zcl_on_off_off_cmd_req(&req);
+    ezb_err_t err;
+    switch (command) {
+    case 0x00:
+        err = ezb_zcl_on_off_off_cmd_req(&req);
+        break;
+    case 0x01:
+        err = ezb_zcl_on_off_on_cmd_req(&req);
+        break;
+    case 0x02:
+        err = ezb_zcl_on_off_toggle_cmd_req(&req);
+        break;
+    default:
+        esp_zigbee_lock_release();
+        return -1;
+    }
     esp_zigbee_lock_release();
     return err == EZB_ERR_NONE ? 0 : -1;
+}
+
+int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint8_t on)
+{
+    return zb_exec_on_off_cmd(op, eui64, short_addr, ep, on ? 0x01 : 0x00);
 }
 
 static void exec_cluster_ctrl(ezb_zcl_cluster_cmd_ctrl_t *ctrl, uint32_t op, uint64_t eui64,
@@ -478,13 +497,7 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
         return -1;
     }
     if (cluster == 0x0006u) {
-        if (command == 0x00u) {
-            return zb_exec_on_off(op, eui64, short_addr, ep, 0);
-        }
-        if (command == 0x01u) {
-            return zb_exec_on_off(op, eui64, short_addr, ep, 1);
-        }
-        return -1;
+        return zb_exec_on_off_cmd(op, eui64, short_addr, ep, command);
     }
     if (cluster == 0x0008u) {
         if (len < 3u) {

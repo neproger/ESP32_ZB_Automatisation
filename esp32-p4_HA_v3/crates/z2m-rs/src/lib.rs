@@ -275,6 +275,8 @@ pub struct Interview<'a> {
 pub enum Command {
     Property { property: PropertyId, value: Value },
     Action(Action),
+    /// Fixed ZCL command with no value (e.g. OnOff Toggle).
+    Toggle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -715,6 +717,7 @@ fn find_command<'a>(profile: &'a Profile, command: &Command) -> Option<&'a Comma
                 },
             ) => wanted == mapped && wanted_value == mapped_value,
             (Command::Action(action), Command::Action(mapped)) => action == mapped,
+            (Command::Toggle, Command::Toggle) => true,
             _ => false,
         },
         CommandCodec::Level | CommandCodec::ColorTemp => matches!(
@@ -1027,6 +1030,23 @@ mod tests {
                 &mut out
             ),
             None
+        );
+    }
+
+    #[test]
+    fn to_zigbee_encodes_onoff_toggle() {
+        let mut out = [0u8; 8];
+        assert_eq!(
+            resolve_command(&crate::capabilities::STANDARD_PROFILE, &Command::Toggle),
+            Some((0x0006, 0x02))
+        );
+        assert_eq!(
+            encode(
+                &crate::capabilities::STANDARD_PROFILE,
+                &Command::Toggle,
+                &mut out
+            ),
+            Some(0)
         );
     }
 

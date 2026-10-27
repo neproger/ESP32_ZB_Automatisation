@@ -1,9 +1,10 @@
+use ha_domain::canonical::{ACTION_ON, ACTION_TOGGLE, PROPERTY_POWER, PROPERTY_TEMPERATURE};
 use z2m_rs::{properties, RawZcl, Update, Value};
-use zigbee_devices::standard::{ONOFF, TEMPERATURE};
-use zigbee_devices::{
-    attribute_capability, classify_endpoint, decode_standard, update_is_discovered, ClusterRole,
-    Confirmed, DeviceKind, EndpointDescriptor, StandardCapability,
+use zigbee_devices::standard::{
+    attribute_capability, capabilities_confirmed, capability_allows, decode_standard,
+    update_is_discovered, ONOFF, TEMPERATURE,
 };
+use zigbee_devices::{ClusterRole, Confirmed, EndpointDescriptor};
 
 fn endpoint(clusters: &[(u16, ClusterRole)]) -> EndpointDescriptor {
     let mut endpoint = EndpointDescriptor::new(1, 0x0104, 0x0000);
@@ -16,7 +17,9 @@ fn endpoint(clusters: &[(u16, ClusterRole)]) -> EndpointDescriptor {
 #[test]
 fn standard_decode_requires_server_cluster() {
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
-    assert_eq!(classify_endpoint(&relay).kind, DeviceKind::Relay);
+    let button = endpoint(&[(ONOFF, ClusterRole::Client)]);
+    assert!(relay.has_server(ONOFF));
+    assert!(!button.has_server(ONOFF));
     let event = RawZcl {
         device: [1; 8],
         endpoint: 1,
@@ -33,8 +36,6 @@ fn standard_decode_requires_server_cluster() {
             value: Value::Bool(true)
         })
     );
-    let button = endpoint(&[(ONOFF, ClusterRole::Client)]);
-    assert_eq!(classify_endpoint(&button).kind, DeviceKind::ButtonCandidate);
     assert!(decode_standard(&button, &event).is_none());
 }
 
@@ -61,9 +62,6 @@ fn standard_temperature_is_gated_by_discovered_cluster() {
     assert!(update_is_discovered(&sensor, &update));
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
     assert!(!update_is_discovered(&relay, &update));
-    assert!(classify_endpoint(&sensor)
-        .features
-        .contains(StandardCapability::Temperature));
 }
 
 #[test]
@@ -79,11 +77,12 @@ fn discovery_does_not_confirm_attributes() {
 #[test]
 fn attribute_confirmation_requires_a_real_attribute() {
     let mut confirmed = Confirmed::new();
-    assert_eq!(
-        attribute_capability(ONOFF, 0x0000),
-        Some(StandardCapability::Power)
-    );
+    assert_eq!(attribute_capability(ONOFF, 0x0000), Some(PROPERTY_POWER));
     assert_eq!(attribute_capability(ONOFF, 0x0001), None);
+    assert_eq!(
+        attribute_capability(TEMPERATURE, 0x0000),
+        Some(PROPERTY_TEMPERATURE)
+    );
     assert!(confirmed.confirm(1, ONOFF, 0x0000));
     assert!(confirmed.is_confirmed(1, ONOFF, 0x0000));
     assert!(!confirmed.is_confirmed(1, ONOFF, 0x0001));
@@ -93,30 +92,45 @@ fn attribute_confirmation_requires_a_real_attribute() {
 fn standard_command_requires_confirmed_attribute() {
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
     let mut confirmed = Confirmed::new();
-    let on = ha_domain::canonical::ACTION_ON;
-    assert!(!zigbee_devices::capability_allows(
+    assert!(!capability_allows(
         &relay,
         &confirmed,
-        ha_domain::canonical::PROPERTY_POWER,
-        on,
+        PROPERTY_POWER,
+        ACTION_ON,
+    ));
+    assert!(!capability_allows(
+        &relay,
+        &confirmed,
+        PROPERTY_POWER,
+        ACTION_TOGGLE,
     ));
     assert!(confirmed.confirm(1, ONOFF, 0x0000));
-    assert!(zigbee_devices::capability_allows(
+    assert!(capability_allows(
         &relay,
         &confirmed,
-        ha_domain::canonical::PROPERTY_POWER,
-        on,
+        PROPERTY_POWER,
+        ACTION_ON,
+    ));
+    assert!(capability_allows(
+        &relay,
+        &confirmed,
+        PROPERTY_POWER,
+        ACTION_TOGGLE,
     ));
 }
+
 #[test]
 fn confirmed_attribute_upgrades_capabilities() {
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
     let mut confirmed = Confirmed::new();
-    let empty = zigbee_devices::standard::capabilities_confirmed(&relay, &confirmed);
+    let empty = capabilities_confirmed(&relay, &confirmed);
     assert_eq!(empty.property_count, 0);
     assert!(confirmed.confirm(1, ONOFF, 0x0000));
-    let caps = zigbee_devices::standard::capabilities_confirmed(&relay, &confirmed);
-    assert!(caps.properties[..usize::from(caps.property_count)]
+    let caps = capabilities_confirmed(&relay, &confirmed);
+    let power = caps.properties[..usize::from(caps.property_count)]
         .iter()
-        .any(|c| c.property == 1));
+        .find(|cap| cap.property == PROPERTY_POWER)
+        .expect("power capability");
+    assert!(power.actions[..usize::from(power.action_count)].contains(&ACTION_ON));
+    assert!(power.actions[..usize::from(power.action_count)].contains(&ACTION_TOGGLE));
 }

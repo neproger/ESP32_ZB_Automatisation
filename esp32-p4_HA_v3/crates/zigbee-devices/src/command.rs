@@ -8,8 +8,9 @@ use zigbee_exec::{
 };
 
 use crate::descriptor::EndpointDescriptor;
-use crate::projection::{canonical_command, profile_capabilities};
-use crate::standard::{self, Confirmed};
+use crate::profile::command_allowed;
+use crate::projection::canonical_command;
+use crate::standard::Confirmed;
 use z2m_rs::Profile;
 
 pub struct ZigbeeSink<'a> {
@@ -142,16 +143,7 @@ fn capability_allows(
     property: PropertyId,
     action: u32,
 ) -> bool {
-    if let Some(endpoint) = standard_endpoint {
-        return standard::capability_allows(endpoint, confirmed, property, action);
-    }
-    let caps = profile_capabilities(profile);
-    caps.properties[..usize::from(caps.property_count)]
-        .iter()
-        .any(|capability| {
-            capability.property == property
-                && capability.actions[..usize::from(capability.action_count)].contains(&action)
-        })
+    command_allowed(profile, standard_endpoint, confirmed, property, action)
 }
 pub fn status_from_exec(status: Status) -> Option<CommandStatus> {
     Some(match status {

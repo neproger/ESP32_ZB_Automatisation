@@ -11,9 +11,10 @@ mod device_record;
 mod domain_adapter;
 mod interview;
 mod ownership;
+mod profile;
 mod projection;
 mod registry;
-pub mod standard;
+mod zcl;
 
 pub use command::{status_from_exec, update_binding_short, Binding, CommandRouter, ZigbeeSink};
 pub use config_run::{ConfigRun, RunOptions};
@@ -35,10 +36,23 @@ pub use projection::{
     zigbee_device_id, zigbee_entity_id, StateUpdate,
 };
 pub use registry::{RecordSlot, Registry};
+pub mod standard {
+    pub use crate::profile::{
+        capabilities_confirmed, capability_allows, decode_standard, update_capability,
+        update_is_discovered,
+    };
+    pub use crate::zcl::{
+        attribute_property as attribute_capability, Confirmed, COLOR, HUMIDITY, ILLUMINANCE, LEVEL,
+        MAX_CONFIRMED_ATTRIBUTES, OCCUPANCY, ONOFF, POWER_CONFIG, TEMPERATURE,
+    };
+    pub use z2m_rs::capabilities::{STANDARD_PROFILE, STANDARD_PROFILE_ID};
+}
+
+pub use profile::{capabilities_for, command_allowed};
 #[allow(unused_imports)]
 pub use standard::STANDARD_PROFILE;
 pub use standard::{
-    attribute_capability, capabilities_confirmed, capability_allows, classify_endpoint,
-    decode_standard, update_capability, update_is_discovered, Confirmed, DeviceKind, EndpointClass,
-    EndpointFeatures, StandardCapability, MAX_CONFIRMED_ATTRIBUTES, STANDARD_PROFILE_ID,
+    attribute_capability, capabilities_confirmed, capability_allows, decode_standard,
+    update_capability, update_is_discovered, Confirmed, MAX_CONFIRMED_ATTRIBUTES,
+    STANDARD_PROFILE_ID,
 };

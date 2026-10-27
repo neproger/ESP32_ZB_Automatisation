@@ -3,7 +3,8 @@
 
 use ha_domain::canonical::{
     device_id_derive, CanonicalCommand, CapabilitiesRecord, Capability, CommandValue, EntityId,
-    EventId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, EVENT_DOUBLE_PRESS, EVENT_HOLD,
+    EventId, PropertyId, ACTION_OFF, ACTION_ON, ACTION_SET, ACTION_TOGGLE, EVENT_DOUBLE_PRESS,
+    EVENT_HOLD,
     EVENT_SINGLE_PRESS, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS,
     PROPERTY_COLOR, PROPERTY_COLOR_HUE, PROPERTY_COLOR_SATURATION, PROPERTY_COLOR_TEMPERATURE,
     PROPERTY_COLOR_X, PROPERTY_COLOR_Y, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE,
@@ -29,13 +30,19 @@ pub fn profile_capabilities(profile: &Profile) -> CapabilitiesRecord {
         .to
         .iter()
         .any(|map| map.codec == CommandCodec::ColorXy);
+    let power_actions: &[u32] = if profile
+        .to
+        .iter()
+        .any(|map| map.command == z2m_rs::Command::Toggle)
+    {
+        &[ACTION_ON, ACTION_OFF, ACTION_TOGGLE]
+    } else {
+        &[ACTION_ON, ACTION_OFF]
+    };
     for expose in profile.exposes {
         match expose {
             Expose::Binary { property } if *property == properties::STATE => {
-                record.push(Capability::with_actions(
-                    PROPERTY_POWER,
-                    &[ACTION_ON, ACTION_OFF],
-                ));
+                record.push(Capability::with_actions(PROPERTY_POWER, power_actions));
             }
             Expose::Numeric { property, .. } if *property == properties::BRIGHTNESS => {
                 record.push(Capability::with_actions(PROPERTY_BRIGHTNESS, &[ACTION_SET]));
@@ -296,6 +303,7 @@ pub fn canonical_command(request: &CanonicalCommand) -> Option<Z2mCommand> {
                 property: properties::STATE,
                 value: Value::Bool(false),
             }),
+            ACTION_TOGGLE => Some(Z2mCommand::Toggle),
             _ => None,
         };
     }
@@ -388,6 +396,17 @@ mod tests {
             .iter()
             .any(|c| c.property == PROPERTY_COLOR_TEMPERATURE));
         assert_eq!(caps.encode().len(), ha_domain::canonical::CAPABILITIES_LEN);
+    }
+
+    #[test]
+    fn standard_profile_capabilities_include_toggle() {
+        let caps = profile_capabilities(&z2m_rs::capabilities::STANDARD_PROFILE);
+        let power = caps.properties[..usize::from(caps.property_count)]
+            .iter()
+            .find(|cap| cap.property == PROPERTY_POWER)
+            .expect("power capability");
+        assert!(power.actions[..usize::from(power.action_count)]
+            .contains(&ha_domain::canonical::ACTION_TOGGLE));
     }
 
     #[test]

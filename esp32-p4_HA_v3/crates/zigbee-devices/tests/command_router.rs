@@ -1,5 +1,5 @@
 use ha_domain::canonical::{
-    CommandValue, ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER,
+    CommandValue, ACTION_ON, ACTION_SET, ACTION_TOGGLE, PROPERTY_BRIGHTNESS, PROPERTY_POWER,
 };
 use ha_domain::command::CommandCore;
 use ha_domain::{Error, Value as DomainValue};
@@ -103,6 +103,40 @@ fn power_value_selects_on_action() {
         panic!("expected SendZcl");
     };
     assert_eq!((cluster, command), (0x0006, 0x01));
+}
+
+#[test]
+fn toggle_selects_onoff_toggle_command() {
+    let mut exec = Executor::new();
+    let mut core = CommandCore::new();
+    let bindings = [binding(&PROFILE)];
+    let mut router = CommandRouter::new(&mut exec, &bindings);
+    router
+        .submit(
+            &mut core,
+            ENTITY,
+            PROPERTY_POWER,
+            ACTION_TOGGLE,
+            CommandValue::None,
+            0,
+        )
+        .unwrap();
+    drop(router);
+
+    let mut transport = FakeTransport::new();
+    exec.tick(&mut transport, 0);
+    let sent = transport.last().expect("request sent");
+    let RequestKind::SendZcl {
+        cluster,
+        command,
+        payload,
+        ..
+    } = sent.request.kind
+    else {
+        panic!("expected SendZcl");
+    };
+    assert_eq!((cluster, command), (0x0006, 0x02));
+    assert!(payload.as_slice().is_empty());
 }
 
 #[test]
