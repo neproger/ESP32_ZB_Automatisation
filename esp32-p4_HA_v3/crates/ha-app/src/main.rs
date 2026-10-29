@@ -17,11 +17,10 @@ use std::time::Duration;
 use ha_domain::canonical::{
     EventId, LocationRecord, SettingsRecord, StateKey, StateRecord, WeatherRecord, ENTITY_ENTITY,
     ENTITY_LOCATION, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER,
-    EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_COLOR, PROPERTY_SYSTEM_HOUR,
-    PROPERTY_SYSTEM_MINUTE, PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS,
-    PROPERTY_SYSTEM_TIME_UTC, PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY,
-    PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE,
-    SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
+    EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_SYSTEM_HOUR, PROPERTY_SYSTEM_MINUTE,
+    PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS, PROPERTY_SYSTEM_TIME_UTC,
+    PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY, PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID,
+    SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
 };
 use ha_domain::command::CommandCore;
 use ha_domain::{Domain, Fact, FactKind, FactMeta, FactTarget, Filter};
@@ -241,14 +240,9 @@ fn main() {
                     let submitted = zigbee_devices::CommandRouter::new(&mut executor, &bindings)
                         .submit(&mut command_core, entity, property, action, value, now_ms());
                     match submitted {
-                        Ok(operation) => {
-                            log::info!(
-                                "command: entity={entity:016x} property={property} op={operation}"
-                            );
-                            if property == PROPERTY_COLOR {
-                                request_color_readback(&mut executor, &bindings, entity, now_ms());
-                            }
-                        }
+                        Ok(operation) => log::info!(
+                            "command: entity={entity:016x} property={property} op={operation}"
+                        ),
                         Err(error) => log::warn!(
                             "command rejected: entity={entity:016x} property={property} error={error:?}"
                         ),
@@ -1118,42 +1112,6 @@ fn rename_device(domain: &mut Domain, device: u64, name: &str) {
             log::info!("domain: renamed device={device:016x} name={name}");
         }
         Err(error) => log::warn!("domain: rename device={device:016x} failed: {error:?}"),
-    }
-}
-
-/// Some color devices confirm `moveToColor` without sending a report. A read
-/// response is still device truth, not optimistic command state.
-fn request_color_readback(
-    executor: &mut zigbee_exec::Executor,
-    bindings: &[zigbee_devices::Binding],
-    entity: u64,
-    now: u64,
-) {
-    let Some(binding) = bindings.iter().find(|binding| binding.entity == entity) else {
-        return;
-    };
-    let attributes = match zigbee_exec::AttributeList::new(&[0x0003, 0x0004]) {
-        Ok(attributes) => attributes,
-        Err(error) => {
-            log::warn!("color readback attributes failed: {error:?}");
-            return;
-        }
-    };
-    let request = zigbee_exec::Request {
-        device: binding.eui,
-        short: binding.short,
-        endpoint: binding.endpoint,
-        sleepy: false,
-        retry: zigbee_exec::RetryPolicy::SAFE,
-        expiry_ms: 10_000,
-        timeout_ms: 3_000,
-        kind: zigbee_exec::RequestKind::ReadAttributes {
-            cluster: zigbee_devices::standard::COLOR,
-            attributes,
-        },
-    };
-    if let Err(error) = executor.enqueue(request, now) {
-        log::warn!("color readback queue failed entity={entity:016x}: {error:?}");
     }
 }
 

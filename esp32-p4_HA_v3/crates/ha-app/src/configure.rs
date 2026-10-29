@@ -9,7 +9,7 @@ use zigbee_devices::{ConfigRun, RunOptions};
 use zigbee_exec::Executor;
 
 const FIRST_APP_ENDPOINT: u8 = 1;
-const STANDARD_CONFIG_VERSION: u16 = 3;
+const STANDARD_CONFIG_VERSION: u16 = 4;
 const COOLDOWN_MS: u64 = 30_000;
 const COOLDOWN_SLOTS: usize = crate::store::MAX_DEVICES;
 const REFRESH_SLOTS: usize = crate::store::MAX_DEVICES;
@@ -123,7 +123,7 @@ fn standard_steps(
                     0x0000,
                     0x10,
                     0,
-                    5,
+                    1,
                     1,
                 );
             }
@@ -141,7 +141,7 @@ fn standard_steps(
                     0x0000,
                     0x20,
                     0,
-                    5,
+                    1,
                     1,
                 );
             }

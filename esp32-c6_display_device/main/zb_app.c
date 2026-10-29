@@ -219,12 +219,12 @@ static void start_light_reporting(void)
             continue;
         }
         ezb_zcl_attr_variable_t delta = { .u8 = 1 };
-        /* max=5: светильник меняет Level дважды за один OnOff (255<->0), reporting-движок
-         * eZbee при этом отдаёт только первое значение; короткий max_interval возвращает
-         * актуальное состояние не позже чем через 5 с. */
-        const ezb_err_t err = ezb_zcl_reporting_info_update(info, 0, 5, &delta);
+        /* max=1: OnOff меняет Level дважды (255<->0), reporting-движок eZbee
+         * отдаёт только первое значение; короткий max_interval возвращает
+         * актуальное состояние не позже чем через 1 с. */
+        const ezb_err_t err = ezb_zcl_reporting_info_update(info, 0, 1, &delta);
         (void)ezb_zcl_reporting_start_attr_report(info);
-        ESP_LOGI(TAG, "light cl=0x%04x attr=0x%04x: reporting min=0 max=5 (err=0x%x)",
+        ESP_LOGI(TAG, "light cl=0x%04x attr=0x%04x: reporting min=0 max=1 (err=0x%x)",
                  attrs[i].cluster, attrs[i].attr, (unsigned)err);
     }
 }
