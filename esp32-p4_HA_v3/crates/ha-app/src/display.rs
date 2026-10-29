@@ -12,25 +12,27 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, CStr, CString};
 use std::ptr::{addr_of, null_mut};
 use std::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicUsize, Ordering,
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU8, AtomicUsize, Ordering,
 };
+use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use ha_domain::canonical::{
-    CommandValue, EntityId, PropertyId, SettingsRecord, ACTION_OFF, ACTION_ON, ACTION_SET,
-    AUTOMATION_RECORD_LEN, CAPABILITIES_LEN, ENTITY_AUTOMATION, ENTITY_CAPABILITIES, ENTITY_ENTITY,
-    ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM, ENTITY_PROPERTY_STATE,
-    ENTITY_SETTINGS, PROPERTY_BATTERY_PERCENT,
-    SETTINGS_ID, SETTINGS_RECORD_LEN,
-    PROPERTY_BATTERY_VOLTAGE, PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE,
-    PROPERTY_COLOR_X, PROPERTY_COLOR_Y, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE,
-    PROPERTY_OCCUPANCY, PROPERTY_POWER, PROPERTY_TEMPERATURE, STATE_RECORD_LEN, StateKey,
-    WEATHER_CLEAR, WEATHER_CLEAR_NIGHT, WEATHER_CLOUDY, WEATHER_FOG, WEATHER_HAIL,
-    WEATHER_LIGHTNING, WEATHER_LIGHTNING_RAINY, WEATHER_OVERCAST, WEATHER_PARTLYCLOUDY,
-    WEATHER_POURING, WEATHER_RAINY, WEATHER_SNOWY, WEATHER_SNOWY_RAINY, WEATHER_WINDY,
-    WEATHER_WINDY_VARIANT,
+    CommandValue, EntityId, LocationRecord, PropertyId, SettingsRecord, StateKey, WeatherRecord,
+    ACTION_OFF, ACTION_ON, ACTION_SET, AUTOMATION_RECORD_LEN, CAPABILITIES_LEN, ENTITY_AUTOMATION,
+    ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
+    ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM,
+    ENTITY_WEATHER, LOCATION_RECORD_LEN, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE,
+    PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE, PROPERTY_COLOR_X,
+    PROPERTY_COLOR_Y, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY, PROPERTY_POWER,
+    PROPERTY_SYSTEM_HOUR, PROPERTY_SYSTEM_MINUTE, PROPERTY_TEMPERATURE, SETTINGS_ID,
+    SETTINGS_RECORD_LEN, STATE_RECORD_LEN, WEATHER_CLEAR, WEATHER_CLEAR_NIGHT, WEATHER_CLOUDY,
+    WEATHER_FOG, WEATHER_HAIL, WEATHER_LIGHTNING, WEATHER_LIGHTNING_RAINY, WEATHER_OVERCAST,
+    WEATHER_PARTLYCLOUDY, WEATHER_POURING, WEATHER_RAINY, WEATHER_RECORD_LEN, WEATHER_SNOWY,
+    WEATHER_SNOWY_RAINY, WEATHER_WINDY, WEATHER_WINDY_VARIANT,
 };
-use ha_domain::{Domain, Value};
+use ha_domain::{Domain, Fact, FactKind, Value};
 
 use crate::intake;
 
@@ -372,7 +374,15 @@ fn build_status_bar() -> (
         let cross = label(wifi, ICON_XMARK, font_icons(), COL_MUTED);
         lv_obj_set_hidden(cross, true);
 
-        (time, location, weather_icon, weather_label, bars, bars_box, cross)
+        (
+            time,
+            location,
+            weather_icon,
+            weather_label,
+            bars,
+            bars_box,
+            cross,
+        )
     }
 }
 
@@ -537,6 +547,7 @@ struct WidgetEntry {
     kind: WidgetKind,
     control: *mut lv_obj_t,
     value_label: *mut lv_obj_t,
+    ctx: *mut CmdCtx,
 }
 
 #[derive(Clone, Copy)]
@@ -594,13 +605,17 @@ static WIFI_KEYBOARD: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static WIFI_BACKDROP: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static WIFI_TEXTAREA: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static DIALOG_SSID: Mutex<Option<String>> = Mutex::new(None);
+static CLOCK_LAST: Mutex<(u8, u8)> = Mutex::new((0, 0));
 
 extern "C" {
     fn ha_wifi_status(ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
 }
 
 fn c_string(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
@@ -779,7 +794,11 @@ fn format_value(property: PropertyId, value: &Value) -> String {
         };
     }
     if let Some(on) = value.as_bool() {
-        return if on { "Вкл".into() } else { "Выкл".into() };
+        return if on {
+            "Вкл".into()
+        } else {
+            "Выкл".into()
+        };
     }
     let Some(number) = numeric(value) else {
         return "—".into();
@@ -900,9 +919,17 @@ fn rgb_hex(r: u8, g: u8, b: u8) -> u32 {
     (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
 }
 
+const SWITCH_LOCK_MS: u64 = 1500;
+
 struct CmdCtx {
     entity: EntityId,
     property: PropertyId,
+    control: *mut lv_obj_t,
+    locked: AtomicBool,
+    syncing: AtomicBool,
+    has_last: AtomicBool,
+    last_bits: AtomicU32,
+    deadline: Mutex<Option<Instant>>,
 }
 
 unsafe extern "C" fn on_control(event: *mut lv_event_t) {
@@ -912,6 +939,16 @@ unsafe extern "C" fn on_control(event: *mut lv_event_t) {
         return;
     }
     let context = &*context;
+    log::debug!(
+        "display: control entity={:016x} property={} syncing={} locked={}",
+        context.entity,
+        context.property,
+        context.syncing.load(Ordering::Relaxed),
+        context.locked.load(Ordering::Relaxed)
+    );
+    if context.syncing.load(Ordering::Relaxed) || context.locked.load(Ordering::Relaxed) {
+        return;
+    }
     let result = if context.property == PROPERTY_POWER {
         let on = lv_obj_has_state(target, lv_state_t_LV_STATE_CHECKED);
         intake::command(
@@ -931,6 +968,12 @@ unsafe extern "C" fn on_control(event: *mut lv_event_t) {
     };
     if let Err(error) = result {
         log::warn!("display: command rejected: {error:?}");
+    }
+    if context.property == PROPERTY_POWER {
+        context.locked.store(true, Ordering::Relaxed);
+        *context.deadline.lock().unwrap() =
+            Some(Instant::now() + Duration::from_millis(SWITCH_LOCK_MS));
+        lv_obj_add_state(target, lv_state_t_LV_STATE_DISABLED);
     }
 }
 
@@ -1053,7 +1096,16 @@ unsafe fn build_widget(
             if state.as_ref().and_then(Value::as_bool).unwrap_or(false) {
                 lv_obj_add_state(control, lv_state_t_LV_STATE_CHECKED);
             }
-            let context = Box::into_raw(Box::new(CmdCtx { entity, property }));
+            let context = Box::into_raw(Box::new(CmdCtx {
+                entity,
+                property,
+                control,
+                locked: AtomicBool::new(false),
+                syncing: AtomicBool::new(false),
+                has_last: AtomicBool::new(false),
+                last_bits: AtomicU32::new(0),
+                deadline: Mutex::new(None),
+            }));
             lv_obj_add_event_cb(
                 control,
                 Some(on_control),
@@ -1072,6 +1124,7 @@ unsafe fn build_widget(
                 kind,
                 control,
                 value_label: std::ptr::null_mut(),
+                ctx: context,
             });
         }
         WidgetKind::Slider => {
@@ -1094,7 +1147,16 @@ unsafe fn build_widget(
                 .map(|value| format_value(property, value))
                 .unwrap_or_else(|| "—".into());
             let value_label = label(row, &text, font_20(), COL_TEXT);
-            let context = Box::into_raw(Box::new(CmdCtx { entity, property }));
+            let context = Box::into_raw(Box::new(CmdCtx {
+                entity,
+                property,
+                control,
+                locked: AtomicBool::new(false),
+                syncing: AtomicBool::new(false),
+                has_last: AtomicBool::new(false),
+                last_bits: AtomicU32::new(0),
+                deadline: Mutex::new(None),
+            }));
             lv_obj_add_event_cb(
                 control,
                 Some(on_control),
@@ -1113,6 +1175,7 @@ unsafe fn build_widget(
                 kind,
                 control,
                 value_label,
+                ctx: context,
             });
         }
         WidgetKind::Value => {
@@ -1127,6 +1190,7 @@ unsafe fn build_widget(
                 kind,
                 control: value_label,
                 value_label,
+                ctx: std::ptr::null_mut(),
             });
         }
     }
@@ -1530,9 +1594,7 @@ unsafe fn build_settings(domain: &Domain) -> Page {
     lv_slider_set_value(slider, i32::from(brightness), false);
     let value_label = label(row, &format!("{brightness} %"), font_20(), COL_TEXT);
 
-    let context = Box::into_raw(Box::new(BrightnessCtx {
-        label: value_label,
-    }));
+    let context = Box::into_raw(Box::new(BrightnessCtx { label: value_label }));
     lv_obj_add_event_cb(
         slider,
         Some(on_brightness),
@@ -1595,7 +1657,7 @@ pub fn rebuild(domain: &Domain) {
     }
     unsafe {
         let page = build_page(domain, &groups, index);
-        log::info!(
+        log::debug!(
             "display: page rebuilt groups={} index={} widgets={} colors={}",
             groups.len(),
             index,
@@ -1694,9 +1756,7 @@ pub fn navigate(domain: &Domain, nav: Nav) {
             unlock();
             VIEW.store(View::Wifi as u8, Ordering::Relaxed);
         }
-        Nav::WifiScan => {
-            /* handled by the main loop (blocking C scan), not a screen switch */
-        }
+        Nav::WifiScan => { /* handled by the main loop (blocking C scan), not a screen switch */ }
     }
 }
 
@@ -1987,6 +2047,108 @@ pub fn wifi_scan_requested(domain: &Domain) {
     unlock();
 }
 
+/// Drain the Display inbox. Facts are already compact; the widget update is
+/// addressed by `(entity, property)` and never rebuilds the whole page.
+pub fn drain(domain: &Domain, receiver: &Receiver<Fact>) {
+    let mut rebuild_needed = false;
+    while let Ok(fact) = receiver.try_recv() {
+        match fact.kind {
+            FactKind::EntityUpserted if fact.entity == ENTITY_PROPERTY_STATE => {
+                let key = fact.key();
+                if key.len() < 16 {
+                    continue;
+                }
+                let entity = u64::from_le_bytes(key[..8].try_into().expect("state entity"));
+                let property = u32::from_le_bytes(key[8..12].try_into().expect("state property"));
+                if entity == ENTITY_SYSTEM
+                    && matches!(property, PROPERTY_SYSTEM_HOUR | PROPERTY_SYSTEM_MINUTE)
+                {
+                    let Some(value) = numeric(&fact.value) else {
+                        continue;
+                    };
+                    let mut clock = CLOCK_LAST.lock().unwrap();
+                    if property == PROPERTY_SYSTEM_HOUR {
+                        clock.0 = value.round().clamp(0.0, 23.0) as u8;
+                    } else {
+                        clock.1 = value.round().clamp(0.0, 59.0) as u8;
+                    }
+                    let (hour, minute) = *clock;
+                    drop(clock);
+                    set_clock(hour, minute);
+                    continue;
+                }
+                on_state(entity, property, fact.value);
+            }
+            FactKind::EntityUpserted | FactKind::EntityRemoved => match fact.entity {
+                ENTITY_LOCATION => {
+                    if fact.kind == FactKind::EntityUpserted {
+                        let mut bytes = [0u8; LOCATION_RECORD_LEN];
+                        if domain
+                            .entity_get(ENTITY_LOCATION, fact.key(), &mut bytes)
+                            .is_ok()
+                        {
+                            if let Some(location) = LocationRecord::decode(&bytes) {
+                                set_location(&location_text(&location));
+                            }
+                        }
+                    }
+                }
+                ENTITY_WEATHER => {
+                    if fact.kind == FactKind::EntityUpserted {
+                        let mut bytes = [0u8; WEATHER_RECORD_LEN];
+                        if domain
+                            .entity_get(ENTITY_WEATHER, fact.key(), &mut bytes)
+                            .is_ok()
+                        {
+                            if let Some(weather) = WeatherRecord::decode(&bytes) {
+                                set_weather(
+                                    weather.condition,
+                                    f32::from(weather.temperature_c100) / 100.0,
+                                    f32::from(weather.humidity_p100) / 100.0,
+                                );
+                            }
+                        }
+                    }
+                }
+                ENTITY_SETTINGS => {
+                    if fact.kind == FactKind::EntityUpserted {
+                        let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+                        if domain
+                            .entity_get(ENTITY_SETTINGS, fact.key(), &mut bytes)
+                            .is_ok()
+                        {
+                            if let Some(settings) = SettingsRecord::decode(&bytes) {
+                                set_brightness(settings.brightness_pct);
+                            }
+                        }
+                    }
+                }
+                ENTITY_LOGICAL_DEVICE
+                | ENTITY_ENTITY
+                | ENTITY_CAPABILITIES
+                | ENTITY_GROUP
+                | ENTITY_GROUP_ITEM
+                | ENTITY_GROUP_AUTOMATION
+                | ENTITY_AUTOMATION => rebuild_needed = true,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    if rebuild_needed {
+        rebuild(domain);
+    }
+}
+
+fn location_text(location: &LocationRecord) -> String {
+    let end = location
+        .name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(location.name.len());
+    String::from_utf8_lossy(&location.name[..end]).into_owned()
+}
+
 /// Apply one confirmed property state to the widgets of the current page.
 pub fn on_state(entity: EntityId, property: PropertyId, value: Value) {
     if property == PROPERTY_COLOR_X || property == PROPERTY_COLOR_Y {
@@ -2038,7 +2200,7 @@ pub fn on_state(entity: EntityId, property: PropertyId, value: Value) {
         return;
     }
 
-    let entries: Vec<(WidgetKind, *mut lv_obj_t, *mut lv_obj_t)> = {
+    let entries: Vec<(WidgetKind, *mut lv_obj_t, *mut lv_obj_t, *mut CmdCtx)> = {
         let page = PAGE.lock().unwrap();
         let Some(page) = page.as_ref() else {
             return;
@@ -2046,7 +2208,7 @@ pub fn on_state(entity: EntityId, property: PropertyId, value: Value) {
         page.widgets
             .iter()
             .filter(|widget| widget.entity == entity && widget.property == property)
-            .map(|widget| (widget.kind, widget.control, widget.value_label))
+            .map(|widget| (widget.kind, widget.control, widget.value_label, widget.ctx))
             .collect()
     };
     if entries.is_empty() {
@@ -2055,18 +2217,55 @@ pub fn on_state(entity: EntityId, property: PropertyId, value: Value) {
     if !lock() {
         return;
     }
-    for (kind, control, value_label) in entries {
+    for (kind, control, value_label, ctx) in entries {
         match kind {
             WidgetKind::Switch => {
-                if let Some(on) = value.as_bool() {
+                let Some(on) = value.as_bool() else {
+                    continue;
+                };
+                if ctx.is_null() {
+                    continue;
+                }
+                let ctx = unsafe { &*ctx };
+                if ctx.syncing.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let bits = u32::from(on);
+                let has_last = ctx.has_last.load(Ordering::Relaxed);
+                let last_bits = ctx.last_bits.load(Ordering::Relaxed);
+                if ctx.locked.load(Ordering::Relaxed) {
+                    if has_last && bits == last_bits {
+                        continue;
+                    }
+                    log::debug!(
+                        "display: switch fresh entity={:016x} bits={} last={} unlock",
+                        ctx.entity,
+                        bits,
+                        last_bits
+                    );
+                    *ctx.deadline.lock().unwrap() = None;
+                    ctx.locked.store(false, Ordering::Relaxed);
+                    unsafe { lv_obj_remove_state(control, lv_state_t_LV_STATE_DISABLED) };
+                } else if has_last && bits == last_bits {
+                    continue;
+                }
+                log::debug!("display: switch apply entity={:016x} on={}", ctx.entity, on);
+                ctx.syncing.store(true, Ordering::Relaxed);
+                unsafe {
                     if on {
-                        unsafe { lv_obj_add_state(control, lv_state_t_LV_STATE_CHECKED) };
+                        lv_obj_add_state(control, lv_state_t_LV_STATE_CHECKED);
                     } else {
-                        unsafe { lv_obj_remove_state(control, lv_state_t_LV_STATE_CHECKED) };
+                        lv_obj_remove_state(control, lv_state_t_LV_STATE_CHECKED);
                     }
                 }
+                ctx.syncing.store(false, Ordering::Relaxed);
+                ctx.last_bits.store(bits, Ordering::Relaxed);
+                ctx.has_last.store(true, Ordering::Relaxed);
             }
             WidgetKind::Slider => {
+                if unsafe { lv_obj_has_state(control, lv_state_t_LV_STATE_PRESSED) } {
+                    continue;
+                }
                 if let Some(number) = numeric(&value) {
                     let (min, max) = if property == PROPERTY_COLOR_TEMPERATURE {
                         (2000, 6500)
@@ -2085,4 +2284,50 @@ pub fn on_state(entity: EntityId, property: PropertyId, value: Value) {
         }
     }
     unlock();
+}
+
+/// V2-style switch lock: re-enable a switch after the command settles, even if
+/// the domain never reports a fresh value.
+pub fn tick() {
+    let contexts: Vec<*mut CmdCtx> = {
+        let page = PAGE.lock().unwrap();
+        page.as_ref()
+            .map(|page| {
+                page.widgets
+                    .iter()
+                    .filter(|widget| widget.kind == WidgetKind::Switch && !widget.ctx.is_null())
+                    .map(|widget| widget.ctx)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if contexts.is_empty() {
+        return;
+    }
+    let now = Instant::now();
+    for ctx in contexts {
+        let ctx = unsafe { &*ctx };
+        if !ctx.locked.load(Ordering::Relaxed) {
+            continue;
+        }
+        let expired = ctx
+            .deadline
+            .lock()
+            .unwrap()
+            .map(|deadline| now >= deadline)
+            .unwrap_or(false);
+        if !expired {
+            continue;
+        }
+        if !lock() {
+            return;
+        }
+        log::debug!("display: switch unlock timeout entity={:016x}", ctx.entity);
+        ctx.locked.store(false, Ordering::Relaxed);
+        *ctx.deadline.lock().unwrap() = None;
+        if !ctx.control.is_null() {
+            unsafe { lv_obj_remove_state(ctx.control, lv_state_t_LV_STATE_DISABLED) };
+        }
+        unlock();
+    }
 }

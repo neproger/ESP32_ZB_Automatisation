@@ -234,6 +234,7 @@ static lv_display_t *lvgl_start(void)
     lvgl_port_cfg_t port = ESP_LVGL_PORT_INIT_CONFIG();
     /* Display (LVGL) — на ядро 1; транспорт esp_hosted/UART остаётся на ядре 0. */
     port.task_affinity = 1;
+    port.task_stack = 12288;
     if (lvgl_port_init(&port) != ESP_OK) {
         return NULL;
     }

@@ -191,10 +191,16 @@ impl FlashTable {
             (None, Some((seq, geo, id))) => (1, seq, geo, id),
             (None, None) => return Err(FlashError::Corrupt),
         };
-        if header_geometry != geometry {
+        if header_geometry.key_size != geometry.key_size
+            || header_geometry.payload_size != geometry.payload_size
+            || header_geometry.capacity > geometry.capacity
+        {
             return Err(FlashError::InvalidSize);
         }
         let set_len = RECORD_FIXED + geometry.key_size + geometry.payload_size + RECORD_TAIL;
+        if HEADER_SIZE + geometry.capacity * set_len > bank_size {
+            return Err(FlashError::NoSpace);
+        }
         let mut table = Self {
             geometry,
             id,

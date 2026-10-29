@@ -16,6 +16,8 @@ pub struct RunOptions {
     pub retries: u8,
     /// Standard ZCL discovery: a missing read is normal, not a plan failure.
     pub optional_reads: bool,
+    /// Standard discovery: unsupported reporting attributes are skipped.
+    pub optional_reports: bool,
 }
 
 impl RunOptions {
@@ -25,6 +27,7 @@ impl RunOptions {
             timeout_ms: plan.timeout_ms,
             retries: plan.retries,
             optional_reads: false,
+            optional_reports: false,
         }
     }
 }
@@ -38,6 +41,7 @@ pub struct ConfigRun {
     timeout_ms: u32,
     retries: u8,
     optional_reads: bool,
+    optional_reports: bool,
     next: usize,
     op: Option<u32>,
     pending: Option<OperationResult>,
@@ -84,6 +88,7 @@ impl ConfigRun {
             timeout_ms: options.timeout_ms,
             retries: options.retries,
             optional_reads: options.optional_reads,
+            optional_reports: options.optional_reports,
             next: 0,
             op: None,
             pending: None,
@@ -145,6 +150,17 @@ impl ConfigRun {
                 {
                     log::info!(
                         "configure: optional read step={} skipped: {other:?}",
+                        self.next
+                    );
+                    self.next += 1;
+                    self.op = None;
+                }
+                other
+                    if self.optional_reports
+                        && matches!(self.current_step(), Some(ConfigureStep::Report { .. })) =>
+                {
+                    log::warn!(
+                        "configure: optional report step={} skipped: {other:?}",
                         self.next
                     );
                     self.next += 1;
@@ -267,6 +283,7 @@ mod tests {
             timeout_ms: 5_000,
             retries: 2,
             optional_reads,
+            optional_reports: false,
         }
     }
 
@@ -323,6 +340,34 @@ mod tests {
         run.on_result(OperationResult {
             id: op,
             status: Status::Timeout,
+            read: None,
+            zdo: None,
+        });
+        assert!(run.tick(&mut exec, 10));
+        assert!(!run.failed());
+    }
+
+    #[test]
+    fn optional_report_failure_does_not_fail_the_plan() {
+        let mut exec = Executor::new();
+        let mut transport = FakeTransport::new();
+        let mut run = ConfigRun::new(
+            &mut exec,
+            (DEVICE, SHORT),
+            EP,
+            "standard",
+            &[report_step()],
+            RunOptions {
+                optional_reports: true,
+                ..options(false)
+            },
+            0,
+        );
+        exec.tick(&mut transport, 0);
+        let op = transport.last().unwrap().op;
+        run.on_result(OperationResult {
+            id: op,
+            status: Status::Failed,
             read: None,
             zdo: None,
         });

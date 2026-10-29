@@ -12,9 +12,10 @@ fn main() {
 fn generate_lvgl_bindings() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let idf_path = PathBuf::from(env::var("IDF_PATH").unwrap_or_else(|_| {
-        "C:/Users/ASUS/.espressif/esp-idf/v6.1".to_string()
-    }));
+    let idf_path = PathBuf::from(
+        env::var("IDF_PATH")
+            .unwrap_or_else(|_| "C:/Users/ASUS/.espressif/esp-idf/v6.1".to_string()),
+    );
 
     let Some(sys_out) = find_sys_out(&out_dir) else {
         panic!("esp-idf-sys out dir not found; run the build through tools/build-ha-app.ps1");
@@ -34,7 +35,10 @@ fn generate_lvgl_bindings() {
         .clang_arg(format!("-I{}", lvgl.display()))
         .clang_arg(format!("-I{}", lvgl.join("src").display()))
         .clang_arg(format!("-I{}", sys_out.join("build/config").display()))
-        .clang_arg(format!("-I{}", idf_path.join("components/esp_common/include").display()))
+        .clang_arg(format!(
+            "-I{}",
+            idf_path.join("components/esp_common/include").display()
+        ))
         .layout_tests(false)
         .generate_comments(false)
         .derive_default(true);
@@ -92,7 +96,11 @@ fn riscv_gcc_includes() -> Vec<PathBuf> {
     let root = root.join("riscv32-esp-elf");
     let mut out = vec![root.join("riscv32-esp-elf/include")];
     if let Ok(versions) = fs::read_dir(root.join("lib/gcc/riscv32-esp-elf")) {
-        if let Some(version) = versions.flatten().map(|entry| entry.path()).find(|p| p.is_dir()) {
+        if let Some(version) = versions
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|p| p.is_dir())
+        {
             out.push(version.join("include"));
         }
     }

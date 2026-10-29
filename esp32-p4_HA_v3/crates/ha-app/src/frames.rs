@@ -9,10 +9,18 @@
 
 use std::sync::Mutex;
 
+use ha_domain::canonical::CapabilitiesRecord;
 use zigbee_frames::ZclFrame;
 
-const SLOTS: usize = 8;
+const SLOTS: usize = 32;
 const FRAME_CAPACITY: usize = 160;
+
+/// Direct consumer of decoded reports. It runs in the main loop, so decoded
+/// state/events reach Domain without an intermediate state/event queue.
+pub trait IngestSink {
+    fn update(&mut self, entity: u64, update: &z2m_rs::Update);
+    fn capabilities(&mut self, entity: u64, capabilities: CapabilitiesRecord);
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -99,9 +107,7 @@ pub unsafe extern "C" fn ha_frame_received(meta: *const FrameMeta, data: *const 
 }
 
 extern "C" {
-    fn zb_poc_set_frame_sink(
-        sink: Option<unsafe extern "C" fn(*const FrameMeta, *const u8, u16)>,
-    );
+    fn zb_poc_set_frame_sink(sink: Option<unsafe extern "C" fn(*const FrameMeta, *const u8, u16)>);
 }
 
 pub fn install() {
@@ -116,18 +122,27 @@ pub fn ingest(
     endpoint: u8,
     cluster: u16,
     view: &z2m_rs::AttributeFrameView<'_>,
+    sink: &mut dyn IngestSink,
 ) -> usize {
     let Some(profile) = crate::interview::selected_profile(eui) else {
         return 0;
     };
     let mut decoded = z2m_rs::Decoded::default();
     let standard = profile.id == zigbee_devices::STANDARD_PROFILE_ID;
-    let descriptor = if standard { crate::store::descriptor(eui) } else { None };
+    let descriptor = if standard {
+        crate::store::descriptor(eui)
+    } else {
+        None
+    };
     let standard_endpoint = descriptor.as_ref().and_then(|d| d.endpoint(endpoint));
     let count = if standard {
         standard_endpoint
             .map(|_| {
-                z2m_rs::decode_frame(&zigbee_devices::standard::STANDARD_PROFILE, view, &mut decoded)
+                z2m_rs::decode_frame(
+                    &zigbee_devices::standard::STANDARD_PROFILE,
+                    view,
+                    &mut decoded,
+                )
             })
             .unwrap_or(0)
     } else {
@@ -138,19 +153,20 @@ pub fn ingest(
         if let Some(ep) = standard_endpoint {
             if ep.has_server(cluster) {
                 for attr in view.attributes() {
-                    let Some(feature) = zigbee_devices::attribute_capability(cluster, attr.id) else {
+                    let Some(feature) = zigbee_devices::attribute_capability(cluster, attr.id)
+                    else {
                         continue;
                     };
-                    let decoded_feature = decoded
-                        .updates()
-                        .any(|update| zigbee_devices::update_capability(ep, update) == Some(feature));
+                    let decoded_feature = decoded.updates().any(|update| {
+                        zigbee_devices::update_capability(ep, update) == Some(feature)
+                    });
                     if decoded_feature {
                         crate::interview::confirm_attribute(eui, endpoint, cluster, attr.id);
                     }
                 }
             }
             let confirmed = crate::interview::confirmed(eui);
-            crate::bridge::push_capabilities(
+            sink.capabilities(
                 entity,
                 zigbee_devices::standard::capabilities_confirmed(ep, &confirmed),
             );
@@ -158,19 +174,21 @@ pub fn ingest(
     }
     for update in decoded.updates() {
         if standard {
-            let Some(ep) = standard_endpoint else { continue; };
+            let Some(ep) = standard_endpoint else {
+                continue;
+            };
             if !zigbee_devices::update_is_discovered(ep, update) {
                 continue;
             }
         }
-        log::info!("decoded {update:?}");
-        crate::bridge::push(entity, update);
+        log::debug!("decoded {update:?}");
+        sink.update(entity, update);
     }
     count
 }
 
 /// Drains the inbox; called from the main loop. Bounded by `SLOTS` per call.
-pub fn process_pending() {
+pub fn process_pending(sink: &mut dyn IngestSink) {
     loop {
         let item = INBOX.lock().unwrap().pop();
         let Some((meta, frame, dropped)) = item else {
@@ -188,12 +206,14 @@ pub fn process_pending() {
                     for attr in view.attributes() {
                         log::debug!(
                             "attr 0x{:04x} type=0x{:02x} value={:02x?}",
-                            attr.id, attr.zcl_type, attr.value
+                            attr.id,
+                            attr.zcl_type,
+                            attr.value
                         );
                     }
                 }
-                let count = ingest(meta.src_ext, meta.src_ep, meta.cluster, &view);
-                log::info!(
+                let count = ingest(meta.src_ext, meta.src_ep, meta.cluster, &view, sink);
+                log::debug!(
                     "attr frame eui64={:016x} ep={} cluster=0x{:04x} tsn={} rssi={} attrs={} decoded={} dropped={} profile={}",
                     meta.src_ext,
                     meta.src_ep,

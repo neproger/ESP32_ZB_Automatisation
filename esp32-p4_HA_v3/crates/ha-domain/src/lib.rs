@@ -56,9 +56,14 @@ struct EntityTable {
     table: Table<Vec<u8>, Vec<u8>>,
 }
 
+enum SubscriptionSink {
+    Callback(Box<dyn FnMut(&Fact) -> bool + Send>),
+    Channel(std::sync::mpsc::SyncSender<Fact>),
+}
+
 struct Subscription {
     filter: Filter,
-    sink: Box<dyn FnMut(&Fact) -> bool + Send>,
+    sink: SubscriptionSink,
 }
 
 struct Command {
@@ -328,7 +333,21 @@ impl Domain {
     pub fn subscribe(&mut self, filter: Filter, sink: impl FnMut(&Fact) -> bool + Send + 'static) {
         self.subscriptions.push(Subscription {
             filter,
-            sink: Box::new(sink),
+            sink: SubscriptionSink::Callback(Box::new(sink)),
+        });
+    }
+
+    /// V2 subscriber inbox: the dispatcher only performs a non-blocking send.
+    /// The receiver belongs to the subscriber task; a full channel is a local
+    /// loss and never blocks Domain or the producer.
+    pub fn subscribe_channel(
+        &mut self,
+        filter: Filter,
+        sender: std::sync::mpsc::SyncSender<Fact>,
+    ) {
+        self.subscriptions.push(Subscription {
+            filter,
+            sink: SubscriptionSink::Channel(sender),
         });
     }
 
@@ -355,7 +374,14 @@ impl Domain {
                 Err(_) => break,
             };
             for subscription in &mut self.subscriptions {
-                if subscription.filter.matches(&fact) && (subscription.sink)(&fact) {
+                if !subscription.filter.matches(&fact) {
+                    continue;
+                }
+                let accepted = match &mut subscription.sink {
+                    SubscriptionSink::Callback(callback) => callback(&fact),
+                    SubscriptionSink::Channel(sender) => sender.try_send(fact).is_ok(),
+                };
+                if accepted {
                     delivered += 1;
                 }
             }
@@ -462,6 +488,12 @@ impl Domain {
             0,
             Some(error),
         );
+    }
+
+    /// Record size for a registered entity type. Copy-out callers need it to
+    /// size their buffer; Domain still owns the layout.
+    pub fn entity_record_len(&self, entity: EntityType) -> Option<usize> {
+        self.desc(entity).ok().map(|(_, record_size)| record_size)
     }
 
     fn desc(&self, entity: EntityType) -> Result<(usize, usize)> {
@@ -717,6 +749,25 @@ mod tests {
         assert_eq!(seen[0].0, DEVICE);
         assert_eq!(seen[0].1, EUI64);
         assert_eq!(seen[1].1, EUI64);
+        assert_eq!(domain.dispatch_once(), 0);
+    }
+
+    #[test]
+    fn channel_subscription_receives_compact_fact_without_running_subscriber_code() {
+        let mut domain = domain(8);
+        register_device(&mut domain);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        domain.subscribe_channel(Filter::all(), sender);
+
+        assert!(domain
+            .entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::bool(true)))
+            .unwrap());
+        assert_eq!(domain.dispatch_once(), 1);
+
+        let fact = receiver.try_recv().expect("fact in subscriber inbox");
+        assert_eq!(fact.entity, DEVICE);
+        assert_eq!(fact.key(), EUI64);
+        assert_eq!(fact.value, Value::bool(true));
         assert_eq!(domain.dispatch_once(), 0);
     }
 

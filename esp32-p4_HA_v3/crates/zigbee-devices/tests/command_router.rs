@@ -185,13 +185,16 @@ fn missing_capability_is_rejected_before_send() {
 fn full_command_core_is_bounded() {
     let mut exec = Executor::new();
     let mut core = CommandCore::new();
-    let bindings = [binding(&PROFILE)];
+    let mut bindings = [binding(&PROFILE); 9];
+    for (index, binding) in bindings.iter_mut().enumerate() {
+        binding.entity = ENTITY + index as u64;
+    }
     let mut router = CommandRouter::new(&mut exec, &bindings);
-    for _ in 0..8 {
+    for binding in &bindings[..8] {
         router
             .submit(
                 &mut core,
-                ENTITY,
+                binding.entity,
                 PROPERTY_POWER,
                 ACTION_ON,
                 CommandValue::Scalar(DomainValue::bool(true)),
@@ -202,7 +205,7 @@ fn full_command_core_is_bounded() {
     assert_eq!(
         router.submit(
             &mut core,
-            ENTITY,
+            bindings[8].entity,
             PROPERTY_POWER,
             ACTION_ON,
             CommandValue::Scalar(DomainValue::bool(true)),

@@ -3,9 +3,13 @@
 //! The standard ZCL profile is just another profile; endpoint discovery and
 //! confirmed attributes select what a concrete endpoint actually exposes.
 
-use ha_domain::canonical::{CapabilitiesRecord, Capability, PropertyId};
+use ha_domain::canonical::{
+    CapabilitiesRecord, Capability, PropertyId, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE,
+    PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE, PROPERTY_HUMIDITY,
+    PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY, PROPERTY_POWER, PROPERTY_TEMPERATURE,
+};
 use z2m_rs::capabilities::STANDARD_PROFILE;
-use z2m_rs::{Profile, Update};
+use z2m_rs::{properties, Profile, Update};
 
 use crate::descriptor::EndpointDescriptor;
 use crate::projection::profile_capabilities;
@@ -23,10 +27,17 @@ pub fn capabilities_for(
             let Some((cluster, attributes)) = zcl::property_attributes(capability.property) else {
                 continue;
             };
-            if !endpoint.has_server(cluster)
-                || !attributes.iter().any(|attribute| {
-                    confirmed.is_confirmed(endpoint.endpoint, cluster, *attribute)
-                })
+            if !endpoint.has_server(cluster) {
+                continue;
+            }
+            // OnOff OnOff is mandatory for an OnOff server. Requiring a read
+            // before the first automation command makes startup/button presses
+            // fail with InvalidArg until the configure walk reaches the device.
+            let onoff_is_mandatory = capability.property == PROPERTY_POWER && cluster == zcl::ONOFF;
+            if !onoff_is_mandatory
+                && !attributes
+                    .iter()
+                    .any(|attribute| confirmed.is_confirmed(endpoint.endpoint, cluster, *attribute))
             {
                 continue;
             }
@@ -68,14 +79,32 @@ pub fn capability_allows(
     property: PropertyId,
     action: u32,
 ) -> bool {
-    command_allowed(&STANDARD_PROFILE, Some(endpoint), confirmed, property, action)
+    command_allowed(
+        &STANDARD_PROFILE,
+        Some(endpoint),
+        confirmed,
+        property,
+        action,
+    )
 }
 
 pub fn update_property(update: &Update) -> Option<PropertyId> {
     let Update::Property { property, .. } = update else {
         return None;
     };
-    Some(property.0)
+    Some(match *property {
+        properties::STATE => PROPERTY_POWER,
+        properties::BRIGHTNESS => PROPERTY_BRIGHTNESS,
+        properties::COLOR_TEMP => PROPERTY_COLOR_TEMPERATURE,
+        properties::COLOR => PROPERTY_COLOR,
+        properties::BATTERY => PROPERTY_BATTERY_PERCENT,
+        properties::VOLTAGE => PROPERTY_BATTERY_VOLTAGE,
+        properties::TEMPERATURE => PROPERTY_TEMPERATURE,
+        properties::HUMIDITY => PROPERTY_HUMIDITY,
+        properties::OCCUPANCY => PROPERTY_OCCUPANCY,
+        properties::ILLUMINANCE => PROPERTY_ILLUMINANCE,
+        _ => return None,
+    })
 }
 
 fn update_is_discovered_for_profile(

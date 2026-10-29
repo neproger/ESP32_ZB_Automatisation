@@ -109,7 +109,10 @@ unsafe extern "C" fn on_zdo_active_ep(op: u32, count: u8, endpoints: *const u8) 
             let _ = list.push(endpoint);
         }
     }
-    EVENTS.lock().unwrap().push(Event::ZdoActiveEndpoints { op, endpoints: list });
+    EVENTS.lock().unwrap().push(Event::ZdoActiveEndpoints {
+        op,
+        endpoints: list,
+    });
 }
 
 unsafe extern "C" fn on_zdo_simple_desc(
@@ -136,7 +139,13 @@ unsafe extern "C" fn on_zdo_simple_desc(
     }
     EVENTS.lock().unwrap().push(Event::ZdoSimpleDescriptor {
         op,
-        descriptor: SimpleDescriptor { endpoint, profile_id, device_id, server_clusters, client_clusters },
+        descriptor: SimpleDescriptor {
+            endpoint,
+            profile_id,
+            device_id,
+            server_clusters,
+            client_clusters,
+        },
     });
 }
 
@@ -150,9 +159,7 @@ unsafe extern "C" fn on_zdo(op: u32, success: u8) {
 extern "C" {
     fn zb_exec_set_callbacks(
         confirm: Option<unsafe extern "C" fn(u32, u8, u8)>,
-        response: Option<
-            unsafe extern "C" fn(u16, u8, u16, u8, u8, i16, i16, *const u8, u16),
-        >,
+        response: Option<unsafe extern "C" fn(u16, u8, u16, u8, u8, i16, i16, *const u8, u16)>,
         zdo: Option<unsafe extern "C" fn(u32, u8)>,
         active_ep: Option<unsafe extern "C" fn(u32, u8, *const u8)>,
         simple_desc: Option<
@@ -195,14 +202,7 @@ extern "C" {
         payload: *const u8,
         len: u16,
     ) -> i32;
-    fn zb_exec_bind(
-        op: u32,
-        eui64: u64,
-        short: u16,
-        src_ep: u8,
-        cluster: u16,
-        dst_ep: u8,
-    ) -> i32;
+    fn zb_exec_bind(op: u32, eui64: u64, short: u16, src_ep: u8, cluster: u16, dst_ep: u8) -> i32;
     fn zb_exec_active_ep(op: u32, eui64: u64, short: u16) -> i32;
     fn zb_exec_simple_desc(op: u32, eui64: u64, short: u16, ep: u8) -> i32;
     fn zb_exec_leave(op: u32, eui64: u64, short: u16) -> i32;
@@ -245,16 +245,12 @@ impl Transport for EspTransport {
                 cluster: 0x0006,
                 command: 0x01,
                 ..
-            } => unsafe {
-                zb_exec_on_off(op, request.device, request.short, request.endpoint, 1)
-            },
+            } => unsafe { zb_exec_on_off(op, request.device, request.short, request.endpoint, 1) },
             RequestKind::Zcl {
                 cluster: 0x0006,
                 command: 0x00,
                 ..
-            } => unsafe {
-                zb_exec_on_off(op, request.device, request.short, request.endpoint, 0)
-            },
+            } => unsafe { zb_exec_on_off(op, request.device, request.short, request.endpoint, 0) },
             RequestKind::SendZcl {
                 cluster,
                 command,

@@ -15,16 +15,19 @@ use z2m_rs::Profile;
 use crate::projection::profile_capabilities;
 use crate::standard;
 
-pub const STATE_CAPACITY: usize = 64;
-pub const ENTITY_CAPACITY: usize = 16;
-pub const DEVICE_CAPACITY: usize = 16;
+// V2 capacity budget (esp32-p4_HA_v2/main/app_main.c). Fixed capacity is
+// deliberate: predictable RAM and no hidden allocation. Size changes belong
+// in the composition root, not in individual services.
+pub const STATE_CAPACITY: usize = 256;
+pub const ENTITY_CAPACITY: usize = 32;
+pub const DEVICE_CAPACITY: usize = 32;
 pub const GROUP_CAPACITY: usize = 16;
-pub const GROUP_ITEM_CAPACITY: usize = 64;
-pub const GROUP_AUTOMATION_CAPACITY: usize = 64;
-pub const AUTOMATION_CAPACITY: usize = 16;
+pub const GROUP_ITEM_CAPACITY: usize = 128;
+pub const GROUP_AUTOMATION_CAPACITY: usize = 32;
+pub const AUTOMATION_CAPACITY: usize = 32;
 pub const LOCATION_CAPACITY: usize = 4;
-pub const WEATHER_CAPACITY: usize = 4;
-pub const SETTINGS_CAPACITY: usize = 2;
+pub const WEATHER_CAPACITY: usize = 1;
+pub const SETTINGS_CAPACITY: usize = 1;
 
 /// Write-through port for canonical records. The firmware implements it over
 /// MicroDB; host tests can use an in-memory sink.
@@ -58,6 +61,9 @@ impl<'a> DomainAdapter<'a> {
     }
 
     fn persist(&mut self, entity: u32, key: &[u8], record: &[u8]) {
+        if entity == ENTITY_PROPERTY_STATE {
+            return;
+        }
         if let Some(sink) = self.sink.as_mut() {
             sink.put(entity, key, record);
         }
@@ -312,7 +318,10 @@ impl<'a> DomainAdapter<'a> {
     ) -> Result<bool, ha_domain::Error> {
         let key = StateKey { entity, property }.to_bytes();
         let record = StateRecord { value }.encode();
-        let changed = self.domain.entity_put(
+        // PROPERTY_STATE is the live truth in RAM. It is restored by device
+        // reports after boot, never by flash. Persistent config is written by
+        // the other Domain records only.
+        self.domain.entity_put(
             ENTITY_PROPERTY_STATE,
             &key,
             &record,
@@ -320,11 +329,7 @@ impl<'a> DomainAdapter<'a> {
                 source: SOURCE_ZIGBEE as u8,
                 value,
             },
-        )?;
-        if changed {
-            self.persist(ENTITY_PROPERTY_STATE, &key, &record);
-        }
-        Ok(changed)
+        )
     }
 
     pub fn read_state(&self, entity: EntityId, property: PropertyId) -> Option<DomainValue> {
@@ -438,13 +443,9 @@ impl<'a> DomainAdapter<'a> {
             }
         })?;
         for key in keys {
-            if self
+            let _ = self
                 .domain
-                .entity_remove(ENTITY_PROPERTY_STATE, &key, fact_meta())
-                .is_ok()
-            {
-                self.remove_persist(ENTITY_PROPERTY_STATE, &key);
-            }
+                .entity_remove(ENTITY_PROPERTY_STATE, &key, fact_meta());
         }
         Ok(())
     }
@@ -568,6 +569,9 @@ impl<'a> DomainAdapter<'a> {
     }
 
     fn remove_persist(&mut self, entity: u32, key: &[u8]) {
+        if entity == ENTITY_PROPERTY_STATE {
+            return;
+        }
         if let Some(sink) = self.sink.as_mut() {
             sink.remove(entity, key);
         }
@@ -606,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_state_is_written_through_and_unchanged_is_not() {
+    fn changed_state_stays_in_ram_and_unchanged_is_not_reported() {
         let mut domain = Domain::new(8, 2, 8).unwrap();
         let puts = Rc::new(RefCell::new(Vec::new()));
         let removes = Rc::new(RefCell::new(Vec::new()));
@@ -618,14 +622,40 @@ mod tests {
         assert!(adapter
             .write_state(7, PROPERTY_POWER, DomainValue::bool(true))
             .unwrap());
-        assert_eq!(puts.borrow().len(), 1);
-        assert_eq!(puts.borrow()[0].0, ENTITY_PROPERTY_STATE);
-        assert_eq!(puts.borrow()[0].2[0], 1, "BOOL value kind");
+        assert!(
+            puts.borrow().is_empty(),
+            "PROPERTY_STATE must not be written through to persistent storage"
+        );
 
         assert!(!adapter
             .write_state(7, PROPERTY_POWER, DomainValue::bool(true))
             .unwrap());
-        assert_eq!(puts.borrow().len(), 1);
+        assert!(puts.borrow().is_empty());
+    }
+
+    #[test]
+    fn generic_record_path_cannot_persist_state() {
+        let mut domain = Domain::new(8, 2, 8).unwrap();
+        let puts = Rc::new(RefCell::new(Vec::new()));
+        let mut sink = Sink {
+            puts: Rc::clone(&puts),
+            removes: Rc::new(RefCell::new(Vec::new())),
+        };
+        let mut adapter = DomainAdapter::with_sink(&mut domain, &mut sink).unwrap();
+        let key = StateKey {
+            entity: 7,
+            property: PROPERTY_POWER,
+        }
+        .to_bytes();
+        let record = StateRecord {
+            value: DomainValue::bool(true),
+        }
+        .encode();
+        adapter
+            .put_record(ENTITY_PROPERTY_STATE, &key, &record)
+            .unwrap();
+        drop(adapter);
+        assert!(puts.borrow().is_empty());
     }
 
     #[test]
@@ -736,13 +766,10 @@ mod tests {
         assert!(adapter.remove_device_records(device).unwrap() >= 1);
         assert!(adapter.read_entity(entity).is_none());
         assert!(adapter.read_device(device).is_none());
+        assert!(adapter.read_state(entity, PROPERTY_POWER).is_none());
         assert!(removes
             .borrow()
             .iter()
             .any(|(entity_type, _)| *entity_type == ENTITY_LOGICAL_DEVICE));
-        assert!(removes
-            .borrow()
-            .iter()
-            .any(|(entity_type, _)| *entity_type == ENTITY_PROPERTY_STATE));
     }
 }

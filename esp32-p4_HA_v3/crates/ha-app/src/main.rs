@@ -1,42 +1,42 @@
 //! First vertical HA V3 slice on hardware.
 //!
-//! In: Zigbee C shim -> bounded inbox -> `z2m-rs` decode -> canonical bridge ->
-//! Domain entities/state (RAM) + web mirror -> WebSocket. Out: WS command frame
-//! -> bounded intake -> `CommandCore` -> `zigbee-exec` -> C transport.
-//! No async runtime: one poll loop owns the Domain, the executor and the queues.
+//! In: Zigbee C shim -> bounded frame inbox -> `z2m-rs` decode -> Domain
+//! entities/state (RAM) + web mirror -> WebSocket. Out: WS command frame ->
+//! bounded intake -> `CommandCore` -> `zigbee-exec` -> C transport.
+//! No async runtime: one poll loop owns the Domain and the executor.
 //!
-//! The Domain is a RAM cache; its canonical records are written through to
-//! MicroDB (`domain` partition) and restored at boot. The registry lives in
-//! `mstore`.
+//! PROPERTY_STATE is RAM-only. Persistent device/config records are written to
+//! MicroDB (`domain` partition) and restored at boot; state is not. The device
+//! registry lives in `mstore`.
 
 use std::ffi::{c_char, CStr, CString};
 use std::io::{Read, Write};
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    LocationRecord, SettingsRecord, StateKey, StateRecord, WeatherRecord, ENTITY_ENTITY,
+    EventId, LocationRecord, SettingsRecord, StateKey, StateRecord, WeatherRecord, ENTITY_ENTITY,
     ENTITY_LOCATION, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER,
-    EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_SYSTEM_HOUR, PROPERTY_SYSTEM_MINUTE,
-    PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS, PROPERTY_SYSTEM_TIME_UTC,
-    PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY, PROPERTY_SYSTEM_WEEKDAY_MASK,
-    SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
-    WEATHER_DEVICE_UID,
+    EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_COLOR, PROPERTY_SYSTEM_HOUR,
+    PROPERTY_SYSTEM_MINUTE, PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS,
+    PROPERTY_SYSTEM_TIME_UTC, PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY,
+    PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE,
+    SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
 };
 use ha_domain::command::CommandCore;
-use ha_domain::{Domain, FactMeta, FactTarget};
+use ha_domain::{Domain, Fact, FactKind, FactMeta, FactTarget, Filter};
 use zigbee_devices::{status_from_exec, DomainAdapter};
 
-mod intake;
+mod capabilities;
+mod configure;
+mod display;
 mod exec;
 mod frames;
+mod intake;
 mod interview;
 mod store;
-mod web;
-mod configure;
-mod bridge;
-mod display;
 mod system;
-
+mod web;
 
 /// Mirror of `poc_event_t` from the C shim; copied once across the FFI boundary.
 #[repr(C)]
@@ -49,6 +49,45 @@ struct PocEvent {
     command_id: u8,
     payload_len: u8,
     payload: [u8; 8],
+}
+
+#[derive(Clone, Copy)]
+struct CanonicalEvent {
+    entity: u64,
+    event: EventId,
+}
+
+/// Direct receiver for decoded Zigbee updates. It owns the Domain-side effects
+/// of one report; no state/event queue stands between decode and Domain.
+struct Ingest<'a> {
+    domain: &'a mut Domain,
+    command_core: &'a mut CommandCore,
+}
+
+impl frames::IngestSink for Ingest<'_> {
+    fn update(&mut self, entity: u64, update: &z2m_rs::Update) {
+        let (states, event) = zigbee_devices::canonical_states(entity, update);
+        for state in states.into_iter().flatten() {
+            apply_state(self.domain, self.command_core, state);
+        }
+        if let Some(event_id) = event {
+            publish_event(
+                self.domain,
+                CanonicalEvent {
+                    entity,
+                    event: event_id,
+                },
+            );
+        }
+    }
+
+    fn capabilities(
+        &mut self,
+        entity: u64,
+        capabilities: ha_domain::canonical::CapabilitiesRecord,
+    ) {
+        apply_capabilities(self.domain, entity, capabilities);
+    }
 }
 
 extern "C" {
@@ -71,7 +110,13 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let mut domain = Domain::new_with_clock(32, 8, 64, now_ms).expect("domain");
+    let mut domain = Domain::new_with_clock(64, 8, 64, now_ms).expect("domain");
+    let (display_tx, display_rx) = sync_channel(64);
+    let (web_tx, web_rx) = sync_channel(64);
+    let (automation_tx, automation_rx) = sync_channel(64);
+    domain.subscribe_channel(Filter::all(), display_tx);
+    domain.subscribe_channel(Filter::all(), web_tx);
+    domain.subscribe_channel(Filter::all(), automation_tx);
 
     unsafe {
         esp_idf_svc::sys::esp_netif_init();
@@ -121,10 +166,6 @@ fn main() {
         }
     }
     if display::start() {
-        if let Some(location) = read_location(&domain) {
-            display::set_location(&location_name(&location));
-        }
-        display::set_brightness(read_settings(&domain).brightness_pct);
         display::rebuild(&domain);
     }
     system::start(read_location(&domain).unwrap_or_default());
@@ -145,7 +186,16 @@ fn main() {
     let mut last_weather: Option<u8> = None;
     loop {
         let mut event = PocEvent::default();
-        if unsafe { zb_poc_poll(&mut event) } != 0 {
+        let polled = unsafe { zb_poc_poll(&mut event) } != 0;
+        if polled {
+            if event.extended_addr == 0 {
+                if let Some(binding) = bindings
+                    .iter()
+                    .find(|binding| binding.short == event.short_addr)
+                {
+                    event.extended_addr = binding.eui;
+                }
+            }
             executor.device_awake(event.short_addr);
             zigbee_devices::update_binding_short(
                 &mut bindings,
@@ -153,9 +203,17 @@ fn main() {
                 event.short_addr,
             );
             ensure_interview(&mut executor, event.extended_addr, event.short_addr);
-            ingest_command(&event);
         }
-        frames::process_pending();
+        let mut ingest = Ingest {
+            domain: &mut domain,
+            command_core: &mut command_core,
+        };
+        if polled {
+            ingest_command(&event, &mut ingest);
+        }
+        frames::process_pending(&mut ingest);
+        drop(ingest);
+        display::tick();
         if let Some(device) = frames::take_last_device() {
             executor.device_awake(device.1);
             zigbee_devices::update_binding_short(&mut bindings, device.0, device.1);
@@ -166,15 +224,9 @@ fn main() {
             zigbee_devices::update_binding_short(&mut bindings, eui, short);
             ensure_interview(&mut executor, eui, short);
         }
-        let mut identified = false;
         while let Some((eui, short, profile)) = interview::take_identified() {
             register_device(&mut domain, &mut bindings, eui, short, profile);
-            identified = true;
         }
-        if identified {
-            display::rebuild(&domain);
-        }
-        let mut display_dirty = false;
         while let Some(request) = intake::take() {
             match request {
                 intake::Request::Command {
@@ -187,18 +239,16 @@ fn main() {
                         binding.confirmed = interview::confirmed(binding.eui);
                     }
                     let submitted = zigbee_devices::CommandRouter::new(&mut executor, &bindings)
-                        .submit(
-                            &mut command_core,
-                            entity,
-                            property,
-                            action,
-                            value,
-                            now_ms(),
-                        );
+                        .submit(&mut command_core, entity, property, action, value, now_ms());
                     match submitted {
-                        Ok(operation) => log::info!(
-                            "command: entity={entity:016x} property={property} op={operation}"
-                        ),
+                        Ok(operation) => {
+                            log::info!(
+                                "command: entity={entity:016x} property={property} op={operation}"
+                            );
+                            if property == PROPERTY_COLOR {
+                                request_color_readback(&mut executor, &bindings, entity, now_ms());
+                            }
+                        }
                         Err(error) => log::warn!(
                             "command rejected: entity={entity:016x} property={property} error={error:?}"
                         ),
@@ -206,15 +256,12 @@ fn main() {
                 }
                 intake::Request::RenameEntity { entity, name } => {
                     rename_entity(&mut domain, entity, &name);
-                    display_dirty = true;
                 }
                 intake::Request::RenameDevice { device, name } => {
                     rename_device(&mut domain, device, &name);
-                    display_dirty = true;
                 }
                 intake::Request::RemoveDevice { device } => {
                     remove_device(&mut domain, &mut bindings, &mut executor, device);
-                    display_dirty = true;
                 }
                 intake::Request::SetAutomationEnabled {
                     automation: id,
@@ -223,11 +270,7 @@ fn main() {
                     let key = id.to_le_bytes();
                     let mut record = [0u8; ha_domain::canonical::AUTOMATION_RECORD_LEN];
                     if domain
-                        .entity_get(
-                            ha_domain::canonical::ENTITY_AUTOMATION,
-                            &key,
-                            &mut record,
-                        )
+                        .entity_get(ha_domain::canonical::ENTITY_AUTOMATION, &key, &mut record)
                         .is_err()
                     {
                         log::warn!("display: automation {id:016x} not found");
@@ -238,18 +281,14 @@ fn main() {
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         continue;
                     };
-                    if let Err(error) = adapter.put_record(
-                        ha_domain::canonical::ENTITY_AUTOMATION,
-                        &key,
-                        &record,
-                    ) {
+                    if let Err(error) =
+                        adapter.put_record(ha_domain::canonical::ENTITY_AUTOMATION, &key, &record)
+                    {
                         log::warn!("display: automation {id:016x} write failed: {error:?}");
                         continue;
                     }
                     drop(adapter);
-                    web::upsert(ha_web::entity::AUTOMATION, &key, &record);
                     rebuild_rules(&domain, &mut automation);
-                    display_dirty = true;
                 }
                 intake::Request::SetSettings { brightness } => {
                     let key = [SETTINGS_ID];
@@ -260,24 +299,18 @@ fn main() {
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         continue;
                     };
-                    if let Err(error) =
-                        adapter.put_record(ENTITY_SETTINGS, &key, &record)
-                    {
+                    if let Err(error) = adapter.put_record(ENTITY_SETTINGS, &key, &record) {
                         log::warn!("display: settings write failed: {error:?}");
                         continue;
                     }
                     drop(adapter);
-                    web::upsert(ha_web::entity::SETTINGS, &key, &record);
-                    display::set_brightness(brightness);
                 }
                 intake::Request::WifiConnect { ssid, password } => {
                     let Ok(ssid_c) = CString::new(ssid) else {
                         continue;
                     };
                     let password_c = CString::new(password).unwrap_or_default();
-                    let rc = unsafe {
-                        ha_wifi_connect_ssid(ssid_c.as_ptr(), password_c.as_ptr())
-                    };
+                    let rc = unsafe { ha_wifi_connect_ssid(ssid_c.as_ptr(), password_c.as_ptr()) };
                     if rc != 0 {
                         log::warn!("wifi: connect request rejected ({rc})");
                     } else {
@@ -291,20 +324,13 @@ fn main() {
                 } => {
                     let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
                     let is_location = entity == ha_domain::canonical::ENTITY_LOCATION;
-                    display_dirty |= display_relevant(entity);
                     let mut sink = StoreSink;
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         log::error!("domain: adapter init failed");
                         continue;
                     };
                     match adapter.put_record(entity, &key, &record) {
-                        Ok(changed) => {
-                            if changed {
-                                if let Ok(frame_type) = u8::try_from(entity) {
-                                    web::upsert(frame_type, &key, &record);
-                                }
-                            }
-                        }
+                        Ok(_) => {}
                         Err(error) => {
                             log::warn!("domain: upsert entity={entity} failed: {error:?}")
                         }
@@ -315,14 +341,12 @@ fn main() {
                     }
                     if is_location {
                         if let Some(location) = read_location(&domain) {
-                            display::set_location(&location_name(&location));
                             system::set_location(location);
                         }
                     }
                 }
                 intake::Request::Remove { entity, key } => {
                     let is_rule = entity == ha_domain::canonical::ENTITY_AUTOMATION;
-                    display_dirty |= display_relevant(entity);
                     let mut sink = StoreSink;
                     let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
                         log::error!("domain: adapter init failed");
@@ -345,7 +369,6 @@ fn main() {
                                     log::warn!("domain: remove group={id:016x} failed: {error:?}")
                                 }
                             }
-                            web::remove_group(id);
                         }
                         ha_domain::canonical::ENTITY_AUTOMATION => {
                             let Some(id) = key
@@ -363,16 +386,9 @@ fn main() {
                                     "domain: remove automation={id:016x} failed: {error:?}"
                                 ),
                             }
-                            web::remove_automation(id);
                         }
                         _ => match adapter.remove_record(entity, &key) {
-                            Ok(changed) => {
-                                if changed {
-                                    if let Ok(frame_type) = u8::try_from(entity) {
-                                        web::remove(frame_type, &key);
-                                    }
-                                }
-                            }
+                            Ok(_) => {}
                             Err(error) => {
                                 log::warn!("domain: remove entity={entity} failed: {error:?}")
                             }
@@ -384,9 +400,6 @@ fn main() {
                     }
                 }
             }
-        }
-        if display_dirty {
-            display::rebuild(&domain);
         }
         while let Some(nav) = display::take_nav() {
             match nav {
@@ -440,33 +453,8 @@ fn main() {
                 }
             }
         }
-        while let Some(state) = bridge::take_state() {
-            let entity = state.entity;
-            let property = state.property;
-            let value = ha_automation::value_to_f64(&state.value);
-            apply_state(&mut domain, &mut command_core, state);
-            if let Some(value) = value {
-                let mut actions = ha_automation::Actions::new();
-                automation.on_state(
-                    entity,
-                    property,
-                    value,
-                    &DomainState(&domain),
-                    &mut actions,
-                );
-                submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
-            }
-        }
-        while let Some((entity, capabilities)) = bridge::take_capabilities() {
+        while let Some((entity, capabilities)) = capabilities::take_capabilities() {
             apply_capabilities(&mut domain, entity, capabilities);
-        }
-        while let Some(event) = bridge::take_event() {
-            let entity = event.entity;
-            let event_id = event.event;
-            publish_event(&mut domain, event);
-            let mut actions = ha_automation::Actions::new();
-            automation.on_event(entity, event_id, &DomainState(&domain), &mut actions);
-            submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
         }
         executor.tick(&mut transport, now_ms());
         while let Some(result) = executor.take_result() {
@@ -488,7 +476,11 @@ fn main() {
                     }
                 }
                 if let Some(read) = result.read {
-                    ingest_read(&context, read);
+                    let mut ingest = Ingest {
+                        domain: &mut domain,
+                        command_core: &mut command_core,
+                    };
+                    ingest_read(&context, read, &mut ingest);
                 }
             }
             interview::on_operation_result(&mut executor, result, now_ms());
@@ -502,15 +494,9 @@ fn main() {
                     log::info!("time: local clock ready (time rules use Location tz)");
                 }
                 last_minute = Some((minutes, weekday));
-                display::set_clock((minutes / 60) as u8, (minutes % 60) as u8);
                 publish_system_time(&mut domain, minutes, weekday);
                 let mut actions = ha_automation::Actions::new();
-                automation.on_minute(
-                    minutes,
-                    1u8 << weekday,
-                    &DomainState(&domain),
-                    &mut actions,
-                );
+                automation.on_minute(minutes, 1u8 << weekday, &DomainState(&domain), &mut actions);
                 submit_automation(&mut executor, &mut command_core, &mut bindings, &actions);
             }
         }
@@ -521,11 +507,26 @@ fn main() {
             let up = unsafe { ha_wifi_rssi(&mut rssi) } != 0;
             display::set_wifi(up.then_some(rssi as i16));
         }
+        domain.dispatch_once();
+        display::drain(&domain, &display_rx);
+        web::drain(&domain, &web_rx);
+        drain_automation(
+            &automation_rx,
+            &domain,
+            &mut automation,
+            &mut executor,
+            &mut command_core,
+            &mut bindings,
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-fn ingest_read(context: &zigbee_exec::Request, read: zigbee_exec::Payload) {
+fn ingest_read(
+    context: &zigbee_exec::Request,
+    read: zigbee_exec::Payload,
+    sink: &mut dyn frames::IngestSink,
+) {
     let zigbee_exec::RequestKind::ReadAttributes { cluster, .. } = context.kind else {
         return;
     };
@@ -535,7 +536,7 @@ fn ingest_read(context: &zigbee_exec::Request, read: zigbee_exec::Payload) {
         log::warn!("read: malformed response cluster=0x{cluster:04x}");
         return;
     };
-    let count = frames::ingest(context.device, context.endpoint, cluster, &frame);
+    let count = frames::ingest(context.device, context.endpoint, cluster, &frame, sink);
     log::info!(
         "read: eui={:016x} ep={} cluster=0x{:04x} decoded={count}",
         context.device,
@@ -544,7 +545,49 @@ fn ingest_read(context: &zigbee_exec::Request, read: zigbee_exec::Payload) {
     );
 }
 
-fn ingest_command(event: &PocEvent) {
+fn drain_automation(
+    receiver: &Receiver<Fact>,
+    domain: &Domain,
+    automation: &mut ha_automation::RuleEngine,
+    executor: &mut zigbee_exec::Executor,
+    command_core: &mut CommandCore,
+    bindings: &mut [zigbee_devices::Binding],
+) {
+    while let Ok(fact) = receiver.try_recv() {
+        match fact.kind {
+            FactKind::EntityUpserted if fact.entity == ENTITY_PROPERTY_STATE => {
+                let key = fact.key();
+                if key.len() < 16 {
+                    continue;
+                }
+                let entity = u64::from_le_bytes(key[..8].try_into().expect("state entity"));
+                let property = u32::from_le_bytes(key[8..12].try_into().expect("state property"));
+                let Some(value) = ha_automation::value_to_f64(&fact.value) else {
+                    continue;
+                };
+                let mut actions = ha_automation::Actions::new();
+                automation.on_state(entity, property, value, &DomainState(domain), &mut actions);
+                submit_automation(executor, command_core, bindings, &actions);
+            }
+            FactKind::Event => {
+                let key = fact.key();
+                if key.len() < 8 {
+                    continue;
+                }
+                let entity = u64::from_le_bytes(key[..8].try_into().expect("event entity"));
+                let Some(event) = fact.value.as_u32() else {
+                    continue;
+                };
+                let mut actions = ha_automation::Actions::new();
+                automation.on_event(entity, event, &DomainState(domain), &mut actions);
+                submit_automation(executor, command_core, bindings, &actions);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn ingest_command(event: &PocEvent, sink: &mut dyn frames::IngestSink) {
     let payload_len = usize::from(event.payload_len.min(8));
     let Some(profile) = interview::selected_profile(event.extended_addr) else {
         log::info!(
@@ -574,8 +617,11 @@ fn ingest_command(event: &PocEvent) {
     };
     let entity = zigbee_devices::zigbee_entity_id(event.extended_addr, event.endpoint);
     for update in decoded.updates() {
-        log::info!("canonical command eui={:016x} {update:?}", event.extended_addr);
-        bridge::push(entity, update);
+        log::info!(
+            "canonical command eui={:016x} {update:?}",
+            event.extended_addr
+        );
+        sink.update(entity, update);
     }
 }
 
@@ -585,18 +631,18 @@ fn apply_capabilities(
     capabilities: ha_domain::canonical::CapabilitiesRecord,
 ) {
     let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else { return; };
-    if let Err(error) = adapter.write_capabilities(entity, &capabilities) {
-        log::error!("domain: capabilities {entity:016x} failed: {error:?}");
+    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
         return;
-    }
-    web::upsert(
-        ha_web::entity::CAPABILITIES,
-        &entity.to_le_bytes(),
-        &capabilities.encode(),
-    );
+    };
+    let changed = match adapter.write_capabilities(entity, &capabilities) {
+        Ok(changed) => changed,
+        Err(error) => {
+            log::error!("domain: capabilities {entity:016x} failed: {error:?}");
+            return;
+        }
+    };
     drop(adapter);
-    display::rebuild(domain);
+    let _ = changed;
 }
 
 fn apply_state(
@@ -612,30 +658,25 @@ fn apply_state(
     match adapter.write_state(state.entity, state.property, state.value) {
         Ok(changed) => {
             command_core.on_reported(state.entity, state.property);
-            log::info!(
-                "domain: state entity={:016x} property={} changed={changed}",
-                state.entity,
-                state.property
-            );
-            display::on_state(state.entity, state.property, state.value);
             if changed {
-                let key = StateKey {
-                    entity: state.entity,
-                    property: state.property,
-                }
-                .to_bytes();
-                let record = StateRecord {
-                    value: state.value,
-                }
-                .encode();
-                web::upsert(ha_web::entity::PROPERTY_STATE, &key, &record);
+                log::info!(
+                    "domain: state entity={:016x} property={} changed=true",
+                    state.entity,
+                    state.property
+                );
+            } else {
+                log::debug!(
+                    "domain: state entity={:016x} property={} unchanged",
+                    state.entity,
+                    state.property
+                );
             }
         }
         Err(error) => log::error!("domain: state write failed: {error:?}"),
     }
 }
 
-fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
+fn publish_event(domain: &mut Domain, event: CanonicalEvent) {
     let key = event.entity.to_le_bytes();
     let payload = event.event.to_le_bytes();
     match domain.payload_put(
@@ -645,7 +686,7 @@ fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
         }),
         FactMeta {
             source: SOURCE_ZIGBEE as u8,
-            value: ha_domain::Value::NONE,
+            value: ha_domain::Value::u32(event.event),
         },
         &payload,
     ) {
@@ -655,7 +696,6 @@ fn publish_event(domain: &mut Domain, event: bridge::CanonicalEvent) {
                 event.entity,
                 event.event
             );
-            web::publish_event(event.entity, event.event);
         }
         Err(error) => log::error!("domain: event write failed: {error:?}"),
     }
@@ -718,7 +758,11 @@ impl ha_automation::StateSource for DomainState<'_> {
         let key = StateKey { entity, property }.to_bytes();
         let mut bytes = [0u8; ha_domain::canonical::STATE_RECORD_LEN];
         self.0
-            .entity_get(ha_domain::canonical::ENTITY_PROPERTY_STATE, &key, &mut bytes)
+            .entity_get(
+                ha_domain::canonical::ENTITY_PROPERTY_STATE,
+                &key,
+                &mut bytes,
+            )
             .ok()?;
         let value = ha_domain::Value::from_bytes(&bytes)?;
         ha_automation::value_to_f64(&value)
@@ -727,12 +771,14 @@ impl ha_automation::StateSource for DomainState<'_> {
 
 fn rebuild_rules(domain: &Domain, engine: &mut ha_automation::RuleEngine) {
     engine.clear();
-    if let Err(error) = domain.entity_iter(ha_domain::canonical::ENTITY_AUTOMATION, |key, record| {
-        if key.len() == 8 && record.len() == ha_domain::canonical::AUTOMATION_RECORD_LEN {
-            let id = u64::from_le_bytes(key.try_into().expect("automation key"));
-            engine.add_rule(id, record);
-        }
-    }) {
+    if let Err(error) =
+        domain.entity_iter(ha_domain::canonical::ENTITY_AUTOMATION, |key, record| {
+            if key.len() == 8 && record.len() == ha_domain::canonical::AUTOMATION_RECORD_LEN {
+                let id = u64::from_le_bytes(key.try_into().expect("automation key"));
+                engine.add_rule(id, record);
+            }
+        })
+    {
         log::warn!("automation: rebuild failed: {error:?}");
     }
     engine.build_index();
@@ -783,7 +829,10 @@ fn submit_automation(
 fn ensure_system_location(domain: &mut Domain) {
     let key = SYSTEM_DEVICE_UID.to_le_bytes();
     let mut current = [0u8; LOCATION_RECORD_LEN];
-    if domain.entity_get(ENTITY_LOCATION, &key, &mut current).is_ok() {
+    if domain
+        .entity_get(ENTITY_LOCATION, &key, &mut current)
+        .is_ok()
+    {
         return;
     }
     let record = LocationRecord::default().encode();
@@ -793,29 +842,13 @@ fn ensure_system_location(domain: &mut Domain) {
         return;
     };
     match adapter.put_record(ENTITY_LOCATION, &key, &record) {
-        Ok(changed) => {
-            if changed {
-                web::upsert(ha_web::entity::LOCATION, &key, &record);
-            }
-            log::info!("domain: location seeded");
-        }
+        Ok(_) => log::info!("domain: location seeded"),
         Err(error) => log::warn!("domain: location seed failed: {error:?}"),
     }
 }
 
 /// Local wall-clock minute for automation Time triggers. A manual offset is
 /// applied; auto timezone falls back to UTC until GeoIP exists.
-fn display_relevant(entity: u32) -> bool {
-    matches!(
-        entity,
-        ha_domain::canonical::ENTITY_GROUP
-            | ha_domain::canonical::ENTITY_GROUP_ITEM
-            | ha_domain::canonical::ENTITY_GROUP_AUTOMATION
-            | ha_domain::canonical::ENTITY_ENTITY
-            | ha_domain::canonical::ENTITY_CAPABILITIES
-            | ha_domain::canonical::ENTITY_AUTOMATION
-    )
-}
 
 fn collect_wifi_scan() -> Vec<(String, i8)> {
     let count = unsafe { ha_wifi_scan_count() };
@@ -856,12 +889,7 @@ fn ensure_settings(domain: &mut Domain) {
         return;
     };
     match adapter.put_record(ENTITY_SETTINGS, &key, &record) {
-        Ok(changed) => {
-            if changed {
-                web::upsert(ha_web::entity::SETTINGS, &key, &record);
-            }
-            log::info!("domain: settings seeded");
-        }
+        Ok(_) => log::info!("domain: settings seeded"),
         Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
     }
 }
@@ -869,18 +897,13 @@ fn ensure_settings(domain: &mut Domain) {
 fn read_location(domain: &Domain) -> Option<LocationRecord> {
     let mut bytes = [0u8; LOCATION_RECORD_LEN];
     domain
-        .entity_get(ENTITY_LOCATION, &SYSTEM_DEVICE_UID.to_le_bytes(), &mut bytes)
+        .entity_get(
+            ENTITY_LOCATION,
+            &SYSTEM_DEVICE_UID.to_le_bytes(),
+            &mut bytes,
+        )
         .ok()?;
     LocationRecord::decode(&bytes)
-}
-
-fn location_name(location: &LocationRecord) -> String {
-    let end = location
-        .name
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(location.name.len());
-    String::from_utf8_lossy(&location.name[..end]).into_owned()
 }
 
 fn apply_system_location(domain: &mut Domain, location: LocationRecord) {
@@ -891,15 +914,10 @@ fn apply_system_location(domain: &mut Domain, location: LocationRecord) {
         return;
     };
     match adapter.put_record(ENTITY_LOCATION, &key, &record) {
-        Ok(changed) => {
-            if changed {
-                web::upsert(ha_web::entity::LOCATION, &key, &record);
-            }
-        }
+        Ok(_) => {}
         Err(error) => log::warn!("system: location write failed: {error:?}"),
     }
     drop(adapter);
-    display::set_location(&location_name(&location));
     system::set_location(location);
 }
 
@@ -912,14 +930,7 @@ fn apply_weather(domain: &mut Domain, weather: WeatherRecord) {
     };
     if let Err(error) = domain.entity_put(ENTITY_WEATHER, &key, &record, meta) {
         log::warn!("system: weather write failed: {error:?}");
-        return;
     }
-    web::upsert(ha_web::entity::WEATHER, &key, &record);
-    display::set_weather(
-        weather.condition,
-        f32::from(weather.temperature_c100) / 100.0,
-        f32::from(weather.humidity_p100) / 100.0,
-    );
 }
 
 /// Publish the V2 system time properties (RAM only, no flash writes every minute).
@@ -932,10 +943,7 @@ fn publish_system_time(domain: &mut Domain, minutes: u16, weekday: u8) {
         .unwrap_or(0);
     let entries = [
         (PROPERTY_SYSTEM_TIME_UTC, ha_domain::Value::u32(seconds)),
-        (
-            PROPERTY_SYSTEM_TIME_STATUS,
-            ha_domain::Value::u32(2),
-        ),
+        (PROPERTY_SYSTEM_TIME_STATUS, ha_domain::Value::u32(2)),
         (
             PROPERTY_SYSTEM_HOUR,
             ha_domain::Value::u32(u32::from(minutes / 60)),
@@ -969,12 +977,7 @@ fn publish_system_time(domain: &mut Domain, minutes: u16, weekday: u8) {
         }
         .to_bytes();
         let record = StateRecord { value }.encode();
-        if domain
-            .entity_put(ENTITY_PROPERTY_STATE, &key, &record, meta)
-            .is_ok()
-        {
-            web::upsert(ha_web::entity::PROPERTY_STATE, &key, &record);
-        }
+        let _ = domain.entity_put(ENTITY_PROPERTY_STATE, &key, &record, meta);
     }
 }
 
@@ -989,7 +992,11 @@ fn local_minute(domain: &Domain) -> Option<(u16, u8)> {
     }
     let mut bytes = [0u8; LOCATION_RECORD_LEN];
     let offset = domain
-        .entity_get(ENTITY_LOCATION, &SYSTEM_DEVICE_UID.to_le_bytes(), &mut bytes)
+        .entity_get(
+            ENTITY_LOCATION,
+            &SYSTEM_DEVICE_UID.to_le_bytes(),
+            &mut bytes,
+        )
         .ok()
         .and_then(|()| LocationRecord::decode(&bytes))
         .map(|location| location.effective_tz_offset_min())
@@ -1020,7 +1027,15 @@ fn register_device(
     let mut registered = false;
     if let Some(descriptor) = descriptor {
         for endpoint in descriptor.endpoints() {
-            register_domain(domain, bindings, eui, short, endpoint.endpoint, profile, &name);
+            register_domain(
+                domain,
+                bindings,
+                eui,
+                short,
+                endpoint.endpoint,
+                profile,
+                &name,
+            );
             registered = true;
         }
     }
@@ -1043,13 +1058,10 @@ fn register_domain(
         log::error!("domain: adapter init failed");
         return;
     };
-    let device = match adapter.ensure_device(eui, name) {
-        Ok((device, _)) => device,
-        Err(error) => {
-            log::error!("domain: device {eui:016x} failed: {error:?}");
-            return;
-        }
-    };
+    if let Err(error) = adapter.ensure_device(eui, name) {
+        log::error!("domain: device {eui:016x} failed: {error:?}");
+        return;
+    }
     let standard_endpoint = if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         crate::store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
     } else {
@@ -1072,19 +1084,6 @@ fn register_domain(
                     confirmed: interview::confirmed(eui),
                 });
             }
-            if let Some(record) = adapter.read_device(device) {
-                web::upsert(
-                    ha_web::entity::LOGICAL_DEVICE,
-                    &device.to_le_bytes(),
-                    &record,
-                );
-            }
-            if let Some(record) = adapter.read_entity(entity) {
-                web::upsert(ha_web::entity::ENTITY, &entity.to_le_bytes(), &record);
-            }
-            if let Some(caps) = adapter.read_capabilities(entity) {
-                web::upsert(ha_web::entity::CAPABILITIES, &entity.to_le_bytes(), &caps);
-            }
             log::info!(
                 "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
                 profile.id
@@ -1094,7 +1093,6 @@ fn register_domain(
     }
 }
 
-
 fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
     let mut sink = StoreSink;
     let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
@@ -1103,9 +1101,6 @@ fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
     };
     match adapter.rename_entity(entity, name) {
         Ok(_) => {
-            if let Some(record) = adapter.read_entity(entity) {
-                web::upsert(ha_web::entity::ENTITY, &entity.to_le_bytes(), &record);
-            }
             log::info!("domain: renamed entity={entity:016x} name={name}");
         }
         Err(error) => log::warn!("domain: rename entity={entity:016x} failed: {error:?}"),
@@ -1120,25 +1115,49 @@ fn rename_device(domain: &mut Domain, device: u64, name: &str) {
     };
     match adapter.rename_device(device, name) {
         Ok(_) => {
-            if let Some(record) = adapter.read_device(device) {
-                web::upsert(
-                    ha_web::entity::LOGICAL_DEVICE,
-                    &device.to_le_bytes(),
-                    &record,
-                );
-            }
             log::info!("domain: renamed device={device:016x} name={name}");
         }
         Err(error) => log::warn!("domain: rename device={device:016x} failed: {error:?}"),
     }
 }
 
-fn request_leave(
+/// Some color devices confirm `moveToColor` without sending a report. A read
+/// response is still device truth, not optimistic command state.
+fn request_color_readback(
     executor: &mut zigbee_exec::Executor,
-    eui: u64,
-    short: u16,
+    bindings: &[zigbee_devices::Binding],
+    entity: u64,
     now: u64,
-) -> bool {
+) {
+    let Some(binding) = bindings.iter().find(|binding| binding.entity == entity) else {
+        return;
+    };
+    let attributes = match zigbee_exec::AttributeList::new(&[0x0003, 0x0004]) {
+        Ok(attributes) => attributes,
+        Err(error) => {
+            log::warn!("color readback attributes failed: {error:?}");
+            return;
+        }
+    };
+    let request = zigbee_exec::Request {
+        device: binding.eui,
+        short: binding.short,
+        endpoint: binding.endpoint,
+        sleepy: false,
+        retry: zigbee_exec::RetryPolicy::SAFE,
+        expiry_ms: 10_000,
+        timeout_ms: 3_000,
+        kind: zigbee_exec::RequestKind::ReadAttributes {
+            cluster: zigbee_devices::standard::COLOR,
+            attributes,
+        },
+    };
+    if let Err(error) = executor.enqueue(request, now) {
+        log::warn!("color readback queue failed entity={entity:016x}: {error:?}");
+    }
+}
+
+fn request_leave(executor: &mut zigbee_exec::Executor, eui: u64, short: u16, now: u64) -> bool {
     if executor.pending_leave(eui) {
         return true;
     }
@@ -1187,14 +1206,6 @@ fn remove_device(
                 u64::from_str_radix(native, 16).ok()
             })
         });
-    let entities: Vec<u64> = match eui {
-        Some(eui) => bindings
-            .iter()
-            .filter(|binding| binding.eui == eui)
-            .map(|binding| binding.entity)
-            .collect(),
-        None => Vec::new(),
-    };
     let short = eui
         .and_then(|eui| {
             bindings
@@ -1217,10 +1228,6 @@ fn remove_device(
         }
     }
     drop(adapter);
-    for entity in entities {
-        web::remove_entity(entity);
-    }
-    web::remove(ha_web::entity::LOGICAL_DEVICE, &device.to_le_bytes());
     if let Some(eui) = eui {
         interview::forget(eui);
         configure::forget(eui);

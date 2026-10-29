@@ -121,8 +121,8 @@ pub fn install() {
 }
 
 pub fn start(exec: &mut Executor, device: (u64, u16), now: u64) {
-    let known = selected_profile(device.0).is_some()
-        && crate::store::descriptor(device.0).is_some();
+    let known =
+        selected_profile(device.0).is_some() && crate::store::descriptor(device.0).is_some();
     MANAGER
         .lock()
         .unwrap()
@@ -158,7 +158,10 @@ pub fn on_operation_result(exec: &mut Executor, result: OperationResult, now: u6
     if queue.len() < crate::store::MAX_DEVICES {
         queue.push((identified.eui, identified.short, identified.profile));
     } else {
-        log::error!("interview: identified queue full, {} not registered", identified.eui);
+        log::error!(
+            "interview: identified queue full, {} not registered",
+            identified.eui
+        );
     }
 }
 
@@ -186,7 +189,10 @@ pub fn confirm_attribute(eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
 }
 
 pub fn confirmed(eui: u64) -> zigbee_devices::Confirmed {
-    CONFIRMED.lock().unwrap().iter()
+    CONFIRMED
+        .lock()
+        .unwrap()
+        .iter()
         .find(|(id, _)| *id == eui)
         .map(|(_, state)| *state)
         .unwrap_or_else(zigbee_devices::Confirmed::new)

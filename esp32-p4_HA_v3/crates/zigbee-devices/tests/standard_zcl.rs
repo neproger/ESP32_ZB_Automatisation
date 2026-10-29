@@ -1,8 +1,10 @@
-use ha_domain::canonical::{ACTION_ON, ACTION_TOGGLE, PROPERTY_POWER, PROPERTY_TEMPERATURE};
+use ha_domain::canonical::{
+    ACTION_ON, ACTION_SET, ACTION_TOGGLE, PROPERTY_BRIGHTNESS, PROPERTY_POWER, PROPERTY_TEMPERATURE,
+};
 use z2m_rs::{properties, RawZcl, Update, Value};
 use zigbee_devices::standard::{
     attribute_capability, capabilities_confirmed, capability_allows, decode_standard,
-    update_is_discovered, ONOFF, TEMPERATURE,
+    update_is_discovered, LEVEL, ONOFF, TEMPERATURE,
 };
 use zigbee_devices::{ClusterRole, Confirmed, EndpointDescriptor};
 
@@ -62,6 +64,13 @@ fn standard_temperature_is_gated_by_discovered_cluster() {
     assert!(update_is_discovered(&sensor, &update));
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
     assert!(!update_is_discovered(&relay, &update));
+
+    let onoff = Update::Property {
+        property: properties::STATE,
+        value: Value::Bool(true),
+    };
+    assert!(update_is_discovered(&relay, &onoff));
+    assert!(!update_is_discovered(&sensor, &onoff));
 }
 
 #[test]
@@ -89,22 +98,9 @@ fn attribute_confirmation_requires_a_real_attribute() {
 }
 
 #[test]
-fn standard_command_requires_confirmed_attribute() {
+fn standard_onoff_command_is_mandatory() {
     let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
-    let mut confirmed = Confirmed::new();
-    assert!(!capability_allows(
-        &relay,
-        &confirmed,
-        PROPERTY_POWER,
-        ACTION_ON,
-    ));
-    assert!(!capability_allows(
-        &relay,
-        &confirmed,
-        PROPERTY_POWER,
-        ACTION_TOGGLE,
-    ));
-    assert!(confirmed.confirm(1, ONOFF, 0x0000));
+    let confirmed = Confirmed::new();
     assert!(capability_allows(
         &relay,
         &confirmed,
@@ -120,13 +116,28 @@ fn standard_command_requires_confirmed_attribute() {
 }
 
 #[test]
-fn confirmed_attribute_upgrades_capabilities() {
-    let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
+fn non_mandatory_standard_command_requires_confirmed_attribute() {
+    let dimmer = endpoint(&[(LEVEL, ClusterRole::Server)]);
     let mut confirmed = Confirmed::new();
-    let empty = capabilities_confirmed(&relay, &confirmed);
-    assert_eq!(empty.property_count, 0);
-    assert!(confirmed.confirm(1, ONOFF, 0x0000));
-    let caps = capabilities_confirmed(&relay, &confirmed);
+    assert!(!capability_allows(
+        &dimmer,
+        &confirmed,
+        PROPERTY_BRIGHTNESS,
+        ACTION_SET,
+    ));
+    assert!(confirmed.confirm(1, LEVEL, 0x0000));
+    assert!(capability_allows(
+        &dimmer,
+        &confirmed,
+        PROPERTY_BRIGHTNESS,
+        ACTION_SET,
+    ));
+}
+
+#[test]
+fn standard_onoff_capabilities_are_available_before_the_read() {
+    let relay = endpoint(&[(ONOFF, ClusterRole::Server)]);
+    let caps = capabilities_confirmed(&relay, &Confirmed::new());
     let power = caps.properties[..usize::from(caps.property_count)]
         .iter()
         .find(|cap| cap.property == PROPERTY_POWER)

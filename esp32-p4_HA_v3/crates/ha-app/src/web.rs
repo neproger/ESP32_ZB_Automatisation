@@ -8,9 +8,11 @@
 
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
 use esp_idf_svc::sys::*;
+use ha_domain::{Domain, Fact, FactKind};
 use ha_web::{command, control, write_frame};
 
 const INDEX: &[u8] = include_bytes!("../../../web/ui/index.html.gz");
@@ -19,7 +21,7 @@ const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
 const MAX_CLIENTS: usize = 4;
-const MAX_MODEL: usize = 192;
+const MAX_MODEL: usize = 384;
 
 struct ModelEntry {
     frame_type: u8,
@@ -72,6 +74,46 @@ pub fn start() -> bool {
     ok
 }
 
+/// Drain the Web inbox. Domain facts are copied into the existing bounded
+/// model; WebSocket sends happen here, never under Domain lock.
+pub fn drain(domain: &Domain, receiver: &Receiver<Fact>) {
+    while let Ok(fact) = receiver.try_recv() {
+        match fact.kind {
+            FactKind::EntityUpserted => {
+                let Some(record_len) = domain.entity_record_len(fact.entity) else {
+                    continue;
+                };
+                let mut record = vec![0u8; record_len];
+                if domain
+                    .entity_get(fact.entity, fact.key(), &mut record)
+                    .is_err()
+                {
+                    continue;
+                }
+                if let Ok(frame_type) = u8::try_from(fact.entity) {
+                    upsert(frame_type, fact.key(), &record);
+                }
+            }
+            FactKind::EntityRemoved => {
+                if let Ok(frame_type) = u8::try_from(fact.entity) {
+                    remove(frame_type, fact.key());
+                }
+            }
+            FactKind::Event => {
+                let key = fact.key();
+                if key.len() < 8 {
+                    continue;
+                }
+                let entity = u64::from_le_bytes(key[..8].try_into().expect("event entity"));
+                if let Some(event) = fact.value.as_u32() {
+                    publish_event(entity, event);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Mirrors one canonical record; an unchanged record is not broadcast again.
 pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
     let mut payload = Vec::with_capacity(key.len() + record.len());
@@ -106,37 +148,6 @@ pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
     }
 }
 
-/// Removes every cached record that belongs to one entity.
-pub fn remove_entity(entity: u64) {
-    let entity_key = entity.to_le_bytes();
-    let keys: Vec<(u8, Vec<u8>)> = {
-        let model = MODEL.lock().unwrap();
-        model
-            .iter()
-            .filter_map(|entry| {
-                let matches_entity = match entry.frame_type {
-                    ha_web::entity::ENTITY | ha_web::entity::CAPABILITIES => {
-                        entry.key.as_slice() == entity_key.as_slice()
-                    }
-                    ha_web::entity::PROPERTY_STATE => {
-                        entry.key.len() >= 8
-                            && u64::from_le_bytes(entry.key[..8].try_into().ok()?) == entity
-                    }
-                    ha_web::entity::GROUP_ITEM => {
-                        entry.key.len() >= 16
-                            && u64::from_le_bytes(entry.key[8..16].try_into().ok()?) == entity
-                    }
-                    _ => false,
-                };
-                matches_entity.then(|| (entry.frame_type, entry.key.clone()))
-            })
-            .collect()
-    };
-    for (frame_type, key) in keys {
-        remove(frame_type, &key);
-    }
-}
-
 /// Drops one cached record and tells clients to remove it too.
 pub fn remove(frame_type: u8, key: &[u8]) {
     let changed = {
@@ -159,54 +170,6 @@ pub fn remove(frame_type: u8, key: &[u8]) {
     payload.push(frame_type);
     payload.extend_from_slice(key);
     broadcast_one(control::REMOVE, &payload);
-}
-
-/// Removes a screen and all of its tiles/automation links.
-pub fn remove_group(group_id: u64) {
-    let group_key = group_id.to_le_bytes();
-    let keys: Vec<(u8, Vec<u8>)> = {
-        let model = MODEL.lock().unwrap();
-        model
-            .iter()
-            .filter_map(|entry| {
-                let matches = match entry.frame_type {
-                    ha_web::entity::GROUP => entry.key.as_slice() == group_key.as_slice(),
-                    ha_web::entity::GROUP_ITEM | ha_web::entity::GROUP_AUTOMATION => {
-                        entry.key.len() >= 8 && entry.key[..8] == group_key[..]
-                    }
-                    _ => false,
-                };
-                matches.then(|| (entry.frame_type, entry.key.clone()))
-            })
-            .collect()
-    };
-    for (frame_type, key) in keys {
-        remove(frame_type, &key);
-    }
-}
-
-/// Removes an automation and every screen tile that references it.
-pub fn remove_automation(automation_id: u64) {
-    let id_key = automation_id.to_le_bytes();
-    let keys: Vec<(u8, Vec<u8>)> = {
-        let model = MODEL.lock().unwrap();
-        model
-            .iter()
-            .filter_map(|entry| {
-                let matches = match entry.frame_type {
-                    ha_web::entity::AUTOMATION => entry.key.as_slice() == id_key.as_slice(),
-                    ha_web::entity::GROUP_AUTOMATION => {
-                        entry.key.len() >= 16 && entry.key[8..16] == id_key[..]
-                    }
-                    _ => false,
-                };
-                matches.then(|| (entry.frame_type, entry.key.clone()))
-            })
-            .collect()
-    };
-    for (frame_type, key) in keys {
-        remove(frame_type, &key);
-    }
 }
 
 pub fn publish_event(entity_id: u64, event_id: u32) {
@@ -249,7 +212,12 @@ fn snapshot_frames() -> Vec<Vec<u8>> {
     let count = entries.len() as u32;
     let mut frames = Vec::with_capacity(entries.len() + 2);
     let mut begin = Vec::new();
-    write_frame(&mut begin, next_seq(), control::SYNC_BEGIN, &count.to_le_bytes());
+    write_frame(
+        &mut begin,
+        next_seq(),
+        control::SYNC_BEGIN,
+        &count.to_le_bytes(),
+    );
     frames.push(begin);
     for (frame_type, payload) in entries {
         let mut frame = Vec::new();
@@ -257,7 +225,12 @@ fn snapshot_frames() -> Vec<Vec<u8>> {
         frames.push(frame);
     }
     let mut end = Vec::new();
-    write_frame(&mut end, next_seq(), control::SYNC_END, &count.to_le_bytes());
+    write_frame(
+        &mut end,
+        next_seq(),
+        control::SYNC_END,
+        &count.to_le_bytes(),
+    );
     frames.push(end);
     frames
 }

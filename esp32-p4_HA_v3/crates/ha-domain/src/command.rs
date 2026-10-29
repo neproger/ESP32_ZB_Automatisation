@@ -55,7 +55,12 @@ impl CommandCore {
         let slot = self
             .pending
             .iter()
-            .position(Option::is_none)
+            .position(|entry| {
+                entry.is_some_and(|entry| {
+                    entry.entity == command.entity && entry.property == command.property
+                })
+            })
+            .or_else(|| self.pending.iter().position(Option::is_none))
             .ok_or(Error::NoSpace)?;
         let operation = sink.send(&command, now)?;
         self.pending[slot] = Some(PendingCommand {
@@ -193,13 +198,10 @@ mod tests {
     fn pending_is_bounded() {
         let mut sink = FakeSink { next: 0 };
         let mut core = CommandCore::new();
-        for _ in 0..PENDING_MAX {
-            core.submit(
-                &mut sink,
-                command(PROPERTY_POWER, ACTION_ON, CommandValue::None),
-                0,
-            )
-            .unwrap();
+        for index in 0..PENDING_MAX {
+            let mut command = command(PROPERTY_POWER, ACTION_ON, CommandValue::None);
+            command.entity = 10 + index as u64;
+            core.submit(&mut sink, command, 0).unwrap();
         }
         assert_eq!(
             core.submit(
@@ -209,5 +211,20 @@ mod tests {
             ),
             Err(Error::NoSpace)
         );
+    }
+
+    #[test]
+    fn same_entity_property_replaces_pending_command() {
+        let mut sink = FakeSink { next: 0 };
+        let mut core = CommandCore::new();
+        for _ in 0..(PENDING_MAX * 2) {
+            core.submit(
+                &mut sink,
+                command(PROPERTY_POWER, ACTION_ON, CommandValue::None),
+                0,
+            )
+            .unwrap();
+        }
+        assert_eq!(core.len(), 1);
     }
 }

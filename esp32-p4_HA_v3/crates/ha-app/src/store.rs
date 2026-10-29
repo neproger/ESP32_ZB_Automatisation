@@ -10,13 +10,13 @@ use ha_domain::{Domain, FactMeta, Value};
 use micro_db::{Fixed, FlashError, NorFlash, PersistedTable};
 use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
-pub const MAX_DEVICES: usize = 16;
+pub const MAX_DEVICES: usize = 32;
 const CAPACITY: usize = MAX_DEVICES;
 const DEFINITION_VERSION: u16 = 1;
 
 const DOMAIN_KEY_MAX: usize = ha_domain::canonical::STATE_KEY_LEN;
 const DOMAIN_RECORD_MAX: usize = ha_domain::canonical::AUTOMATION_RECORD_LEN;
-const DOMAIN_CAPACITY: usize = 320;
+const DOMAIN_CAPACITY: usize = 384;
 const DOMAIN_PERSIST_ID: &str = "ha_domain";
 
 struct CFlash {
@@ -287,9 +287,9 @@ pub fn save(
         return;
     };
     match registry.put(&mut flash, &record) {
-        Ok(()) => log::info!(
-            "registry: saved {definition_id} ieee={ieee:016x} short=0x{short:04x}"
-        ),
+        Ok(()) => {
+            log::info!("registry: saved {definition_id} ieee={ieee:016x} short=0x{short:04x}")
+        }
         Err(error) => log::error!("registry save failed: {error:?}"),
     }
 }
@@ -316,7 +316,9 @@ pub fn mark_removed(ieee: u64) -> bool {
 
 pub fn is_removed(ieee: u64) -> bool {
     let registry = REGISTRY.lock().unwrap();
-    registry.as_ref().is_some_and(|registry| registry.is_removed(ieee))
+    registry
+        .as_ref()
+        .is_some_and(|registry| registry.is_removed(ieee))
 }
 
 pub fn clear_removed(ieee: u64) {
@@ -437,17 +439,25 @@ pub fn remove_domain(entity: u32, key: &[u8]) {
     }
 }
 
-/// Load persisted Domain records back into RAM and mirror them to the UI.
+/// Load persistent device/config records back into RAM and mirror them to the UI.
+///
+/// PROPERTY_STATE is deliberately not restored: it is RAM truth and devices
+/// report it again after boot. Nothing is written to or cleaned from flash for
+/// state here.
 pub fn restore_domain(domain: &mut Domain) {
     let guard = DOMAIN_DB.lock().unwrap();
     let Some(table) = guard.as_ref() else {
         return;
     };
+
     let mut restored = 0;
     let mut skipped = 0;
     // shortcut: no schema migration; an incompatible record is skipped and
     // rewritten on the next change.
     for view in table.iter() {
+        if view.key.entity == ha_domain::canonical::ENTITY_PROPERTY_STATE {
+            continue;
+        }
         let key_len = usize::from(view.key.key_len).min(DOMAIN_KEY_MAX);
         let key = &view.key.key[..key_len];
         let record_len = usize::from(view.payload.len).min(DOMAIN_RECORD_MAX);
@@ -465,7 +475,10 @@ pub fn restore_domain(domain: &mut Domain) {
             }
             Err(error) => {
                 skipped += 1;
-                log::warn!("domain: restore entity={} skipped: {error:?}", view.key.entity);
+                log::warn!(
+                    "domain: restore entity={} skipped: {error:?}",
+                    view.key.entity
+                );
             }
         }
     }

@@ -360,6 +360,33 @@ mod tests {
     }
 
     #[test]
+    fn capacity_can_grow_without_reformat() {
+        let mut flash = SimFlash::new(8192, 4096);
+        let mut store: PersistedTable<[u8; 8], [u8; 12]> =
+            PersistedTable::format(&mut flash, 4, "devices").unwrap();
+        for index in 0..4u8 {
+            assert!(store.put(&mut flash, [index; 8], [index; 12]).is_ok());
+        }
+
+        let mut grown = PersistedTable::open(&mut flash, 8, "devices").unwrap();
+        for index in 0..4u8 {
+            let mut out = [0u8; 12];
+            grown.get(&[index; 8], &mut out).unwrap();
+            assert_eq!(out, [index; 12]);
+        }
+        for index in 4..8u8 {
+            assert!(grown.put(&mut flash, [index; 8], [index; 12]).is_ok());
+        }
+
+        let restarted = PersistedTable::open(&mut flash, 8, "devices").unwrap();
+        for index in 0..8u8 {
+            let mut out = [0u8; 12];
+            restarted.get(&[index; 8], &mut out).unwrap();
+            assert_eq!(out, [index; 12]);
+        }
+    }
+
+    #[test]
     fn open_rejects_wrong_persist_id() {
         let mut flash = region();
         PersistedTable::<[u8; 8], [u8; 12]>::format(&mut flash, 4, "devices").unwrap();

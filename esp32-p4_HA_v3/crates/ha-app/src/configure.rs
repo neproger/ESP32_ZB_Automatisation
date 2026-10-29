@@ -9,6 +9,7 @@ use zigbee_devices::{ConfigRun, RunOptions};
 use zigbee_exec::Executor;
 
 const FIRST_APP_ENDPOINT: u8 = 1;
+const STANDARD_CONFIG_VERSION: u16 = 3;
 const COOLDOWN_MS: u64 = 30_000;
 const COOLDOWN_SLOTS: usize = crate::store::MAX_DEVICES;
 const REFRESH_SLOTS: usize = crate::store::MAX_DEVICES;
@@ -32,14 +33,20 @@ pub fn ensure(exec: &mut Executor, eui: u64, short: u16, now: u64) {
     if in_cooldown(eui, now) || active_eui(eui) || pending_has(eui) {
         return;
     }
-    let Some(profile) = crate::interview::selected_profile(eui) else { return; };
+    let Some(profile) = crate::interview::selected_profile(eui) else {
+        return;
+    };
     if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         queue_standard(eui, short, now);
         start_next(exec, now);
         return;
     }
-    let Some(plan) = profile.configure else { return; };
-    if crate::store::is_configured(eui, profile.id, plan.version) { return; }
+    let Some(plan) = profile.configure else {
+        return;
+    };
+    if crate::store::is_configured(eui, profile.id, plan.version) {
+        return;
+    }
     if plan.steps.is_empty() {
         crate::store::mark_configured(eui, profile.id, plan.version);
         return;
@@ -109,7 +116,16 @@ fn standard_steps(
             }
             push_read(&mut steps, ep, zigbee_devices::standard::ONOFF, &[0x0000]);
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::ONOFF, 0x0000, 0x10, 0, 3600, 1);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::ONOFF,
+                    0x0000,
+                    0x10,
+                    0,
+                    5,
+                    1,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::LEVEL) {
@@ -118,63 +134,174 @@ fn standard_steps(
             }
             push_read(&mut steps, ep, zigbee_devices::standard::LEVEL, &[0x0000]);
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::LEVEL, 0x0000, 0x20, 1, 3600, 1);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::LEVEL,
+                    0x0000,
+                    0x20,
+                    0,
+                    5,
+                    1,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::COLOR) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::COLOR);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::COLOR, &[0x0007, 0x0003, 0x0004]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::COLOR,
+                &[0x0007, 0x0003, 0x0004],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::COLOR, 0x0007, 0x21, 1, 3600, 10);
-                push_report(&mut steps, ep, zigbee_devices::standard::COLOR, 0x0003, 0x20, 1, 3600, 1);
-                push_report(&mut steps, ep, zigbee_devices::standard::COLOR, 0x0004, 0x20, 1, 3600, 1);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::COLOR,
+                    0x0007,
+                    0x21,
+                    1,
+                    3600,
+                    10,
+                );
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::COLOR,
+                    0x0003,
+                    0x21,
+                    1,
+                    3600,
+                    1,
+                );
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::COLOR,
+                    0x0004,
+                    0x21,
+                    1,
+                    3600,
+                    1,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::POWER_CONFIG) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::POWER_CONFIG);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::POWER_CONFIG, &[0x0021, 0x0020]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::POWER_CONFIG,
+                &[0x0021, 0x0020],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::POWER_CONFIG, 0x0021, 0x20, 3600, 3600, 10);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::POWER_CONFIG,
+                    0x0021,
+                    0x20,
+                    3600,
+                    3600,
+                    10,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::TEMPERATURE) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::TEMPERATURE);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::TEMPERATURE, &[0x0000]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::TEMPERATURE,
+                &[0x0000],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::TEMPERATURE, 0x0000, 0x29, 10, 3600, 100);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::TEMPERATURE,
+                    0x0000,
+                    0x29,
+                    10,
+                    3600,
+                    100,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::HUMIDITY) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::HUMIDITY);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::HUMIDITY, &[0x0000]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::HUMIDITY,
+                &[0x0000],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::HUMIDITY, 0x0000, 0x21, 10, 3600, 100);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::HUMIDITY,
+                    0x0000,
+                    0x21,
+                    10,
+                    3600,
+                    100,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::ILLUMINANCE) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::ILLUMINANCE);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::ILLUMINANCE, &[0x0000]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::ILLUMINANCE,
+                &[0x0000],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::ILLUMINANCE, 0x0000, 0x21, 10, 3600, 5);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::ILLUMINANCE,
+                    0x0000,
+                    0x21,
+                    10,
+                    3600,
+                    5,
+                );
             }
         }
         if endpoint.has_server(zigbee_devices::standard::OCCUPANCY) {
             if configure {
                 push_bind(&mut steps, ep, zigbee_devices::standard::OCCUPANCY);
             }
-            push_read(&mut steps, ep, zigbee_devices::standard::OCCUPANCY, &[0x0000]);
+            push_read(
+                &mut steps,
+                ep,
+                zigbee_devices::standard::OCCUPANCY,
+                &[0x0000],
+            );
             if configure {
-                push_report(&mut steps, ep, zigbee_devices::standard::OCCUPANCY, 0x0000, 0x18, 1, 3600, 0);
+                push_report(
+                    &mut steps,
+                    ep,
+                    zigbee_devices::standard::OCCUPANCY,
+                    0x0000,
+                    0x18,
+                    1,
+                    3600,
+                    0,
+                );
             }
         }
     }
@@ -196,9 +323,17 @@ fn queue_standard(eui: u64, short: u16, now: u64) {
     if refreshed(eui) || in_cooldown(eui, now) || pending_has(eui) || active_eui(eui) {
         return;
     }
-    let Some(descriptor) = crate::store::descriptor(eui) else { return; };
-    let Some(first) = descriptor.endpoints().next() else { return; };
-    let configured = crate::store::is_configured(eui, zigbee_devices::STANDARD_PROFILE_ID, 1);
+    let Some(descriptor) = crate::store::descriptor(eui) else {
+        return;
+    };
+    let Some(first) = descriptor.endpoints().next() else {
+        return;
+    };
+    let configured = crate::store::is_configured(
+        eui,
+        zigbee_devices::STANDARD_PROFILE_ID,
+        STANDARD_CONFIG_VERSION,
+    );
     let steps = standard_steps(&descriptor, !configured);
     if steps.is_empty() {
         return;
@@ -210,10 +345,11 @@ fn queue_standard(eui: u64, short: u16, now: u64) {
         definition: zigbee_devices::STANDARD_PROFILE_ID,
         steps,
         options: RunOptions {
-            version: 1,
+            version: STANDARD_CONFIG_VERSION,
             timeout_ms: 5_000,
             retries: 2,
             optional_reads: true,
+            optional_reports: true,
         },
     });
 }
@@ -235,10 +371,7 @@ pub fn forget(eui: u64) {
             *run = None;
         }
     }
-    PENDING
-        .lock()
-        .unwrap()
-        .retain(|pending| pending.eui != eui);
+    PENDING.lock().unwrap().retain(|pending| pending.eui != eui);
     for entry in COOLDOWN.lock().unwrap().iter_mut() {
         if entry.0 == eui {
             *entry = (0, 0);
@@ -255,11 +388,18 @@ pub fn forget(eui: u64) {
 }
 
 fn pending_has(eui: u64) -> bool {
-    PENDING.lock().unwrap().iter().any(|pending| pending.eui == eui)
+    PENDING
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|pending| pending.eui == eui)
 }
 
 fn active_eui(eui: u64) -> bool {
-    RUN.lock().unwrap().as_ref().is_some_and(|run| run.eui() == eui)
+    RUN.lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|run| run.eui() == eui)
 }
 
 fn start_next(exec: &mut Executor, now: u64) {
@@ -291,10 +431,18 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
             return;
         };
         if run.accepts(result.id) && result.status == zigbee_exec::Status::Confirmed {
-            if let Some(step @ z2m_rs::ConfigureStep::Read { cluster, attributes, .. }) = run.current_step() {
+            if let Some(
+                step @ z2m_rs::ConfigureStep::Read {
+                    cluster,
+                    attributes,
+                    ..
+                },
+            ) = run.current_step()
+            {
                 let endpoint = step_endpoint(&step, run.endpoint());
                 let present = result.read.as_ref().and_then(|payload| {
-                    z2m_rs::AttributeFrameView::parse(cluster, endpoint, 0x0A, payload.as_slice()).ok()
+                    z2m_rs::AttributeFrameView::parse(cluster, endpoint, 0x0A, payload.as_slice())
+                        .ok()
                 });
                 let Some(present) = present else {
                     log::warn!(
@@ -306,13 +454,18 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
                 };
                 for attribute in attributes {
                     if present.attributes().any(|entry| entry.id == *attribute) {
-                        crate::interview::confirm_attribute(run.eui(), endpoint, cluster, *attribute);
+                        crate::interview::confirm_attribute(
+                            run.eui(),
+                            endpoint,
+                            cluster,
+                            *attribute,
+                        );
                     }
                 }
                 if let Some(descriptor) = crate::store::descriptor(run.eui()) {
                     if let Some(endpoint_descriptor) = descriptor.endpoint(endpoint) {
                         let confirmed = crate::interview::confirmed(run.eui());
-                        crate::bridge::push_capabilities(
+                        crate::capabilities::push_capabilities(
                             zigbee_devices::zigbee_entity_id(run.eui(), endpoint),
                             zigbee_devices::standard::capabilities_confirmed(
                                 endpoint_descriptor,
@@ -376,7 +529,11 @@ fn finish_outcome(outcome: Option<(u64, &'static str, u16, bool)>, now: u64) {
 }
 
 fn refreshed(eui: u64) -> bool {
-    REFRESHED.lock().unwrap().iter().any(|entry| *entry == Some(eui))
+    REFRESHED
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|entry| *entry == Some(eui))
 }
 
 fn mark_refreshed(eui: u64) {

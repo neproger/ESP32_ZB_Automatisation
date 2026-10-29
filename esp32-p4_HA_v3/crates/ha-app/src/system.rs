@@ -246,7 +246,9 @@ fn fetch_weather(lat: f32, lon: f32) -> Option<WeatherRecord> {
         ) else {
             continue;
         };
-        let is_day = json_number(current, "is_day").map(|v| v != 0.0).unwrap_or(true);
+        let is_day = json_number(current, "is_day")
+            .map(|v| v != 0.0)
+            .unwrap_or(true);
         let humidity = json_number(current, "relative_humidity_2m").unwrap_or(0.0);
         let pressure = json_number(current, "surface_pressure").unwrap_or(0.0);
         let wind = json_number(current, "wind_speed_10m").unwrap_or(0.0);
