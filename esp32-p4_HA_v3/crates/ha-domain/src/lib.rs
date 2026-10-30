@@ -12,7 +12,6 @@
 //! * subscribers only copy a fact into their inbox (V2 `try_push` contract).
 
 pub mod canonical;
-pub mod command;
 mod fact;
 
 use std::time::{SystemTime, UNIX_EPOCH};

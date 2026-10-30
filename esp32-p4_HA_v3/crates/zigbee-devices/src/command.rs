@@ -1,8 +1,9 @@
 //! Bridge between HA Command Core and the universal request executor.
 
 use ha_domain::canonical::{ActionId, CanonicalCommand, CommandValue, EntityId, PropertyId};
-use ha_domain::command::{CommandCore, CommandSink, CommandStatus, OperationToken};
 use ha_domain::Error;
+
+use crate::command_core::{CommandCore, CommandSink, CommandStatus, OperationToken};
 use zigbee_exec::{
     ExecError, Executor, Expect, Payload, Request, RequestKind, RetryPolicy, Status,
 };

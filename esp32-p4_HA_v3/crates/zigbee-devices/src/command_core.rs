@@ -3,7 +3,7 @@
 
 use micro_db::Error;
 
-use crate::canonical::{CanonicalCommand, CommandValue, EntityId, PropertyId};
+use ha_domain::canonical::{CanonicalCommand, CommandValue, EntityId, PropertyId};
 
 pub type OperationToken = u64;
 pub const PENDING_MAX: usize = 8;
@@ -125,8 +125,8 @@ impl CommandCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical::{ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
-    use crate::Value;
+    use ha_domain::canonical::{ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
+    use ha_domain::Value;
 
     struct FakeSink {
         next: OperationToken,

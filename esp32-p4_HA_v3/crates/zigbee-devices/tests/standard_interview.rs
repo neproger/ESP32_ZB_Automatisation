@@ -1,6 +1,6 @@
 use ha_domain::canonical::{CommandValue, ACTION_ON, PROPERTY_POWER};
-use ha_domain::command::CommandCore;
 use ha_domain::Value as DomainValue;
+use zigbee_devices::CommandCore;
 use zigbee_devices::{CommandRouter, EndpointDescriptor, InterviewManager, STANDARD_PROFILE};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{

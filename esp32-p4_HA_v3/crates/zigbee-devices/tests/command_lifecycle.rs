@@ -5,7 +5,6 @@ use ha_domain::canonical::{
     CanonicalCommand, CommandValue, ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_COLOR,
     PROPERTY_COLOR_TEMPERATURE, PROPERTY_POWER,
 };
-use ha_domain::command::{CommandCore, CommandStatus};
 use ha_domain::{Domain, Value as DomainValue};
 use z2m_rs::capabilities::{
     COLORTEMP_TO, COLOR_XY_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON,
@@ -13,6 +12,7 @@ use z2m_rs::capabilities::{
 use z2m_rs::{properties, Fingerprint, Manufacturer, Profile, Support, Update, Value};
 use zigbee_devices::canonical_states;
 use zigbee_devices::{status_from_exec, DomainAdapter, ZigbeeSink};
+use zigbee_devices::{CommandCore, CommandStatus};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{Executor, RequestKind, Status};
 

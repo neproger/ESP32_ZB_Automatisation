@@ -1,10 +1,10 @@
 use ha_domain::canonical::{
     CommandValue, ACTION_ON, ACTION_SET, ACTION_TOGGLE, PROPERTY_BRIGHTNESS, PROPERTY_POWER,
 };
-use ha_domain::command::CommandCore;
 use ha_domain::{Error, Value as DomainValue};
 use z2m_rs::capabilities::{DIM_CT_EXPOSES, DIM_CT_TO};
 use z2m_rs::{Fingerprint, Manufacturer, Profile, Support};
+use zigbee_devices::CommandCore;
 use zigbee_devices::{update_binding_short, Binding, CommandRouter, Confirmed};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{Executor, RequestKind};

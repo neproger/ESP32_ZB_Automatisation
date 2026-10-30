@@ -22,8 +22,8 @@ use ha_domain::canonical::{
     PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY, PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID,
     SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
 };
-use ha_domain::command::CommandCore;
 use ha_domain::{Domain, Fact, FactKind, FactMeta, FactTarget, Filter};
+use zigbee_devices::CommandCore;
 use zigbee_devices::{status_from_exec, DomainAdapter};
 
 mod capabilities;

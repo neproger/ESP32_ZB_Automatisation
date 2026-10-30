@@ -5,6 +5,7 @@
 //! MicroDB. No model-specific decoding belongs here.
 
 mod command;
+mod command_core;
 mod config_run;
 mod descriptor;
 mod device_record;
@@ -17,6 +18,9 @@ mod registry;
 mod zcl;
 
 pub use command::{status_from_exec, update_binding_short, Binding, CommandRouter, ZigbeeSink};
+pub use command_core::{
+    CommandCore, CommandSink, CommandStatus, OperationToken, PendingCommand, PENDING_MAX,
+};
 pub use config_run::{ConfigRun, RunOptions};
 pub use descriptor::{
     ClusterEntry, ClusterRole, DescriptorError, DeviceDescriptor, EndpointDescriptor, MAX_CLUSTERS,
