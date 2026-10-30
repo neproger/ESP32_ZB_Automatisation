@@ -6,6 +6,7 @@
 > `esp32-p4_HA_v2/docs/domain/`, `services/`, `clients/`, `storage/`.
 >
 > Целевой контракт V3: [V3_LAYERS.md](V3_LAYERS.md).
+> План реализации: [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
 >
 > Этот документ не является планом рефакторинга. Он фиксирует, что в V3 уже
 > соответствует V2, что перенесено неверно, чего нет и что является обходом.
@@ -212,7 +213,17 @@
 
 - 32-device нагрузочный стенд не проведён: на стенде 3 устройства.
 
-## 10. Следующий порядок
+## 10. План реализации
 
-1. Провести 32-device load evidence на стенде.
-2. Проверить длительную стабильность Zigbee service под нагрузкой.
+Рабочий план вынесен в [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
+
+Порядок:
+
+1. Domain API + persistence ownership.
+2. Zigbee adapter cleanup.
+3. System / Automation / Settings / Display ownership.
+4. Runtime и intake.
+5. `main.rs` как composition root.
+6. V2 scenario verification.
+
+До завершения этапа 1 не менять `main.rs` и `DomainAdapter`.

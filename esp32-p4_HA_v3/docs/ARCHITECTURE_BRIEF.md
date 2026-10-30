@@ -5,6 +5,7 @@ Draft 0.2 · 24 октября 2026 · Концепция, не утверждё
 
 > Главный архитектурный контракт: [V3_LAYERS.md](V3_LAYERS.md).
 > Аудит V2 → V3: [V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md).
+> План реализации: [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
 > Детали canonical-модели: [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
 > V3 — Rust-порт архитектуры V2, а не её новая версия.
 > При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —

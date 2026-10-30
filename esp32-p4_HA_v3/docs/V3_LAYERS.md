@@ -17,6 +17,8 @@
 > `services/WIFI.md`, `services/WEB.md`, `services/WEB_PROTOCOL.md`,
 > `clients/DISPLAY.md`, `storage/MSTORE.md`.
 >
+> План реализации и порядок этапов: [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
+>
 > Если документ V3 расходится с V2-контрактом, действует V2, пока расхождение не
 > оформлено как отдельное платформенное исключение. Такое исключение должно быть
 > явным и обоснованным; «так удобнее в Rust» — не обоснование.
