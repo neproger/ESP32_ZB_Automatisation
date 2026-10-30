@@ -143,70 +143,32 @@ static bool known_add_raw(const char *ssid, const char *password)
     return true;
 }
 
-static void known_save(void)
-{
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open("ha_wifi", NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "known APs not saved: %s", esp_err_to_name(err));
-        return;
-    }
-    err = nvs_set_u8(handle, "count", (uint8_t)s_known_count);
-    for (size_t i = 0; err == ESP_OK && i < s_known_count; ++i) {
-        char key[8];
-        snprintf(key, sizeof(key), "ssid%u", (unsigned)i);
-        err = nvs_set_str(handle, key, s_known[i].ssid);
-        if (err == ESP_OK) {
-            snprintf(key, sizeof(key), "pass%u", (unsigned)i);
-            err = nvs_set_str(handle, key, s_known[i].password);
-        }
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "known APs not saved: %s", esp_err_to_name(err));
-    }
-    nvs_close(handle);
-}
-
 static void known_add(const char *ssid, const char *password)
 {
-    if (known_add_raw(ssid, password)) {
-        known_save();
-    }
+    (void)known_add_raw(ssid, password);
 }
 
-static void known_load(void)
+/* Domain owns persistence; the radio only keeps the RAM list. */
+int ha_wifi_known_add(const char *ssid, const char *password)
 {
-    nvs_handle_t handle;
-    if (nvs_open("ha_wifi", NVS_READONLY, &handle) != ESP_OK) {
-        return;
+    return known_add_raw(ssid, password) ? 0 : -1;
+}
+
+int ha_wifi_known_count(void)
+{
+    return (int)s_known_count;
+}
+
+int ha_wifi_known_get(int index, char *ssid, size_t len, char *password, size_t password_len)
+{
+    if (index < 0 || (size_t)index >= s_known_count || ssid == NULL) {
+        return 0;
     }
-    uint8_t count = 0;
-    if (nvs_get_u8(handle, "count", &count) != ESP_OK) {
-        count = 0;
+    strlcpy(ssid, s_known[index].ssid, len);
+    if (password != NULL) {
+        strlcpy(password, s_known[index].password, password_len);
     }
-    if (count > WIFI_KNOWN_MAX) {
-        count = WIFI_KNOWN_MAX;
-    }
-    for (uint8_t i = 0; i < count; ++i) {
-        char key[8];
-        char ssid[WIFI_SSID_MAX];
-        char pass[WIFI_PASSWORD_MAX];
-        size_t len = sizeof(ssid);
-        snprintf(key, sizeof(key), "ssid%u", (unsigned)i);
-        ssid[0] = '\0';
-        if (nvs_get_str(handle, key, ssid, &len) != ESP_OK || ssid[0] == '\0') {
-            continue;
-        }
-        len = sizeof(pass);
-        pass[0] = '\0';
-        snprintf(key, sizeof(key), "pass%u", (unsigned)i);
-        (void)nvs_get_str(handle, key, pass, &len);
-        (void)known_add_raw(ssid, pass);
-    }
-    nvs_close(handle);
+    return 1;
 }
 
 /* --- Radio --------------------------------------------------------------- */
@@ -593,8 +555,6 @@ esp_err_t ha_wifi_start(void)
         ESP_LOGW(TAG, "nvs init failed: %s; known APs will not persist",
                  esp_err_to_name(nvs_err));
     }
-    known_load();
-
     const esp_err_t err = wifi_init_stack();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wifi init failed: %s", esp_err_to_name(err));

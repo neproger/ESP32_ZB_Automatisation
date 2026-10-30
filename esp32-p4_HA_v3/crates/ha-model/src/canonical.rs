@@ -20,18 +20,26 @@ pub const ENTITY_ID_SOURCE: EntityId = u64::MAX;
 pub const ISSUER_SYSTEM: IssuerId = 2;
 pub const ISSUER_ZIGBEE: IssuerId = 1;
 pub const SOURCE_ZIGBEE: SourceId = 1;
-pub const SOURCE_SYSTEM: SourceId = 2;
+pub const SOURCE_UI: SourceId = 2;
+pub const SOURCE_AUTOMATION: SourceId = 3;
+pub const SOURCE_SYSTEM: SourceId = 4;
+pub const SOURCE_WIFI: SourceId = 5;
 
 /// Synthetic system entity (V2 `ha_entity_singleton(HA_ENTITY_ISSUER_SYSTEM)`).
 pub const ENTITY_SYSTEM: EntityId = 0x9229_b477_04a2_45b5;
 /// Synthetic weather record key (ASCII "WTHR" in the high bytes).
 pub const WEATHER_DEVICE_UID: DeviceId = 0x5754_4852_0000_0001;
+/// Synthetic Wi-Fi uid (ASCII "WIFI" in the high bytes).
+pub const WIFI_DEVICE_UID: DeviceId = 0x5749_4649_0000_0001;
 
 pub const ENTITY_AUTOMATION: u32 = 4;
 pub const ENTITY_LOCATION: u32 = 6;
 pub const ENTITY_GROUP: u32 = 7;
 pub const ENTITY_GROUP_ITEM: u32 = 8;
 pub const ENTITY_WEATHER: u32 = 9;
+pub const ENTITY_WIFI_SCAN: u32 = 10;
+pub const ENTITY_WIFI_KNOWN: u32 = 11;
+pub const ENTITY_WIFI_STATUS: u32 = 12;
 pub const ENTITY_SETTINGS: u32 = 13;
 pub const ENTITY_ENTITY: u32 = 14;
 pub const ENTITY_PROPERTY_STATE: u32 = 15;
@@ -67,6 +75,11 @@ pub const ACTION_OFF: ActionId = 2;
 pub const ACTION_TOGGLE: ActionId = 3;
 pub const ACTION_SET: ActionId = 4;
 
+pub const COMMAND_PROPERTY: u32 = 6;
+pub const COMMAND_WIFI_SCAN: u32 = 4;
+pub const COMMAND_WIFI_CONNECT: u32 = 5;
+pub const COMMAND_RECORD_LEN: usize = 32;
+
 pub const EVENT_SINGLE_PRESS: EventId = 1;
 pub const EVENT_DOUBLE_PRESS: EventId = 2;
 pub const EVENT_HOLD: EventId = 3;
@@ -97,6 +110,13 @@ pub const LOCATION_KEY_LEN: usize = 8;
 pub const LOCATION_RECORD_LEN: usize = 60;
 pub const LOCATION_NAME_MAX: usize = 48;
 pub const WEATHER_RECORD_LEN: usize = 16;
+pub const WIFI_SSID_MAX: usize = 32;
+pub const WIFI_PASSWORD_MAX: usize = 64;
+pub const WIFI_SCAN_MAX: usize = 16;
+pub const WIFI_KNOWN_MAX: usize = 8;
+pub const WIFI_SCAN_RECORD_LEN: usize = 4 + WIFI_SCAN_MAX * 36;
+pub const WIFI_KNOWN_RECORD_LEN: usize = 96;
+pub const WIFI_STATUS_RECORD_LEN: usize = 36;
 pub const SETTINGS_KEY_LEN: usize = 1;
 pub const SETTINGS_RECORD_LEN: usize = 8;
 pub const SETTINGS_ID: u8 = 0;
@@ -545,6 +565,126 @@ impl WeatherRecord {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WifiScanAp {
+    pub ssid: [u8; WIFI_SSID_MAX],
+    pub rssi: i8,
+    pub auth: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WifiScanRecord {
+    pub aps: [WifiScanAp; WIFI_SCAN_MAX],
+    pub count: u8,
+}
+
+impl Default for WifiScanRecord {
+    fn default() -> Self {
+        Self {
+            aps: [WifiScanAp::default(); WIFI_SCAN_MAX],
+            count: 0,
+        }
+    }
+}
+
+impl WifiScanRecord {
+    pub fn encode(self) -> [u8; WIFI_SCAN_RECORD_LEN] {
+        let mut out = [0u8; WIFI_SCAN_RECORD_LEN];
+        out[0] = self.count.min(WIFI_SCAN_MAX as u8);
+        for (index, ap) in self.aps.iter().take(usize::from(out[0])).enumerate() {
+            let start = 4 + index * 36;
+            out[start..start + 32].copy_from_slice(&ap.ssid);
+            out[start + 32] = ap.rssi as u8;
+            out[start + 33] = ap.auth;
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < WIFI_SCAN_RECORD_LEN {
+            return None;
+        }
+        let mut record = Self::default();
+        record.count = bytes[0].min(WIFI_SCAN_MAX as u8);
+        for index in 0..usize::from(record.count) {
+            let start = 4 + index * 36;
+            record.aps[index]
+                .ssid
+                .copy_from_slice(&bytes[start..start + 32]);
+            record.aps[index].rssi = bytes[start + 32] as i8;
+            record.aps[index].auth = bytes[start + 33];
+        }
+        Some(record)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WifiStatusRecord {
+    pub state: u8,
+    pub connected: u8,
+    pub rssi: i8,
+    pub ssid: [u8; WIFI_SSID_MAX],
+}
+
+impl WifiStatusRecord {
+    pub fn encode(self) -> [u8; WIFI_STATUS_RECORD_LEN] {
+        let mut out = [0u8; WIFI_STATUS_RECORD_LEN];
+        out[0] = self.state;
+        out[1] = self.connected;
+        out[2] = self.rssi as u8;
+        out[4..].copy_from_slice(&self.ssid);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < WIFI_STATUS_RECORD_LEN {
+            return None;
+        }
+        Some(Self {
+            state: bytes[0],
+            connected: bytes[1],
+            rssi: bytes[2] as i8,
+            ssid: bytes[4..36].try_into().ok()?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WifiKnownRecord {
+    pub ssid: [u8; WIFI_SSID_MAX],
+    pub password: [u8; WIFI_PASSWORD_MAX],
+}
+
+impl Default for WifiKnownRecord {
+    fn default() -> Self {
+        Self {
+            ssid: [0; WIFI_SSID_MAX],
+            password: [0; WIFI_PASSWORD_MAX],
+        }
+    }
+}
+
+impl WifiKnownRecord {
+    pub fn encode(self) -> [u8; WIFI_KNOWN_RECORD_LEN] {
+        let mut out = [0u8; WIFI_KNOWN_RECORD_LEN];
+        out[..WIFI_SSID_MAX].copy_from_slice(&self.ssid);
+        out[WIFI_SSID_MAX..].copy_from_slice(&self.password);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < WIFI_KNOWN_RECORD_LEN {
+            return None;
+        }
+        Some(Self {
+            ssid: bytes[..WIFI_SSID_MAX].try_into().ok()?,
+            password: bytes[WIFI_SSID_MAX..WIFI_KNOWN_RECORD_LEN]
+                .try_into()
+                .ok()?,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommandValue {
     None,
@@ -558,6 +698,69 @@ pub struct CanonicalCommand {
     pub property: PropertyId,
     pub action: ActionId,
     pub value: CommandValue,
+}
+
+impl CanonicalCommand {
+    /// V2 `ha_property_command_t`: entity u64@0, property u32@8, action u8@12,
+    /// value kind u32@16, scalar kind / x @20, value / y @24.
+    pub fn encode(self) -> [u8; COMMAND_RECORD_LEN] {
+        let mut out = [0u8; COMMAND_RECORD_LEN];
+        out[..8].copy_from_slice(&self.entity.to_le_bytes());
+        out[8..12].copy_from_slice(&self.property.to_le_bytes());
+        out[12] = self.action as u8;
+        match self.value {
+            CommandValue::None => {}
+            CommandValue::Scalar(value) => {
+                let bytes = value.to_bytes();
+                out[16..20].copy_from_slice(&1u32.to_le_bytes());
+                out[20..24].copy_from_slice(&u32::from(bytes[0]).to_le_bytes());
+                out[24..28].copy_from_slice(&bytes[4..8]);
+            }
+            CommandValue::Xy { x, y } => {
+                out[16..20].copy_from_slice(&2u32.to_le_bytes());
+                out[20..24].copy_from_slice(&x.to_le_bytes());
+                out[24..28].copy_from_slice(&y.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != COMMAND_RECORD_LEN {
+            return None;
+        }
+        let entity = u64::from_le_bytes(bytes[..8].try_into().ok()?);
+        let property = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+        let action = u32::from(bytes[12]);
+        let kind = u32::from_le_bytes(bytes[16..20].try_into().ok()?);
+        let value = match kind {
+            0 => CommandValue::None,
+            1 => {
+                let scalar = u32::from_le_bytes(bytes[20..24].try_into().ok()?);
+                let bits = u32::from_le_bytes(bytes[24..28].try_into().ok()?);
+                let value = match scalar {
+                    1 => Value::bool(bits != 0),
+                    2 => Value::i32(bits as i32),
+                    3 => Value::u32(bits),
+                    4 => Value::f32(f32::from_bits(bits)),
+                    5 => Value::enum_(bits),
+                    _ => return None,
+                };
+                CommandValue::Scalar(value)
+            }
+            2 => CommandValue::Xy {
+                x: f32::from_le_bytes(bytes[20..24].try_into().ok()?),
+                y: f32::from_le_bytes(bytes[24..28].try_into().ok()?),
+            },
+            _ => return None,
+        };
+        Some(Self {
+            entity,
+            property,
+            action,
+            value,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -583,6 +786,69 @@ mod tests {
         assert_eq!(id, 0xdf80_3cba_f588_876d);
         assert_ne!(id, zigbee_entity_id(0x0012_4B00_0A1B_2C3D, 2));
         assert_ne!(entity_id_derive(ISSUER_SYSTEM, &zigbee_seed(1, 1)), id);
+    }
+
+    #[test]
+    fn wifi_records_match_v2_layouts() {
+        let mut scan = WifiScanRecord::default();
+        scan.count = 1;
+        scan.aps[0].ssid[..4].copy_from_slice(b"wifi");
+        scan.aps[0].rssi = -54;
+        scan.aps[0].auth = 2;
+        let bytes = scan.encode();
+        assert_eq!(bytes.len(), WIFI_SCAN_RECORD_LEN);
+        assert_eq!(WifiScanRecord::decode(&bytes), Some(scan));
+
+        let status = WifiStatusRecord {
+            state: 3,
+            connected: 1,
+            rssi: -60,
+            ssid: scan.aps[0].ssid,
+        };
+        let bytes = status.encode();
+        assert_eq!(bytes.len(), WIFI_STATUS_RECORD_LEN);
+        assert_eq!(WifiStatusRecord::decode(&bytes), Some(status));
+
+        let known = WifiKnownRecord {
+            ssid: scan.aps[0].ssid,
+            password: [b'x'; WIFI_PASSWORD_MAX],
+        };
+        let bytes = known.encode();
+        assert_eq!(bytes.len(), WIFI_KNOWN_RECORD_LEN);
+        assert_eq!(WifiKnownRecord::decode(&bytes), Some(known));
+    }
+
+    #[test]
+    fn source_and_command_ids_match_v2() {
+        assert_eq!(SOURCE_UI, 2);
+        assert_eq!(SOURCE_AUTOMATION, 3);
+        assert_eq!(SOURCE_SYSTEM, 4);
+        assert_eq!(SOURCE_WIFI, 5);
+        assert_eq!(COMMAND_PROPERTY, 6);
+    }
+
+    #[test]
+    fn property_command_roundtrips_in_v2_layout() {
+        for value in [
+            CommandValue::None,
+            CommandValue::Scalar(Value::bool(true)),
+            CommandValue::Scalar(Value::i32(-7)),
+            CommandValue::Scalar(Value::u32(42)),
+            CommandValue::Scalar(Value::f32(50.0)),
+            CommandValue::Scalar(Value::enum_(3)),
+            CommandValue::Xy { x: 0.25, y: 0.5 },
+        ] {
+            let command = CanonicalCommand {
+                entity: 0x1122_3344_5566_7788,
+                property: PROPERTY_BRIGHTNESS,
+                action: ACTION_SET,
+                value,
+            };
+            let bytes = command.encode();
+            assert_eq!(bytes.len(), COMMAND_RECORD_LEN);
+            assert_eq!(CanonicalCommand::decode(&bytes), Some(command));
+        }
+        assert!(CanonicalCommand::decode(&[0u8; COMMAND_RECORD_LEN - 1]).is_none());
     }
 
     #[test]

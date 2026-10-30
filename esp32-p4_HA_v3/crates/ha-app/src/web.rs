@@ -6,6 +6,7 @@
 //! every change afterwards. `/model.bin` stays 404 on purpose: the UI falls back
 //! to a full WS snapshot.
 
+use std::collections::VecDeque;
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc::Receiver;
@@ -21,6 +22,7 @@ const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
 const MAX_CLIENTS: usize = 4;
+const CLIENT_QUEUE: usize = 64;
 // Full 32-device config: devices/entities/caps, 256 states, groups, rules.
 const MAX_MODEL: usize = 768;
 
@@ -30,8 +32,13 @@ struct ModelEntry {
     payload: Vec<u8>,
 }
 
+struct Client {
+    fd: i32,
+    queue: VecDeque<Vec<u8>>,
+}
+
 static MODEL: Mutex<Vec<ModelEntry>> = Mutex::new(Vec::new());
-static CLIENTS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
 static SEQ: AtomicU16 = AtomicU16::new(0);
 static MODEL_EVICTED: AtomicBool = AtomicBool::new(false);
@@ -190,20 +197,50 @@ fn next_seq() -> u16 {
 }
 
 fn broadcast_one(frame_type: u8, payload: &[u8]) {
-    let handle = match *SERVER.lock().unwrap() {
-        Some(handle) => handle,
-        None => return,
+    let Some(handle) = *SERVER.lock().unwrap() else {
+        return;
     };
     let mut frame = Vec::new();
     write_frame(&mut frame, next_seq(), frame_type, payload);
-    let mut ws = ws_frame(&frame);
     let mut clients = CLIENTS.lock().unwrap();
-    if clients.is_empty() {
+    let mut slow = Vec::new();
+    for client in clients.iter_mut() {
+        if client.queue.len() >= CLIENT_QUEUE {
+            slow.push(client.fd);
+        } else {
+            client.queue.push_back(frame.clone());
+        }
+    }
+    if slow.is_empty() {
         return;
     }
-    clients.retain(|fd| unsafe {
-        httpd_ws_send_frame_async(handle as httpd_handle_t, *fd, &mut ws) == ESP_OK
-    });
+    clients.retain(|client| !slow.contains(&client.fd));
+    for fd in slow {
+        log::warn!("ws: slow client {fd}, closing");
+        unsafe { httpd_sess_trigger_close(handle as httpd_handle_t, fd) };
+    }
+}
+
+/// Send queued frames from the Web task. The realtime path only enqueues, so a
+/// slow client can never block Domain, Dispatcher or Zigbee.
+pub fn flush() {
+    let Some(handle) = *SERVER.lock().unwrap() else {
+        return;
+    };
+    let mut clients = CLIENTS.lock().unwrap();
+    let mut dead = Vec::new();
+    for client in clients.iter_mut() {
+        while let Some(bytes) = client.queue.pop_front() {
+            let mut frame = ws_frame(&bytes);
+            if unsafe { httpd_ws_send_frame_async(handle as httpd_handle_t, client.fd, &mut frame) }
+                != ESP_OK
+            {
+                dead.push(client.fd);
+                break;
+            }
+        }
+    }
+    clients.retain(|client| !dead.contains(&client.fd));
 }
 
 fn snapshot_frames() -> Vec<Vec<u8>> {
@@ -319,9 +356,12 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
             let fd = httpd_req_to_sockfd(req);
             {
                 let mut clients = CLIENTS.lock().unwrap();
-                if !clients.contains(&fd) {
+                if !clients.iter().any(|client| client.fd == fd) {
                     if clients.len() < MAX_CLIENTS {
-                        clients.push(fd);
+                        clients.push(Client {
+                            fd,
+                            queue: VecDeque::new(),
+                        });
                     } else {
                         log::warn!("ws: client limit reached, {fd} ignored");
                     }

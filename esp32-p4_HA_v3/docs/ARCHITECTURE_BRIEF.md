@@ -3,11 +3,12 @@
 Draft 0.2 · 24 октября 2026 · Концепция, не утверждённая спецификация
 (0.2: зафиксирована аппаратная схема P4 Coordinator + C6 RCP)
 
-> Целевой контракт и правила миграции: [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
-> Карта слоёв, владение runtime и порядок рефакторинга:
-> [V3_LAYERS.md](V3_LAYERS.md).
+> Главный архитектурный контракт: [V3_LAYERS.md](V3_LAYERS.md).
+> Аудит V2 → V3: [V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md).
+> Детали canonical-модели: [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
+> V3 — Rust-порт архитектуры V2, а не её новая версия.
 > При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
-> `TARGET_ARCHITECTURE.md`.
+> `TARGET_ARCHITECTURE.md`, по архитектурному эталону — V2.
 
 ## 1. Видение
 

@@ -10,11 +10,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-device"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+]
+
+[[package]]
 name = "ha-domain"
 version = "0.1.0"
 dependencies = [
+ "ha-model",
  "micro-db",
 ]
+
+[[package]]
+name = "ha-model"
+version = "0.1.0"
 
 [[package]]
 name = "ha-web"

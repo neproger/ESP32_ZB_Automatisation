@@ -11,9 +11,10 @@
 //!   counts gaps instead of replaying history;
 //! * subscribers only copy a fact into their inbox (V2 `try_push` contract).
 
-pub mod canonical;
+pub use ha_model::canonical;
 mod fact;
 
+use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use micro_db::{Handle, Ring, Table};
@@ -25,6 +26,34 @@ pub use fact::{
 pub use micro_db::Error;
 
 pub type Result<T> = core::result::Result<T, Error>;
+
+struct DispatchSignal {
+    pending: StdMutex<bool>,
+    wake: Condvar,
+}
+
+impl DispatchSignal {
+    fn notify(&self) {
+        *self.pending.lock().unwrap() = true;
+        self.wake.notify_one();
+    }
+}
+
+/// Wake handle for the separate Dispatcher task.
+#[derive(Clone)]
+pub struct DispatchHandle {
+    signal: Arc<DispatchSignal>,
+}
+
+impl DispatchHandle {
+    pub fn wait(&self) {
+        let mut pending = self.signal.pending.lock().unwrap();
+        while !*pending {
+            pending = self.signal.wake.wait(pending).unwrap();
+        }
+        *pending = false;
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backing {
@@ -82,6 +111,30 @@ pub struct Domain {
     payload_max_size: usize,
     commands: Vec<Command>,
     clock: fn() -> u64,
+    dispatch: Arc<DispatchSignal>,
+}
+
+/// Shared Domain boundary. Runtime clients use `with`/`with_mut`; only the
+/// composition root uses `lock` to own the main loop's serialized access.
+#[derive(Clone)]
+pub struct DomainHandle(Arc<StdMutex<Domain>>);
+
+impl DomainHandle {
+    pub fn new(domain: Domain) -> Self {
+        Self(Arc::new(StdMutex::new(domain)))
+    }
+
+    pub fn with<R>(&self, visit: impl FnOnce(&Domain) -> R) -> R {
+        visit(&self.lock())
+    }
+
+    pub fn with_mut<R>(&self, visit: impl FnOnce(&mut Domain) -> R) -> R {
+        visit(&mut self.lock())
+    }
+
+    pub fn lock(&self) -> MutexGuard<'_, Domain> {
+        self.0.lock().unwrap()
+    }
 }
 
 impl Domain {
@@ -116,6 +169,10 @@ impl Domain {
             payload_max_size,
             commands: Vec::new(),
             clock,
+            dispatch: Arc::new(DispatchSignal {
+                pending: StdMutex::new(false),
+                wake: Condvar::new(),
+            }),
         })
     }
 
@@ -338,6 +395,12 @@ impl Domain {
         });
     }
 
+    pub fn dispatch_handle(&self) -> DispatchHandle {
+        DispatchHandle {
+            signal: Arc::clone(&self.dispatch),
+        }
+    }
+
     /// V2 subscriber inbox: the dispatcher only performs a non-blocking send.
     /// The receiver belongs to the subscriber task; a full channel is a local
     /// loss and never blocks Domain or the producer.
@@ -467,7 +530,10 @@ impl Domain {
             error,
         );
         match self.journal.append(fact) {
-            Ok(id) => Some(id),
+            Ok(id) => {
+                self.dispatch.notify();
+                Some(id)
+            }
             Err(_) => {
                 // The journal is a parallel trace: state stays committed, but the
                 // loss is counted instead of vanishing.
@@ -777,6 +843,25 @@ mod tests {
         assert_eq!(fact.key(), EUI64);
         assert_eq!(fact.value, Value::bool(true));
         assert_eq!(domain.dispatch_once(), 0);
+    }
+
+    #[test]
+    fn dispatch_handle_wakes_the_dispatcher() {
+        let mut domain = domain(8);
+        register_device(&mut domain);
+        let handle = domain.dispatch_handle();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            handle.wait();
+            ready_tx.send(()).unwrap();
+        });
+        assert!(domain
+            .entity_put(DEVICE, &EUI64, &[1u8; 12], meta(Value::bool(true)))
+            .unwrap());
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("dispatcher wake");
+        waiter.join().unwrap();
     }
 
     #[test]

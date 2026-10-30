@@ -1,17 +1,19 @@
-# HA V3 — целевая архитектура
+# HA V3 — canonical-контракт и потоки данных
 
-> Статус: **target / контракт миграции**, не описание текущего кода.
-> Текущий V3 местами ещё не соответствует этому документу (см. §12).
+> Статус: **детализация canonical-модели и потоков для V3**.
+> V3 — это Rust-порт архитектуры V2, а не новая эволюционная ступень.
+> Главный архитектурный контракт: [V3_LAYERS.md](V3_LAYERS.md).
+> Аудит V2 → V3: [V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md).
+> Текущий V3 местами ещё не соответствует эталону V2 (см. mapping).
+>
 > Основа — проверенная модель V2:
 > `esp32-p4_HA_v2/docs/ARCHITECTURE.md`,
 > `domain/DISPATCHER.md`, `domain/JOURNAL.md`, `clients/DISPLAY.md`,
 > `RECORD_MODEL.md`, `storage/MSTORE_BENCH.md`.
 >
 > Концептуальный бриф: [ARCHITECTURE_BRIEF.md](ARCHITECTURE_BRIEF.md).
-> Карта слоёв, владения runtime и порядок рефакторинга:
-> [V3_LAYERS.md](V3_LAYERS.md).
 > При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
-> этот документ.
+> этот документ, а по архитектурному эталону — V2.
 
 ## 1. Главный принцип
 

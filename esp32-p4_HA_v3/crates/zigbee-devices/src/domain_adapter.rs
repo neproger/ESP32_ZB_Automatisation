@@ -6,8 +6,10 @@ use ha_domain::canonical::{
     PropertyId, StateKey, StateRecord, AUTOMATION_RECORD_LEN, ENTITY_AUTOMATION,
     ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
     ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_WEATHER,
-    GROUP_ITEM_KEY_LEN, GROUP_ITEM_RECORD_LEN, GROUP_KEY_LEN, GROUP_RECORD_LEN, LOCATION_KEY_LEN,
-    LOCATION_RECORD_LEN, SETTINGS_RECORD_LEN, SOURCE_ZIGBEE, WEATHER_RECORD_LEN,
+    ENTITY_WIFI_KNOWN, ENTITY_WIFI_SCAN, ENTITY_WIFI_STATUS, GROUP_ITEM_KEY_LEN,
+    GROUP_ITEM_RECORD_LEN, GROUP_KEY_LEN, GROUP_RECORD_LEN, LOCATION_KEY_LEN, LOCATION_RECORD_LEN,
+    SETTINGS_RECORD_LEN, SOURCE_ZIGBEE, WEATHER_RECORD_LEN, WIFI_KNOWN_MAX,
+    WIFI_KNOWN_RECORD_LEN, WIFI_SCAN_RECORD_LEN, WIFI_STATUS_RECORD_LEN,
 };
 use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
@@ -148,6 +150,30 @@ impl<'a> DomainAdapter<'a> {
                 key_size: 8,
                 record_size: WEATHER_RECORD_LEN,
                 capacity: WEATHER_CAPACITY,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_WIFI_SCAN,
+                key_size: 8,
+                record_size: WIFI_SCAN_RECORD_LEN,
+                capacity: 1,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_WIFI_KNOWN,
+                key_size: 4,
+                record_size: WIFI_KNOWN_RECORD_LEN,
+                capacity: WIFI_KNOWN_MAX,
+                backing: Backing::Ram,
+                persist_key: None,
+            },
+            EntityDesc {
+                entity: ENTITY_WIFI_STATUS,
+                key_size: 8,
+                record_size: WIFI_STATUS_RECORD_LEN,
+                capacity: 1,
                 backing: Backing::Ram,
                 persist_key: None,
             },
