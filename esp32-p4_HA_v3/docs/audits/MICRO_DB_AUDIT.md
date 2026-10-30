@@ -53,8 +53,9 @@
 - Composite: ошибка Flash → RAM не меняется, откат не нужен
   (`mstore_storage_ram_flash.c:1-10`); при `init` состояние берётся из Flash
   (`tests/test_composite.c`).
-- `clear_all`: RAM — `used=false` с сохранением generation; Flash — compact в пустую
-  банку (generation сбрасывается) (`mstore_storage_ram.c`, `flash_clear_all`).
+- `clear_all`: RAM — `used=false` с сохранением generation; Flash — compact с META
+  `used=false` по каждому записанному слоту (generation и version сохраняются,
+  clear durable) (`mstore_storage_ram.c`, `flash_compact(clear=true)`).
 - `sync` — backend lifecycle, not a durability contract.
 
 ### 1.4. Schema
@@ -120,7 +121,7 @@
 | # | Пункт | V2 | V3 | Тип |
 |---|---|---|---|---|
 | D1 | `meta(free slot)` | `STALE` | возвращает `used=false` | **дефект контракта** |
-| D2 | `clear` | RAM сохраняет generation, Flash сбрасывает | engine сбрасывает generation для всех | расхождение |
+| D2 | `clear` | generation сохраняется в обоих backend'ах; на Flash clear durable (META) | engine сбрасывает generation для всех, на Flash clear отсутствует | **расхождение** |
 | D3 | `clear_all` в backend | есть | нет | **отсутствует** |
 | D4 | Порядок composite | Flash → RAM | RAM → Flash + rollback | **расхождение** |
 | D5 | Ошибка отката RAM | не нужна | проглатывается (`let _`) | **дефект** |
@@ -140,6 +141,10 @@
 | D19 | persist_id/CRC/формат-константы | — | совпадают | ✅ |
 | D20 | Журнал `PersistedTable::put` | `latest[]` O(1) | скан `journal` O(capacity) | перф, minor |
 | D21 | Комментарий в `flash.rs` | — | «No bank rotation or compaction yet» при наличии compact | doc-дефект |
+| D22 | Авто-format при смене схемы | `INVALID_SIZE` без форматирования | `store.rs` форматирует раздел `domain` при `InvalidSize` | **дефект** (данные теряются) |
+| D23 | Fresh-раздел | `open` создаёт header seq=1 сам | `open` → `Corrupt`, инициализация в composition root | компенсировано, расхождение |
+| D24 | capacity в header | точное равенство | header capacity ≤ запрошенной (рост) | расхождение |
+| D25 | Код ошибки при смене geometry | `INVALID_STATE` | `InvalidSize` | расхождение кодов |
 
 Устаревших тестов, противоречащих заголовкам, в `mstore` не найдено. В
 `MSTORE_FLASH_FORMAT.md` статус «proposal / revision 1 (draft)», хотя формат
@@ -167,9 +172,11 @@
   - байтовый `Table` (opaque key/payload, geometry из descriptor), `Ram`, `Flash`,
     `RamFlash`; удаление `PersistedTable`/`Fixed`;
   - Flash-first write-through, удаление rollback-ветки;
-  - `meta(free) → Stale`, `clear_all`, `read_key`, lenient-чтение free-слота;
+  - `meta(free) → Stale`, `clear_all` по V2 (generation сохраняется, Flash durable),
+    `read_key`, lenient-чтение free-слота;
+  - запрет авто-форматирования при `InvalidSize`/смене схемы (D22);
   - invariant checker (test-only), callback iter;
-  - D1–D9, D15–D19 (кроме региона).
+  - D1–D9, D15–D19, D22–D25 (кроме региона).
 - **Этап 1 (region):**
   - Region Manager: directory ping-pong, bind/release, размер региона с headroom
     `max(25%, 8)`, выравнивание `2 * erase_size`, ошибки, изоляция;
@@ -198,17 +205,21 @@
 
 ## 7. Открытые вопросы
 
-- `clear_all`: сохранить разницу backend'ов (V2) или нормализовать? Рекомендация —
-  сохранить V2.
-- `payload_size == 0`: поддержать как V2 или оформить Rust-исключение?
-  Потребителей сейчас нет.
-- `can_append`: оставить pre-check или удалить и полагаться на append+compact?
-  Размер региона всё равно считается по V2-формуле.
-- Владелец Region Manager: `micro-db` (как V2) — подтвердить до этапа 1.
+Уточнены аудитом Flash/Region (`FLASH_REGION_AUDIT.md`):
+
+- `clear_all`: разницы в generation между backend'ами нет — оба сохраняют generation;
+  различие только в durability (Flash пишет META и переживает reboot). Решение
+  предлагается: портировать V2 как есть, без нормализации (ждёт согласования).
+- `payload_size == 0`: V2 допускает (проверяется только `key_size`), V3 `FlashTable`
+  отвергает. Предложение — сохранить V2-поведение; решение открыто.
+- `can_append`: в V2 такой операции нет: место резервируется размером региона
+  (`capacity + max(25%, 8)`), а append сам делает compact. Предложение — убрать
+  pre-check из V3 и полагаться на append+compact; решение открыто.
+- Владелец Region Manager: в V2 — storage-слой `mstore`; в V3 — `micro-db`, этап 1.
 - Физическая совместимость: формат и `persist_id` совпадают, но раскладка Domain
   меняется на этапе 1 — решение erase/миграция остаётся за этапом 1.
 
 ## 8. Следующий слой
 
-Flash / Region Manager: полный аудит формата, recovery, compaction, directory,
-bind/release и раскладки разделов. Затем Domain Store (mutation/Delta/Journal).
+Domain Store: mutation, persistence policy, Delta, Journal, restore. Детали
+Flash/Region зафиксированы в `FLASH_REGION_AUDIT.md`.
