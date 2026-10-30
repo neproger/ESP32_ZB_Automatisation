@@ -5,8 +5,8 @@
 > Эталон: `esp32-p4_HA_v2/docs/ARCHITECTURE.md` и контракты в
 > `esp32-p4_HA_v2/docs/domain/`, `services/`, `clients/`, `storage/`.
 >
-> Целевой контракт V3: [V3_LAYERS.md](V3_LAYERS.md).
-> План реализации: [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
+> Целевой контракт V3: [V3_LAYERS.md](../architecture/V3_LAYERS.md).
+> План реализации: [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
 >
 > Этот документ не является планом рефакторинга. Он фиксирует, что в V3 уже
 > соответствует V2, что перенесено неверно, чего нет и что является обходом.
@@ -215,7 +215,7 @@
 
 ## 10. План реализации
 
-Рабочий план вынесен в [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
+Рабочий план вынесен в [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
 
 Порядок:
 

@@ -10,9 +10,9 @@
 > `domain/`, `services/`, `clients/`, `storage/`.
 >
 > Связанные документы:
-> - [V3_LAYERS.md](V3_LAYERS.md) — архитектурный контракт V3;
-> - [V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md) — аудит текущего состояния;
-> - [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md) — canonical-модель.
+> - [V3_LAYERS.md](../architecture/V3_LAYERS.md) — архитектурный контракт V3;
+> - [V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md) — аудит текущего состояния;
+> - [TARGET_ARCHITECTURE.md](../architecture/TARGET_ARCHITECTURE.md) — canonical-модель.
 
 ## 1. Правила выполнения плана
 

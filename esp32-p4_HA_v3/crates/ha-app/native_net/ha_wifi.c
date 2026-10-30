@@ -34,7 +34,7 @@ static const char *TAG = "ha_net";
 #define WIFI_SCAN_MAX 16
 #define WIFI_SSID_MAX 33
 #define WIFI_PASSWORD_MAX 65
-/* 0.25 dBm units. C3 CP on IDF 6.1 gets AUTH_EXPIRE at full power; see docs/WIFI.md. */
+/* 0.25 dBm units. C3 CP on IDF 6.1 gets AUTH_EXPIRE at full power; see docs/build/WIFI.md. */
 #define WIFI_MAX_TX_POWER 34
 
 typedef struct {

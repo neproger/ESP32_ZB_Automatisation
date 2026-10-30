@@ -3,7 +3,7 @@
 > Статус: **детализация canonical-модели и потоков для V3**.
 > V3 — это Rust-порт архитектуры V2, а не новая эволюционная ступень.
 > Главный архитектурный контракт: [V3_LAYERS.md](V3_LAYERS.md).
-> Аудит V2 → V3: [V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md).
+> Аудит V2 → V3: [V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md).
 > Текущий V3 местами ещё не соответствует эталону V2 (см. mapping).
 >
 > Основа — проверенная модель V2:
@@ -11,7 +11,6 @@
 > `domain/DISPATCHER.md`, `domain/JOURNAL.md`, `clients/DISPLAY.md`,
 > `RECORD_MODEL.md`, `storage/MSTORE_BENCH.md`.
 >
-> Концептуальный бриф: [ARCHITECTURE_BRIEF.md](ARCHITECTURE_BRIEF.md).
 > При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
 > этот документ, а по архитектурному эталону — V2.
 
@@ -52,7 +51,7 @@ V3 не проектирует новую модель. Берём V2 как е�
 
 - те же категории `State / Event / Command`;
 - ту же canonical identity и точные ABI-формы
-  (`DOMAIN_V2_MAPPING.md`);
+  (`archive/DOMAIN_V2_MAPPING.md`);
 - тот же Entity Store как единственную истину;
 - тот же Journal + Dispatcher + subscriber inbox;
 - тот же adapter boundary (Zigbee-private → canonical);
@@ -388,63 +387,14 @@ Subscriber:     inbox → прочитать state/payload → своя рабо
 - capacity не становится «магически безлимитной»;
 - ошибки/потери не становятся молчаливыми.
 
-## 12. Что в текущем V3 нарушает target
+## 12. Исторический статус
 
-Исторические нарушения и текущий статус:
+Исторический срез несоответствий и порядок миграции в этом документе не ведутся:
+текущее состояние и расхождения — [V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md),
+порядок работ и DoD — [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
+Критерии приёмки — сценарии этапа 6 плана.
 
-- **Сделано:** `PROPERTY_STATE` — RAM; `write_state`/`remove_states` не
-  используют persistence. `restore_domain` state не восстанавливает и не
-  чистит flash.
-- **Сделано:** `bridge::STATES`/`EVENTS` удалены. `frames::IngestSink` пишет
-  report/event в Domain напрямую; остался только bounded capability mailbox
-  (`capabilities.rs`) для configure.
-- **Сделано:** capacity приведены к V2-бюджету; journal 64.
-- **Сделано:** state/event/capabilities/entity идут через Domain-подписки
-  (`SyncSender<Fact>`); Zigbee register/caps/state не вызывает Display/Web
-  напрямую. Display/Web/Automation разбирают факты в своих drain-функциях.
-- **Сделано:** non-Zigbee config (system/wifi/settings/rename) больше не
-  обновляет Display/Web прямыми вызовами; status/настройки идут через
-  Domain-факты.
-- **Сделано:** `display::drain` коалесцирует composition-facts в один rebuild
-  за цикл.
-- **Осталось:** `intake=8`, `capabilities=32` — проверить и заменить на
-  V2-размеры/явные counters.
-- **Осталось:** V2-фикс web (per-client TX queue/ACK, не держать Domain-lock
-  на сокете) пока не воспроизведён.
-
-Эти пункты удаляются/заменяются, а не обрастают новыми обходами.
-
-## 13. План миграции
-
-### Этап 1 — truth и бюджет
-
-- `PROPERTY_STATE` → RAM; убрать persist state и restore state.
-- Поднять ёмкости до V2-бюджета (state 256, entity/device/caps 32,
-  group_item 128, journal 64).
-- Явные счётчики переполнения; без изменения UI-логики.
-
-### Этап 2 — убрать bridge
-
-- Decode → Domain напрямую; `ENTITY_UPSERTED`/`EVENT` → Journal.
-- Удалить `bridge::STATES`/`EVENTS`.
-- Dispatcher читает Journal и доставляет подписчикам.
-
-### Этап 3 — подписчики
-
-- Display/Web/Automation регистрируют inbox + task.
-- Убрать прямые `display::on_state`/`web::upsert` из main/adapter.
-- Display обновляет виджет по `(entity, property)`, не весь экран.
-- Web per-client TX queue без per-frame ACK; медленный клиент закрывается, Domain-lock не держим.
-
-### Этап 4 — нагрузка
-
-- 32 устройства, 8 свойств, отчёты 5–60 с.
-- Проверить: ни один report не потерян до Domain; медленный Display/Web
-  не останавливает producer; команда не меняет state до report; flash не
-  пишется на state; gap/drop counters видны.
-- Замерить heap, stack high-water, latency, журнал/очереди.
-
-## 14. Критерии готовности
+## 13. Критерии готовности
 
 - Report → state виден в Domain без промежуточной state-очереди.
 - `changed=false` не создаёт факт и не будит подписчиков.
@@ -454,13 +404,3 @@ Subscriber:     inbox → прочитать state/payload → своя рабо
 - State не пишется во flash; после reboot state приходит report'ами.
 - Переполнения state/journal/subscriber/command наблюдаемы.
 - 32 устройства в нагрузочном стенде не дают silent loss state.
-
-## 15. Открытые решения
-
-1. Целевой парк: 32 устройства или больше (от этого зависит state capacity).
-2. Динамическая state-таблица vs фиксированный бюджет V2.
-3. Persist entity/capabilities как кэш или восстанавливать интервью.
-4. Точные размеры inbox Display/Web/Automation.
-5. Web TX queue: V2 final не использует per-frame ACK; подтвердить схему.
-6. Политика report interval для C6 (5 с / 30 с / change-driven).
-7. Нужна ли история Event для UI (сейчас — bounded Journal, без replay).

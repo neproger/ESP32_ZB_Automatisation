@@ -17,7 +17,7 @@
 > `services/WIFI.md`, `services/WEB.md`, `services/WEB_PROTOCOL.md`,
 > `clients/DISPLAY.md`, `storage/MSTORE.md`.
 >
-> План реализации и порядок этапов: [V3_IMPLEMENTATION_PLAN.md](V3_IMPLEMENTATION_PLAN.md).
+> План реализации и порядок этапов: [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
 >
 > Если документ V3 расходится с V2-контрактом, действует V2, пока расхождение не
 > оформлено как отдельное платформенное исключение. Такое исключение должно быть
@@ -378,7 +378,7 @@ Display:
 ## 14. Соответствие V2 → V3
 
 Текущий аудит и статус каждого компонента:
-[V2_TO_V3_MAPPING.md](V2_TO_V3_MAPPING.md).
+[V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md).
 
 Детали canonical-модели и потоков:
 [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
