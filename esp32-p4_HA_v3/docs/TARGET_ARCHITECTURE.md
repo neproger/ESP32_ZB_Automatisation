@@ -8,7 +8,10 @@
 > `RECORD_MODEL.md`, `storage/MSTORE_BENCH.md`.
 >
 > Концептуальный бриф: [ARCHITECTURE_BRIEF.md](ARCHITECTURE_BRIEF.md).
-> При расхождении этого документа с кодом или брифом действует этот документ.
+> Карта слоёв, владения runtime и порядок рефакторинга:
+> [V3_LAYERS.md](V3_LAYERS.md).
+> При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
+> этот документ.
 
 ## 1. Главный принцип
 

@@ -4,7 +4,10 @@ Draft 0.2 · 24 октября 2026 · Концепция, не утверждё
 (0.2: зафиксирована аппаратная схема P4 Coordinator + C6 RCP)
 
 > Целевой контракт и правила миграции: [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
-> При расхождении действует target-документ.
+> Карта слоёв, владение runtime и порядок рефакторинга:
+> [V3_LAYERS.md](V3_LAYERS.md).
+> При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
+> `TARGET_ARCHITECTURE.md`.
 
 ## 1. Видение
 
