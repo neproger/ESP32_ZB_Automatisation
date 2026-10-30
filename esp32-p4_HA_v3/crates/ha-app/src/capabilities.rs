@@ -13,15 +13,17 @@ const MAX_ITEMS: usize = 32;
 
 static CAPABILITIES: Mutex<Vec<(u64, CapabilitiesRecord)>> = Mutex::new(Vec::new());
 
-pub fn push_capabilities(entity: u64, capabilities: CapabilitiesRecord) {
+pub fn push_capabilities(entity: u64, capabilities: CapabilitiesRecord) -> bool {
     let mut queue = CAPABILITIES.lock().unwrap();
-    if queue.len() < MAX_ITEMS {
-        if let Some(slot) = queue.iter_mut().find(|(id, _)| *id == entity) {
-            slot.1 = capabilities;
-        } else {
-            queue.push((entity, capabilities));
-        }
+    if let Some(slot) = queue.iter_mut().find(|(id, _)| *id == entity) {
+        slot.1 = capabilities;
+        return true;
     }
+    if queue.len() >= MAX_ITEMS {
+        return false;
+    }
+    queue.push((entity, capabilities));
+    true
 }
 
 pub fn take_capabilities() -> Option<(u64, CapabilitiesRecord)> {

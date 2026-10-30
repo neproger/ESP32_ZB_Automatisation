@@ -41,6 +41,7 @@
 #define POC_DEVICE_GATEWAY 0x0005u
 #define POC_OPEN_SECONDS 255
 #define POC_QUEUE_LEN 32
+#define POC_STORAGE_PARTITION "zb_storage"
 
 static const char *TAG = "zb_poc";
 
@@ -913,17 +914,22 @@ static bool coordinator_device(void)
 
 esp_err_t zb_poc_start(void)
 {
-    /* shortcut: PoC держит сеть в общем разделе nvs; при переносе в V3 вернуть свой zb_storage. */
-    esp_err_t nvs = nvs_flash_init();
+    /* Wi-Fi keeps the default nvs; Zigbee network state is isolated here. */
+    const esp_err_t default_nvs = nvs_flash_init();
+    if (default_nvs != ESP_OK && default_nvs != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "default nvs init: %s", esp_err_to_name(default_nvs));
+    }
+
+    esp_err_t nvs = nvs_flash_init_partition(POC_STORAGE_PARTITION);
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "nvs not usable (%s), erasing", esp_err_to_name(nvs));
-        nvs = nvs_flash_erase();
+        ESP_LOGW(TAG, "zb_storage not usable (%s), erasing", esp_err_to_name(nvs));
+        nvs = nvs_flash_erase_partition(POC_STORAGE_PARTITION);
         if (nvs == ESP_OK) {
-            nvs = nvs_flash_init();
+            nvs = nvs_flash_init_partition(POC_STORAGE_PARTITION);
         }
     }
     if (nvs != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(nvs));
+        ESP_LOGE(TAG, "zb_storage init failed: %s", esp_err_to_name(nvs));
         return nvs;
     }
 
@@ -934,7 +940,7 @@ esp_err_t zb_poc_start(void)
                 .install_code_policy = false,
                 .zczr_config = { .max_children = 10 },
             },
-        .platform_config = { .storage_partition_name = "nvs" },
+        .platform_config = { .storage_partition_name = POC_STORAGE_PARTITION },
     };
     uart_config(&config);
 

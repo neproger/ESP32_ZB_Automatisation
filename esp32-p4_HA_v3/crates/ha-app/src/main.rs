@@ -183,6 +183,7 @@ fn main() {
     let mut last_minute: Option<(u16, u8)> = None;
     let mut last_wifi_poll = 0u64;
     let mut last_weather: Option<u8> = None;
+    let mut last_subscriber_drops = 0u64;
     loop {
         let mut event = PocEvent::default();
         let polled = unsafe { zb_poc_poll(&mut event) } != 0;
@@ -512,6 +513,11 @@ fn main() {
             &mut command_core,
             &mut bindings,
         );
+        let subscriber_drops = domain.subscriber_drops();
+        if subscriber_drops != last_subscriber_drops {
+            log::warn!("domain: subscriber drops={subscriber_drops}");
+            last_subscriber_drops = subscriber_drops;
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }

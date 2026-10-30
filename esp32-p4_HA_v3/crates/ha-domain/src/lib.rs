@@ -64,6 +64,7 @@ enum SubscriptionSink {
 struct Subscription {
     filter: Filter,
     sink: SubscriptionSink,
+    dropped: u64,
 }
 
 struct Command {
@@ -334,20 +335,18 @@ impl Domain {
         self.subscriptions.push(Subscription {
             filter,
             sink: SubscriptionSink::Callback(Box::new(sink)),
+            dropped: 0,
         });
     }
 
     /// V2 subscriber inbox: the dispatcher only performs a non-blocking send.
     /// The receiver belongs to the subscriber task; a full channel is a local
     /// loss and never blocks Domain or the producer.
-    pub fn subscribe_channel(
-        &mut self,
-        filter: Filter,
-        sender: std::sync::mpsc::SyncSender<Fact>,
-    ) {
+    pub fn subscribe_channel(&mut self, filter: Filter, sender: std::sync::mpsc::SyncSender<Fact>) {
         self.subscriptions.push(Subscription {
             filter,
             sink: SubscriptionSink::Channel(sender),
+            dropped: 0,
         });
     }
 
@@ -383,6 +382,8 @@ impl Domain {
                 };
                 if accepted {
                     delivered += 1;
+                } else {
+                    subscription.dropped = subscription.dropped.saturating_add(1);
                 }
             }
             self.cursor += 1;
@@ -398,6 +399,14 @@ impl Domain {
     /// Facts lost because the journal ring rejected an append (u64 overflow only).
     pub fn dropped_facts(&self) -> u64 {
         self.dropped_facts
+    }
+
+    /// Facts rejected by full subscriber inboxes since boot.
+    pub fn subscriber_drops(&self) -> u64 {
+        self.subscriptions
+            .iter()
+            .map(|subscription| subscription.dropped)
+            .sum()
     }
 
     fn put_record(&mut self, entity: EntityType, key: &[u8], record: &[u8]) -> Result<bool> {
@@ -769,6 +778,22 @@ mod tests {
         assert_eq!(fact.key(), EUI64);
         assert_eq!(fact.value, Value::bool(true));
         assert_eq!(domain.dispatch_once(), 0);
+    }
+
+    #[test]
+    fn full_channel_counts_subscriber_drops() {
+        let mut domain = domain(8);
+        register_device(&mut domain);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        domain.subscribe_channel(Filter::all(), sender);
+
+        for on in [true, false, true] {
+            assert!(domain
+                .entity_put(DEVICE, &EUI64, &[u8::from(on); 12], meta(Value::bool(on)),)
+                .unwrap());
+            domain.dispatch_once();
+        }
+        assert_eq!(domain.subscriber_drops(), 2);
     }
 
     #[test]

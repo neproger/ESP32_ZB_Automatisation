@@ -7,6 +7,7 @@
 //!
 //! `ingest` is the single decode path for both reports and read responses.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use ha_domain::canonical::CapabilitiesRecord;
@@ -14,6 +15,7 @@ use zigbee_frames::ZclFrame;
 
 const SLOTS: usize = 32;
 const FRAME_CAPACITY: usize = 160;
+static LAST_DROPPED: AtomicU32 = AtomicU32::new(0);
 
 /// Direct consumer of decoded reports. It runs in the main loop, so decoded
 /// state/events reach Domain without an intermediate state/event queue.
@@ -194,6 +196,9 @@ pub fn process_pending(sink: &mut dyn IngestSink) {
         let Some((meta, frame, dropped)) = item else {
             return;
         };
+        if dropped != LAST_DROPPED.swap(dropped, Ordering::Relaxed) {
+            log::warn!("frames: inbox drops={dropped}");
+        }
 
         if meta.src_ext != 0 {
             *LAST_DEVICE.lock().unwrap() = Some((meta.src_ext, meta.src_short));

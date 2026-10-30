@@ -465,13 +465,18 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
                 if let Some(descriptor) = crate::store::descriptor(run.eui()) {
                     if let Some(endpoint_descriptor) = descriptor.endpoint(endpoint) {
                         let confirmed = crate::interview::confirmed(run.eui());
-                        crate::capabilities::push_capabilities(
+                        if !crate::capabilities::push_capabilities(
                             zigbee_devices::zigbee_entity_id(run.eui(), endpoint),
                             zigbee_devices::standard::capabilities_confirmed(
                                 endpoint_descriptor,
                                 &confirmed,
                             ),
-                        );
+                        ) {
+                            log::warn!(
+                                "configure: capability mailbox full eui={:016x} ep={endpoint}",
+                                run.eui()
+                            );
+                        }
                     }
                 }
             }
