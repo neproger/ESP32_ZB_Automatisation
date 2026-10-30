@@ -34,6 +34,12 @@
    нужно: в ходе миграции будут сильные изменения, и прошивка может не собираться
    и не работать на плате. Обкатка на P4 и проверка сценариев V2 — этап 6; только
    после него плата снова обязана работать.
+8. **Canonical ABI — внешний контракт.** Типы, числовые id, layout ключей и
+   записей живут в `ha-model` (V2 `RECORD_MODEL.md`, `ha_model/*.h`) и не меняются
+   ни одним этапом. Сервисы не интерпретируют запись по magic-офсетам. Изменение
+   layout — новый тип или версия `persist_key`, а не правка записи. `micro-db`
+   получает `key_size`/`payload_size` из descriptor и хранит payload как
+   opaque-байты.
 
 ## 2. Этапы
 
@@ -160,6 +166,8 @@ host-тестом: записи, созданные текущим формат�
 - рост `capacity` без переформатирования сохраняет все записи;
 - байтовая совместимость: формат `ha_zigbee_devices` с прежними
   `geometry`/`persist_id` открывается и читается на `SimFlash`;
+- payload проходит Storage байт-в-байт: `Value` ABI (8 байт) и canonical-байты не
+  меняются;
 - Domain read-API остаётся `&self` (`entity_get`/`entity_meta`/`entity_iter`).
 
 ### 3.8. Вне этапа 0
@@ -236,6 +244,9 @@ Domain::dispatch_once()
 `restore` вызываются composition root на этапе 5; до этого `main.rs` не меняется
 (правило 6).
 
+`EntityDesc.key_size`/`record_size` — производные canonical-констант (§4.3), а не
+самостоятельные параметры хранения.
+
 Внутренние, не публичные для сервисов:
 
 ```text
@@ -247,7 +258,42 @@ restore policy
 storage error mapping
 ```
 
-### 4.3. Backing
+### 4.3. Canonical ABI и геометрия
+
+Источник истины — `ha-model` (V2 `RECORD_MODEL.md`, `ha_model/*.h`): числовые id,
+layout ключей и записей. `key_size`, `payload_size` и `capacity` — производные от
+протокола и лимитов bootstrap, а не самостоятельные параметры хранения.
+Descriptor собирается из canonical-констант; `micro-db` получает готовую
+геометрию.
+
+- `micro-db` хранит payload как opaque-байты и не интерпретирует canonical-типы.
+- Изменение layout — новый тип или версия `persist_key`, а не правка записи
+  (V2 `RECORD_MODEL.md` §3, §4).
+- Размер протокольной формы и физической записи совпадает только там, где
+  zero-marshalling гарантирован (V2 §6); это проверяется тестом, а не
+  предполагается.
+- Сервисы не читают и не пишут запись по magic-офсетам. Сейчас это нарушено:
+  `ha-automation` держит свой `RULE_RECORD_LEN = 456` и офсеты 384–387,
+  `main.rs:216` пишет `record[384]`, `display.rs:637,663` разбирает
+  `group`/`group_item` по смещениям.
+
+Задачи этапа 1:
+
+- перенести в `ha-model` раскладки `ha_rule`, `ha_group`, `ha_group_item` с
+  compile-time проверками размеров и офсетов (как `static_assert` в V2);
+- удалить `RULE_RECORD_LEN` из `ha-automation`, использовать
+  `canonical::AUTOMATION_RECORD_LEN`;
+- `ha-domain` не является точкой импорта canonical для новых зависимостей:
+  единственный источник — `ha-model`.
+
+Потребители раскладок (`main.rs`, `display`, `ha-automation`) переключаются на
+canonical-структуры в этапе 3 (правило 6).
+
+Совместимость с V2 не считается доказанной, пока не пройдёт тест сравнения
+layout'ов V2 и V3 (§4.9), в том числе `ha_rule_t.enabled` на смещении 384.
+Значения для сравнения берутся из V2-заголовков и `static_assert`, а не из V3-кода.
+
+### 4.4. Backing
 
 Текущая таблица V2-политики, которую нужно сохранить:
 
@@ -282,13 +328,13 @@ storage error mapping
 
 Механизм mutation/restore даёт `micro-db` (этап 0): `RamFlash` пишет Flash до RAM,
 ошибка Flash возвращает `Err` и не меняет RAM; `restore` — открытие таблицы при
-регистрации, без публикации фактов (§4.5).
+регистрации, без публикации фактов (§4.6).
 
 Переход на per-entity таблицы меняет flash layout. Судьба текущего раздела
 `ha_domain` (erase либо миграция чтением старой таблицы) фиксируется в этапе 1 до
 реализации; прецедент — разовый erase старого ABI в V2 (A7).
 
-### 4.4. `entity_put` / `entity_remove`
+### 4.5. `entity_put` / `entity_remove`
 
 - `entity_put` возвращает `changed`.
 - `entity_remove` следует V2: `Result<()>`, отсутствие записи — `Err(NotFound)`.
@@ -302,7 +348,7 @@ storage error mapping
   - RAM совпадает с последним commit (инвариант `RamFlash`, этап 0).
 - `ENTITY_REMOVED` несёт полный canonical key.
 
-### 4.5. Restore
+### 4.6. Restore
 
 `restore` — lifecycle-операция Domain, а не пользовательская мутация. В V2 её
 отдельного вызова нет: восстановление происходит при регистрации таблицы
@@ -325,7 +371,7 @@ storage error mapping
   `source` — поле факта, а не persisted-записи. Записывать восстановленные
   записи как `SOURCE_ZIGBEE` запрещено.
 
-### 4.6. DomainHandle
+### 4.7. DomainHandle
 
 `DomainHandle` — cloneable handle Domain API:
 
@@ -346,7 +392,7 @@ domain.post(...)?
 свой API. Убрать его на этапе 1 нельзя: это потребует правок там, где правило 6
 их запрещает.
 
-### 4.7. `Domain::post` и executor
+### 4.8. `Domain::post` и executor
 
 1. Domain находит executor.
 2. Domain готовит вызов.
@@ -358,7 +404,7 @@ domain.post(...)?
 выполнение команды и не означает подтверждение устройства. Ошибка executor’а
 не пишет `COMMAND_SENT`. Executor не вызывается под внутренним Domain-lock.
 
-### 4.8. Контрактные тесты этапа 1
+### 4.9. Контрактные тесты этапа 1
 
 Все тесты этапа — host; P4 не требуется (правило 7).
 
@@ -375,9 +421,16 @@ domain.post(...)?
 - Несовместимая и повреждённая запись дают явную ошибку, а не тихий skip.
 - `DomainHandle` не отдаёт `MutexGuard`; `with_mut` остаётся только до этапа 3.
 - Executor не вызывается под Domain-lock.
+- Для каждой сущности `EntityDesc.key_size`/`record_size` совпадают с
+  `canonical::*_KEY_LEN`/`*_RECORD_LEN`.
+- Canonical-раскладки `ha_rule`, `ha_group`, `ha_group_item` проходят
+  compile-time проверки размеров и офсетов.
+- Layout-паритет V2↔V3: тест сравнивает размеры и офсеты `ha_rule`, `ha_group`,
+  `ha_group_item` со значениями V2 (`ha_model/*.h`), включая `ha_rule_t.enabled`
+  на смещении 384. До зелёного теста совместимость не считается доказанной.
 - Существующие `ha-domain` тесты остаются зелёными.
 
-### 4.9. Вне этапа 1
+### 4.10. Вне этапа 1
 
 Не менять:
 
@@ -385,6 +438,8 @@ domain.post(...)?
 - `DomainAdapter` (кроме подготовки к следующему этапу после тестов);
 - `RecordSink`/`StoreSink`;
 - System/Display/Automation/Web;
+- потребителей canonical-раскладок (`main.rs`, `display`, `ha-automation`) —
+  их перевод на структуры `ha-model` выполняется в этапе 3;
 - Zigbee command semantics, кроме проверки, что Domain API не ломает текущий путь.
 
 ## 5. Этап 2 — Zigbee adapter
@@ -403,7 +458,10 @@ domain.post(...)?
 ## 6. Этап 3 — сервисы
 
 - System сам пишет Location/Weather/время и публикует события.
-- Automation сам меняет enabled/record layout; `record[384]` уходит из `main`.
+- Automation сам меняет enabled/record layout; `record[384]` уходит из `main`;
+  `ha-automation` использует canonical-раскладку и `AUTOMATION_RECORD_LEN`.
+- Display разбирает `group`/`group_item` через canonical-структуры `ha-model`, а не
+  по magic-офсетам.
 - Settings — через Domain API/профильный сервис.
 - Display сам обрабатывает навигацию/scan UI.
 - Web/Display/Automation не используют `main` как посредника для команд.
@@ -457,13 +515,20 @@ domain.post(...)?
 - Display navigation and state updates;
 - persistence policy RAM/RamFlash;
 - reboot after every persistent mutation;
-- storage error and corrupt record behavior.
+- storage error and corrupt record behavior;
+- canonical parity: Web snapshot/delta, Zigbee-проекция и storage несут
+  байт-идентичные записи (zero-marshalling).
 
 ## 10. Definition of done этапа 1
 
 Этап 1 завершён, когда:
 
-- Domain descriptors выражают backing и `persist_key`;
+- Domain descriptors выражают backing и `persist_key`; `key_size`/`record_size`
+  производны от canonical-констант;
+- раскладки `ha_rule`, `ha_group`, `ha_group_item` перенесены в `ha-model` с
+  compile-time проверками; `RULE_RECORD_LEN` в `ha-automation` удалён;
+- тест `desc == canonical` и layout-паритет V2↔V3 зелёные (включая
+  `ha_rule_t.enabled` на смещении 384);
 - Domain владеет persistence policy; mutation выполняет `micro-db` (§3.4);
 - `entity_remove` следует V2: `Result<()>`, отсутствие — `NotFound`;
 - storage errors не публикуют факты;
