@@ -65,7 +65,8 @@ region_size     = 2 * bank_size
   - новый регион: directory заполнена → `NO_SPACE`; свободный хвост меньше →
     `INVALID_SIZE`; offset/size вне границ → `CORRUPT`;
   - успех: сначала запись directory, затем backend пишет в регион.
-- Владение — RAM-таблица (16 id), не персистентна; `release` только снимает флаг;
+- Владение — RAM-таблица (16 id), не персистентна; `release` снимает только
+  runtime ownership, directory entry остаётся `USED`;
   `owner_prune` снимает владение для id, которых нет в directory.
 - `lookup` требует валидную directory; иначе `NOT_FOUND`.
 - Регион отдаётся как view: `{base_offset, size}`, bounds-check, `erase_size`
@@ -190,8 +191,11 @@ region_size     = 2 * bank_size
 
 - Directory: fresh, ping-pong recovery (каждый слот активен), оба erased,
   не-erased без header → `CORRUPT`, CRC/state/entry corruption → `CORRUPT`.
-- Bind: повторный bind → `INVALID_STATE`; после `release` — reuse; другой размер →
-  `INVALID_SIZE`; directory full → `NO_SPACE`; free tail мал → `INVALID_SIZE`.
+- Bind: повторный bind при активном владении → `INVALID_STATE`; после `release`
+  повторный bind того же ключа возвращает прежние `offset/size` (directory entry
+  остаётся `USED`, bump tail не меняется); физического освобождения/переиспользования
+  места нет; другой размер → `INVALID_SIZE`; directory full → `NO_SPACE`; free tail
+  мал → `INVALID_SIZE`.
 - Layout: offset выровнен, `>= 2 * erase`, размер кратен `2 * erase`, регионы не
   пересекаются, lookup стабилен после reopen.
 - Geometry mismatch: тот же размер региона, другой key/payload → `INVALID_STATE`;
