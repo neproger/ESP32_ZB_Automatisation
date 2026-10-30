@@ -7,7 +7,7 @@
 //! to a full WS snapshot.
 
 use std::ffi::c_char;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
@@ -21,7 +21,8 @@ const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
 const MAX_CLIENTS: usize = 4;
-const MAX_MODEL: usize = 384;
+// Full 32-device config: devices/entities/caps, 256 states, groups, rules.
+const MAX_MODEL: usize = 768;
 
 struct ModelEntry {
     frame_type: u8,
@@ -33,6 +34,7 @@ static MODEL: Mutex<Vec<ModelEntry>> = Mutex::new(Vec::new());
 static CLIENTS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
 static SEQ: AtomicU16 = AtomicU16::new(0);
+static MODEL_EVICTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" {
     fn zb_poc_open_network(seconds: u8) -> i32;
@@ -132,6 +134,9 @@ pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
             }
             None => {
                 if model.len() == MAX_MODEL {
+                    if !MODEL_EVICTED.swap(true, Ordering::Relaxed) {
+                        log::warn!("web: model full, evicting oldest records");
+                    }
                     model.remove(0);
                 }
                 model.push(ModelEntry {
