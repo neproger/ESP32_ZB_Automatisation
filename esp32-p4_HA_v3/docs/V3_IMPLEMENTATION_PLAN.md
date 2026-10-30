@@ -1,6 +1,6 @@
 # HA V3 — план восстановления архитектуры V2
 
-> Статус: **утверждённое направление, этап 1 требует закрытия открытых вопросов**.
+> Статус: **утверждённое направление; этап 0 зафиксирован и готов к работе**.
 >
 > HA V3 = HA V2 Architecture + Rust implementation. V2 остаётся неизменяемым
 > архитектурным эталоном. V3 не добавляет новые слои и не «улучшает» владение
@@ -25,25 +25,166 @@
 4. **Адаптеры и сервисы не пишут canonical-записи в storage в обход Domain.**
    Ни `RecordSink`, ни `StoreSink`, ни прямой вызов `store::save_domain` не
    являются допустимой границей.
-5. **Порядок работ фиксирован:** Domain → Zigbee adapter → сервисы → runtime →
-   `main.rs` → сценарии V2. Нельзя переписывать `main.rs` раньше Domain.
-6. **`main.rs` и `DomainAdapter` не меняются на этапе 1.** Их рефакторинг
+5. **Порядок работ фиксирован:** `micro-db` → Domain → Zigbee adapter → сервисы →
+   runtime → `main.rs` → сценарии V2. Нельзя переписывать `main.rs` раньше Domain.
+6. **`main.rs` и `DomainAdapter` не меняются на этапах 0 и 1.** Их рефакторинг
    начинается только после прохождения контрактных тестов Domain.
+7. **Host-first.** Работа и приёмка этапов 0–5 идут на host-тестах. Держать P4 в
+   рабочем состоянии и тратить время на его сборку/отладку на каждом шаге не
+   нужно: в ходе миграции будут сильные изменения, и прошивка может не собираться
+   и не работать на плате. Обкатка на P4 и проверка сценариев V2 — этап 6; только
+   после него плата снова обязана работать.
 
 ## 2. Этапы
 
 | Этап | Работа | Результат |
 |---|---|---|
+| 0 | `micro-db`: инверсия Engine/Storage | `Table` — единый Engine, RAM/Flash — подчинённые Storage Backend; формат Flash не меняется |
 | 1 | Domain API + persistence | Domain — единственный владелец canonical state и политики хранения |
 | 2 | Zigbee adapter | `DomainAdapter` ограничен Zigbee-проекцией и Zigbee-private lifecycle |
 | 3 | System / Automation / Settings / Display | Каждый сервис сам выполняет свой сценарий и пишет через Domain API |
 | 4 | Runtime и intake | Нет центрального application controller; inbox принадлежит сервису |
 | 5 | `main.rs` | Только composition root и bootstrap |
-| 6 | V2 scenario verification | Поведение подтверждено по сценариям V2, а не только unit-тестами |
+| 6 | V2 scenario verification | Поведение подтверждено на P4 и host-тестах по сценариям V2 |
 
-## 3. Этап 1 — Domain API + persistence
+## 3. Этап 0 — micro-db: инверсия Engine/Storage
 
-### 3.1. Граница владения
+Цель: вернуть границу V2 внутри `micro-db`, не меняя поведение Domain.
+Этап не добавляет функций и не меняет persistence policy; он делает `Table`
+единым Engine, а RAM/Flash — подчинёнными Storage Backend.
+
+Запрещено на этапе 0: менять `main.rs`, `DomainAdapter`, сервисы, формат
+journal/flash, раскладку разделов и публичное поведение `ha-domain`.
+
+Проверка этапа — host-тесты; сборка и запуск на P4 не требуются (правило 7).
+
+### 3.1. Целевая структура
+
+```text
+Table<S: Storage>          engine: geometry, slot lifecycle, hash index,
+  │                        free-list, generation/version, live count
+  ├── Ram                  непрерывный массив слотов
+  ├── Flash                существующий FlashTable (формат, recovery, compaction)
+  └── RamFlash             write-through: Flash commit, затем RAM
+
+Ring<T>                    без изменений, не входит в Engine
+```
+
+- `Table` не хранит слоты, ключи, payload или meta.
+- `Storage` — единственный владелец canonical slot state `meta + key + payload`.
+- `index`, `free`, `live` — производные структуры, пересобираются при `open`
+  (V2 `mstore_runtime_rebuild`).
+- Engine меняет производное состояние только после успешного `write_*`.
+
+### 3.2. Контракт Storage (перенос V2 `mstore_storage.h`)
+
+| Операция | Rust | V2 |
+|---|---|---|
+| `read_meta(slot)` | `&self` | `mstore_storage.h:34` |
+| `read_key(slot, out)` | `&self` | `:36` |
+| `read_slot(slot, key, payload)` | `&self` | `:38` |
+| `write_slot(slot, meta, key, payload)` | `&mut self` | `:40` |
+| `write_meta(slot, meta)` | `&mut self` | `:42` |
+| `clear_all()` | `&mut self` | `:44` |
+| `sync()` | `&mut self` | `:45` |
+
+`close` не переносится — в Rust его заменяет `Drop`. `sync` остаётся в трейте как
+backend-lifecycle с no-op реализацией и никогда не вызывается из `Table`.
+
+`read_key` — операция V2, а не добавление: `slot_find` сравнивает probing-цепочку
+с canonical `slot.key`, не читая payload (`MSTORE.md` §2.9).
+
+Чтения объявлены `&self` по контракту V2 (`const mstore_storage_t *`). Чтобы
+`FlashStorage` мог это выполнить, на этапе 0 меняется локальный trait:
+`NorFlash::read(&mut self)` → `read(&self)`. Это изменение этапа 0, а не
+констатация текущего состояния. Внешних `embedded-storage`/`nor-flash` в проекте
+нет; все три реализации (`CFlash`, `SimFlash`, `CrashFlash`) допускают такую
+сигнатуру без `RefCell` и синхронизации.
+
+Причина обязательности `&self`: публичные чтения Domain (`entity_get`,
+`entity_meta`, `entity_iter`) вызываются через `DomainHandle::with`
+(`automation_task.rs`, `main.rs`, `wifi.rs`, `display`, `web`). Смена Storage на
+`&mut` потребовала бы менять сервисы, что этапом 0 запрещено.
+
+### 3.3. Слот и владение
+
+```text
+slot = meta { used, generation, version } + key[key_size] + payload[payload_size]
+```
+
+- Геометрия задаётся рантаймом: `Geometry { capacity, key_size, payload_size }`.
+  Отдельных типов под каждую геометрию и `Fixed` больше нет.
+- `Ram` — один `Vec<u8>` на `capacity * slot_len`, без выделений на слот.
+- `Flash` — `FlashTable` как есть: журнал «слот → последняя запись», `latest[]`
+  остаётся приватной директорией backend'а, а не вторым индексом.
+- Tombstone (`write_meta` с `used=false`) — часть контракта Storage.
+- Итерация — `for_each(slot, meta, key, payload)`; `&self`-чтение flash идёт
+  через scratch-буфер backend'а.
+
+### 3.4. RamFlash
+
+`write_slot`/`write_meta`: сначала Flash commit, затем RAM mutation. Ошибка Flash
+возвращается как есть, RAM не изменяется; откат не нужен по построению.
+Текущая схема `RAM → append → rollback` из `persisted.rs` удаляется вместе с
+`PersistedTable` как архитектурной сущностью.
+
+### 3.5. Совместимость Flash
+
+Формат записи, заголовок, CRC, commit-marker, recovery и compaction не меняются.
+`latest[]` и правило last-wins при восстановлении сохраняются.
+
+Этап 0 не меняет раскладку разделов и `persist_id`. Совместимость фиксируется
+host-тестом: записи, созданные текущим форматом (`ha_zigbee_devices`,
+`ha_domain`), открываются и читаются новым Engine на `SimFlash`. Переход Domain
+на per-entity таблицы — этап 1, вместе с решением о миграции/erase.
+
+### 3.6. Что разрешено менять
+
+- `crates/micro-db/*`;
+- `crates/ha-domain` — механическая адаптация к байтовому `Table`/`Storage`;
+  публичный контракт Domain не меняется;
+- `crates/ha-app/src/store.rs`;
+- `crates/zigbee-devices/src/registry.rs` — потребитель `micro-db`, не `DomainAdapter`.
+
+### 3.7. Контрактные тесты этапа 0
+
+Существующие сценарии `table.rs`/`flash.rs`/`persisted.rs` сохраняются
+(переписывается вызов, не смысл). Добавляются:
+
+- повторная запись слота: одна запись в журнал, `version` растёт только при
+  реальном изменении;
+- tombstone переживает reopen и compaction; `read_meta` после него `used=false`;
+- `clear_all` очищает RAM и Flash;
+- ошибка Flash в `RamFlash` → `Err`, RAM совпадает с последним commit;
+- reopen восстанавливает `index`/`free`/`live` ровно по слотам;
+- рост `capacity` без переформатирования сохраняет все записи;
+- байтовая совместимость: формат `ha_zigbee_devices` с прежними
+  `geometry`/`persist_id` открывается и читается на `SimFlash`;
+- Domain read-API остаётся `&self` (`entity_get`/`entity_meta`/`entity_iter`).
+
+### 3.8. Вне этапа 0
+
+- `Backing::Flash` (flash-only) — политикой V2 не используется, реализуется
+  только при появлении реального потребителя;
+- Region Adapter и per-entity таблицы;
+- persistence policy Domain, restore, `source`;
+- `entity_remove`/`Result<bool>`;
+- zero-copy `acquire/release` — RAM-only оптимизация по результатам замеров.
+
+### 3.9. Definition of done этапа 0
+
+- `Table` не содержит слотов; слоты принадлежат `Storage`;
+- `Storage` реализует семь операций V2; `NorFlash::read` — `&self`;
+- `PersistedTable` и `Fixed` удалены;
+- `RamFlash` пишет Flash до RAM и не имеет rollback-ветки;
+- формат Flash не изменился; host-тест подтверждает чтение записей, созданных
+  прежним форматом;
+- все тесты этапа 0 и существующие тесты `ha-domain` зелёные;
+- `main.rs`, `DomainAdapter`, сервисы не изменены.
+
+## 4. Этап 1 — Domain API + persistence
+
+### 4.1. Граница владения
 
 ```text
 composition root
@@ -53,7 +194,7 @@ composition root
 Domain
   ├── descriptors canonical-сущностей
   ├── Backing policy
-  ├── RAM/Flash mutation
+  ├── mutation через micro-db Storage
   ├── restore
   ├── Journal / Dispatcher
   └── command registry
@@ -67,17 +208,18 @@ service / adapter
 - Сервисы не получают доступа к persistent tables и `micro-db` API.
 - `micro-db` не знает про Domain, Zigbee, Web, Automation.
 
-### 3.2. Публичный контракт Domain
+### 4.2. Публичный контракт Domain
 
 ```text
-Domain::new(config, clock, storage)
+Domain::new(journal, payload, payload_max)          — RAM-only (тесты, текущий main)
+Domain::new_with_storage(config, clock, storage)    — с persistence
 Domain::register_entity(EntityDesc)
 Domain::restore() -> Result<RestoreReport>
 
 Domain::entity_put(entity, key, record, meta) -> Result<bool>
 Domain::entity_get(entity, key, out) -> Result<()>
 Domain::entity_meta(entity, key) -> Result<EntityMeta>
-Domain::entity_remove(entity, key, meta) -> Result<bool>
+Domain::entity_remove(entity, key, meta) -> Result<()>
 Domain::entity_iter(entity, visit) -> Result<()>
 
 Domain::payload_put(target, meta, payload) -> Result<PayloadRef>
@@ -90,18 +232,22 @@ Domain::subscribe(filter, sink)
 Domain::dispatch_once()
 ```
 
+`Domain::new` остаётся для тестов и текущего `main.rs`. `new_with_storage` и
+`restore` вызываются composition root на этапе 5; до этого `main.rs` не меняется
+(правило 6).
+
 Внутренние, не публичные для сервисов:
 
 ```text
 StorageBackend
-PersistedTable / RAM Table
+Table<S> / Storage::{Ram, Flash, RamFlash}
 Backing::{Ram, Flash, RamFlash}
 persist_key
 restore policy
 storage error mapping
 ```
 
-### 3.3. Backing
+### 4.3. Backing
 
 Текущая таблица V2-политики, которую нужно сохранить:
 
@@ -127,37 +273,40 @@ storage error mapping
 | Backing | Чтение | Запись | Restore |
 |---|---|---|---|
 | `Ram` | RAM | RAM | нет |
-| `Flash` | по контракту V2 | Flash | да |
-| `RamFlash` | RAM | RAM + Flash | да |
+| `RamFlash` | RAM | Flash commit, затем RAM | да |
+| `Flash` | — | — | — |
 
-**Открытый вопрос 1:** точная семантика `Flash` в V2 — только Flash или
-Flash-backed таблица с RAM-кэшем. До ответа `Backing::Flash` не реализуется
-«на глаз».
+`Backing::Flash` не используется ни одним дескриптором V2; регистрация такой
+сущности отклоняется (этап 0, §3.8). Реализация — только при появлении реального
+потребителя.
 
-**Открытый вопрос 2:** порядок согласованной RAM/Flash mutation и поведение при
-ошибке между двумя представлениями. Требуемый инвариант: ошибка Flash не должна
-оставлять Domain в состоянии, противоречащем persistence. Конкретный порядок
-(flash → RAM или RAM → flash с rollback) должен быть взят из V2/micro-db
-семантики, а не выбран произвольно.
+Механизм mutation/restore даёт `micro-db` (этап 0): `RamFlash` пишет Flash до RAM,
+ошибка Flash возвращает `Err` и не меняет RAM; `restore` — открытие таблицы при
+регистрации, без публикации фактов (§4.5).
 
-### 3.4. `entity_put` / `entity_remove`
+Переход на per-entity таблицы меняет flash layout. Судьба текущего раздела
+`ha_domain` (erase либо миграция чтением старой таблицы) фиксируется в этапе 1 до
+реализации; прецедент — разовый erase старого ABI в V2 (A7).
+
+### 4.4. `entity_put` / `entity_remove`
 
 - `entity_put` возвращает `changed`.
-- `entity_remove` возвращает `bool`: `true` — запись удалена, `false` — записи
-  не было.
+- `entity_remove` следует V2: `Result<()>`, отсутствие записи — `Err(NotFound)`.
+  `bool` нужен только адаптеру, и он уже маппит `NotFound` сам.
 - При `changed=false` не выполняется запись во Flash и не публикуется факт.
-- При `Ok(false)` для remove не выполняется запись во Flash и не публикуется
+- При `Err(NotFound)` для remove не выполняется запись во Flash и не публикуется
   `ENTITY_REMOVED`.
 - При ошибке storage:
   - возвращается ошибка;
   - факт не публикуется;
-  - RAM-представление не должно оказаться изменённым сильнее, чем позволяет
-    выбранный V2-порядок mutation/rollback.
+  - RAM совпадает с последним commit (инвариант `RamFlash`, этап 0).
 - `ENTITY_REMOVED` несёт полный canonical key.
 
-### 3.5. Restore
+### 4.5. Restore
 
-`restore` — lifecycle-операция Domain, а не пользовательская мутация:
+`restore` — lifecycle-операция Domain, а не пользовательская мутация. В V2 её
+отдельного вызова нет: восстановление происходит при регистрации таблицы
+(`mstore_table_init → mstore_storage_open → mstore_runtime_rebuild`).
 
 - выполняется до запуска подписчиков;
 - не вызывает публичный `entity_put` как обычный сервис;
@@ -172,10 +321,11 @@ Flash-backed таблица с RAM-кэшем. До ответа `Backing::Flash
   - запись без зарегистрированного descriptor.
 - повреждение данных и несовместимость версии — разные ошибки;
 - `RestoreReport` отражает факт восстановления, но не скрывает ошибку;
-- источник (`source`) восстанавливается по правилам V2 или сохраняется в
-  persistent record. Восстанавливать все записи как `SOURCE_ZIGBEE` запрещено.
+- восстановление не публикует факты, поэтому `source` в нём не участвует:
+  `source` — поле факта, а не persisted-записи. Записывать восстановленные
+  записи как `SOURCE_ZIGBEE` запрещено.
 
-### 3.6. DomainHandle
+### 4.6. DomainHandle
 
 `DomainHandle` — cloneable handle Domain API:
 
@@ -188,11 +338,15 @@ domain.post(...)?
 
 Запрещено:
 
-- `lock() -> MutexGuard<Domain>`;
-- `with_mut(...)`;
+- `lock() -> MutexGuard<Domain>` — с этапа 1;
 - любой другой способ получить изменяемый доступ к внутреннему Domain.
 
-### 3.7. `Domain::post` и executor
+`with_mut` на этапе 1 остаётся для неизменяемых потребителей (`main.rs`,
+`DomainAdapter`, сервисы) и удаляется на этапе 3–4, когда каждый сервис получает
+свой API. Убрать его на этапе 1 нельзя: это потребует правок там, где правило 6
+их запрещает.
+
+### 4.7. `Domain::post` и executor
 
 1. Domain находит executor.
 2. Domain готовит вызов.
@@ -204,24 +358,26 @@ domain.post(...)?
 выполнение команды и не означает подтверждение устройства. Ошибка executor’а
 не пишет `COMMAND_SENT`. Executor не вызывается под внутренним Domain-lock.
 
-### 3.8. Контрактные тесты этапа 1
+### 4.8. Контрактные тесты этапа 1
+
+Все тесты этапа — host; P4 не требуется (правило 7).
 
 - RAM-only entity никогда не попадает во Flash.
-- `RamFlash` переживает reboot и восстанавливается.
+- `RamFlash` переживает reboot на `SimFlash` и восстанавливается.
 - `PROPERTY_STATE` не восстанавливается.
 - Ошибка Flash возвращается из `entity_put`/`entity_remove`.
 - Ошибка Flash не публикует факт.
 - Повторный `entity_put` с теми же данными не пишет во Flash.
-- `entity_remove` отсутствующей записи возвращает `false`, не пишет во Flash и
+- `entity_remove` отсутствующей записи возвращает `NotFound`, не пишет во Flash и
   не публикует факт.
-- После restore canonical records совпадают по key/record, `source` и metadata
-  соответствуют V2.
+- После restore canonical records и `version` совпадают; факты не публикуются,
+  `source` не участвует.
 - Несовместимая и повреждённая запись дают явную ошибку, а не тихий skip.
-- `DomainHandle` не отдаёт `MutexGuard`/изменяемый доступ.
+- `DomainHandle` не отдаёт `MutexGuard`; `with_mut` остаётся только до этапа 3.
 - Executor не вызывается под Domain-lock.
 - Существующие `ha-domain` тесты остаются зелёными.
 
-### 3.9. Вне этапа 1
+### 4.9. Вне этапа 1
 
 Не менять:
 
@@ -231,7 +387,7 @@ domain.post(...)?
 - System/Display/Automation/Web;
 - Zigbee command semantics, кроме проверки, что Domain API не ломает текущий путь.
 
-## 4. Этап 2 — Zigbee adapter
+## 5. Этап 2 — Zigbee adapter
 
 После этапа 1:
 
@@ -240,9 +396,11 @@ domain.post(...)?
 - `RecordSink`, `put_record`, generic CRUD, Device lifecycle и persistence
   удаляются из adapter’а;
 - Device service остаётся владельцем Logical Device/Entity lifecycle;
-- Zigbee adapter регистрирует remover, но не пишет canonical storage.
+- Zigbee adapter регистрирует remover, но не пишет canonical storage;
+- после этапа 2 ни один production-путь не использует `RecordSink`/`StoreSink`
+  для persistence. Проверка — host-тесты.
 
-## 5. Этап 3 — сервисы
+## 6. Этап 3 — сервисы
 
 - System сам пишет Location/Weather/время и публикует события.
 - Automation сам меняет enabled/record layout; `record[384]` уходит из `main`.
@@ -250,7 +408,7 @@ domain.post(...)?
 - Display сам обрабатывает навигацию/scan UI.
 - Web/Display/Automation не используют `main` как посредника для команд.
 
-## 6. Этап 4 — runtime/intake
+## 7. Этап 4 — runtime/intake
 
 - Убрать `intake` как центральный application controller.
 - У каждого сервиса свой bounded inbox; polling допустим только внутри сервиса,
@@ -258,7 +416,7 @@ domain.post(...)?
 - Убрать `system::take`, `display::take_nav`, `capabilities::take` из main-цикла.
 - `main` не опрашивает Wi-Fi и не публикует системные события за сервисы.
 
-## 7. Этап 5 — `main.rs`
+## 8. Этап 5 — `main.rs`
 
 Разрешено:
 
@@ -281,9 +439,12 @@ domain.post(...)?
 - публикация системных событий;
 - изменение canonical records.
 
-## 8. Этап 6 — V2 scenarios
+## 9. Этап 6 — V2 scenarios
 
-Проверить сценарии V2 на железе и host-тестах:
+Единственный этап, где P4 обязателен. До него плата может не собираться и не
+работать (правило 7); после него прошивка снова обязана работать на P4.
+
+Проверить сценарии V2 на P4 и host-тестах:
 
 - первый старт и restore;
 - Zigbee report → state → delta;
@@ -294,22 +455,25 @@ domain.post(...)?
 - Wi-Fi scan/connect/known/autostart;
 - Web snapshot/delta/slow client;
 - Display navigation and state updates;
-- persistence policy RAM/Flash/RamFlash;
+- persistence policy RAM/RamFlash;
 - reboot after every persistent mutation;
 - storage error and corrupt record behavior.
 
-## 9. Definition of done
+## 10. Definition of done этапа 1
 
 Этап 1 завершён, когда:
 
 - Domain descriptors выражают backing и `persist_key`;
-- Domain сам выполняет RAM/Flash mutation и restore;
-- `entity_remove` возвращает `bool`;
+- Domain владеет persistence policy; mutation выполняет `micro-db` (§3.4);
+- `entity_remove` следует V2: `Result<()>`, отсутствие — `NotFound`;
 - storage errors не публикуют факты;
-- `DomainHandle` не отдаёт изменяемый Domain;
+- `DomainHandle` не отдаёт `MutexGuard` (`with_mut` — до этапа 3);
 - `post` вызывает executor вне Domain-lock;
+- `restore` не публикует факты и не зависит от `source`;
 - все контрактные тесты зелёные;
-- `RecordSink` ещё может существовать как переходный код, но **ни один
-  production-путь не использует его для persistence**.
+- host-сборка и host-тесты проходят; работоспособность на P4 не требуется до
+  этапа 6;
+- `RecordSink`/`StoreSink` ещё существуют: их удаление из production-пути —
+  этап 2, проводка Domain в `main.rs` — этап 5.
 
-Только после этого начинается этап 2.
+После этого начинается этап 2.
