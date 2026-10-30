@@ -45,8 +45,8 @@
 
 | Этап | Работа | Результат |
 |---|---|---|
-| 0 | `micro-db`: инверсия Engine/Storage | `Table` — единый Engine, RAM/Flash — подчинённые Storage Backend; формат Flash не меняется |
-| 1 | Domain API + persistence | Domain — единственный владелец canonical state и политики хранения |
+| 0 | `micro-db`: инверсия Engine/Storage | `Table` — единый Engine, RAM/Flash — подчинённые Storage Backend; формат Flash и V2-семантика fresh/clear/geometry/ошибок сохранены |
+| 1 | Domain API + persistence | Domain — единственный владелец canonical state и политики хранения; Region Manager и per-entity таблицы |
 | 2 | Zigbee adapter | `DomainAdapter` ограничен Zigbee-проекцией и Zigbee-private lifecycle |
 | 3 | System / Automation / Settings / Display | Каждый сервис сам выполняет свой сценарий и пишет через Domain API |
 | 4 | Runtime и intake | Нет центрального application controller; inbox принадлежит сервису |
@@ -100,6 +100,14 @@ backend-lifecycle с no-op реализацией и никогда не выз�
 `read_key` — операция V2, а не добавление: `slot_find` сравнивает probing-цепочку
 с canonical `slot.key`, не читая payload (`MSTORE.md` §2.9).
 
+`clear_all` — операция backend'а (M1): `used=false` с сохранением
+`generation`/`version`; на Flash операция durable (META-записи). Engine после
+успешного `clear_all` только пересобирает `index`/`free`/`live` и не сбрасывает
+`generation`.
+
+Чтение свободного слота — lenient, как в V2: backend возвращает `used=false` и
+нулевые key/payload (`Ok`), а `Stale` формирует Table Engine.
+
 Чтения объявлены `&self` по контракту V2 (`const mstore_storage_t *`). Чтобы
 `FlashStorage` мог это выполнить, на этапе 0 меняется локальный trait:
 `NorFlash::read(&mut self)` → `read(&self)`. Это изменение этапа 0, а не
@@ -144,12 +152,28 @@ host-тестом: записи, созданные текущим формат�
 `ha_domain`), открываются и читаются новым Engine на `SimFlash`. Переход Domain
 на per-entity таблицы — этап 1, вместе с решением о миграции/erase.
 
+Политика открытия, геометрии и ошибок (M2–M5):
+
+| Случай | Поведение |
+|---|---|
+| оба header-блока полностью erased | fresh: `open` сам пишет header `seq=1`; composition root раздел не форматирует |
+| валидного header нет, но header-область не полностью erased | `Corrupt`; авто-формата нет |
+| `capacity`/`key_size`/`payload_size`/`persist_id` не совпали точно | `InvalidState` |
+| недопустимый размер или переполнение геометрии | `InvalidSize` |
+| повреждённая committed-запись или directory | `Corrupt` |
+
+`capacity` строго равна header (M3): роста и opt-in на этапе 0 нет. Увеличение
+`MAX_DEVICES` — отдельное решение с проверкой физического резерва.
+
+Форматирование допустимо только для полностью стёртого раздела. Ветка «schema
+changed → format» в `store.rs` удаляется (D22): при ошибке данные сохраняются.
+
 ### 3.6. Что разрешено менять
 
 - `crates/micro-db/*`;
 - `crates/ha-domain` — механическая адаптация к байтовому `Table`/`Storage`;
   публичный контракт Domain не меняется;
-- `crates/ha-app/src/store.rs`;
+- `crates/ha-app/src/store.rs` — включая удаление авто-формата при `InvalidSize`;
 - `crates/zigbee-devices/src/registry.rs` — потребитель `micro-db`, не `DomainAdapter`.
 
 ### 3.7. Контрактные тесты этапа 0
@@ -159,11 +183,25 @@ host-тестом: записи, созданные текущим формат�
 
 - повторная запись слота: одна запись в журнал, `version` растёт только при
   реальном изменении;
+- generation/version overflow: `allocate` при `generation == MAX` → `Overflow`
+  (слот не переиспользуется), при `MAX-1` → `MAX`; `update` при `version == MAX`
+  и реальном изменении → `Overflow` без изменения записи, при том же payload →
+  `Ok(false)`; Ring при `next_seq == u64::MAX` → `Overflow` (V3-защита; V2
+  переполнение не проверял — допустимое отличие реализации);
 - tombstone переживает reopen и compaction; `read_meta` после него `used=false`;
-- `clear_all` очищает RAM и Flash;
+- `clear_all`: `used=false`, `generation`/`version` сохраняются; на Flash clear
+  durable (переживает reopen);
+- fresh: полностью стёртый раздел инициализируется в `open`; частично записанный
+  header не считается fresh (`Corrupt`);
 - ошибка Flash в `RamFlash` → `Err`, RAM совпадает с последним commit;
 - reopen восстанавливает `index`/`free`/`live` ровно по слотам;
-- рост `capacity` без переформатирования сохраняет все записи;
+- строгое равенство `capacity`/`key_size`/`payload_size`/`persist_id`; рост
+  `capacity` не поддерживается;
+- несовпадение geometry/persist_id → `InvalidState`; недопустимый размер →
+  `InvalidSize`; повреждение → `Corrupt`;
+- авто-формата нет: `InvalidSize`/`InvalidState`/`Corrupt` не стирают раздел;
+- `payload_size == 0` допустим; `can_append` и pre-check по live-count отсутствуют;
+- свободный слот читается lenient (`used=false`, нули), `Stale` — на уровне Table;
 - байтовая совместимость: формат `ha_zigbee_devices` с прежними
   `geometry`/`persist_id` открывается и читается на `SimFlash`;
 - payload проходит Storage байт-в-байт: `Value` ABI (8 байт) и canonical-байты не
@@ -177,7 +215,8 @@ host-тестом: записи, созданные текущим формат�
 - Region Adapter и per-entity таблицы;
 - persistence policy Domain, restore, `source`;
 - `entity_remove`/`Result<bool>`;
-- zero-copy `acquire/release` — RAM-only оптимизация по результатам замеров.
+- zero-copy `acquire/release` — RAM-only оптимизация по результатам замеров;
+- рост `capacity` и opt-in для него (отдельное решение после этапа 0).
 
 ### 3.9. Definition of done этапа 0
 
@@ -185,6 +224,10 @@ host-тестом: записи, созданные текущим формат�
 - `Storage` реализует семь операций V2; `NorFlash::read` — `&self`;
 - `PersistedTable` и `Fixed` удалены;
 - `RamFlash` пишет Flash до RAM и не имеет rollback-ветки;
+- `clear_all` по V2: `generation` сохраняется, на Flash clear durable;
+- fresh-раздел инициализируется в `open`; авто-формат при ошибках запрещён;
+- строгое равенство geometry/`persist_id`; V2-классификация ошибок;
+- `payload_size == 0` поддержан, `can_append` удалён;
 - формат Flash не изменился; host-тест подтверждает чтение записей, созданных
   прежним форматом;
 - все тесты этапа 0 и существующие тесты `ha-domain` зелёные;
@@ -330,9 +373,13 @@ layout'ов V2 и V3 (§4.9), в том числе `ha_rule_t.enabled` на см
 ошибка Flash возвращает `Err` и не меняет RAM; `restore` — открытие таблицы при
 регистрации, без публикации фактов (§4.6).
 
-Переход на per-entity таблицы меняет flash layout. Судьба текущего раздела
-`ha_domain` (erase либо миграция чтением старой таблицы) фиксируется в этапе 1 до
-реализации; прецедент — разовый erase старого ABI в V2 (A7).
+Переход на per-entity таблицы меняет flash layout. Решение: разовый erase раздела
+`domain` при переходе (V2 §9.8, прецедент A7); миграция не выполняется. Erase
+выполняется один раз при явном переходе со старой схемы `ha_domain` на per-entity
+regions: факт перехода фиксируется явным маркером (build-flag/one-shot, как V2 A7)
+и не повторяется при последующих запусках. `Corrupt`, `InvalidSize`,
+`InvalidState` сами по себе erase не запускают; авто-формата при повреждении нет —
+только явный erase.
 
 ### 4.5. `entity_put` / `entity_remove`
 
@@ -428,9 +475,42 @@ domain.post(...)?
 - Layout-паритет V2↔V3: тест сравнивает размеры и офсеты `ha_rule`, `ha_group`,
   `ha_group_item` со значениями V2 (`ha_model/*.h`), включая `ha_rule_t.enabled`
   на смещении 384. До зелёного теста совместимость не считается доказанной.
+- Region Manager: fresh/ping-pong recovery/`Corrupt` directory; повторный bind при
+  активном владении → `InvalidState`; другой размер региона → `InvalidSize`; полная
+  directory → `NoSpace`; offset выровнен по erase, регионы не пересекаются.
+- `release` снимает только владение в процессе; directory-запись остаётся `USED`.
+  Повторный bind того же ключа разрешён и возвращает тот же offset/size (bump tail
+  не двигается); физического освобождения региона и переиспользования дыр нет;
+  reopen сохраняет directory и привязки.
+- Смена geometry в регионе: другой размер региона → `InvalidSize`; тот же размер,
+  другой key/payload → `InvalidState`; авто-формата нет.
 - Существующие `ha-domain` тесты остаются зелёными.
 
-### 4.10. Вне этапа 1
+### 4.10. Region Manager и Registry (M8, M9)
+
+Раскладка V2 переносится в `micro-db` на этапе 1:
+
+- один раздел; directory из двух erase-блоков (слот 528 Б: header 16 +
+  16 записей × 32), header/entry CRC, `generation`, ping-pong, header последним;
+- bump-allocator от `2 * erase_size`; регионы не пересекаются, дыры не
+  переиспользуются; удаления региона нет;
+- размер: `max_record = 16 + key + payload + 8`, `headroom = max(25%, 8)`,
+  `bank = round_up(64 + (capacity + headroom) * max_record, erase)`,
+  `region = 2 * bank`;
+- `bind/release/lookup`: `persist_id` = FNV-1a64 ×2; повторный bind →
+  `InvalidState`; другой размер региона → `InvalidSize`; directory полна →
+  `NoSpace`; bounds/CRC → `Corrupt`;
+- владение — RAM-таблица, `release` на закрытии; регион отдаётся как view с
+  bounds-check; backend считает регион своим устройством;
+- авто-формата и миграции нет (`MSTORE_FLASH_REGIONS.md` §9.8).
+
+Domain получает per-entity таблицы; переход с текущей раскладки `ha_domain` —
+разовый erase раздела `domain` (см. §4.4).
+
+Device Registry остаётся отдельной таблицей в собственном разделе вне Region
+Manager: формат и данные не меняются (M9).
+
+### 4.11. Вне этапа 1
 
 Не менять:
 
@@ -440,6 +520,7 @@ domain.post(...)?
 - System/Display/Automation/Web;
 - потребителей canonical-раскладок (`main.rs`, `display`, `ha-automation`) —
   их перевод на структуры `ha-model` выполняется в этапе 3;
+- рост `capacity` и смену geometry без явного erase;
 - Zigbee command semantics, кроме проверки, что Domain API не ломает текущий путь.
 
 ## 5. Этап 2 — Zigbee adapter
@@ -535,6 +616,8 @@ domain.post(...)?
 - `DomainHandle` не отдаёт `MutexGuard` (`with_mut` — до этапа 3);
 - `post` вызывает executor вне Domain-lock;
 - `restore` не публикует факты и не зависит от `source`;
+- Region Manager и Registry-разделение по M8/M9; Domain-раздел переведён на
+  per-entity регионы с разовым erase;
 - все контрактные тесты зелёные;
 - host-сборка и host-тесты проходят; работоспособность на P4 не требуется до
   этапа 6;
