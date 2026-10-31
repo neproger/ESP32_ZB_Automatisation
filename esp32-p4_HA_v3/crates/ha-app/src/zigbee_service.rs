@@ -333,15 +333,14 @@ fn register_domain(
         parent_native_id: None,
         name,
     };
-    let device = match domain
-        .with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc))
-    {
-        Ok(Ok(device)) => device,
-        Ok(Err(error)) | Err(error) => {
-            log::error!("device: register {eui:016x} failed: {error:?}");
-            return;
-        }
-    };
+    let device =
+        match domain.with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc)) {
+            Ok(Ok(device)) => device,
+            Ok(Err(error)) | Err(error) => {
+                log::error!("device: register {eui:016x} failed: {error:?}");
+                return;
+            }
+        };
     let standard_endpoint = if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
     } else {
@@ -366,9 +365,9 @@ fn register_domain(
             return;
         }
     };
-    match domain.with_mut(|domain| {
-        ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity)
-    }) {
+    match domain
+        .with_mut(|domain| ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity))
+    {
         Ok(Ok(_)) => {}
         Ok(Err(error)) | Err(error) => {
             log::error!("device: bind entity={entity:016x} failed: {error:?}");
@@ -439,9 +438,9 @@ fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) 
             return;
         }
     };
-    match domain.with_mut(|domain| {
-        ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket)
-    }) {
+    match domain
+        .with_mut(|domain| ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket))
+    {
         Ok(Ok(count)) => log::info!("device: removed device={device:016x} records={count}"),
         Ok(Err(error)) => {
             log::warn!("device: canonical removal device={device:016x} failed: {error:?}");
