@@ -180,17 +180,18 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
             ensure_interview(&state, event.extended_addr, event.short_addr);
         }
 
-        {
-            let mut domain = domain.lock();
+        if let Err(error) = domain.with_mut(|domain| {
             let mut state = state.lock().unwrap();
             let mut ingest = Ingest {
-                domain: &mut domain,
+                domain,
                 command_core: &mut state.command_core,
             };
             if polled {
                 ingest_command(&event, &mut ingest);
             }
             frames::process_pending(&mut ingest);
+        }) {
+            log::error!("domain: ingest failed: {error:?}");
         }
 
         if let Some(device) = frames::take_last_device() {
@@ -237,13 +238,16 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
                     }
                 }
                 if let Some(read) = result.read {
-                    let mut domain = domain.lock();
-                    let mut state = state.lock().unwrap();
-                    let mut ingest = Ingest {
-                        domain: &mut domain,
-                        command_core: &mut state.command_core,
-                    };
-                    ingest_read(&context, read, &mut ingest);
+                    if let Err(error) = domain.with_mut(|domain| {
+                        let mut state = state.lock().unwrap();
+                        let mut ingest = Ingest {
+                            domain,
+                            command_core: &mut state.command_core,
+                        };
+                        ingest_read(&context, read, &mut ingest);
+                    }) {
+                        log::error!("domain: read ingest failed: {error:?}");
+                    }
                 }
             }
             {
@@ -317,48 +321,44 @@ fn register_domain(
         parent_native_id: None,
         name,
     };
-    let device =
-        match ha_device::register(&mut domain.lock(), SOURCE_ZIGBEE as u8, &desc, &mut sink) {
-            Ok(device) => device,
-            Err(error) => {
-                log::error!("device: register {eui:016x} failed: {error:?}");
-                return;
-            }
-        };
+    let device = match domain
+        .with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc, &mut sink))
+    {
+        Ok(Ok(device)) => device,
+        Ok(Err(error)) | Err(error) => {
+            log::error!("device: register {eui:016x} failed: {error:?}");
+            return;
+        }
+    };
     let standard_endpoint = if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
     } else {
         None
     };
-    let entity = {
-        let mut domain = domain.lock();
-        let Ok(mut adapter) = DomainAdapter::with_sink(&mut domain, &mut sink) else {
-            log::error!("domain: adapter init failed");
-            return;
-        };
-        let result = match standard_endpoint {
+    let entity = match domain.with_mut(|domain| -> Result<(u64, bool), ha_domain::Error> {
+        let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
+        match standard_endpoint {
             Some(descriptor) => adapter.ensure_standard_entity(eui, endpoint, name, &descriptor),
             None => adapter.ensure_entity(eui, endpoint, name, profile),
-        };
-        match result {
-            Ok((entity, changed)) => {
-                log::info!(
-                    "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
-                    profile.id
-                );
-                entity
-            }
-            Err(error) => {
-                log::error!("domain: entity {eui:016x} failed: {error:?}");
-                return;
-            }
+        }
+    }) {
+        Ok(Ok((entity, changed))) => {
+            log::info!(
+                "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
+                profile.id
+            );
+            entity
+        }
+        Ok(Err(error)) | Err(error) => {
+            log::error!("domain: entity {eui:016x} failed: {error:?}");
+            return;
         }
     };
-    {
-        let mut domain = domain.lock();
-        if let Err(error) =
-            ha_device::bind_entity(&mut domain, SOURCE_ZIGBEE as u8, device, entity, &mut sink)
-        {
+    match domain.with_mut(|domain| {
+        ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity, &mut sink)
+    }) {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) | Err(error) => {
             log::error!("device: bind entity={entity:016x} failed: {error:?}");
             return;
         }
@@ -410,9 +410,11 @@ fn request_leave(state: &Arc<Mutex<State>>, eui: u64, short: u16, now: u64) -> b
 
 fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) {
     let mut sink = crate::StoreSink;
-    match ha_device::remove(&mut domain.lock(), SOURCE_UI as u8, device, &mut sink) {
-        Ok(count) => log::info!("device: removed device={device:016x} records={count}"),
-        Err(error) => log::warn!("device: remove device={device:016x} failed: {error:?}"),
+    match domain.with_mut(|domain| ha_device::remove(domain, SOURCE_UI as u8, device, &mut sink)) {
+        Ok(Ok(count)) => log::info!("device: removed device={device:016x} records={count}"),
+        Ok(Err(error)) | Err(error) => {
+            log::warn!("device: remove device={device:016x} failed: {error:?}")
+        }
     }
     let removed: Vec<u64> = REMOVALS.lock().unwrap().drain(..).collect();
     for eui in removed {
