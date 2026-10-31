@@ -11,9 +11,9 @@ use ha_domain::canonical::{
     EVENT_MINUTE_TICK, PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_WEEKDAY, SOURCE_AUTOMATION,
     STATE_RECORD_LEN,
 };
-use ha_domain::{Domain, DomainHandle, Fact, FactKind};
+use ha_domain::{DomainHandle, Fact, FactKind};
 
-struct State<'a>(&'a Domain);
+struct State<'a>(&'a DomainHandle);
 
 impl ha_automation::StateSource for State<'_> {
     fn state(&self, entity: u64, property: u32) -> Option<f64> {
@@ -27,15 +27,24 @@ impl ha_automation::StateSource for State<'_> {
     }
 }
 
-fn reload(domain: &Domain, engine: &mut ha_automation::RuleEngine) {
+fn reload(domain: &DomainHandle, engine: &mut ha_automation::RuleEngine) {
     engine.clear();
-    if let Err(error) = domain.entity_iter(ENTITY_AUTOMATION, |key, record| {
-        if key.len() == 8 && record.len() == ha_domain::canonical::AUTOMATION_RECORD_LEN {
-            let id = u64::from_le_bytes(key.try_into().expect("automation key"));
-            engine.add_rule(id, record);
+    match domain.entity_snapshot(ENTITY_AUTOMATION) {
+        Ok(snapshot) => {
+            for index in 0..snapshot.len() {
+                let Some(key) = snapshot.key(index) else {
+                    continue;
+                };
+                let Some(record) = snapshot.record(index) else {
+                    continue;
+                };
+                if key.len() == 8 && record.len() == ha_domain::canonical::AUTOMATION_RECORD_LEN {
+                    let id = u64::from_le_bytes(key.try_into().expect("automation key"));
+                    engine.add_rule(id, record);
+                }
+            }
         }
-    }) {
-        log::warn!("automation: rebuild failed: {error:?}");
+        Err(error) => log::warn!("automation: snapshot failed: {error:?}"),
     }
     engine.build_index();
     log::info!(
@@ -46,27 +55,23 @@ fn reload(domain: &Domain, engine: &mut ha_automation::RuleEngine) {
 }
 
 fn emit(domain: &DomainHandle, actions: &ha_automation::Actions) {
-    if let Err(error) = domain.with_mut(|domain| {
-        for command in actions.iter() {
-            let bytes = command.encode();
-            let meta = ha_domain::FactMeta {
-                source: SOURCE_AUTOMATION as u8,
-                value: ha_domain::Value::NONE,
-            };
-            if let Err(error) = domain.post(COMMAND_PROPERTY, &bytes, None, meta) {
-                log::warn!(
-                    "automation: command rejected entity={:016x} property={}: {error:?}",
-                    command.entity,
-                    command.property
-                );
-            }
+    for command in actions.iter() {
+        let bytes = command.encode();
+        let meta = ha_domain::FactMeta {
+            source: SOURCE_AUTOMATION as u8,
+            value: ha_domain::Value::NONE,
+        };
+        if let Err(error) = domain.post(COMMAND_PROPERTY, &bytes, None, meta) {
+            log::warn!(
+                "automation: command rejected entity={:016x} property={}: {error:?}",
+                command.entity,
+                command.property
+            );
         }
-    }) {
-        log::warn!("automation: command lane unavailable: {error:?}");
     }
 }
 
-fn system_minute(domain: &Domain) -> Option<(u16, u8)> {
+fn system_minute(domain: &DomainHandle) -> Option<(u16, u8)> {
     let minutes = <State<'_> as ha_automation::StateSource>::state(
         &State(domain),
         ENTITY_SYSTEM,
@@ -86,7 +91,7 @@ fn system_minute(domain: &Domain) -> Option<(u16, u8)> {
 fn handle_fact(domain: &DomainHandle, engine: &mut ha_automation::RuleEngine, fact: Fact) {
     match fact.kind {
         FactKind::EntityUpserted | FactKind::EntityRemoved if fact.entity == ENTITY_AUTOMATION => {
-            domain.with(|guard| reload(guard, engine));
+            reload(domain, engine);
         }
         FactKind::EntityUpserted if fact.entity == ENTITY_PROPERTY_STATE => {
             let key = fact.key();
@@ -99,9 +104,7 @@ fn handle_fact(domain: &DomainHandle, engine: &mut ha_automation::RuleEngine, fa
                 return;
             };
             let mut actions = ha_automation::Actions::new();
-            domain.with(|guard| {
-                engine.on_state(entity, property, value, &State(guard), &mut actions);
-            });
+            engine.on_state(entity, property, value, &State(domain), &mut actions);
             emit(domain, &actions);
         }
         FactKind::Event => {
@@ -114,15 +117,13 @@ fn handle_fact(domain: &DomainHandle, engine: &mut ha_automation::RuleEngine, fa
                 return;
             };
             let mut actions = ha_automation::Actions::new();
-            domain.with(|guard| {
-                if entity == ENTITY_SYSTEM && event == EVENT_MINUTE_TICK {
-                    if let Some((minutes, weekday)) = system_minute(guard) {
-                        engine.on_minute(minutes, 1u8 << weekday, &State(guard), &mut actions);
-                    }
-                } else {
-                    engine.on_event(entity, event, &State(guard), &mut actions);
+            if entity == ENTITY_SYSTEM && event == EVENT_MINUTE_TICK {
+                if let Some((minutes, weekday)) = system_minute(domain) {
+                    engine.on_minute(minutes, 1u8 << weekday, &State(domain), &mut actions);
                 }
-            });
+            } else {
+                engine.on_event(entity, event, &State(domain), &mut actions);
+            }
             emit(domain, &actions);
         }
         _ => {}
@@ -131,7 +132,7 @@ fn handle_fact(domain: &DomainHandle, engine: &mut ha_automation::RuleEngine, fa
 
 pub fn spawn(domain: DomainHandle, facts: Receiver<Fact>) {
     let mut engine = ha_automation::RuleEngine::boxed();
-    domain.with(|guard| reload(guard, &mut engine));
+    reload(&domain, &mut engine);
     std::thread::Builder::new()
         .name("automation".into())
         .stack_size(8192)
