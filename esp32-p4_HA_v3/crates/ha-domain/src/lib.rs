@@ -231,8 +231,8 @@ pub struct Domain {
     command_lane: Arc<StdMutex<()>>,
 }
 
-/// Shared Domain boundary. Runtime clients use `with`/`with_mut`; only the
-/// composition root uses `lock` to own the main loop's serialized access.
+/// Shared Domain boundary. Runtime clients use explicit methods; the hidden
+/// `with_mut` remains only for adapter/device mutation until Stage 2.
 #[derive(Clone)]
 pub struct DomainHandle(Arc<StdMutex<Domain>>);
 
@@ -241,18 +241,11 @@ impl DomainHandle {
         Self(Arc::new(StdMutex::new(domain)))
     }
 
-    pub fn with<R>(&self, visit: impl FnOnce(&Domain) -> R) -> R {
-        visit(&self.lock())
-    }
-
+    #[doc(hidden)]
     pub fn with_mut<R>(&self, visit: impl FnOnce(&mut Domain) -> R) -> Result<R> {
         let _flag = ThreadFlagGuard::enter(&IN_DOMAIN_CALLBACK);
         let mut domain = self.lock_checked()?;
         Ok(visit(&mut domain))
-    }
-
-    pub fn lock(&self) -> MutexGuard<'_, Domain> {
-        self.0.lock().unwrap()
     }
 
     fn lock_checked(&self) -> Result<MutexGuard<'_, Domain>> {
