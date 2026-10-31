@@ -393,6 +393,11 @@ fn storage_write_error_returns_err_without_fact() {
         domain.entity_put(RAM_ENTITY, &[1u8; 8], &[2u8; 8], meta()),
         Err(Error::Io)
     );
+    let mut out = [0u8; 8];
+    assert_eq!(
+        domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out),
+        Err(Error::NotFound)
+    );
     assert_eq!(domain.dispatch_once(), 0);
     assert_eq!(*seen.lock().unwrap(), 0);
 
@@ -400,14 +405,75 @@ fn storage_write_error_returns_err_without_fact() {
     domain
         .entity_put(RAM_ENTITY, &[1u8; 8], &[2u8; 8], meta())
         .unwrap();
+    let version = domain.entity_meta(RAM_ENTITY, &[1u8; 8]).unwrap().version;
+    domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out).unwrap();
+    assert_eq!(out, [2u8; 8]);
     domain.dispatch_once();
     *fail.lock().unwrap() = true;
     assert_eq!(
         domain.entity_remove(RAM_ENTITY, &[1u8; 8], meta()),
         Err(Error::Io)
     );
+    domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out).unwrap();
+    assert_eq!(out, [2u8; 8]);
+    assert_eq!(
+        domain.entity_meta(RAM_ENTITY, &[1u8; 8]).unwrap().version,
+        version
+    );
     assert_eq!(domain.dispatch_once(), 0);
     assert_eq!(*seen.lock().unwrap(), 1);
+}
+
+struct TableFailProvider {
+    inner: RegionProvider,
+    fail: Arc<Mutex<bool>>,
+    target: EntityType,
+}
+
+impl StorageProvider for TableFailProvider {
+    fn open(&mut self, desc: &EntityDesc<'_>) -> Result<StorageBackend, Error> {
+        let mut fail = self.fail.lock().unwrap();
+        if *fail && desc.entity == self.target {
+            *fail = false;
+            drop(fail);
+            let key = desc.persist_key.ok_or(Error::InvalidArg)?;
+            let view =
+                self.inner
+                    .manager
+                    .bind(key, desc.capacity, desc.key_size, desc.record_size)?;
+            drop(view);
+            let wrong = Geometry {
+                capacity: desc.capacity,
+                key_size: desc.key_size,
+                payload_size: desc.record_size + 1,
+            };
+            return Ok(StorageBackend::new(RamStorage::new(wrong)?));
+        }
+        drop(fail);
+        self.inner.open(desc)
+    }
+}
+
+#[test]
+fn restore_table_open_error_releases_region_and_retries() {
+    let flash = SharedFlash::new();
+    let fail = Arc::new(Mutex::new(true));
+    let provider = TableFailProvider {
+        inner: RegionProvider::new(flash).unwrap(),
+        fail: Arc::clone(&fail),
+        target: ENTITY_GROUP,
+    };
+    let mut domain = new_domain(provider);
+    register_manifest(&mut domain);
+
+    let error = domain.restore().unwrap_err();
+    assert_eq!(error.entity, ENTITY_GROUP);
+    assert_eq!(error.phase, RestorePhase::TableOpen);
+    assert_eq!(error.error, Error::InvalidState);
+    assert_eq!(*fail.lock().unwrap(), false);
+
+    let report = domain.restore().unwrap();
+    assert_eq!(report.entities.len(), 3);
 }
 
 struct WrongGeometryProvider;
@@ -469,6 +535,17 @@ fn registration_rules_enforce_backing_and_persist_key() {
             persist_key: None,
         }),
         Err(Error::InvalidArg)
+    );
+    assert_eq!(
+        domain.register_entity(EntityDesc {
+            entity: 103,
+            key_size: 8,
+            record_size: 8,
+            capacity: 4,
+            backing: Backing::Ram,
+            persist_key: Some("group"),
+        }),
+        Err(Error::AlreadyExists)
     );
     assert_eq!(
         domain.register_entity(EntityDesc {

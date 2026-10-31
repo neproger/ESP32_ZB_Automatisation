@@ -245,6 +245,15 @@ impl Domain {
         if desc.backing == Backing::Flash {
             return Err(Error::InvalidState);
         }
+        if let Some(persist_key) = desc.persist_key {
+            if self
+                .entities
+                .iter()
+                .any(|table| table.desc.persist_key == Some(persist_key))
+            {
+                return Err(Error::AlreadyExists);
+            }
+        }
         if desc.backing == Backing::RamFlash {
             if self.lifecycle == Lifecycle::RamOnly {
                 return Err(Error::InvalidState);
@@ -254,12 +263,6 @@ impl Domain {
             };
             if persist_key.is_empty() {
                 return Err(Error::InvalidArg);
-            }
-            if self.entities.iter().any(|table| {
-                table.desc.backing == Backing::RamFlash
-                    && table.desc.persist_key == Some(persist_key)
-            }) {
-                return Err(Error::AlreadyExists);
             }
         }
         if self.entity(desc.entity).is_ok() {
