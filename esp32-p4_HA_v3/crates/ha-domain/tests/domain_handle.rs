@@ -180,6 +180,46 @@ fn commands_are_serialized() {
 }
 
 #[test]
+fn concurrent_posters_and_readers_do_not_deadlock() {
+    let domain = handle();
+    domain.entity_put(7, &[1u8; 8], &[2u8; 8], meta()).unwrap();
+    domain.register_command(1, |_| Ok(())).unwrap();
+
+    let barrier = Arc::new(Barrier::new(5));
+    let posters: Vec<_> = (0..2)
+        .map(|_| {
+            let domain = domain.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..50 {
+                    domain.post(1, &[], None, meta()).unwrap();
+                }
+            })
+        })
+        .collect();
+    let readers: Vec<_> = (0..2)
+        .map(|_| {
+            let domain = domain.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..50 {
+                    domain.entity_get(7, &[1u8; 8], &mut [0u8; 8]).unwrap();
+                }
+            })
+        })
+        .collect();
+    barrier.wait();
+    for poster in posters {
+        poster.join().unwrap();
+    }
+    for reader in readers {
+        reader.join().unwrap();
+    }
+}
+
+#[test]
 fn command_sent_follows_executor_order() {
     let domain = handle();
     let executed = Arc::new(Mutex::new(Vec::new()));
