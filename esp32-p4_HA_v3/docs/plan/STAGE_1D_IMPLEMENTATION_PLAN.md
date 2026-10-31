@@ -331,7 +331,11 @@ cargo test --workspace
 .\tools\check-domain-api.ps1
 ```
 
-`check-domain-api.ps1` запрещает legacy `domain.lock()`/`domain.with()` и
-разрешает `with_mut` только в `ha-app/src/main.rs`,
-`ha-app/src/zigbee_service.rs` и `ha-domain/tests/domain_handle.rs`.
-`DomainHandle::lock`/`with` удалены; `with_mut` помечен `#[doc(hidden)]`.
+`check-domain-api.ps1` разрешает `with_mut` только для фиксированного
+набора функций и проверяет точное число вызовов; вызов `post()` внутри
+`with_mut` запрещён (кроме теста, который проверяет отказ). Скрипт также
+проверяет, что `DomainHandle` не содержит публичных `lock`/`with`.
+`DomainHandle::lock`/`with` удалены, поэтому любой вызов через любое имя
+переменной теперь является ошибкой компиляции. `Domain::post` ограничен
+`pub(crate)` и недоступен production-клиентам; `with_mut` помечен
+`#[doc(hidden)]`.
