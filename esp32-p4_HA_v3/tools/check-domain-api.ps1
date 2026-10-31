@@ -16,11 +16,10 @@ $expected = @{
 $seen = @{}
 $violations = @()
 
-$scanRoots = @(
-    (Join-Path $root 'crates/ha-app/src'),
-    (Join-Path $root 'crates/ha-domain')
-)
-Get-ChildItem -LiteralPath $scanRoots -Recurse -Filter '*.rs' | ForEach-Object {
+$scanRoots = @((Join-Path $root 'crates'))
+Get-ChildItem -LiteralPath $scanRoots -Recurse -Filter '*.rs' |
+    Where-Object { $_.FullName -notmatch '[\\/]generated[\\/]' } |
+    ForEach-Object {
     $relative = $_.FullName.Substring($root.Length + 1).Replace('\', '/')
     $lines = @(Get-Content -LiteralPath $_.FullName)
     $text = $lines -join "`n"
@@ -102,3 +101,4 @@ if ($violations.Count -ne 0) {
     exit 1
 }
 Write-Output 'domain API allowlist ok'
+
