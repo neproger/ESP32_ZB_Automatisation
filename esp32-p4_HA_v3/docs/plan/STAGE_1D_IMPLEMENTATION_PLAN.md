@@ -263,6 +263,10 @@ workspace собирается и тесты зелёные.
 | snapshot_empty_no_alloc | пустой snapshot |
 | snapshot_no_memory_is_atomic_and_recoverable | NoMemory; Domain unchanged; следующий snapshot/put работает |
 | snapshot_no_per_entry_alloc | один data-буфер |
+| fast_consumer_receives_all_facts | все facts доставлены, drops=0 |
+| slow_consumer_does_not_block_domain_operations | Domain работает при остановленном consumer |
+| stopped_consumer_overflows_and_recovers | drops учтены; после drain операции и snapshot корректны |
+| callback_sink_runs_under_domain_lock | panic callback poison'ит Domain |
 | long_display_web_callback | Domain не блокирован |
 | concurrent_posters_readers | нет deadlock |
 
