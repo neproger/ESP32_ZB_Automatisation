@@ -132,7 +132,21 @@ struct Subscription {
 
 struct Command {
     command_type: u32,
-    exec: Box<dyn FnMut(&[u8]) -> Result<()> + Send>,
+    handler: Arc<dyn Fn(&[u8]) -> Result<()> + Send + Sync>,
+}
+
+#[derive(Clone)]
+struct OwnedTarget {
+    entity: EntityType,
+    key: Vec<u8>,
+}
+
+struct PreparedCommand {
+    handler: Arc<dyn Fn(&[u8]) -> Result<()> + Send + Sync>,
+    args: Vec<u8>,
+    target: Option<OwnedTarget>,
+    meta: FactMeta,
+    lane: Arc<StdMutex<()>>,
 }
 
 pub struct Domain {
@@ -149,6 +163,7 @@ pub struct Domain {
     dispatch: Arc<DispatchSignal>,
     storage: Option<Box<dyn StorageProvider>>,
     lifecycle: Lifecycle,
+    command_lane: Arc<StdMutex<()>>,
 }
 
 /// Shared Domain boundary. Runtime clients use `with`/`with_mut`; only the
@@ -212,6 +227,7 @@ impl Domain {
             }),
             storage: None,
             lifecycle: Lifecycle::RamOnly,
+            command_lane: Arc::new(StdMutex::new(())),
         })
     }
 
@@ -470,7 +486,7 @@ impl Domain {
     pub fn register_command(
         &mut self,
         command_type: u32,
-        exec: impl FnMut(&[u8]) -> Result<()> + Send + 'static,
+        handler: impl Fn(&[u8]) -> Result<()> + Send + Sync + 'static,
     ) -> Result<()> {
         if self
             .commands
@@ -481,9 +497,59 @@ impl Domain {
         }
         self.commands.push(Command {
             command_type,
-            exec: Box::new(exec),
+            handler: Arc::new(handler),
         });
         Ok(())
+    }
+
+    pub(crate) fn prepare_post(
+        &mut self,
+        command_type: u32,
+        args: &[u8],
+        target: Option<FactTarget<'_>>,
+        meta: FactMeta,
+    ) -> Result<PreparedCommand> {
+        check_source(&meta)?;
+        let target = match target {
+            Some(target) => {
+                self.desc(target.entity)?;
+                Some(OwnedTarget {
+                    entity: target.entity,
+                    key: target.key.to_vec(),
+                })
+            }
+            None => None,
+        };
+        let handler = self
+            .commands
+            .iter()
+            .find(|command| command.command_type == command_type)
+            .map(|command| Arc::clone(&command.handler))
+            .ok_or(Error::NotFound)?;
+        Ok(PreparedCommand {
+            handler,
+            args: args.to_vec(),
+            target,
+            meta,
+            lane: Arc::clone(&self.command_lane),
+        })
+    }
+
+    pub(crate) fn complete_post(&mut self, prepared: &PreparedCommand) {
+        self.publish(
+            FactKind::CommandSent,
+            Op::Command,
+            prepared.meta,
+            prepared.target.as_ref().map_or(0, |target| target.entity),
+            prepared
+                .target
+                .as_ref()
+                .map_or(&[], |target| target.key.as_slice()),
+            prepared.meta.value,
+            0,
+            0,
+            None,
+        );
     }
 
     /// Synchronous hand-off; the executor's result is not awaited.
@@ -503,7 +569,7 @@ impl Domain {
             .iter()
             .position(|command| command.command_type == command_type)
             .ok_or(Error::NotFound)?;
-        (self.commands[index].exec)(args)?;
+        (self.commands[index].handler)(args)?;
         self.publish(
             FactKind::CommandSent,
             Op::Command,
