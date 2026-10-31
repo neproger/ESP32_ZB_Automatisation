@@ -1,6 +1,8 @@
-use micro_db::{Geometry, Meta, Result, Storage};
+use crate::{EntityType, Error};
 
-use crate::EntityDesc;
+use crate::entity::EntityDesc;
+
+use micro_db::{Geometry, Meta, Result, Storage};
 
 /// Type-erased storage so `Domain` can hold RAM and RAM+Flash tables together.
 pub struct StorageBackend(Box<dyn Storage + Send>);
@@ -50,4 +52,36 @@ impl Storage for StorageBackend {
 /// failed opens may leave directory entries that must be reusable.
 pub trait StorageProvider: Send {
     fn open(&mut self, desc: &EntityDesc<'_>) -> Result<StorageBackend>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backing {
+    Ram,
+    Flash,
+    RamFlash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestorePhase {
+    StorageOpen,
+    TableOpen,
+    Lifecycle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreError {
+    pub entity: EntityType,
+    pub phase: RestorePhase,
+    pub error: Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntityRestore {
+    pub entity: EntityType,
+    pub records: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RestoreReport {
+    pub entities: Vec<EntityRestore>,
 }
