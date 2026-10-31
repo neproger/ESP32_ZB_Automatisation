@@ -8,6 +8,12 @@
 //!   slot 0..erase_size          directory slot A
 //!   erase_size..2*erase_size    directory slot B
 //!   2*erase_size..capacity      regions, in allocation order
+//!
+//! Strict recovery: a directory is valid only if both slots are erased (fresh)
+//! or a CRC-valid slot exists. A power cut before the first commit writes any
+//! byte leaves both slots erased, so startup treats it as fresh; once any
+//! directory byte is written, an invalid slot plus an erased peer is `Corrupt`
+//! and is never auto-formatted.
 
 use std::sync::{Arc, Mutex};
 
@@ -67,7 +73,8 @@ impl RegionManager {
         if erase_size < DIRECTORY_SLOT_BYTES {
             return Err(Error::InvalidSize);
         }
-        if capacity > u32::MAX as usize || erase_size > usize::MAX / 2 || capacity < 2 * erase_size {
+        if capacity > u32::MAX as usize || erase_size > usize::MAX / 2 || capacity < 2 * erase_size
+        {
             return Err(Error::InvalidSize);
         }
         let mut state = RegionState {
@@ -88,10 +95,7 @@ impl RegionManager {
     }
 
     pub fn lookup(&self, persist_key: &str) -> Result<RegionLocation> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| Error::InvalidState)?;
+        let state = self.state.lock().map_err(|_| Error::InvalidState)?;
         if !state.has_directory {
             return Err(Error::NotFound);
         }
@@ -115,10 +119,7 @@ impl RegionManager {
         key_size: usize,
         payload_size: usize,
     ) -> Result<RegionView> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::InvalidState)?;
+        let mut state = self.state.lock().map_err(|_| Error::InvalidState)?;
         let region_size = region_size(capacity, key_size, payload_size, state.erase_size)?;
         let id = persist_id_bytes(persist_key);
 
@@ -137,8 +138,9 @@ impl RegionManager {
                 if entry.size != region_size {
                     return Err(Error::InvalidSize);
                 }
-                if entry.offset < 2 * state.erase_size
-                    || entry.offset % state.erase_size != 0
+                let region_align = 2 * state.erase_size;
+                if entry.offset < region_align
+                    || entry.offset % region_align != 0
                     || entry.offset > state.capacity
                     || region_size > state.capacity - entry.offset
                 {
@@ -168,10 +170,7 @@ impl RegionManager {
                     offset,
                     size: region_size,
                 });
-                let generation = state
-                    .generation
-                    .checked_add(1)
-                    .ok_or(Error::Overflow)?;
+                let generation = state.generation.checked_add(1).ok_or(Error::Overflow)?;
                 (offset, entries, generation)
             }
         };
@@ -215,6 +214,9 @@ impl RegionState {
             (Some(a), None) => (0, a),
             (None, Some(b)) => (1, b),
             (None, None) => {
+                // A cut before any directory byte is written leaves both slots
+                // erased: no entry was ever committed, so this is fresh. Any
+                // partial byte makes a slot non-erased and startup fails below.
                 if erased0 && erased1 {
                     self.has_directory = false;
                     self.active_slot = 1;
@@ -236,9 +238,7 @@ impl RegionState {
 
     fn read_raw(&self, base: usize) -> Result<[u8; DIRECTORY_SLOT_BYTES]> {
         let mut raw = [0u8; DIRECTORY_SLOT_BYTES];
-        self.device
-            .read(base, &mut raw)
-            .map_err(Error::from)?;
+        self.device.read(base, &mut raw).map_err(Error::from)?;
         Ok(raw)
     }
 
@@ -291,7 +291,9 @@ impl NorFlash for RegionView {
     }
 
     fn read(&self, offset: usize, out: &mut [u8]) -> core::result::Result<(), FlashError> {
-        let end = offset.checked_add(out.len()).ok_or(FlashError::InvalidSize)?;
+        let end = offset
+            .checked_add(out.len())
+            .ok_or(FlashError::InvalidSize)?;
         if end > self.size {
             return Err(FlashError::InvalidSize);
         }
@@ -303,7 +305,9 @@ impl NorFlash for RegionView {
     }
 
     fn write(&mut self, offset: usize, data: &[u8]) -> core::result::Result<(), FlashError> {
-        let end = offset.checked_add(data.len()).ok_or(FlashError::InvalidSize)?;
+        let end = offset
+            .checked_add(data.len())
+            .ok_or(FlashError::InvalidSize)?;
         if end > self.size {
             return Err(FlashError::InvalidSize);
         }
@@ -339,7 +343,10 @@ fn region_size(
     if capacity == 0 || key_size == 0 {
         return Err(Error::InvalidSize);
     }
-    if capacity > u32::MAX as usize || key_size > u16::MAX as usize || payload_size > u16::MAX as usize {
+    if capacity > u32::MAX as usize
+        || key_size > u16::MAX as usize
+        || payload_size > u16::MAX as usize
+    {
         return Err(Error::InvalidSize);
     }
     if erase_size < DIRECTORY_SLOT_BYTES || erase_size > usize::MAX / 2 {
@@ -350,10 +357,7 @@ fn region_size(
         .and_then(|len| len.checked_add(payload_size))
         .and_then(|len| len.checked_add(8))
         .ok_or(Error::InvalidSize)?;
-    let percent = capacity
-        .checked_mul(25)
-        .ok_or(Error::InvalidSize)?
-        / 100;
+    let percent = capacity.checked_mul(25).ok_or(Error::InvalidSize)? / 100;
     let headroom = percent.max(8);
     let records_needed = capacity.checked_add(headroom).ok_or(Error::InvalidSize)?;
     let content = records_needed
@@ -368,7 +372,10 @@ fn region_size(
     bank_size.checked_mul(2).ok_or(Error::InvalidSize)
 }
 
-fn encode_directory(entries: [Option<Entry>; MAX_ENTRIES], generation: u32) -> [u8; DIRECTORY_SLOT_BYTES] {
+fn encode_directory(
+    entries: [Option<Entry>; MAX_ENTRIES],
+    generation: u32,
+) -> [u8; DIRECTORY_SLOT_BYTES] {
     let mut raw = [0xFFu8; DIRECTORY_SLOT_BYTES];
     put_u32(&mut raw, 0, DIRECTORY_MAGIC);
     put_u16(&mut raw, 4, DIRECTORY_REVISION);
@@ -392,7 +399,9 @@ fn encode_directory(entries: [Option<Entry>; MAX_ENTRIES], generation: u32) -> [
     raw
 }
 
-fn parse_directory(raw: &[u8; DIRECTORY_SLOT_BYTES]) -> Option<(u32, [Option<Entry>; MAX_ENTRIES])> {
+fn parse_directory(
+    raw: &[u8; DIRECTORY_SLOT_BYTES],
+) -> Option<(u32, [Option<Entry>; MAX_ENTRIES])> {
     if get_u32(raw, 0) != DIRECTORY_MAGIC
         || get_u16(raw, 4) != DIRECTORY_REVISION
         || get_u16(raw, 6) != MAX_ENTRIES as u16
@@ -427,18 +436,39 @@ fn parse_directory(raw: &[u8; DIRECTORY_SLOT_BYTES]) -> Option<(u32, [Option<Ent
     Some((get_u32(raw, 8), entries))
 }
 
-fn validate_entries(entries: &[Option<Entry>; MAX_ENTRIES], erase_size: usize, capacity: usize) -> Result<()> {
+fn validate_entries(
+    entries: &[Option<Entry>; MAX_ENTRIES],
+    erase_size: usize,
+    capacity: usize,
+) -> Result<()> {
     let region_align = erase_size.checked_mul(2).ok_or(Error::InvalidSize)?;
-    for entry in entries.iter().flatten() {
+    let mut expected_offset = region_align;
+    let mut saw_free = false;
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(entry) = entry else {
+            saw_free = true;
+            continue;
+        };
+        if saw_free {
+            return Err(Error::Corrupt);
+        }
+        if entries[..index]
+            .iter()
+            .flatten()
+            .any(|other| other.id == entry.id)
+        {
+            return Err(Error::Corrupt);
+        }
         if entry.size == 0
             || entry.size % region_align != 0
-            || entry.offset < 2 * erase_size
-            || entry.offset % erase_size != 0
+            || entry.offset != expected_offset
+            || entry.offset % region_align != 0
             || entry.offset > capacity
             || entry.size > capacity - entry.offset
         {
             return Err(Error::Corrupt);
         }
+        expected_offset = entry.offset.checked_add(entry.size).ok_or(Error::Corrupt)?;
     }
     Ok(())
 }
@@ -508,12 +538,98 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum Fault {
+        Erase,
+        Write { skip: usize, prefix: usize },
+    }
+
+    #[derive(Clone)]
+    struct FaultFlash {
+        inner: SharedFlash,
+        fault: Arc<Mutex<Option<Fault>>>,
+    }
+
+    impl FaultFlash {
+        fn new() -> Self {
+            Self {
+                inner: SharedFlash::new(),
+                fault: Arc::new(Mutex::new(None)),
+            }
+        }
+
+        fn arm(&self, fault: Fault) {
+            *self.fault.lock().unwrap() = Some(fault);
+        }
+    }
+
+    impl NorFlash for FaultFlash {
+        fn capacity(&self) -> usize {
+            self.inner.capacity()
+        }
+
+        fn erase_size(&self) -> usize {
+            self.inner.erase_size()
+        }
+
+        fn read(&self, offset: usize, out: &mut [u8]) -> core::result::Result<(), FlashError> {
+            self.inner.read(offset, out)
+        }
+
+        fn write(&mut self, offset: usize, data: &[u8]) -> core::result::Result<(), FlashError> {
+            let fault = self.fault.lock().unwrap().take();
+            match fault {
+                Some(Fault::Write { skip: 0, prefix }) => {
+                    let prefix = prefix.min(data.len());
+                    self.inner.write(offset, &data[..prefix])?;
+                    Err(FlashError::Io)
+                }
+                Some(Fault::Write { skip, prefix }) => {
+                    *self.fault.lock().unwrap() = Some(Fault::Write {
+                        skip: skip - 1,
+                        prefix,
+                    });
+                    self.inner.write(offset, data)
+                }
+                Some(Fault::Erase) | None => self.inner.write(offset, data),
+            }
+        }
+
+        fn erase(&mut self, offset: usize, len: usize) -> core::result::Result<(), FlashError> {
+            let fault = self.fault.lock().unwrap().take();
+            match fault {
+                Some(Fault::Erase) => Err(FlashError::Io),
+                Some(Fault::Write { skip, prefix }) => {
+                    *self.fault.lock().unwrap() = Some(Fault::Write { skip, prefix });
+                    self.inner.erase(offset, len)
+                }
+                None => self.inner.erase(offset, len),
+            }
+        }
+    }
+
     fn new_manager(flash: &SharedFlash) -> RegionManager {
+        RegionManager::new(flash.clone()).unwrap()
+    }
+
+    fn new_fault_manager(flash: &FaultFlash) -> RegionManager {
         RegionManager::new(flash.clone()).unwrap()
     }
 
     fn bind(manager: &mut RegionManager, key: &str) -> RegionView {
         manager.bind(key, 4, 8, 0).unwrap()
+    }
+
+    fn entry(id: u8, offset: usize, size: usize) -> Entry {
+        Entry {
+            id: [id; 16],
+            offset,
+            size,
+        }
+    }
+
+    fn write_directory(flash: &SharedFlash, entries: [Option<Entry>; MAX_ENTRIES]) {
+        flash.corrupt(0, &encode_directory(entries, 1));
     }
 
     #[test]
@@ -647,14 +763,162 @@ mod tests {
             drop(view);
         }
         flash.corrupt(0, &[0x00]);
-        assert_eq!(RegionManager::new(flash.clone()).err(), Some(Error::Corrupt));
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
     }
 
     #[test]
     fn partially_written_directory_is_corrupt() {
         let flash = SharedFlash::new();
         flash.corrupt(0, &[0x00]);
-        assert_eq!(RegionManager::new(flash.clone()).err(), Some(Error::Corrupt));
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn overlapping_regions_are_corrupt() {
+        let flash = SharedFlash::new();
+        let mut entries = [None; MAX_ENTRIES];
+        entries[0] = Some(entry(1, 2 * ERASE, REGION));
+        entries[1] = Some(entry(2, 2 * ERASE, REGION));
+        write_directory(&flash, entries);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn duplicate_region_ids_are_corrupt() {
+        let flash = SharedFlash::new();
+        let mut entries = [None; MAX_ENTRIES];
+        entries[0] = Some(entry(7, 2 * ERASE, REGION));
+        entries[1] = Some(entry(7, 2 * ERASE + REGION, REGION));
+        write_directory(&flash, entries);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn region_offset_must_be_region_aligned() {
+        let flash = SharedFlash::new();
+        let mut entries = [None; MAX_ENTRIES];
+        entries[0] = Some(entry(1, 2 * ERASE + ERASE, REGION));
+        write_directory(&flash, entries);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn region_offsets_must_follow_bump_order() {
+        let flash = SharedFlash::new();
+        let mut entries = [None; MAX_ENTRIES];
+        entries[0] = Some(entry(1, 2 * ERASE, REGION));
+        entries[1] = Some(entry(2, 2 * ERASE + 2 * REGION, REGION));
+        write_directory(&flash, entries);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn first_commit_erase_interruption_is_fresh() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        flash.arm(Fault::Erase);
+        assert_eq!(manager.bind("a", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+
+        let mut reopened = RegionManager::new(flash.clone()).unwrap();
+        assert_eq!(reopened.lookup("a"), Err(Error::NotFound));
+        let view = reopened.bind("a", 4, 8, 0).unwrap();
+        drop(view);
+    }
+
+    #[test]
+    fn first_commit_body_interruption_is_corrupt() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        flash.arm(Fault::Write { skip: 0, prefix: 1 });
+        assert_eq!(manager.bind("a", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn first_commit_header_interruption_is_corrupt() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        flash.arm(Fault::Write { skip: 1, prefix: 1 });
+        assert_eq!(manager.bind("a", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+        assert_eq!(
+            RegionManager::new(flash.clone()).err(),
+            Some(Error::Corrupt)
+        );
+    }
+
+    #[test]
+    fn update_erase_failure_keeps_previous_directory() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        let a = manager.bind("a", 4, 8, 0).unwrap();
+        drop(a);
+        flash.arm(Fault::Erase);
+        assert_eq!(manager.bind("b", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+
+        let mut reopened = RegionManager::new(flash.clone()).unwrap();
+        assert!(reopened.lookup("a").is_ok());
+        assert_eq!(reopened.lookup("b"), Err(Error::NotFound));
+        let b = reopened.bind("b", 4, 8, 0).unwrap();
+        drop(b);
+    }
+
+    #[test]
+    fn update_body_failure_keeps_previous_directory() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        let a = manager.bind("a", 4, 8, 0).unwrap();
+        drop(a);
+        flash.arm(Fault::Write { skip: 0, prefix: 1 });
+        assert_eq!(manager.bind("b", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+
+        let mut reopened = RegionManager::new(flash.clone()).unwrap();
+        assert!(reopened.lookup("a").is_ok());
+        assert_eq!(reopened.lookup("b"), Err(Error::NotFound));
+        let b = reopened.bind("b", 4, 8, 0).unwrap();
+        drop(b);
+    }
+
+    #[test]
+    fn update_header_failure_keeps_previous_directory() {
+        let flash = FaultFlash::new();
+        let mut manager = new_fault_manager(&flash);
+        let a = manager.bind("a", 4, 8, 0).unwrap();
+        drop(a);
+        flash.arm(Fault::Write { skip: 1, prefix: 1 });
+        assert_eq!(manager.bind("b", 4, 8, 0).err(), Some(Error::Io));
+        drop(manager);
+
+        let mut reopened = RegionManager::new(flash.clone()).unwrap();
+        assert!(reopened.lookup("a").is_ok());
+        assert_eq!(reopened.lookup("b"), Err(Error::NotFound));
+        let b = reopened.bind("b", 4, 8, 0).unwrap();
+        drop(b);
     }
 
     #[test]
