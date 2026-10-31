@@ -13,11 +13,14 @@
 
 pub use ha_model::canonical;
 mod fact;
+mod storage;
 
 use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use micro_db::{Geometry, Handle, RamStorage, Ring, Table};
+
+pub use storage::{StorageBackend, StorageProvider};
 
 pub use fact::{
     EntityType, EventId, Fact, FactKind, FactMeta, FactTarget, Filter, Op, PayloadRef, Value,
@@ -79,9 +82,41 @@ pub struct EntityMeta {
     pub version: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestorePhase {
+    StorageOpen,
+    TableOpen,
+    Lifecycle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreError {
+    pub entity: EntityType,
+    pub phase: RestorePhase,
+    pub error: Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntityRestore {
+    pub entity: EntityType,
+    pub records: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RestoreReport {
+    pub entities: Vec<EntityRestore>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lifecycle {
+    RamOnly,
+    Registering,
+    Restored,
+}
+
 struct EntityTable {
     desc: EntityDesc<'static>,
-    table: Table<RamStorage>,
+    table: Option<Table<StorageBackend>>,
 }
 
 enum SubscriptionSink {
@@ -112,6 +147,8 @@ pub struct Domain {
     commands: Vec<Command>,
     clock: fn() -> u64,
     dispatch: Arc<DispatchSignal>,
+    storage: Option<Box<dyn StorageProvider>>,
+    lifecycle: Lifecycle,
 }
 
 /// Shared Domain boundary. Runtime clients use `with`/`with_mut`; only the
@@ -173,10 +210,29 @@ impl Domain {
                 pending: StdMutex::new(false),
                 wake: Condvar::new(),
             }),
+            storage: None,
+            lifecycle: Lifecycle::RamOnly,
         })
     }
 
+    pub fn new_with_storage(
+        journal_capacity: usize,
+        payload_capacity: usize,
+        payload_max_size: usize,
+        clock: fn() -> u64,
+        storage: impl StorageProvider + 'static,
+    ) -> Result<Self> {
+        let mut domain =
+            Self::new_with_clock(journal_capacity, payload_capacity, payload_max_size, clock)?;
+        domain.storage = Some(Box::new(storage));
+        domain.lifecycle = Lifecycle::Registering;
+        Ok(domain)
+    }
+
     pub fn register_entity(&mut self, desc: EntityDesc<'static>) -> Result<()> {
+        if self.lifecycle == Lifecycle::Restored {
+            return Err(Error::InvalidState);
+        }
         if desc.entity == 0 {
             return Err(Error::InvalidArg);
         }
@@ -186,22 +242,99 @@ impl Domain {
         if desc.record_size == 0 || desc.capacity == 0 {
             return Err(Error::InvalidSize);
         }
-        if desc.backing != Backing::Ram {
-            // Flash persistence is the next step; refusing is better than pretending.
+        if desc.backing == Backing::Flash {
             return Err(Error::InvalidState);
+        }
+        if desc.backing == Backing::RamFlash {
+            if self.lifecycle == Lifecycle::RamOnly {
+                return Err(Error::InvalidState);
+            }
+            let Some(persist_key) = desc.persist_key else {
+                return Err(Error::InvalidArg);
+            };
+            if persist_key.is_empty() {
+                return Err(Error::InvalidArg);
+            }
+            if self.entities.iter().any(|table| {
+                table.desc.backing == Backing::RamFlash
+                    && table.desc.persist_key == Some(persist_key)
+            }) {
+                return Err(Error::AlreadyExists);
+            }
         }
         if self.entity(desc.entity).is_ok() {
             return Err(Error::AlreadyExists);
         }
-        let geometry = Geometry {
-            capacity: desc.capacity,
-            key_size: desc.key_size,
-            payload_size: desc.record_size,
+
+        let table = if self.lifecycle == Lifecycle::RamOnly {
+            let geometry = Geometry {
+                capacity: desc.capacity,
+                key_size: desc.key_size,
+                payload_size: desc.record_size,
+            };
+            let storage = StorageBackend::new(RamStorage::new(geometry)?);
+            Some(Table::open(geometry, storage)?)
+        } else {
+            None
         };
-        let storage = RamStorage::new(geometry)?;
-        let table = Table::open(geometry, storage)?;
         self.entities.push(EntityTable { desc, table });
         Ok(())
+    }
+
+    pub fn restore(&mut self) -> core::result::Result<RestoreReport, RestoreError> {
+        if self.lifecycle != Lifecycle::Registering {
+            return Err(RestoreError {
+                entity: 0,
+                phase: RestorePhase::Lifecycle,
+                error: Error::InvalidState,
+            });
+        }
+        let Some(provider) = self.storage.as_mut() else {
+            return Err(RestoreError {
+                entity: 0,
+                phase: RestorePhase::Lifecycle,
+                error: Error::InvalidState,
+            });
+        };
+
+        let mut opened = Vec::with_capacity(self.entities.len());
+        let mut report = RestoreReport::default();
+        for entity in &self.entities {
+            let item = entity.desc.entity;
+            let backend = provider.open(&entity.desc).map_err(|error| RestoreError {
+                entity: item,
+                phase: RestorePhase::StorageOpen,
+                error,
+            })?;
+            let geometry = Geometry {
+                capacity: entity.desc.capacity,
+                key_size: entity.desc.key_size,
+                payload_size: entity.desc.record_size,
+            };
+            let table = Table::open(geometry, backend).map_err(|error| RestoreError {
+                entity: item,
+                phase: RestorePhase::TableOpen,
+                error,
+            })?;
+            report.entities.push(EntityRestore {
+                entity: item,
+                records: table.len(),
+            });
+            opened.push((item, table));
+        }
+
+        for (item, table) in opened {
+            if let Some(entity) = self
+                .entities
+                .iter_mut()
+                .find(|entity| entity.desc.entity == item)
+            {
+                entity.table = Some(table);
+            }
+        }
+        self.storage = None;
+        self.lifecycle = Lifecycle::Restored;
+        Ok(report)
     }
 
     pub fn entity_put(
@@ -218,14 +351,7 @@ impl Domain {
         }
         check_source(&meta)?;
 
-        let result = self.put_record(entity, key, record);
-        let changed = match result {
-            Ok(changed) => changed,
-            Err(err) => {
-                self.publish_error(Op::EntityPut, meta, entity, key, err);
-                return Err(err);
-            }
-        };
+        let changed = self.put_record(entity, key, record)?;
         if changed {
             self.publish(
                 FactKind::EntityUpserted,
@@ -248,15 +374,14 @@ impl Domain {
         if out.len() < record_size {
             return Err(Error::InvalidSize);
         }
-        let table = &self.entity(entity)?.table;
-        table.get(key, out)?;
+        self.table(entity)?.get(key, out)?;
         Ok(())
     }
 
     pub fn entity_meta(&self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
         let (key_size, _) = self.desc(entity)?;
         check_key(key, key_size)?;
-        let table = &self.entity(entity)?.table;
+        let table = self.table(entity)?;
         let slot = table.find(key)?;
         let meta = table.meta(slot)?;
         Ok(EntityMeta {
@@ -271,7 +396,10 @@ impl Domain {
 
         let result = self.remove_record(entity, key);
         if let Err(err) = result {
-            self.publish_error(Op::EntityRemove, meta, entity, key, err);
+            if err == Error::NotFound {
+                // Separate defect: preserve current NotFound fact behavior in Stage 1c.
+                self.publish_error(Op::EntityRemove, meta, entity, key, err);
+            }
             return Err(err);
         }
         self.publish(
@@ -294,7 +422,7 @@ impl Domain {
         entity: EntityType,
         mut visit: impl FnMut(&[u8], &[u8]),
     ) -> Result<()> {
-        let table = &self.entity(entity)?.table;
+        let table = self.table(entity)?;
         table.iter(|_, _, key, record| visit(key, record))?;
         Ok(())
     }
@@ -472,7 +600,7 @@ impl Domain {
     }
 
     fn put_record(&mut self, entity: EntityType, key: &[u8], record: &[u8]) -> Result<bool> {
-        let table = &mut self.table_mut(entity)?.table;
+        let table = self.table_mut(entity)?;
         match table.find(key) {
             Ok(slot) => {
                 let meta = table.meta(slot)?;
@@ -494,7 +622,7 @@ impl Domain {
     }
 
     fn remove_record(&mut self, entity: EntityType, key: &[u8]) -> Result<()> {
-        let table = &mut self.table_mut(entity)?.table;
+        let table = self.table_mut(entity)?;
         let slot = table.find(key)?;
         let meta = table.meta(slot)?;
         table.free(Handle {
@@ -584,11 +712,19 @@ impl Domain {
             .ok_or(Error::NotFound)
     }
 
-    fn table_mut(&mut self, entity: EntityType) -> Result<&mut EntityTable> {
+    fn table(&self, entity: EntityType) -> Result<&Table<StorageBackend>> {
+        self.entity(entity)?
+            .table
+            .as_ref()
+            .ok_or(Error::InvalidState)
+    }
+
+    fn table_mut(&mut self, entity: EntityType) -> Result<&mut Table<StorageBackend>> {
         self.entities
             .iter_mut()
             .find(|table| table.desc.entity == entity)
-            .ok_or(Error::NotFound)
+            .and_then(|table| table.table.as_mut())
+            .ok_or(Error::InvalidState)
     }
 }
 
