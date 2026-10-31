@@ -32,7 +32,7 @@ use ha_domain::canonical::{
     WEATHER_PARTLYCLOUDY, WEATHER_POURING, WEATHER_RAINY, WEATHER_RECORD_LEN, WEATHER_SNOWY,
     WEATHER_SNOWY_RAINY, WEATHER_WINDY, WEATHER_WINDY_VARIANT,
 };
-use ha_domain::{Domain, Fact, FactKind, Value};
+use ha_domain::{DomainHandle, Fact, FactKind, Value};
 
 use crate::intake;
 
@@ -619,7 +619,7 @@ fn c_string(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
-fn read_state(domain: &Domain, entity: EntityId, property: PropertyId) -> Option<Value> {
+fn read_state(domain: &DomainHandle, entity: EntityId, property: PropertyId) -> Option<Value> {
     let key = StateKey { entity, property }.to_bytes();
     let mut bytes = [0u8; STATE_RECORD_LEN];
     domain
@@ -628,16 +628,22 @@ fn read_state(domain: &Domain, entity: EntityId, property: PropertyId) -> Option
     Value::from_bytes(&bytes)
 }
 
-fn collect_groups(domain: &Domain) -> Vec<GroupRef> {
+fn collect_groups(domain: &DomainHandle) -> Vec<GroupRef> {
+    let Ok(snapshot) = domain.entity_snapshot(ENTITY_GROUP) else {
+        return Vec::new();
+    };
     let mut groups = Vec::new();
-    let _ = domain.entity_iter(ENTITY_GROUP, |key, record| {
+    for index in 0..snapshot.len() {
+        let (Some(key), Some(record)) = (snapshot.key(index), snapshot.record(index)) else {
+            continue;
+        };
         if key.len() == 8 && record.len() >= 32 {
             groups.push(GroupRef {
                 id: u64::from_le_bytes(key.try_into().unwrap()),
                 title: c_string(&record[..32]),
             });
         }
-    });
+    }
     groups.sort_by(|a, b| a.title.cmp(&b.title));
     groups
 }
@@ -648,22 +654,28 @@ struct Item {
     title: String,
 }
 
-fn collect_items(domain: &Domain, group: u64) -> Vec<Item> {
+fn collect_items(domain: &DomainHandle, group: u64) -> Vec<Item> {
+    let Ok(snapshot) = domain.entity_snapshot(ENTITY_GROUP_ITEM) else {
+        return Vec::new();
+    };
     let mut items = Vec::new();
-    let _ = domain.entity_iter(ENTITY_GROUP_ITEM, |key, record| {
+    for index in 0..snapshot.len() {
+        let (Some(key), Some(record)) = (snapshot.key(index), snapshot.record(index)) else {
+            continue;
+        };
         if key.len() != 16 || record.len() < 36 {
-            return;
+            continue;
         }
         let group_id = u64::from_le_bytes(key[..8].try_into().unwrap());
         if group_id != group {
-            return;
+            continue;
         }
         items.push(Item {
             entity: u64::from_le_bytes(key[8..16].try_into().unwrap()),
             order: u16::from_le_bytes(record[..2].try_into().unwrap()),
             title: c_string(&record[4..36]),
         });
-    });
+    }
     items.sort_by_key(|item| item.order);
     items
 }
@@ -674,22 +686,28 @@ struct AutomationItem {
     title: String,
 }
 
-fn collect_group_automations(domain: &Domain, group: u64) -> Vec<AutomationItem> {
+fn collect_group_automations(domain: &DomainHandle, group: u64) -> Vec<AutomationItem> {
+    let Ok(snapshot) = domain.entity_snapshot(ENTITY_GROUP_AUTOMATION) else {
+        return Vec::new();
+    };
     let mut items = Vec::new();
-    let _ = domain.entity_iter(ENTITY_GROUP_AUTOMATION, |key, record| {
+    for index in 0..snapshot.len() {
+        let (Some(key), Some(record)) = (snapshot.key(index), snapshot.record(index)) else {
+            continue;
+        };
         if key.len() != 16 || record.len() < 36 {
-            return;
+            continue;
         }
         let group_id = u64::from_le_bytes(key[..8].try_into().unwrap());
         if group_id != group {
-            return;
+            continue;
         }
         items.push(AutomationItem {
             automation: u64::from_le_bytes(key[8..16].try_into().unwrap()),
             order: u16::from_le_bytes(record[..2].try_into().unwrap()),
             title: c_string(&record[4..36]),
         });
-    });
+    }
     items.sort_by_key(|item| item.order);
     items
 }
@@ -699,7 +717,7 @@ enum PageItem {
     Automation(AutomationItem),
 }
 
-fn collect_page_items(domain: &Domain, group: u64) -> Vec<PageItem> {
+fn collect_page_items(domain: &DomainHandle, group: u64) -> Vec<PageItem> {
     let mut entities = collect_items(domain, group);
     entities.reverse();
     let mut automations = collect_group_automations(domain, group);
@@ -720,7 +738,7 @@ fn collect_page_items(domain: &Domain, group: u64) -> Vec<PageItem> {
     out
 }
 
-fn automation_enabled(domain: &Domain, automation: u64) -> bool {
+fn automation_enabled(domain: &DomainHandle, automation: u64) -> bool {
     let mut bytes = [0u8; AUTOMATION_RECORD_LEN];
     if domain
         .entity_get(ENTITY_AUTOMATION, &automation.to_le_bytes(), &mut bytes)
@@ -731,7 +749,7 @@ fn automation_enabled(domain: &Domain, automation: u64) -> bool {
     bytes[384] != 0
 }
 
-fn entity_name(domain: &Domain, entity: EntityId) -> String {
+fn entity_name(domain: &DomainHandle, entity: EntityId) -> String {
     let mut bytes = [0u8; ha_domain::canonical::ENTITY_RECORD_LEN];
     if domain
         .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut bytes)
@@ -742,7 +760,7 @@ fn entity_name(domain: &Domain, entity: EntityId) -> String {
     c_string(&bytes[8..40])
 }
 
-fn capabilities(domain: &Domain, entity: EntityId) -> Vec<PropertyId> {
+fn capabilities(domain: &DomainHandle, entity: EntityId) -> Vec<PropertyId> {
     let mut bytes = [0u8; CAPABILITIES_LEN];
     if domain
         .entity_get(ENTITY_CAPABILITIES, &entity.to_le_bytes(), &mut bytes)
@@ -1081,7 +1099,7 @@ unsafe fn nav_target(obj: *mut lv_obj_t, nav: Nav) {
 }
 
 unsafe fn build_widget(
-    domain: &Domain,
+    domain: &DomainHandle,
     row: *mut lv_obj_t,
     entity: EntityId,
     property: PropertyId,
@@ -1197,7 +1215,7 @@ unsafe fn build_widget(
 }
 
 unsafe fn build_color_widget(
-    domain: &Domain,
+    domain: &DomainHandle,
     card: *mut lv_obj_t,
     entity: EntityId,
     widgets: &mut Vec<WidgetEntry>,
@@ -1325,7 +1343,7 @@ unsafe fn build_color_widget(
 }
 
 unsafe fn build_automation_card(
-    domain: &Domain,
+    domain: &DomainHandle,
     parent: *mut lv_obj_t,
     automation: u64,
     title: &str,
@@ -1365,7 +1383,7 @@ unsafe fn build_automation_card(
 }
 
 unsafe fn build_card(
-    domain: &Domain,
+    domain: &DomainHandle,
     parent: *mut lv_obj_t,
     entity: EntityId,
     item_title: &str,
@@ -1417,7 +1435,7 @@ unsafe fn build_card(
     }
 }
 
-unsafe fn build_page(domain: &Domain, groups: &[GroupRef], index: usize) -> Page {
+unsafe fn build_page(domain: &DomainHandle, groups: &[GroupRef], index: usize) -> Page {
     let screen = lv_obj_create(std::ptr::null_mut());
     lv_obj_set_style_bg_color(screen, color(COL_BG), 0);
     lv_obj_set_style_bg_opa(screen, 255, 0);
@@ -1511,7 +1529,7 @@ unsafe fn build_page(domain: &Domain, groups: &[GroupRef], index: usize) -> Page
     }
 }
 
-fn display_settings(domain: &Domain) -> SettingsRecord {
+fn display_settings(domain: &DomainHandle) -> SettingsRecord {
     let key = [SETTINGS_ID];
     let mut bytes = [0u8; SETTINGS_RECORD_LEN];
     domain
@@ -1548,7 +1566,7 @@ unsafe extern "C" fn free_brightness_context(event: *mut lv_event_t) {
     }
 }
 
-unsafe fn build_settings(domain: &Domain) -> Page {
+unsafe fn build_settings(domain: &DomainHandle) -> Page {
     let screen = lv_obj_create(null_mut());
     lv_obj_set_style_bg_color(screen, color(COL_BG), 0);
     lv_obj_set_style_bg_opa(screen, 255, 0);
@@ -1636,7 +1654,7 @@ unsafe fn replace_page(page: Page) {
 }
 
 /// Rebuild pages from Domain (groups, items, capabilities, names).
-pub fn rebuild(domain: &Domain) {
+pub fn rebuild(domain: &DomainHandle) {
     if !STARTED.load(Ordering::Relaxed) {
         return;
     }
@@ -1675,7 +1693,7 @@ pub fn take_nav() -> Option<Nav> {
     NAV.lock().unwrap().pop_front()
 }
 
-pub fn navigate(domain: &Domain, nav: Nav) {
+pub fn navigate(domain: &DomainHandle, nav: Nav) {
     if !STARTED.load(Ordering::Relaxed) {
         return;
     }
@@ -1908,7 +1926,7 @@ unsafe fn open_wifi_dialog(ssid: &str) {
     WIFI_KEYBOARD.store(keyboard, Ordering::Relaxed);
 }
 
-unsafe fn build_wifi(_domain: &Domain) -> Page {
+unsafe fn build_wifi(_domain: &DomainHandle) -> Page {
     close_wifi_dialog();
     let screen = lv_obj_create(null_mut());
     lv_obj_set_style_bg_color(screen, color(COL_BG), 0);
@@ -2008,7 +2026,7 @@ unsafe fn build_wifi(_domain: &Domain) -> Page {
     }
 }
 
-pub fn wifi_scan_done(domain: &Domain, results: Vec<(String, i8)>) {
+pub fn wifi_scan_done(domain: &DomainHandle, results: Vec<(String, i8)>) {
     *WIFI_SCAN.lock().unwrap() = results;
     WIFI_SCAN_RUN.store(true, Ordering::Relaxed);
     WIFI_SCANNING.store(false, Ordering::Relaxed);
@@ -2032,7 +2050,7 @@ pub fn set_wifi_scan(results: Vec<(String, i8)>) {
 }
 
 /// Mark a scan as in flight and refresh the Wi-Fi screen hint.
-pub fn wifi_scan_requested(domain: &Domain) {
+pub fn wifi_scan_requested(domain: &DomainHandle) {
     WIFI_SCANNING.store(true, Ordering::Relaxed);
     if VIEW.load(Ordering::Relaxed) != View::Wifi as u8 {
         return;
@@ -2049,7 +2067,7 @@ pub fn wifi_scan_requested(domain: &Domain) {
 
 /// Drain the Display inbox. Facts are already compact; the widget update is
 /// addressed by `(entity, property)` and never rebuilds the whole page.
-pub fn drain(domain: &Domain, receiver: &Receiver<Fact>) {
+pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
     let mut rebuild_needed = false;
     while let Ok(fact) = receiver.try_recv() {
         match fact.kind {

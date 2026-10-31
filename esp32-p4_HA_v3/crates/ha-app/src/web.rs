@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
 use esp_idf_svc::sys::*;
-use ha_domain::{Domain, Fact, FactKind};
+use ha_domain::{DomainHandle, Fact, FactKind};
 use ha_web::{command, control, write_frame};
 
 const INDEX: &[u8] = include_bytes!("../../../web/ui/index.html.gz");
@@ -85,11 +85,11 @@ pub fn start() -> bool {
 
 /// Drain the Web inbox. Domain facts are copied into the existing bounded
 /// model; WebSocket sends happen here, never under Domain lock.
-pub fn drain(domain: &Domain, receiver: &Receiver<Fact>) {
+pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
     while let Ok(fact) = receiver.try_recv() {
         match fact.kind {
             FactKind::EntityUpserted => {
-                let Some(record_len) = domain.entity_record_len(fact.entity) else {
+                let Some(record_len) = domain.entity_record_len(fact.entity).ok() else {
                     continue;
                 };
                 let mut record = vec![0u8; record_len];
