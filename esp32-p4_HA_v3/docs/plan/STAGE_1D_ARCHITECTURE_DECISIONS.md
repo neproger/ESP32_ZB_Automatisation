@@ -241,31 +241,48 @@ dropped_facts() -> Result<u64>
 with_mut(visit) -> Result<R>                    // transitional, adapter/device only
 ```
 
-`EntitySnapshot` — owned копия:
+`EntitySnapshot` — owned копия в одном непрерывном буфере:
 
 ```text
 EntitySnapshot {
     entity: EntityType,
     key_size: usize,
     record_size: usize,
-    entries: Vec<EntitySnapshotEntry>, // не больше EntityDesc.capacity
+    count: usize,
+    data: Vec<u8>, // count * (key_size + record_size), без per-entry alloc
 }
-EntitySnapshotEntry {
-    key: Box<[u8]>,     // key_size
-    record: Box<[u8]>,  // record_size
+
+impl EntitySnapshot {
+    len() -> usize
+    key(index) -> Option<&[u8]>
+    record(index) -> Option<&[u8]>
 }
 ```
 
-Ограничения snapshot:
+Порядок байтов в `data`: последовательные пары `key[0]`, `record[0]`,
+`key[1]`, `record[1]`, …
 
-- размер ограничен `EntityDesc.capacity` и фиксированными
-  `key_size`/`record_size`;
-- `entries.capacity` резервируется заранее через fallible reservation;
-  нехватка памяти → `Error::NoMemory`;
-- snapshot одной таблицы не является неограниченным `Vec` по входным
-  данным;
-- обработка snapshot выполняется без Domain mutex; для UI/automation
-  допускается несколько последовательных snapshot'ов разных таблиц.
+Ограничения и гарантии памяти:
+
+- `count` берётся из `Table::len()` под Domain lock и не превышает
+  `EntityDesc.capacity`;
+- `stride = key_size.checked_add(record_size)`; `total =
+  count.checked_mul(stride)`; переполнение → `Error::InvalidSize`;
+- `EntitySnapshot` ограничен `ENTITY_SNAPSHOT_MAX_BYTES = 16 * 1024`;
+  превышение → `Error::InvalidSize`. Текущий максимум canonical-таблиц:
+  Automation 32 × (8 + 456) = 14 848 байт, Group Item 128 × (16 + 36)
+  = 6 656, State 256 × (16 + 8) = 6 144 — все укладываются в лимит;
+- выделяется **один** `Vec<u8>` через `try_reserve_exact(total)`; ошибка
+  резервирования → `Error::NoMemory`;
+- после успешного резервирования `resize(total, 0)` не должен выделять
+  память повторно; `into_boxed_slice()` не используется, чтобы не
+  провоцировать infallible shrink/realloc;
+- per-entry `Box<[u8]>`/`to_vec()`/`vec!` для записей не используются;
+  данные копируются прямо в срезы `data`;
+- при `EntityDesc.capacity == 0` snapshot пустой и не требует аллокации;
+- обработка snapshot выполняется без Domain mutex; несколько snapshot'ов
+  разных таблиц могут сосуществовать, но каждый ограничен 16 KiB и должен
+  освобождаться как можно раньше.
 
 ### 5.1. Что удаляется
 
@@ -304,7 +321,13 @@ EntitySnapshotEntry {
 - удаление `with_mut` — обязательная задача Stage 2, когда adapter/device
   перейдут на `DomainHandle` и sink не будет вызываться под lock;
 - для ревью добавляется статическая проверка: новые `.with_mut(` вне
-  разрешённого списка не допускаются.
+  разрешённого списка не допускаются;
+- Stage 1d.3 обязан проверить allowlist всех `.with_mut(` call sites:
+  разрешены только существующие adapter/device mutation-транзакции в
+  `main.rs`/`zigbee_service.rs`; `automation_task.rs`, `wifi.rs`, UI/Web и
+  executor paths — запрещены;
+- отдельно проверяется отсутствие `post()` внутри `with_mut` closures и
+  отсутствие `Domain mutex → command lane`.
 
 ## 6. Locking policy
 
@@ -495,6 +518,14 @@ Domain mutex никогда не удерживается при ожидани�
 - длительный `display`/`web` callback не блокирует producer.
 - automation reload/evaluate не держит Domain во время engine работы.
 - `entity_snapshot` ограничен capacity; недостаток памяти → `NoMemory`.
+- `entity_snapshot` с `count * (key+record) > 16 KiB` → `InvalidSize`.
+- `entity_snapshot` с переполнением `count * stride` → `InvalidSize`.
+- `entity_snapshot` с пустой таблицей не аллоцирует и возвращает пустой
+  snapshot.
+- snapshot stores keys/records в едином `data`; per-entry allocations
+  отсутствуют.
+- allocation-failure test: при доступном fault-injection аллокаторе →
+  `NoMemory`; иначе проверить fallible reserve path на уровне кода/ревью.
 
 ### Concurrency/regression
 
@@ -518,9 +549,13 @@ Domain mutex никогда не удерживается при ожидани�
   queue/worker.
 - Handler должен быть `Fn + Send + Sync`; изменяемое состояние — за
   собственным mutex.
-- Snapshot для UI/automation требует памяти; размер ограничен capacity и
-  fallible reservation, но несколько snapshot'ов могут временно занимать
-  память одновременно.
+- Snapshot для UI/automation требует памяти: один непрерывный `Vec<u8>`,
+  максимум 16 KiB, fallible `try_reserve_exact`; несколько snapshot'ов
+  могут временно занимать память одновременно. Ошибка резервирования —
+  `NoMemory`; превышение лимита/переполнение — `InvalidSize`.
+- Максимальный текущий canonical snapshot — Automation
+  32 × (8 + 456) = 14 848 байт; лимит 16 KiB оставляет запас только под
+  текущие descriptors. Рост capacity/record требует пересмотра лимита.
 - `COMMAND_SENT` публикуется до освобождения command lane, но после
   внешнего side effect executor'а; это audit-факт, не state.
 - Panic executor оставляет command lane poisoned; последующие `post`
@@ -544,8 +579,11 @@ Domain mutex никогда не удерживается при ожидани�
 5. Целевой `DomainHandle` API: удалить `lock`/`with`/`entity_iter`; добавить
    explicit methods и bounded `EntitySnapshot`; `with_mut` — только
    переходный adapter/device, `#[doc(hidden)]`, без новых call sites.
-6. Порядок команд: сериализация через lane; строгий FIFO не гарантируется.
-7. Разрешить Stage 1d.3 только после утверждения этого документа.
+6. Snapshot memory: один непрерывный `Vec<u8>`, лимит 16 KiB, checked
+   `count * (key+record)`, fallible `try_reserve_exact`, ошибки
+   `InvalidSize`/`NoMemory`.
+7. Порядок команд: сериализация через lane; строгий FIFO не гарантируется.
+8. Разрешить Stage 1d.3 только после утверждения этого документа.
 
 ## 14. Изменения после архитектурного ревью
 
@@ -558,7 +596,13 @@ Domain mutex никогда не удерживается при ожидани�
   `COMMAND_SENT`.
 - `with_mut` зафиксирован как `#[doc(hidden)]` переходный API только для
   adapter/device; новые call sites запрещены; удаление — Stage 2.
+- Stage 1d.3 static check должен проверить allowlist `.with_mut(` call sites
+  и отсутствие `post()` внутри `with_mut`/executor.
 - `entity_iter` удалён из целевого API; введён bounded `EntitySnapshot`
   с fallible reservation и ограничением по capacity.
+- Snapshot уточнён до единого непрерывного `Vec<u8>`: checked
+  `count * (key+record)`, лимит 16 KiB, `try_reserve_exact`, без per-entry
+  `Box`/`to_vec`; ошибки `InvalidSize`/`NoMemory`.
 - Добавлены тесты порядка `COMMAND_SENT`, reentrant-проверки до mutex,
-  panic/poison command lane и доступности Domain во время executor.
+  panic/poison command lane, доступности Domain во время executor и
+  memory-контракта snapshot.
