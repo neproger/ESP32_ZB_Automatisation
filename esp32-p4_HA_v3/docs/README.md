@@ -27,6 +27,8 @@
 - [build/BUILD.md](build/BUILD.md) — P4, host workspace, C3 Wi-Fi CP, ZHC compiler.
 - [build/BUILD_ENV.md](build/BUILD_ENV.md) — окружение сборки P4.
 - [build/WIFI.md](build/WIFI.md) — AUTH_EXPIRE и TX power на C3 CP.
+- [hardware/JC4880P443C_I_W.md](hardware/JC4880P443C_I_W.md) — плата GUITION
+  JC4880P443C_I_W: распиновка, дисплей, тач, радио (копия из V2).
 
 ## Zigbee / Z2M
 
@@ -42,7 +44,9 @@
 
 ## Внешний эталон
 
-`esp32-p4_HA_v2/docs/` остаётся архитектурным эталоном V2 и не копируется сюда.
+`esp32-p4_HA_v2/docs/` остаётся архитектурным эталоном V2. Исключение —
+`hardware/JC4880P443C_I_W.md`: справочник по плате скопирован из V2, потому что
+на него ссылается `board_p4.h`.
 
 ## Ревизия 2026-10-31
 
@@ -52,7 +56,3 @@
   и `TARGET_ARCHITECTURE.md`;
 - `MICRODB_COMPACTION.md` — заменён `audits/FLASH_REGION_AUDIT.md` и
   `audits/MICRO_DB_AUDIT.md`.
-
-Известный разрыв: `crates/ha-app/native_display/board_p4.h` ссылается на
-`docs/hardware/JC4880P443C_I_W.md`; файла нет. Нужно восстановить документ или
-убрать ссылку.
