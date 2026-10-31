@@ -746,8 +746,9 @@ impl Domain {
         );
     }
 
-    /// Synchronous hand-off; the executor's result is not awaited.
-    pub fn post(
+    /// Crate-internal direct hand-off for unit tests only; production clients
+    /// must use `DomainHandle::post` so the executor runs outside the mutex.
+    pub(crate) fn post(
         &mut self,
         command_type: u32,
         args: &[u8],
