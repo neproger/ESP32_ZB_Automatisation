@@ -1,11 +1,11 @@
-//! Thin Device Registry: EUI64 -> canonical DeviceRecord over PersistedTable.
+//! Thin Device Registry: EUI64 -> canonical DeviceRecord over Table<FlashStorage<F>>.
 //!
 //! No own storage model, indexes or serializers: the canonical record is encoded
 //! by `DeviceRecord`, stored by `micro-db`, and the profile comes from `z2m-rs`.
 //! The short address in the record is a cache; callers must revalidate it against
 //! the network before sending commands.
 
-use micro_db::{Error, Fixed, NorFlash, PersistedTable};
+use micro_db::{Error, FlashStorage, Geometry, Handle, NorFlash, Table};
 use z2m_rs::Interview;
 
 use crate::{DeviceDescriptor, DeviceRecord, RecordError, MAX_RECORD};
@@ -33,15 +33,15 @@ impl RecordSlot {
     }
 }
 
-impl Fixed for RecordSlot {
-    const SIZE: usize = RECORD_SLOT_SIZE;
+impl RecordSlot {
+    pub const SIZE: usize = RECORD_SLOT_SIZE;
 
-    fn to_bytes(&self, out: &mut [u8]) {
+    pub fn to_bytes(&self, out: &mut [u8]) {
         out[..2].copy_from_slice(&self.len.to_le_bytes());
         out[2..].copy_from_slice(&self.bytes);
     }
 
-    fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         let len = usize::from(u16::from_le_bytes([bytes[0], bytes[1]])).min(MAX_RECORD);
         let mut slot = Self::empty();
         slot.len = len as u16;
@@ -50,40 +50,67 @@ impl Fixed for RecordSlot {
     }
 }
 
-pub struct Registry {
-    table: PersistedTable<[u8; 8], RecordSlot>,
+pub struct Registry<F: NorFlash> {
+    table: Table<FlashStorage<F>>,
 }
 
-impl Registry {
-    pub fn format<F: NorFlash>(flash: &mut F, capacity: usize) -> Result<Self, Error> {
+impl<F: NorFlash> Registry<F> {
+    fn geometry(capacity: usize) -> Geometry {
+        Geometry {
+            capacity,
+            key_size: 8,
+            payload_size: RECORD_SLOT_SIZE,
+        }
+    }
+
+    pub fn format(flash: F, capacity: usize) -> Result<Self, Error> {
+        let geometry = Self::geometry(capacity);
+        let storage = FlashStorage::format(flash, geometry, PERSIST_ID)?;
         Ok(Self {
-            table: PersistedTable::format(flash, capacity, PERSIST_ID)?,
+            table: Table::open(geometry, storage)?,
         })
     }
 
-    pub fn open<F: NorFlash>(flash: &mut F, capacity: usize) -> Result<Self, Error> {
+    pub fn open(flash: F, capacity: usize) -> Result<Self, Error> {
+        let geometry = Self::geometry(capacity);
+        let storage = FlashStorage::open(flash, geometry, PERSIST_ID)?;
         Ok(Self {
-            table: PersistedTable::open(flash, capacity, PERSIST_ID)?,
+            table: Table::open(geometry, storage)?,
         })
     }
 
-    pub fn put<F: NorFlash>(
-        &mut self,
-        flash: &mut F,
-        record: &DeviceRecord<'_>,
-    ) -> Result<(), Error> {
-        let mut slot = RecordSlot::empty();
-        let len = record.encode(&mut slot.bytes).map_err(map_record_error)?;
-        slot.len = len as u16;
-        self.table
-            .put(flash, record.ieee.to_le_bytes(), slot)
-            .map(|_| ())
+    pub fn into_flash(self) -> F {
+        self.table.into_storage().into_flash()
+    }
+
+    pub fn put(&mut self, record: &DeviceRecord<'_>) -> Result<(), Error> {
+        let mut bytes = [0u8; RECORD_SLOT_SIZE];
+        let len = record.encode(&mut bytes[2..]).map_err(map_record_error)?;
+        bytes[..2].copy_from_slice(&(len as u16).to_le_bytes());
+        let key = record.ieee.to_le_bytes();
+        match self.table.find(&key) {
+            Ok(slot) => {
+                let meta = self.table.meta(slot)?;
+                self.table
+                    .update(
+                        Handle {
+                            slot,
+                            generation: meta.generation,
+                            version: meta.version,
+                        },
+                        &bytes,
+                    )
+                    .map(|_| ())
+            }
+            Err(Error::NotFound) => self.table.allocate(&key, &bytes).map(|_| ()),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn slot(&self, ieee: u64) -> Result<RecordSlot, Error> {
-        let mut slot = RecordSlot::empty();
-        self.table.get(&ieee.to_le_bytes(), &mut slot)?;
-        Ok(slot)
+        let mut bytes = [0u8; RECORD_SLOT_SIZE];
+        self.table.get(&ieee.to_le_bytes(), &mut bytes)?;
+        Ok(RecordSlot::from_bytes(&bytes))
     }
 
     pub fn descriptor_for(&self, ieee: u64) -> Result<Option<DeviceDescriptor>, Error> {
@@ -129,7 +156,7 @@ impl Registry {
 
     /// Durable deferred-leave mark: keep a tombstone instead of deleting the
     /// row, so an announce cannot silently re-add the device.
-    pub fn mark_removed<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
+    pub fn mark_removed(&mut self, ieee: u64) -> Result<(), Error> {
         let previous = self.slot(ieee).ok();
         let record = previous.as_ref().and_then(|slot| slot.record().ok());
         let tombstone = DeviceRecord {
@@ -143,7 +170,7 @@ impl Registry {
             configured_version: 0,
             signature: &[],
         };
-        self.put(flash, &tombstone)
+        self.put(&tombstone)
     }
 
     pub fn is_removed(&self, ieee: u64) -> bool {
@@ -157,12 +184,12 @@ impl Registry {
 
     /// Clears the mark only after the leave succeeded. A row re-written by a
     /// normal interview is left alone.
-    pub fn clear_removed<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
+    pub fn clear_removed(&mut self, ieee: u64) -> Result<(), Error> {
         let removed = self.is_removed(ieee);
         if !removed {
             return Ok(());
         }
-        self.remove(flash, ieee)
+        self.remove(ieee)
     }
 
     /// Configuration is bound to the definition: a different profile at the
@@ -178,9 +205,8 @@ impl Registry {
         Ok(record.definition_id == definition_id && record.configured_version >= version)
     }
 
-    pub fn set_configured<F: NorFlash>(
+    pub fn set_configured(
         &mut self,
-        flash: &mut F,
         ieee: u64,
         version: u16,
     ) -> Result<(), Error> {
@@ -190,23 +216,31 @@ impl Registry {
             configured_version: version,
             ..record
         };
-        self.put(flash, &updated)
+        self.put(&updated)
     }
 
-    pub fn remove<F: NorFlash>(&mut self, flash: &mut F, ieee: u64) -> Result<(), Error> {
-        self.table.remove(flash, &ieee.to_le_bytes())
+    pub fn remove(&mut self, ieee: u64) -> Result<(), Error> {
+        let key = ieee.to_le_bytes();
+        let slot = self.table.find(&key)?;
+        let meta = self.table.meta(slot)?;
+        self.table.free(Handle {
+            slot,
+            generation: meta.generation,
+            version: meta.version,
+        })
     }
 
-    pub fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), Error> {
-        self.table.compact(flash)
+    pub fn compact(&mut self) -> Result<(), Error> {
+        self.table.compact()
     }
 
     pub fn bank_state(&self) -> (usize, u32) {
         self.table.bank_state()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &RecordSlot> {
-        self.table.iter().map(|view| view.payload)
+    pub fn for_each(&self, mut visit: impl FnMut(RecordSlot)) -> Result<(), Error> {
+        self.table
+            .iter(|_, _, _, payload| visit(RecordSlot::from_bytes(payload)))
     }
 
     pub fn len(&self) -> usize {
@@ -232,7 +266,7 @@ fn map_record_error(error: RecordError) -> Error {
 mod tests {
     use super::*;
     use crate::InterviewStatus;
-    use micro_db::SimFlash;
+    use micro_db::{FlashMeta, FlashTable, SimFlash};
 
     const SIGNATURE: [u8; 7] = [1, 2, 0x06, 0x00, 0x06, 0x00, 0x01];
     const IEEE: u64 = 0xA4C1_383B_F9D6_2A03;
@@ -257,39 +291,45 @@ mod tests {
 
     #[test]
     fn record_survives_reboot_and_profile_is_restored() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
-        registry.put(&mut flash, &record()).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
+        registry.put(&record()).unwrap();
 
-        let restarted = Registry::open(&mut flash, 4).unwrap();
+        let restarted = Registry::open(registry.into_flash(), 4).unwrap();
         let profile = restarted.profile_for(IEEE).unwrap().unwrap();
         assert_eq!(profile.id, "tuya.ts0041");
         assert_eq!(restarted.model(IEEE).unwrap().as_deref(), Some("TS0041"));
         let slot = restarted.slot(IEEE).unwrap();
         assert_eq!(slot.record().unwrap().manufacturer, "_TZ3000_b4awzgct");
+
+        let mut seen = 0;
+        restarted.for_each(|slot| {
+            if slot.record().is_ok() {
+                seen += 1;
+            }
+        })
+        .unwrap();
+        assert_eq!(seen, 1);
     }
 
     #[test]
     fn standard_definition_restores_standard_profile() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
         let mut record = record();
         record.definition_id = crate::standard::STANDARD_PROFILE_ID;
-        registry.put(&mut flash, &record).unwrap();
+        registry.put(&record).unwrap();
 
-        let restarted = Registry::open(&mut flash, 4).unwrap();
+        let restarted = Registry::open(registry.into_flash(), 4).unwrap();
         let profile = restarted.profile_for(IEEE).unwrap().unwrap();
         assert_eq!(profile.id, crate::standard::STANDARD_PROFILE_ID);
     }
 
     #[test]
     fn configured_version_is_explicit_and_updated() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
-        registry.put(&mut flash, &record()).unwrap();
-        registry.set_configured(&mut flash, IEEE, 1).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
+        registry.put(&record()).unwrap();
+        registry.set_configured(IEEE, 1).unwrap();
 
-        let reopened = Registry::open(&mut flash, 4).unwrap();
+        let reopened = Registry::open(registry.into_flash(), 4).unwrap();
         assert_eq!(
             reopened
                 .slot(IEEE)
@@ -303,10 +343,9 @@ mod tests {
 
     #[test]
     fn configured_flag_is_scoped_to_definition() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
-        registry.put(&mut flash, &record()).unwrap();
-        registry.set_configured(&mut flash, IEEE, 1).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
+        registry.put(&record()).unwrap();
+        registry.set_configured(IEEE, 1).unwrap();
         assert!(registry.is_configured(IEEE, "tuya.ts0041", 1).unwrap());
         assert!(!registry.is_configured(IEEE, "other.profile", 1).unwrap());
         assert!(!registry.is_configured(IEEE, "tuya.ts0041", 2).unwrap());
@@ -314,30 +353,58 @@ mod tests {
 
     #[test]
     fn removal_does_not_return_after_reboot() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
-        registry.put(&mut flash, &record()).unwrap();
-        registry.remove(&mut flash, IEEE).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
+        registry.put(&record()).unwrap();
+        registry.remove(IEEE).unwrap();
 
-        let reopened = Registry::open(&mut flash, 4).unwrap();
+        let reopened = Registry::open(registry.into_flash(), 4).unwrap();
         assert_eq!(reopened.slot(IEEE), Err(Error::NotFound));
         assert_eq!(reopened.len(), 0);
     }
 
     #[test]
     fn removal_mark_is_a_durable_tombstone() {
-        let mut flash = flash();
-        let mut registry = Registry::format(&mut flash, 4).unwrap();
-        registry.put(&mut flash, &record()).unwrap();
-        registry.mark_removed(&mut flash, IEEE).unwrap();
+        let mut registry = Registry::format(flash(), 4).unwrap();
+        registry.put(&record()).unwrap();
+        registry.mark_removed(IEEE).unwrap();
 
-        let mut reopened = Registry::open(&mut flash, 4).unwrap();
+        let mut reopened = Registry::open(registry.into_flash(), 4).unwrap();
         assert!(reopened.is_removed(IEEE));
         assert!(reopened.profile_for(IEEE).unwrap().is_none());
         assert!(reopened.descriptor_for(IEEE).unwrap().is_none());
 
-        reopened.clear_removed(&mut flash, IEEE).unwrap();
+        reopened.clear_removed(IEEE).unwrap();
         assert!(!reopened.is_removed(IEEE));
         assert_eq!(reopened.slot(IEEE), Err(Error::NotFound));
+    }
+
+    #[test]
+    fn registry_reads_flash_table_written_with_same_layout() {
+        let geometry = Registry::<SimFlash>::geometry(4);
+        let mut flash = flash();
+        let mut table = FlashTable::format(&mut flash, geometry, PERSIST_ID).unwrap();
+
+        let mut slot = RecordSlot::empty();
+        let len = record().encode(&mut slot.bytes).unwrap();
+        slot.len = len as u16;
+        let mut bytes = [0u8; RECORD_SLOT_SIZE];
+        slot.to_bytes(&mut bytes);
+        table
+            .append_set(
+                &mut flash,
+                0,
+                FlashMeta {
+                    used: true,
+                    generation: 1,
+                    version: 1,
+                },
+                &IEEE.to_le_bytes(),
+                &bytes,
+            )
+            .unwrap();
+
+        let registry = Registry::open(flash, 4).unwrap();
+        let read = registry.slot(IEEE).unwrap();
+        assert_eq!(read.record().unwrap().model, "TS0041");
     }
 }

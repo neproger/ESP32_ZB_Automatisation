@@ -12,6 +12,19 @@ use crate::{Error, Geometry, Meta, NorFlash, Result};
 
 const RAM_META_LEN: usize = 12;
 
+impl From<FlashError> for Error {
+    fn from(error: FlashError) -> Self {
+        match error {
+            FlashError::Io => Error::Io,
+            FlashError::Corrupt => Error::Corrupt,
+            FlashError::NoSpace => Error::NoSpace,
+            FlashError::InvalidSize => Error::InvalidSize,
+            FlashError::NotFound => Error::NotFound,
+            FlashError::InvalidState => Error::InvalidState,
+        }
+    }
+}
+
 pub trait Storage {
     fn geometry(&self) -> Geometry;
 

@@ -1,13 +1,13 @@
 //! MicroDB access for the device registry (mstore) and Domain state (domain).
 //!
-//! Both partitions are found by label through the SDK; no absolute offsets. On
-//! boot each table is opened, or formatted once when the partition is fully
-//! erased. A corrupt table is kept for inspection instead of being wiped.
+//! Both partitions are found by label through the SDK; no absolute offsets.
+//! Each table is opened on boot; a fully erased partition is initialized inside
+//! micro-db, while corrupt data is kept for inspection instead of being wiped.
 
 use std::sync::Mutex;
 
 use ha_domain::{Domain, FactMeta, Value};
-use micro_db::{Fixed, FlashError, NorFlash, PersistedTable};
+use micro_db::{FlashError, Geometry, Handle, NorFlash, RamFlashStorage, Table};
 use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
 pub const MAX_DEVICES: usize = 32;
@@ -16,8 +16,13 @@ const DEFINITION_VERSION: u16 = 1;
 
 const DOMAIN_KEY_MAX: usize = ha_domain::canonical::STATE_KEY_LEN;
 const DOMAIN_RECORD_MAX: usize = ha_domain::canonical::AUTOMATION_RECORD_LEN;
+const DOMAIN_KEY_SIZE: usize = 4 + 1 + DOMAIN_KEY_MAX;
+const DOMAIN_SLOT_SIZE: usize = 2 + DOMAIN_RECORD_MAX;
 const DOMAIN_CAPACITY: usize = 384;
 const DOMAIN_PERSIST_ID: &str = "ha_domain";
+
+const _: () = assert!(DOMAIN_KEY_SIZE == 21);
+const _: () = assert!(DOMAIN_SLOT_SIZE == 458);
 
 struct CFlash {
     size: unsafe extern "C" fn() -> u32,
@@ -94,13 +99,13 @@ struct DomainKey {
     key: [u8; DOMAIN_KEY_MAX],
 }
 
-impl Fixed for DomainKey {
-    const SIZE: usize = 4 + 1 + DOMAIN_KEY_MAX;
-
-    fn to_bytes(&self, out: &mut [u8]) {
+impl DomainKey {
+    fn to_bytes(&self) -> [u8; DOMAIN_KEY_SIZE] {
+        let mut out = [0u8; DOMAIN_KEY_SIZE];
         out[..4].copy_from_slice(&self.entity.to_le_bytes());
         out[4] = self.key_len;
         out[5..5 + DOMAIN_KEY_MAX].copy_from_slice(&self.key);
+        out
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
@@ -120,12 +125,12 @@ struct DomainSlot {
     bytes: [u8; DOMAIN_RECORD_MAX],
 }
 
-impl Fixed for DomainSlot {
-    const SIZE: usize = 2 + DOMAIN_RECORD_MAX;
-
-    fn to_bytes(&self, out: &mut [u8]) {
+impl DomainSlot {
+    fn to_bytes(&self) -> [u8; DOMAIN_SLOT_SIZE] {
+        let mut out = [0u8; DOMAIN_SLOT_SIZE];
         out[..2].copy_from_slice(&self.len.to_le_bytes());
         out[2..2 + DOMAIN_RECORD_MAX].copy_from_slice(&self.bytes);
+        out
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
@@ -138,52 +143,24 @@ impl Fixed for DomainSlot {
     }
 }
 
-type DomainTable = PersistedTable<DomainKey, DomainSlot>;
+type DomainTable = Table<RamFlashStorage<CFlash>>;
 
-static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+static REGISTRY: Mutex<Option<Registry<CFlash>>> = Mutex::new(None);
 static DOMAIN_DB: Mutex<Option<DomainTable>> = Mutex::new(None);
 
-/// A partition may be formatted only when every byte is erased.
-fn partition_erased<F: NorFlash>(flash: &mut F) -> bool {
-    let capacity = flash.capacity();
-    let mut offset = 0;
-    let mut buf = [0u8; 256];
-    while offset < capacity {
-        let len = (capacity - offset).min(buf.len());
-        if flash.read(offset, &mut buf[..len]).is_err() {
-            return false;
-        }
-        if buf[..len].iter().any(|byte| *byte != 0xFF) {
-            return false;
-        }
-        offset += len;
-    }
-    true
-}
-
 pub fn init() {
-    let mut flash = CFlash::MSTORE;
-    let registry = match Registry::open(&mut flash, CAPACITY) {
+    let flash = CFlash::MSTORE;
+    let size = flash.capacity();
+    let registry = match Registry::open(flash, CAPACITY) {
         Ok(registry) => registry,
         Err(error) => {
-            if !partition_erased(&mut flash) {
-                log::error!("registry: not mounted ({error:?}); data preserved");
-                return;
-            }
-            log::warn!("registry: mstore empty ({error:?}); initialising");
-            match Registry::format(&mut flash, CAPACITY) {
-                Ok(registry) => registry,
-                Err(error) => {
-                    log::error!("registry: mstore init failed: {error:?}");
-                    return;
-                }
-            }
+            log::error!("registry: not mounted ({error:?}); data preserved");
+            return;
         }
     };
     let (bank, seq) = registry.bank_state();
     log::info!(
-        "registry ready: mstore={} bytes entries={} bank={bank} seq={seq}",
-        flash.capacity(),
+        "registry ready: mstore={size} bytes entries={} bank={bank} seq={seq}",
         registry.len()
     );
     *REGISTRY.lock().unwrap() = Some(registry);
@@ -191,36 +168,37 @@ pub fn init() {
 }
 
 fn init_domain() -> Option<DomainTable> {
-    let mut flash = CFlash::DOMAIN;
+    let flash = CFlash::DOMAIN;
     let size = flash.capacity();
     if size == 0 {
         log::error!("domain: partition not found");
         return None;
     }
-    match DomainTable::open(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
-        Ok(table) => {
-            let (bank, seq) = table.bank_state();
-            log::info!(
-                "domain ready: domain={size} bytes entries={} bank={bank} seq={seq}",
-                table.len()
-            );
-            Some(table)
-        }
+    let geometry = Geometry {
+        capacity: DOMAIN_CAPACITY,
+        key_size: DOMAIN_KEY_SIZE,
+        payload_size: DOMAIN_SLOT_SIZE,
+    };
+    let storage = match RamFlashStorage::open(flash, geometry, DOMAIN_PERSIST_ID) {
+        Ok(storage) => storage,
         Err(error) => {
-            if !partition_erased(&mut flash) {
-                log::error!("domain: not mounted ({error:?}); data preserved");
-                return None;
-            }
-            log::warn!("domain: empty ({error:?}); initialising");
-            match DomainTable::format(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
-                Ok(table) => Some(table),
-                Err(error) => {
-                    log::error!("domain: init failed: {error:?}");
-                    None
-                }
-            }
+            log::error!("domain: not mounted ({error:?}); data preserved");
+            return None;
         }
-    }
+    };
+    let table = match Table::open(geometry, storage) {
+        Ok(table) => table,
+        Err(error) => {
+            log::error!("domain: not mounted ({error:?}); data preserved");
+            return None;
+        }
+    };
+    let (bank, seq) = table.bank_state();
+    log::info!(
+        "domain ready: domain={size} bytes entries={} bank={bank} seq={seq}",
+        table.len()
+    );
+    Some(table)
 }
 
 pub fn lookup(ieee: u64) -> Option<&'static z2m_rs::Profile> {
@@ -266,12 +244,11 @@ pub fn save(
         configured_version: 0,
         signature: &signature[..signature_len],
     };
-    let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return;
     };
-    match registry.put(&mut flash, &record) {
+    match registry.put(&record) {
         Ok(()) => {
             log::info!("registry: saved {definition_id} ieee={ieee:016x} short=0x{short:04x}")
         }
@@ -282,12 +259,11 @@ pub fn save(
 /// Durable deferred-leave mark; canonical cleanup may proceed even if the
 /// immediate leave cannot be sent (the announce path retries it).
 pub fn mark_removed(ieee: u64) -> bool {
-    let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return false;
     };
-    match registry.mark_removed(&mut flash, ieee) {
+    match registry.mark_removed(ieee) {
         Ok(()) => {
             log::info!("registry: removal marked ieee={ieee:016x}");
             true
@@ -307,12 +283,11 @@ pub fn is_removed(ieee: u64) -> bool {
 }
 
 pub fn clear_removed(ieee: u64) {
-    let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return;
     };
-    match registry.clear_removed(&mut flash, ieee) {
+    match registry.clear_removed(ieee) {
         Ok(()) => log::info!("registry: removal mark cleared ieee={ieee:016x}"),
         Err(error) => log::error!("registry: clear removal failed ieee={ieee:016x}: {error:?}"),
     }
@@ -331,7 +306,6 @@ pub fn is_configured(ieee: u64, definition_id: &str, version: u16) -> bool {
 }
 
 pub fn mark_configured(ieee: u64, definition_id: &str, version: u16) {
-    let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return;
@@ -347,7 +321,7 @@ pub fn mark_configured(ieee: u64, definition_id: &str, version: u16) {
         configured_version: version,
         ..record
     };
-    match registry.put(&mut flash, &updated) {
+    match registry.put(&updated) {
         Ok(()) => log::info!("registry: configured ieee={ieee:016x} version={version}"),
         Err(error) => log::error!("registry configured_version failed: {error:?}"),
     }
@@ -358,16 +332,19 @@ pub fn device_addresses() -> ([(u64, u16); CAPACITY], usize) {
     let mut out = [(0, 0); CAPACITY];
     let mut count = 0;
     if let Some(registry) = registry.as_ref() {
-        for slot in registry.values() {
+        let result = registry.for_each(|slot| {
             if let Ok(record) = slot.record() {
                 if record.interview == InterviewStatus::Removed {
-                    continue;
+                    return;
                 }
                 if count < CAPACITY {
                     out[count] = (record.ieee, record.short);
                     count += 1;
                 }
             }
+        });
+        if let Err(error) = result {
+            log::error!("registry: address iteration failed: {error:?}");
         }
     }
     (out, count)
@@ -383,23 +360,42 @@ pub fn save_domain(entity: u32, key: &[u8], record: &[u8]) {
         );
         return;
     }
-    let mut guard = DOMAIN_DB.lock().unwrap();
-    let Some(table) = guard.as_mut() else {
-        return;
-    };
     let mut key_slot = DomainKey {
         entity,
         key_len: key.len() as u8,
         key: [0; DOMAIN_KEY_MAX],
     };
     key_slot.key[..key.len()].copy_from_slice(key);
+    let key_bytes = key_slot.to_bytes();
     let mut record_slot = DomainSlot {
         len: record.len() as u16,
         bytes: [0; DOMAIN_RECORD_MAX],
     };
     record_slot.bytes[..record.len()].copy_from_slice(record);
-    let mut flash = CFlash::DOMAIN;
-    if let Err(error) = table.put(&mut flash, key_slot, record_slot) {
+    let payload = record_slot.to_bytes();
+
+    let mut guard = DOMAIN_DB.lock().unwrap();
+    let Some(table) = guard.as_mut() else {
+        return;
+    };
+    let result = match table.find(&key_bytes) {
+        Ok(slot) => match table.meta(slot) {
+            Ok(meta) => table
+                .update(
+                    Handle {
+                        slot,
+                        generation: meta.generation,
+                        version: meta.version,
+                    },
+                    &payload,
+                )
+                .map(|_| ()),
+            Err(error) => Err(error),
+        },
+        Err(micro_db::Error::NotFound) => table.allocate(&key_bytes, &payload).map(|_| ()),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
         log::error!("domain: persist entity={entity} failed: {error:?}");
     }
 }
@@ -408,18 +404,30 @@ pub fn remove_domain(entity: u32, key: &[u8]) {
     if key.len() > DOMAIN_KEY_MAX {
         return;
     }
-    let mut guard = DOMAIN_DB.lock().unwrap();
-    let Some(table) = guard.as_mut() else {
-        return;
-    };
     let mut key_slot = DomainKey {
         entity,
         key_len: key.len() as u8,
         key: [0; DOMAIN_KEY_MAX],
     };
     key_slot.key[..key.len()].copy_from_slice(key);
-    let mut flash = CFlash::DOMAIN;
-    if let Err(error) = table.remove(&mut flash, &key_slot) {
+    let key_bytes = key_slot.to_bytes();
+
+    let mut guard = DOMAIN_DB.lock().unwrap();
+    let Some(table) = guard.as_mut() else {
+        return;
+    };
+    let result = match table.find(&key_bytes) {
+        Ok(slot) => match table.meta(slot) {
+            Ok(meta) => table.free(Handle {
+                slot,
+                generation: meta.generation,
+                version: meta.version,
+            }),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
         log::error!("domain: remove entity={entity} failed: {error:?}");
     }
 }
@@ -439,22 +447,27 @@ pub fn restore_domain(domain: &mut Domain) {
     let mut skipped = 0;
     // shortcut: no schema migration; an incompatible record is skipped and
     // rewritten on the next change.
-    for view in table.iter() {
-        if view.key.entity == ha_domain::canonical::ENTITY_PROPERTY_STATE {
-            continue;
+    let result = table.iter(|_, _, key, record| {
+        let key = DomainKey::from_bytes(key);
+        if key.entity == ha_domain::canonical::ENTITY_PROPERTY_STATE {
+            return;
         }
-        let key_len = usize::from(view.key.key_len).min(DOMAIN_KEY_MAX);
-        let key = &view.key.key[..key_len];
-        let record_len = usize::from(view.payload.len).min(DOMAIN_RECORD_MAX);
-        let record = &view.payload.bytes[..record_len];
+        let slot = DomainSlot::from_bytes(record);
+        let key_len = usize::from(key.key_len).min(DOMAIN_KEY_MAX);
+        let record_len = usize::from(slot.len).min(DOMAIN_RECORD_MAX);
         let meta = FactMeta {
             source: ha_domain::canonical::SOURCE_ZIGBEE as u8,
             value: Value::NONE,
         };
-        match domain.entity_put(view.key.entity, key, record, meta) {
+        match domain.entity_put(
+            key.entity,
+            &key.key[..key_len],
+            &slot.bytes[..record_len],
+            meta,
+        ) {
             Ok(_) => {
-                if let Ok(frame_type) = u8::try_from(view.key.entity) {
-                    crate::web::upsert(frame_type, key, record);
+                if let Ok(frame_type) = u8::try_from(key.entity) {
+                    crate::web::upsert(frame_type, &key.key[..key_len], &slot.bytes[..record_len]);
                 }
                 restored += 1;
             }
@@ -462,10 +475,13 @@ pub fn restore_domain(domain: &mut Domain) {
                 skipped += 1;
                 log::warn!(
                     "domain: restore entity={} skipped: {error:?}",
-                    view.key.entity
+                    key.entity
                 );
             }
         }
+    });
+    if let Err(error) = result {
+        log::error!("domain: restore read failed: {error:?}");
     }
     log::info!("domain: restored {restored} records ({skipped} skipped)");
 }
@@ -473,12 +489,11 @@ pub fn restore_domain(domain: &mut Domain) {
 /// Diagnostic hook (kept behind the `HA_FORCE_COMPACT` build flag): moves the
 /// journal to the other bank without touching RAM records.
 pub fn compact_for_test() {
-    let mut flash = CFlash::MSTORE;
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
         return;
     };
-    match registry.compact(&mut flash) {
+    match registry.compact() {
         Ok(()) => {
             let (bank, seq) = registry.bank_state();
             log::info!("micro-db: forced compaction bank={bank} seq={seq}");
