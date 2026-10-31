@@ -35,14 +35,14 @@ struct CanonicalEvent {
 
 struct Ingest<'a> {
     domain: &'a mut Domain,
-    command_core: &'a mut CommandCore,
+    reported: &'a mut Vec<(u64, u32)>,
 }
 
 impl frames::IngestSink for Ingest<'_> {
     fn update(&mut self, entity: u64, update: &z2m_rs::Update) {
         let (states, event) = zigbee_devices::canonical_states(entity, update);
         for state in states.into_iter().flatten() {
-            apply_state(self.domain, self.command_core, state);
+            apply_state(self.domain, self.reported, state);
         }
         if let Some(event_id) = event {
             publish_event(
@@ -180,11 +180,11 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
             ensure_interview(&state, event.extended_addr, event.short_addr);
         }
 
+        let mut reported = Vec::new();
         if let Err(error) = domain.with_mut(|domain| {
-            let mut state = state.lock().unwrap();
             let mut ingest = Ingest {
                 domain,
-                command_core: &mut state.command_core,
+                reported: &mut reported,
             };
             if polled {
                 ingest_command(&event, &mut ingest);
@@ -192,6 +192,12 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
             frames::process_pending(&mut ingest);
         }) {
             log::error!("domain: ingest failed: {error:?}");
+        }
+        if !reported.is_empty() {
+            let mut state = state.lock().unwrap();
+            for (entity, property) in reported {
+                state.command_core.on_reported(entity, property);
+            }
         }
 
         if let Some(device) = frames::take_last_device() {
@@ -238,15 +244,21 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
                     }
                 }
                 if let Some(read) = result.read {
+                    let mut reported = Vec::new();
                     if let Err(error) = domain.with_mut(|domain| {
-                        let mut state = state.lock().unwrap();
                         let mut ingest = Ingest {
                             domain,
-                            command_core: &mut state.command_core,
+                            reported: &mut reported,
                         };
                         ingest_read(&context, read, &mut ingest);
                     }) {
                         log::error!("domain: read ingest failed: {error:?}");
+                    }
+                    if !reported.is_empty() {
+                        let mut state = state.lock().unwrap();
+                        for (entity, property) in reported {
+                            state.command_core.on_reported(entity, property);
+                        }
                     }
                 }
             }
@@ -544,7 +556,7 @@ fn apply_capabilities(
 
 fn apply_state(
     domain: &mut Domain,
-    command_core: &mut CommandCore,
+    reported: &mut Vec<(u64, u32)>,
     state: zigbee_devices::StateUpdate,
 ) {
     let mut sink = crate::StoreSink;
@@ -554,7 +566,7 @@ fn apply_state(
     };
     match adapter.write_state(state.entity, state.property, state.value) {
         Ok(changed) => {
-            command_core.on_reported(state.entity, state.property);
+            reported.push((state.entity, state.property));
             if changed {
                 log::info!(
                     "domain: state entity={:016x} property={} changed=true",
