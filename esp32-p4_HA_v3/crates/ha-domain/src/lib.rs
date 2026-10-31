@@ -15,7 +15,9 @@ pub use ha_model::canonical;
 mod fact;
 mod storage;
 
+use std::cell::Cell;
 use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard};
+use std::thread::LocalKey;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use micro_db::{Geometry, Handle, RamStorage, Ring, Table};
@@ -107,6 +109,69 @@ pub struct RestoreReport {
     pub entities: Vec<EntityRestore>,
 }
 
+pub const ENTITY_SNAPSHOT_MAX_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntitySnapshot {
+    entity: EntityType,
+    key_size: usize,
+    record_size: usize,
+    count: usize,
+    data: Vec<u8>,
+}
+
+impl EntitySnapshot {
+    pub fn entity(&self) -> EntityType {
+        self.entity
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn key(&self, index: usize) -> Option<&[u8]> {
+        if index >= self.count {
+            return None;
+        }
+        let stride = self.key_size + self.record_size;
+        let start = index * stride;
+        Some(&self.data[start..start + self.key_size])
+    }
+
+    pub fn record(&self, index: usize) -> Option<&[u8]> {
+        if index >= self.count {
+            return None;
+        }
+        let stride = self.key_size + self.record_size;
+        let start = index * stride + self.key_size;
+        Some(&self.data[start..start + self.record_size])
+    }
+}
+
+thread_local! {
+    static IN_DOMAIN_CALLBACK: Cell<bool> = const { Cell::new(false) };
+    static IN_COMMAND_EXECUTOR: Cell<bool> = const { Cell::new(false) };
+}
+
+struct ThreadFlagGuard(&'static LocalKey<Cell<bool>>);
+
+impl ThreadFlagGuard {
+    fn enter(key: &'static LocalKey<Cell<bool>>) -> Self {
+        key.with(|flag| flag.set(true));
+        Self(key)
+    }
+}
+
+impl Drop for ThreadFlagGuard {
+    fn drop(&mut self) {
+        self.0.with(|flag| flag.set(false));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lifecycle {
     RamOnly,
@@ -180,12 +245,114 @@ impl DomainHandle {
         visit(&self.lock())
     }
 
-    pub fn with_mut<R>(&self, visit: impl FnOnce(&mut Domain) -> R) -> R {
-        visit(&mut self.lock())
+    pub fn with_mut<R>(&self, visit: impl FnOnce(&mut Domain) -> R) -> Result<R> {
+        let _flag = ThreadFlagGuard::enter(&IN_DOMAIN_CALLBACK);
+        let mut domain = self.lock_checked()?;
+        Ok(visit(&mut domain))
     }
 
     pub fn lock(&self) -> MutexGuard<'_, Domain> {
         self.0.lock().unwrap()
+    }
+
+    fn lock_checked(&self) -> Result<MutexGuard<'_, Domain>> {
+        self.0.lock().map_err(|_| Error::InvalidState)
+    }
+
+    pub fn entity_put(
+        &self,
+        entity: EntityType,
+        key: &[u8],
+        record: &[u8],
+        meta: FactMeta,
+    ) -> Result<bool> {
+        self.lock_checked()?.entity_put(entity, key, record, meta)
+    }
+
+    pub fn entity_get(&self, entity: EntityType, key: &[u8], out: &mut [u8]) -> Result<()> {
+        self.lock_checked()?.entity_get(entity, key, out)
+    }
+
+    pub fn entity_meta(&self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
+        self.lock_checked()?.entity_meta(entity, key)
+    }
+
+    pub fn entity_remove(&self, entity: EntityType, key: &[u8], meta: FactMeta) -> Result<()> {
+        self.lock_checked()?.entity_remove(entity, key, meta)
+    }
+
+    pub fn entity_snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
+        self.lock_checked()?.snapshot(entity)
+    }
+
+    pub fn entity_record_len(&self, entity: EntityType) -> Result<usize> {
+        self.lock_checked()?
+            .entity_record_len(entity)
+            .ok_or(Error::NotFound)
+    }
+
+    pub fn payload_put(
+        &self,
+        target: Option<FactTarget<'_>>,
+        meta: FactMeta,
+        payload: &[u8],
+    ) -> Result<PayloadRef> {
+        self.lock_checked()?.payload_put(target, meta, payload)
+    }
+
+    pub fn payload_get(&self, reference: PayloadRef, out: &mut [u8]) -> Result<()> {
+        self.lock_checked()?.payload_get(reference, out)
+    }
+
+    pub fn register_command(
+        &self,
+        command_type: u32,
+        handler: impl Fn(&[u8]) -> Result<()> + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.lock_checked()?.register_command(command_type, handler)
+    }
+
+    pub fn post(
+        &self,
+        command_type: u32,
+        args: &[u8],
+        target: Option<FactTarget<'_>>,
+        meta: FactMeta,
+    ) -> Result<()> {
+        if IN_DOMAIN_CALLBACK.with(Cell::get) || IN_COMMAND_EXECUTOR.with(Cell::get) {
+            return Err(Error::InvalidState);
+        }
+        let prepared = {
+            let mut domain = self.lock_checked()?;
+            domain.prepare_post(command_type, args, target, meta)?
+        };
+        let _executor_flag = ThreadFlagGuard::enter(&IN_COMMAND_EXECUTOR);
+        let lane = Arc::clone(&prepared.lane);
+        let _lane = lane.lock().map_err(|_| Error::InvalidState)?;
+        (prepared.handler)(&prepared.args)?;
+        let mut domain = self.lock_checked()?;
+        domain.complete_post(&prepared);
+        Ok(())
+    }
+
+    pub fn dispatch_once(&self) -> Result<usize> {
+        Ok(self.lock_checked()?.dispatch_once())
+    }
+
+    pub fn dispatch_handle(&self) -> Result<DispatchHandle> {
+        Ok(self.lock_checked()?.dispatch_handle())
+    }
+
+    pub fn subscriber_drops(&self) -> Result<u64> {
+        Ok(self.lock_checked()?.subscriber_drops())
+    }
+
+    pub fn gaps(&self) -> Result<u32> {
+        Ok(self.lock_checked()?.gaps())
+    }
+
+    pub fn dropped_facts(&self) -> Result<u64> {
+        Ok(self.lock_checked()?.dropped_facts())
     }
 }
 
@@ -433,6 +600,40 @@ impl Domain {
             None,
         );
         Ok(())
+    }
+
+    fn snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
+        let table = self.table(entity)?;
+        let desc = self.entity(entity)?.desc;
+        let count = table.len();
+        let stride = desc
+            .key_size
+            .checked_add(desc.record_size)
+            .ok_or(Error::InvalidSize)?;
+        let total = count.checked_mul(stride).ok_or(Error::InvalidSize)?;
+        if total > ENTITY_SNAPSHOT_MAX_BYTES {
+            return Err(Error::InvalidSize);
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(total).map_err(|_| Error::NoMemory)?;
+        data.resize(total, 0);
+        let mut index = 0usize;
+        table.iter(|_, _, key, record| {
+            let start = index * stride;
+            data[start..start + desc.key_size].copy_from_slice(key);
+            data[start + desc.key_size..start + stride].copy_from_slice(record);
+            index += 1;
+        })?;
+        if index != count {
+            return Err(Error::Corrupt);
+        }
+        Ok(EntitySnapshot {
+            entity,
+            key_size: desc.key_size,
+            record_size: desc.record_size,
+            count,
+            data,
+        })
     }
 
     /// Borrowed iteration; the callback cannot mutate this domain (borrow checker).

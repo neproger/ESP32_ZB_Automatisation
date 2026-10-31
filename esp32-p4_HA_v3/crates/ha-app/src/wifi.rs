@@ -183,11 +183,13 @@ fn remember_known(domain: &DomainHandle, ssid: &str, password: &str) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    let changed = domain.with_mut(|domain| {
-        domain
-            .entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta)
-            .unwrap_or(false)
-    });
+    let changed = domain
+        .with_mut(|domain| {
+            domain
+                .entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
     if changed {
         crate::store::save_domain(ENTITY_WIFI_KNOWN, &key, &encoded);
     }
@@ -334,7 +336,7 @@ fn publish_status(domain: &DomainHandle) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    domain.with_mut(|domain| {
+    let _ = domain.with_mut(|domain| {
         let key = WIFI_DEVICE_UID.to_le_bytes();
         let _ = domain.entity_put(ENTITY_WIFI_STATUS, &key, &record, meta);
     });
@@ -353,7 +355,7 @@ fn publish_scan(domain: &DomainHandle, results: &[(String, i8)]) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    domain.with_mut(|domain| {
+    let _ = domain.with_mut(|domain| {
         let key = WIFI_DEVICE_UID.to_le_bytes();
         let _ = domain.entity_put(ENTITY_WIFI_SCAN, &key, &record.encode(), meta);
     });

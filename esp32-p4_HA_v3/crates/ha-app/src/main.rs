@@ -94,7 +94,7 @@ fn main() {
     let (zigbee, zigbee_state) = zigbee_service::start(domain.clone());
     {
         let command_state = std::sync::Arc::clone(&zigbee_state);
-        domain.with_mut(|domain| {
+        if let Err(error) = domain.with_mut(|domain| {
             domain
                 .register_command(COMMAND_PROPERTY, move |args| {
                     let command =
@@ -108,7 +108,9 @@ fn main() {
             domain
                 .register_command(COMMAND_WIFI_CONNECT, wifi::connect_from_args)
                 .expect("wifi connect executor");
-        });
+        }) {
+            log::error!("domain: command registration failed: {error:?}");
+        }
     }
     if display::start() {
         domain.with(|domain| display::rebuild(domain));
@@ -127,7 +129,9 @@ fn main() {
         .stack_size(4096)
         .spawn(move || loop {
             dispatch.wait();
-            dispatcher_domain.with_mut(|domain| domain.dispatch_once());
+            if let Err(error) = dispatcher_domain.with_mut(|domain| domain.dispatch_once()) {
+                log::error!("domain: dispatcher failed: {error:?}");
+            }
         })
         .expect("dispatcher thread");
     // shortcut: display/web drain loops use a 20 ms timeout to keep LVGL ticks
@@ -382,7 +386,7 @@ fn main() {
                     log::info!("time: local clock ready (time rules use Location tz)");
                 }
                 last_minute = Some((minutes, weekday));
-                domain.with_mut(|domain| {
+                if let Err(error) = domain.with_mut(|domain| {
                     publish_system_time(domain, minutes, weekday);
                     publish_event(
                         domain,
@@ -391,7 +395,9 @@ fn main() {
                             event: EVENT_MINUTE_TICK,
                         },
                     );
-                });
+                }) {
+                    log::warn!("domain: time publish failed: {error:?}");
+                }
             }
         }
         let now = now_ms();

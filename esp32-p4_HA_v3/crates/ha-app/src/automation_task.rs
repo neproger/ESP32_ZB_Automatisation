@@ -46,7 +46,7 @@ fn reload(domain: &Domain, engine: &mut ha_automation::RuleEngine) {
 }
 
 fn emit(domain: &DomainHandle, actions: &ha_automation::Actions) {
-    domain.with_mut(|domain| {
+    if let Err(error) = domain.with_mut(|domain| {
         for command in actions.iter() {
             let bytes = command.encode();
             let meta = ha_domain::FactMeta {
@@ -61,7 +61,9 @@ fn emit(domain: &DomainHandle, actions: &ha_automation::Actions) {
                 );
             }
         }
-    });
+    }) {
+        log::warn!("automation: command lane unavailable: {error:?}");
+    }
 }
 
 fn system_minute(domain: &Domain) -> Option<(u16, u8)> {
