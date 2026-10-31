@@ -16,11 +16,13 @@
 //! know what keys or generations mean.
 
 mod flash;
+mod region;
 mod ring;
 mod storage;
 mod table;
 pub use flash::sim::SimFlash;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
+pub use region::{RegionLocation, RegionManager, RegionView};
 pub use storage::{FlashStorage, RamFlashStorage, RamStorage, Storage};
 
 pub use ring::Ring;
