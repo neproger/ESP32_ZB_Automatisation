@@ -1,7 +1,7 @@
 //! Canonical HA model, ported from V2 `ha_model` with the same numbers and
 //! record layouts. Domain stores these records but does not interpret them.
 
-use crate::Value;
+use crate::{Value, ValueType};
 
 pub type EntityId = u64;
 pub type DeviceId = u64;
@@ -1293,11 +1293,14 @@ pub enum RuleCommandValue {
 }
 
 impl RuleCommandValue {
-    pub fn encode(self) -> [u8; RULE_COMMAND_VALUE_LEN] {
+    pub fn encode(self) -> AbiResult<[u8; RULE_COMMAND_VALUE_LEN]> {
         let mut out = [0u8; RULE_COMMAND_VALUE_LEN];
         match self {
             Self::None => {}
             Self::Scalar(value) => {
+                if value.kind == ValueType::None {
+                    return Err(AbiError::InvalidKind);
+                }
                 abi_put_u32(&mut out, RULE_COMMAND_KIND_OFFSET, 1);
                 abi_put_u32(&mut out, RULE_COMMAND_SCALAR_KIND_OFFSET, value.kind as u32);
                 let bytes = value.to_bytes();
@@ -1309,7 +1312,7 @@ impl RuleCommandValue {
                 abi_put_u32(&mut out, RULE_COMMAND_XY_Y_OFFSET, y.to_bits());
             }
         }
-        out
+        Ok(out)
     }
 
     pub fn decode(bytes: &[u8]) -> AbiResult<Self> {
@@ -1328,7 +1331,7 @@ impl RuleCommandValue {
             }
             1 => {
                 let scalar_kind = abi_get_u32(bytes, RULE_COMMAND_SCALAR_KIND_OFFSET);
-                if scalar_kind > 5 {
+                if !(1..=5).contains(&scalar_kind) {
                     return Err(AbiError::InvalidKind);
                 }
                 let bits = abi_get_u32(bytes, RULE_COMMAND_SCALAR_VALUE_OFFSET);
@@ -1362,14 +1365,14 @@ impl RuleAction {
         action: 0,
     };
 
-    pub fn encode(self) -> [u8; RULE_ACTION_LEN] {
+    pub fn encode(self) -> AbiResult<[u8; RULE_ACTION_LEN]> {
         let mut out = [0u8; RULE_ACTION_LEN];
         out[RULE_ACTION_REF_OFFSET..RULE_ACTION_REF_OFFSET + RULE_REF_LEN]
             .copy_from_slice(&self.reference.encode());
         out[RULE_ACTION_VALUE_OFFSET..RULE_ACTION_VALUE_OFFSET + RULE_COMMAND_VALUE_LEN]
-            .copy_from_slice(&self.value.encode());
+            .copy_from_slice(&self.value.encode()?);
         out[RULE_ACTION_ACTION_OFFSET] = self.action;
-        out
+        Ok(out)
     }
 
     pub fn decode(bytes: &[u8]) -> AbiResult<Self> {
@@ -1418,7 +1421,7 @@ impl RuleRecord {
         }
         for (index, action) in self.actions.iter().enumerate() {
             let start = RULE_ACTIONS_OFFSET + index * RULE_ACTION_LEN;
-            out[start..start + RULE_ACTION_LEN].copy_from_slice(&action.encode());
+            out[start..start + RULE_ACTION_LEN].copy_from_slice(&action.encode()?);
         }
         for (index, condition) in self.conditions.iter().enumerate() {
             let start = RULE_CONDITIONS_OFFSET + index * RULE_CONDITION_LEN;

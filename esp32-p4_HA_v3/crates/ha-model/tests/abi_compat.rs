@@ -163,6 +163,18 @@ fn counts_above_four_are_rejected() {
 }
 
 #[test]
+fn scalar_none_is_rejected() {
+    let mut bytes = *RULE;
+    let scalar_kind = RULE_ACTIONS_OFFSET + 32 + 16 + 4;
+    bytes[scalar_kind..scalar_kind + 4].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(RuleRecord::decode(&bytes), Err(AbiError::InvalidKind));
+
+    let mut rule = RuleRecord::decode(RULE).unwrap();
+    rule.actions[1].value = RuleCommandValue::Scalar(Value::NONE);
+    assert_eq!(rule.encode(), Err(AbiError::InvalidKind));
+}
+
+#[test]
 fn truncated_and_unknown_values_are_rejected() {
     assert_eq!(RuleRecord::decode(&RULE[..455]), Err(AbiError::InvalidSize));
     assert_eq!(RuleTrigger::decode(&RULE[..31]), Err(AbiError::InvalidSize));
