@@ -7,6 +7,9 @@ edition = "2021"
 name = "ha-app"
 harness = false
 
+[features]
+p4-lock-metrics = ["ha-domain/p4-lock-metrics"]
+
 [profile.dev]
 debug = true
 opt-level = "z"
@@ -53,3 +56,4 @@ remote_component = { name = "espressif/esp_lvgl_port", version = "^2" }
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_lcd_touch_gt911", version = "^1" }
+

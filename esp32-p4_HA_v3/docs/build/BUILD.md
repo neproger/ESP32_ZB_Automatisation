@@ -53,6 +53,15 @@ target-dir = C:/t/hav3
 
 Обычная сборка — около 1–1.5 минуты; полная после очистки — около 3–4 минут.
 
+P4 lock instrumentation (opt-in):
+
+```powershell
+.\tools\build-ha-app.ps1 -Features p4-lock-metrics
+```
+
+Feature добавляет `p4-lock` probe и счётчики Domain lock. Протокол испытаний —
+`docs/plan/STAGE_1D_4_P4_VALIDATION.md`.
+
 ### Прошивка
 
 Кастомная таблица разделов обязательна:

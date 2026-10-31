@@ -33,6 +33,8 @@ mod exec;
 mod frames;
 mod intake;
 mod interview;
+#[cfg(feature = "p4-lock-metrics")]
+mod p4_probe;
 mod store;
 mod system;
 mod web;
@@ -159,6 +161,8 @@ fn main() {
         })
         .expect("web drain thread");
     automation_task::spawn(domain.clone(), automation_rx);
+    #[cfg(feature = "p4-lock-metrics")]
+    p4_probe::start(domain.clone());
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
     let mut last_minute: Option<(u16, u8)> = None;

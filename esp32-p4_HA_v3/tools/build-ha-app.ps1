@@ -2,6 +2,10 @@
 # The normal path reuses the CMake cache; if it is stale, the script removes
 # only the esp-idf-sys CMake build and retries once. It never deletes flash or
 # the application sources.
+param(
+    [string]$Features = ''
+)
+
 $ErrorActionPreference = 'Continue'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -57,7 +61,12 @@ function Build-Sys([string]$buildRoot) {
 function Run-Cargo {
     Push-Location $app
     try {
-        & cargo build | Out-Host
+        $cargoArgs = @('build')
+        if ($Features) {
+            $cargoArgs += '--features'
+            $cargoArgs += $Features
+        }
+        & cargo @cargoArgs | Out-Host
         return $LASTEXITCODE
     } finally {
         Pop-Location

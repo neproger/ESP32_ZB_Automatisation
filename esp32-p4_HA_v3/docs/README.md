@@ -11,6 +11,8 @@
   canonical-модель, потоки данных, границы модулей.
 - [plan/V3_IMPLEMENTATION_PLAN.md](plan/V3_IMPLEMENTATION_PLAN.md) — этапы 0–6,
   правила выполнения, контрактные тесты и DoD.
+- [plan/STAGE_1D_4_P4_VALIDATION.md](plan/STAGE_1D_4_P4_VALIDATION.md) — P4
+  readiness, lock instrumentation и воспроизводимый hardware protocol.
 
 ## Аудиты
 

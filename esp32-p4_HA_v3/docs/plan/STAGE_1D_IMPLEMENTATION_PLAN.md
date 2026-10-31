@@ -346,3 +346,11 @@ cargo test --workspace
 переменной теперь является ошибкой компиляции. `Domain::post` ограничен
 `pub(crate)` и недоступен production-клиентам; `with_mut` помечен
 `#[doc(hidden)]`.
+
+P4 lock instrumentation is opt-in:
+
+```powershell
+.\tools\build-ha-app.ps1 -Features p4-lock-metrics
+```
+
+The protocol is in `docs/plan/STAGE_1D_4_P4_VALIDATION.md`.

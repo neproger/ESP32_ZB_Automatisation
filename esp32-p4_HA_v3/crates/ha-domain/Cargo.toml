@@ -3,6 +3,10 @@ name = "ha-domain"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+p4-lock-metrics = []
+
 [dependencies]
 micro-db = { path = "../micro-db" }
 ha-model = { path = "../ha-model" }
+
