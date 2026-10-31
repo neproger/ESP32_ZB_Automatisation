@@ -22,7 +22,7 @@ mod table;
 pub use flash::sim::SimFlash;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
 pub use persisted::{Fixed, PersistedTable};
-pub use storage::{FlashStorage, RamStorage, Storage};
+pub use storage::{FlashStorage, RamFlashStorage, RamStorage, Storage};
 
 pub use ring::Ring;
 pub use table::{Error, Handle, HandleStatus, Meta, Result, Table, View};

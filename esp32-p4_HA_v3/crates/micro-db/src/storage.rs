@@ -74,6 +74,14 @@ impl<F: NorFlash> FlashStorage<F> {
         self.flash
     }
 
+    pub fn compact(&mut self) -> Result<()> {
+        self.table.compact(&mut self.flash).map_err(Error::from)
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.table.bank_state()
+    }
+
     fn check_slot(&self, slot: u32) -> Result<()> {
         if slot as usize >= self.geometry.capacity {
             return Err(Error::InvalidArg);
@@ -283,6 +291,102 @@ impl Storage for RamStorage {
 
     fn sync(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+/// RAM hot copy over a flash journal: writes commit to flash first, then RAM.
+pub struct RamFlashStorage<F: NorFlash> {
+    geometry: Geometry,
+    ram: RamStorage,
+    flash: FlashStorage<F>,
+}
+
+impl<F: NorFlash> RamFlashStorage<F> {
+    pub fn open(flash: F, geometry: Geometry, persist_id: &str) -> Result<Self> {
+        let flash = FlashStorage::open(flash, geometry, persist_id)?;
+        let ram = RamStorage::new(geometry)?;
+        let mut storage = Self {
+            geometry,
+            ram,
+            flash,
+        };
+        storage.hydrate()?;
+        Ok(storage)
+    }
+
+    pub fn format(flash: F, geometry: Geometry, persist_id: &str) -> Result<Self> {
+        let flash = FlashStorage::format(flash, geometry, persist_id)?;
+        let ram = RamStorage::new(geometry)?;
+        Ok(Self {
+            geometry,
+            ram,
+            flash,
+        })
+    }
+
+    pub fn into_flash(self) -> F {
+        self.flash.into_flash()
+    }
+
+    pub fn compact(&mut self) -> Result<()> {
+        self.flash.compact()
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.flash.bank_state()
+    }
+
+    fn hydrate(&mut self) -> Result<()> {
+        let mut key = vec![0u8; self.geometry.key_size];
+        let mut payload = vec![0u8; self.geometry.payload_size];
+        for slot in 0..self.geometry.capacity as u32 {
+            let meta = self.flash.read_meta(slot)?;
+            if meta.used {
+                let meta = self.flash.read_slot(slot, &mut key, &mut payload)?;
+                self.ram.write_slot(slot, meta, &key, &payload)?;
+            } else {
+                self.ram.write_meta(slot, meta)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<F: NorFlash> Storage for RamFlashStorage<F> {
+    fn geometry(&self) -> Geometry {
+        self.geometry
+    }
+
+    fn read_meta(&self, slot: u32) -> Result<Meta> {
+        self.ram.read_meta(slot)
+    }
+
+    fn read_key(&self, slot: u32, out: &mut [u8]) -> Result<()> {
+        self.ram.read_key(slot, out)
+    }
+
+    fn read_slot(&self, slot: u32, key: &mut [u8], payload: &mut [u8]) -> Result<Meta> {
+        self.ram.read_slot(slot, key, payload)
+    }
+
+    fn write_slot(&mut self, slot: u32, meta: Meta, key: &[u8], payload: &[u8]) -> Result<()> {
+        self.flash.write_slot(slot, meta, key, payload)?;
+        self.ram.write_slot(slot, meta, key, payload)
+    }
+
+    fn write_meta(&mut self, slot: u32, meta: Meta) -> Result<()> {
+        self.flash.write_meta(slot, meta)?;
+        self.ram.write_meta(slot, meta)
+    }
+
+    fn clear_all(&mut self) -> Result<()> {
+        self.flash.clear_all()?;
+        self.ram.clear_all()
+    }
+
+    fn sync(&mut self) -> Result<()> {
+        self.flash.sync()?;
+        self.ram.sync()
     }
 }
 

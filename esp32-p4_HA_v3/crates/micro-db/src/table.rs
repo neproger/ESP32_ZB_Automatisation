@@ -1,8 +1,8 @@
 use core::borrow::Borrow;
 use core::hash::{Hash, Hasher};
 
-use crate::flash::Geometry;
-use crate::storage::Storage;
+use crate::flash::{Geometry, NorFlash};
+use crate::storage::{FlashStorage, RamFlashStorage, Storage};
 
 /// Operation outcome. Names match V2 `SYS_CODE_*` used by mstore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -476,6 +476,14 @@ impl<S: Storage> Table<S> {
         self.live == 0
     }
 
+    pub fn storage(&self) -> &S {
+        &self.storage
+    }
+
+    pub fn into_storage(self) -> S {
+        self.storage
+    }
+
     pub fn find(&self, key: &[u8]) -> Result<u32> {
         if key.len() != self.geometry.key_size {
             return Err(Error::InvalidSize);
@@ -749,11 +757,34 @@ impl<S: Storage> Table<S> {
     }
 }
 
+impl<F: NorFlash> Table<FlashStorage<F>> {
+    pub fn compact(&mut self) -> Result<()> {
+        self.storage.compact()
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.storage.bank_state()
+    }
+}
+
+impl<F: NorFlash> Table<RamFlashStorage<F>> {
+    pub fn compact(&mut self) -> Result<()> {
+        self.storage.compact()
+    }
+
+    pub fn bank_state(&self) -> (usize, u32) {
+        self.storage.bank_state()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flash::FlashError;
     use crate::ring::Ring;
-    use crate::{RamStorage, Storage};
+    use crate::{RamFlashStorage, RamStorage, SimFlash, Storage};
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     fn table() -> LegacyTable<u32, (i32, i32)> {
         LegacyTable::new(4).unwrap()
@@ -1390,5 +1421,180 @@ mod tests {
         table.free(handles[2]).unwrap();
         table.rebuild().unwrap();
         assert_eq!(table.find(&keys[2]), Err(Error::NotFound));
+    }
+
+    struct FaultFlags {
+        reads: Cell<usize>,
+        fail_read_at: Cell<Option<usize>>,
+        fail_write: Cell<bool>,
+        fail_erase: Cell<bool>,
+    }
+
+    struct FailingFlash {
+        inner: SimFlash,
+        flags: Rc<FaultFlags>,
+    }
+
+    impl FailingFlash {
+        fn new(flags: &Rc<FaultFlags>) -> Self {
+            Self {
+                inner: SimFlash::new(8192, 4096),
+                flags: Rc::clone(flags),
+            }
+        }
+    }
+
+    impl NorFlash for FailingFlash {
+        fn capacity(&self) -> usize {
+            self.inner.capacity()
+        }
+
+        fn erase_size(&self) -> usize {
+            self.inner.erase_size()
+        }
+
+        fn read(&self, offset: usize, out: &mut [u8]) -> core::result::Result<(), FlashError> {
+            let reads = self.flags.reads.get();
+            self.flags.reads.set(reads + 1);
+            if self.flags.fail_read_at.get() == Some(reads) {
+                return Err(FlashError::Io);
+            }
+            self.inner.read(offset, out)
+        }
+
+        fn write(
+            &mut self,
+            offset: usize,
+            data: &[u8],
+        ) -> core::result::Result<(), FlashError> {
+            if self.flags.fail_write.get() {
+                return Err(FlashError::Io);
+            }
+            self.inner.write(offset, data)
+        }
+
+        fn erase(&mut self, offset: usize, len: usize) -> core::result::Result<(), FlashError> {
+            if self.flags.fail_erase.get() {
+                return Err(FlashError::Io);
+            }
+            self.inner.erase(offset, len)
+        }
+    }
+
+    fn fault_flags() -> Rc<FaultFlags> {
+        Rc::new(FaultFlags {
+            reads: Cell::new(0),
+            fail_read_at: Cell::new(None),
+            fail_write: Cell::new(false),
+            fail_erase: Cell::new(false),
+        })
+    }
+
+    #[test]
+    fn ram_flash_reopen_hydrates_and_reuses_generation() {
+        let geometry = Geometry {
+            capacity: 1,
+            key_size: 8,
+            payload_size: 0,
+        };
+        let storage =
+            RamFlashStorage::format(SimFlash::new(8192, 4096), geometry, "ram_flash").unwrap();
+        let mut table = Table::open(geometry, storage).unwrap();
+        let handle = table.allocate(&byte_key(1), &[]).unwrap();
+        table.free(handle).unwrap();
+
+        let flash = table.into_storage().into_flash();
+        let storage = RamFlashStorage::open(flash, geometry, "ram_flash").unwrap();
+        let mut table = Table::open(geometry, storage).unwrap();
+        assert_eq!(table.check(handle), Ok(HandleStatus::Removed));
+
+        let reused = table.allocate(&byte_key(1), &[]).unwrap();
+        assert_eq!(reused.generation, 2);
+    }
+
+    #[test]
+    fn ram_flash_write_failure_keeps_ram_and_recovers() {
+        let geometry = byte_geometry();
+        let flags = fault_flags();
+        let flash = FailingFlash::new(&flags);
+        let storage = RamFlashStorage::format(flash, geometry, "ram_flash").unwrap();
+        let mut table = Table::open(geometry, storage).unwrap();
+        let handle = table
+            .allocate(&byte_key(1), &byte_payload(1))
+            .unwrap();
+        let before = table.len();
+
+        flags.fail_write.set(true);
+        assert_eq!(
+            table.allocate(&byte_key(2), &byte_payload(2)),
+            Err(Error::Io)
+        );
+        assert_eq!(table.len(), before);
+        assert!(table.find(&byte_key(1)).is_ok());
+        assert_eq!(table.find(&byte_key(2)), Err(Error::NotFound));
+        assert_eq!(table.check(handle), Ok(HandleStatus::Unchanged));
+        assert_eq!(table.update(handle, &byte_payload(3)), Err(Error::Io));
+        let mut out = [0u8; 12];
+        table.get(&byte_key(1), &mut out).unwrap();
+        assert_eq!(out, byte_payload(1));
+        assert_eq!(table.free(handle), Err(Error::Io));
+        assert!(table.find(&byte_key(1)).is_ok());
+        assert_eq!(table.clear(), Err(Error::Io));
+        assert_eq!(table.len(), before);
+        assert!(table.find(&byte_key(1)).is_ok());
+
+        flags.fail_write.set(false);
+        table.allocate(&byte_key(2), &byte_payload(2)).unwrap();
+        assert!(table.update(handle, &byte_payload(3)).unwrap());
+        assert!(matches!(
+            table.check(handle),
+            Ok(HandleStatus::Changed(_))
+        ));
+    }
+
+    #[test]
+    fn ram_flash_compact_keeps_logical_state() {
+        let geometry = byte_geometry();
+        let storage =
+            RamFlashStorage::format(SimFlash::new(8192, 4096), geometry, "ram_flash").unwrap();
+        let mut table = Table::open(geometry, storage).unwrap();
+        let handle = table
+            .allocate(&byte_key(1), &byte_payload(1))
+            .unwrap();
+        table
+            .allocate(&byte_key(2), &byte_payload(2))
+            .unwrap();
+
+        let len = table.len();
+        table.compact().unwrap();
+        assert_eq!(table.len(), len);
+        let mut out = [0u8; 12];
+        table.get(&byte_key(1), &mut out).unwrap();
+        assert_eq!(out, byte_payload(1));
+        assert_eq!(table.check(handle), Ok(HandleStatus::Unchanged));
+
+        let flash = table.into_storage().into_flash();
+        let storage = RamFlashStorage::open(flash, geometry, "ram_flash").unwrap();
+        let table = Table::open(geometry, storage).unwrap();
+        table.get(&byte_key(2), &mut out).unwrap();
+        assert_eq!(out, byte_payload(2));
+    }
+
+    #[test]
+    fn ram_flash_hydration_failure_returns_error() {
+        let geometry = byte_geometry();
+        let flags = fault_flags();
+        let flash = FailingFlash::new(&flags);
+        let storage = RamFlashStorage::format(flash, geometry, "ram_flash").unwrap();
+        let mut table = Table::open(geometry, storage).unwrap();
+        table
+            .allocate(&byte_key(1), &byte_payload(1))
+            .unwrap();
+        let flash = table.into_storage().into_flash();
+
+        flags
+            .fail_read_at
+            .set(Some(flags.reads.get() + 4));
+        assert!(RamFlashStorage::open(flash, geometry, "ram_flash").is_err());
     }
 }
