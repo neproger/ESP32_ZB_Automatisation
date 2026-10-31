@@ -13,6 +13,8 @@ use crate::{Error, Geometry, Meta, NorFlash, Result};
 const RAM_META_LEN: usize = 12;
 
 pub trait Storage {
+    fn geometry(&self) -> Geometry;
+
     fn read_meta(&self, slot: u32) -> Result<Meta>;
     fn read_key(&self, slot: u32, out: &mut [u8]) -> Result<()>;
     fn read_slot(&self, slot: u32, key: &mut [u8], payload: &mut [u8]) -> Result<Meta>;
@@ -88,6 +90,10 @@ impl<F: NorFlash> FlashStorage<F> {
 }
 
 impl<F: NorFlash> Storage for FlashStorage<F> {
+    fn geometry(&self) -> Geometry {
+        self.geometry
+    }
+
     fn read_meta(&self, slot: u32) -> Result<Meta> {
         self.check_slot(slot)?;
         self.table
@@ -193,6 +199,10 @@ impl RamStorage {
 }
 
 impl Storage for RamStorage {
+    fn geometry(&self) -> Geometry {
+        self.geometry
+    }
+
     fn read_meta(&self, slot: u32) -> Result<Meta> {
         let offset = self.offset(slot)?;
         let slot = &self.slots[offset..offset + Self::slot_len(&self.geometry)?];

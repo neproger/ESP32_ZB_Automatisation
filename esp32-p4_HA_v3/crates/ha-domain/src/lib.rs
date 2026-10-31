@@ -17,7 +17,7 @@ mod fact;
 use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use micro_db::{Handle, Ring, Table};
+use micro_db::{Geometry, Handle, RamStorage, Ring, Table};
 
 pub use fact::{
     EntityType, EventId, Fact, FactKind, FactMeta, FactTarget, Filter, Op, PayloadRef, Value,
@@ -81,7 +81,7 @@ pub struct EntityMeta {
 
 struct EntityTable {
     desc: EntityDesc<'static>,
-    table: Table<Vec<u8>, Vec<u8>>,
+    table: Table<RamStorage>,
 }
 
 enum SubscriptionSink {
@@ -193,10 +193,14 @@ impl Domain {
         if self.entity(desc.entity).is_ok() {
             return Err(Error::AlreadyExists);
         }
-        self.entities.push(EntityTable {
-            desc,
-            table: Table::new(desc.capacity)?,
-        });
+        let geometry = Geometry {
+            capacity: desc.capacity,
+            key_size: desc.key_size,
+            payload_size: desc.record_size,
+        };
+        let storage = RamStorage::new(geometry)?;
+        let table = Table::open(geometry, storage)?;
+        self.entities.push(EntityTable { desc, table });
         Ok(())
     }
 
@@ -245,9 +249,7 @@ impl Domain {
             return Err(Error::InvalidSize);
         }
         let table = &self.entity(entity)?.table;
-        let slot = table.find(key)?;
-        let view = table.read(slot)?;
-        out[..record_size].copy_from_slice(view.payload);
+        table.get(key, out)?;
         Ok(())
     }
 
@@ -293,9 +295,7 @@ impl Domain {
         mut visit: impl FnMut(&[u8], &[u8]),
     ) -> Result<()> {
         let table = &self.entity(entity)?.table;
-        for view in table.iter() {
-            visit(view.key, view.payload);
-        }
+        table.iter(|_, _, key, record| visit(key, record))?;
         Ok(())
     }
 
@@ -480,12 +480,13 @@ impl Domain {
                     Handle {
                         slot,
                         generation: meta.generation,
+                        version: meta.version,
                     },
-                    record.to_vec(),
+                    record,
                 )
             }
             Err(Error::NotFound) => {
-                table.allocate(key.to_vec(), record.to_vec())?;
+                table.allocate(key, record)?;
                 Ok(true)
             }
             Err(err) => Err(err),
@@ -499,6 +500,7 @@ impl Domain {
         table.free(Handle {
             slot,
             generation: meta.generation,
+            version: meta.version,
         })
     }
 

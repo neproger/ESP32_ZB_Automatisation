@@ -25,4 +25,4 @@ pub use persisted::{Fixed, PersistedTable};
 pub use storage::{FlashStorage, RamStorage, Storage};
 
 pub use ring::Ring;
-pub use table::{Error, Handle, Meta, Result, Table, View};
+pub use table::{Error, Handle, HandleStatus, Meta, Result, Table, View};

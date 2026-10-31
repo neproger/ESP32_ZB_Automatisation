@@ -8,7 +8,8 @@
 use core::hash::Hash;
 
 use crate::flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash, KIND_SET};
-use crate::{Error, Handle, Meta, Table};
+use crate::table::LegacyTable;
+use crate::{Error, Handle, Meta};
 
 pub trait Fixed: Copy + Eq + Hash {
     const SIZE: usize;
@@ -44,7 +45,7 @@ impl From<FlashError> for Error {
 }
 
 pub struct PersistedTable<K: Fixed, V: Fixed> {
-    table: Table<K, V>,
+    table: LegacyTable<K, V>,
     flash: FlashTable,
     /// Flash journal slot -> key; `None` means the slot is free/reusable.
     journal: Vec<Option<K>>,
@@ -65,7 +66,7 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
             payload_size: V::SIZE,
         };
         let flash_table = FlashTable::open(flash, geometry, persist_id)?;
-        let mut table = Table::new(capacity)?;
+        let mut table = LegacyTable::new(capacity)?;
         let mut journal = vec![None; capacity];
         let mut key_bytes = vec![0u8; K::SIZE];
         let mut payload_bytes = vec![0u8; V::SIZE];
@@ -113,7 +114,7 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
         };
         let flash_table = FlashTable::format(flash, geometry, persist_id)?;
         Ok(Self {
-            table: Table::new(capacity)?,
+            table: LegacyTable::new(capacity)?,
             flash: flash_table,
             journal: vec![None; capacity],
             key_buf: vec![0u8; K::SIZE],
