@@ -70,7 +70,9 @@
 
 ### Phase 2 — `DomainHandle` API
 
-1. Удалить публичные `lock()` и `with()`.
+1. **Не удалять** `lock()`/`with()` в этой фазе: они остаются deprecated
+   до завершения миграции call sites, иначе workspace перестанет
+   компилироваться.
 2. Добавить explicit methods:
    - entity_put/get/meta/remove;
    - entity_snapshot;
@@ -92,8 +94,9 @@
 5. `with_mut` оставить `#[doc(hidden)]`, возвращающим `Result<R>`,
    только для adapter/device; новые call sites запрещены.
 
-**Gate 2:** `DomainHandle` не отдаёт guard; command и snapshot API
-покрыты unit-тестами; `with_mut` allowlist проверен.
+**Gate 2:** новый API и snapshot покрыты unit-тестами; workspace
+компилируется; старые `lock`/`with` существуют только как deprecated
+переходный путь.
 
 ### Phase 3 — Migration `automation_task.rs`
 
@@ -153,20 +156,34 @@ radio/store операций.
 
 **Gate 6:** zigbee service tests зелёные; no deadlock in host scenarios.
 
-### Phase 7 — Static check и документация
+### Phase 7 — Удаление старого API
+
+1. Убедиться, что Phases 3–6 удалили все production call sites
+   `DomainHandle::lock()`/`with()`.
+2. Удалить `lock()` и `with()` из `DomainHandle`.
+3. Убедиться, что нет обращений в `main.rs`, `zigbee_service.rs`,
+   `automation_task.rs`, `wifi.rs`, tests или других crates.
+4. Workspace tests должны проходить после удаления.
+5. Не оставлять `lock`/`with` как «временный публичный контракт».
+
+**Gate 7:** grep не находит `.lock()`/`.with(` на `DomainHandle`;
+workspace собирается и тесты зелёные.
+
+### Phase 8 — Static check и документация
 
 1. Добавить проверку allowlist `.with_mut(` call sites:
    - разрешены только существующие adapter/device mutation paths;
    - запрещены `automation_task.rs`, `wifi.rs`, UI/Web, executor.
 2. Проверить отсутствие `post()` внутри `with_mut`/executor.
-3. Обновить архитектурную документацию:
+3. Проверить отсутствие `lock`/`with` в публичном API и call sites.
+4. Обновить архитектурную документацию:
    - `V3_LAYERS.md` / `V3_IMPLEMENTATION_PLAN.md` при необходимости;
    - зафиксировать, что `lock`/`with` удалены, `with_mut` переходный.
-4. Зафиксировать known limitations.
+5. Зафиксировать known limitations.
 
-**Gate 7:** static grep/check чистый; docs соответствуют коду.
+**Gate 8:** static grep/check чистый; docs соответствуют коду.
 
-### Phase 8 — Full verification
+### Phase 9 — Full verification
 
 1. `cargo test -p ha-domain`
 2. `cargo test -p micro-db`
@@ -180,8 +197,10 @@ radio/store операций.
 
 ### API
 
-- [ ] В публичном API нет `DomainHandle::lock()`.
-- [ ] В публичном API нет `DomainHandle::with()`.
+- [ ] Новый API добавлен до удаления старых методов; промежуточные
+      коммиты компилируются.
+- [ ] В публичном API нет `DomainHandle::lock()` после Phase 7.
+- [ ] В публичном API нет `DomainHandle::with()` после Phase 7.
 - [ ] `EntitySnapshot` owned, имеет checked размер и failible allocation.
 - [ ] `DomainHandle` методы не паникуют при poison.
 - [ ] `with_mut` отсутствует в новых call sites и помечен переходным.
@@ -255,11 +274,13 @@ radio/store операций.
 4. `ha-app: move wifi reads/writes off Domain lock`
 5. `ha-app: migrate main intake and UI/Web reads`
 6. `ha-app: migrate zigbee service call sites`
-7. `docs: update Stage 1d API and locking notes`
+7. `ha-domain: remove legacy DomainHandle lock and with`
+8. `docs: update Stage 1d API and locking notes`
 
 Каждый commit должен independently проходить workspace tests; production
 main может временно использовать transitional `with_mut` до завершения
-соответствующего phase.
+соответствующего phase. Удаление `lock`/`with` — только после миграции
+всех call sites (Phase 7).
 
 ## 7. Stop conditions
 
@@ -274,7 +295,24 @@ main может временно использовать transitional `with_mut
 - обнаружен обратный порядок `Domain mutex → command lane`;
 - изменение требует RegionManager/Zigbee/production wiring.
 
-## 8. Definition of done
+## 8. Known limitations
+
+- Thread-local reentrant detection ловит только тот же поток. Executor
+  запрещено рекурсивно вызывать `post()` и запрещено порождать поток,
+  который вызывает `post()` и затем ожидается executor'ом: иначе возможна
+  блокировка на command lane. Это контрактное ограничение, а не
+  обнаруженный deadlock.
+- Command lane сериализует выполнение, но не гарантирует строгий FIFO
+  между потоками.
+- `with_mut` остаётся переходным adapter/device исключением; sink может
+  выполняться под Domain lock до Stage 2.
+- Лимит 16 KiB действует на один `EntitySnapshot`; несколько одновременно
+  существующих snapshot могут потребовать больше памяти.
+- Poison command lane после panic executor не восстанавливается
+  автоматически; последующие `post` → `InvalidState`.
+- P4/hardware не проверяются в Stage 1d.3.
+
+## 9. Definition of done
 
 - Все acceptance criteria §4 выполнены.
 - Полный test matrix §5 зелёный.
