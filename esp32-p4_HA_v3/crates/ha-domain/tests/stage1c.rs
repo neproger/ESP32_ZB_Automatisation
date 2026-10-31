@@ -424,6 +424,51 @@ fn storage_write_error_returns_err_without_fact() {
     assert_eq!(*seen.lock().unwrap(), 1);
 }
 
+struct WrongGeometryStorage<S> {
+    inner: S,
+    geometry: Geometry,
+}
+
+impl<S: Storage> Storage for WrongGeometryStorage<S> {
+    fn geometry(&self) -> Geometry {
+        self.geometry
+    }
+
+    fn read_meta(&self, slot: u32) -> Result<Meta, Error> {
+        self.inner.read_meta(slot)
+    }
+
+    fn read_key(&self, slot: u32, out: &mut [u8]) -> Result<(), Error> {
+        self.inner.read_key(slot, out)
+    }
+
+    fn read_slot(&self, slot: u32, key: &mut [u8], payload: &mut [u8]) -> Result<Meta, Error> {
+        self.inner.read_slot(slot, key, payload)
+    }
+
+    fn write_slot(
+        &mut self,
+        slot: u32,
+        meta: Meta,
+        key: &[u8],
+        payload: &[u8],
+    ) -> Result<(), Error> {
+        self.inner.write_slot(slot, meta, key, payload)
+    }
+
+    fn write_meta(&mut self, slot: u32, meta: Meta) -> Result<(), Error> {
+        self.inner.write_meta(slot, meta)
+    }
+
+    fn clear_all(&mut self) -> Result<(), Error> {
+        self.inner.clear_all()
+    }
+
+    fn sync(&mut self) -> Result<(), Error> {
+        self.inner.sync()
+    }
+}
+
 struct TableFailProvider {
     inner: RegionProvider,
     fail: Arc<Mutex<bool>>,
@@ -437,17 +482,24 @@ impl StorageProvider for TableFailProvider {
             *fail = false;
             drop(fail);
             let key = desc.persist_key.ok_or(Error::InvalidArg)?;
+            let geometry = Geometry {
+                capacity: desc.capacity,
+                key_size: desc.key_size,
+                payload_size: desc.record_size,
+            };
             let view =
                 self.inner
                     .manager
                     .bind(key, desc.capacity, desc.key_size, desc.record_size)?;
-            drop(view);
+            let storage = RamFlashStorage::open(view, geometry, key)?;
             let wrong = Geometry {
-                capacity: desc.capacity,
-                key_size: desc.key_size,
                 payload_size: desc.record_size + 1,
+                ..geometry
             };
-            return Ok(StorageBackend::new(RamStorage::new(wrong)?));
+            return Ok(StorageBackend::new(WrongGeometryStorage {
+                inner: storage,
+                geometry: wrong,
+            }));
         }
         drop(fail);
         self.inner.open(desc)
