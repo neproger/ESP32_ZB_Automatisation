@@ -314,6 +314,9 @@ main может временно использовать transitional `with_mut
   существующих snapshot могут потребовать больше памяти.
 - Poison command lane после panic executor не восстанавливается
   автоматически; последующие `post` → `InvalidState`.
+- Host-harness `domain_dispatch.rs` проверяет Domain locking/backpressure,
+  но не LVGL/httpd. Callback lock-contract проверяется косвенно через
+  poison Domain и не доказывает отсутствие блокировки UI/WS.
 - P4/hardware не проверяются в Stage 1d.3.
 
 ## 9. Definition of done
