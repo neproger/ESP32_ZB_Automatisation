@@ -124,18 +124,25 @@ pub fn rssi() -> Option<i16> {
 }
 
 fn known_records(domain: &DomainHandle) -> Vec<(u32, WifiKnownRecord)> {
-    domain.with(|domain| {
-        let mut records = Vec::new();
-        let _ = domain.entity_iter(ENTITY_WIFI_KNOWN, |key, record| {
-            if key.len() == 4 && record.len() == 96 {
-                let id = u32::from_le_bytes(key.try_into().expect("known key"));
-                if let Some(record) = WifiKnownRecord::decode(record) {
-                    records.push((id, record));
-                }
+    let Ok(snapshot) = domain.entity_snapshot(ENTITY_WIFI_KNOWN) else {
+        return Vec::new();
+    };
+    let mut records = Vec::new();
+    for index in 0..snapshot.len() {
+        let Some(key) = snapshot.key(index) else {
+            continue;
+        };
+        let Some(record) = snapshot.record(index) else {
+            continue;
+        };
+        if key.len() == 4 && record.len() == 96 {
+            let id = u32::from_le_bytes(key.try_into().expect("known key"));
+            if let Some(record) = WifiKnownRecord::decode(record) {
+                records.push((id, record));
             }
-        });
-        records
-    })
+        }
+    }
+    records
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -184,11 +191,7 @@ fn remember_known(domain: &DomainHandle, ssid: &str, password: &str) {
         value: Value::NONE,
     };
     let changed = domain
-        .with_mut(|domain| {
-            domain
-                .entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta)
-                .unwrap_or(false)
-        })
+        .entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta)
         .unwrap_or(false);
     if changed {
         crate::store::save_domain(ENTITY_WIFI_KNOWN, &key, &encoded);
@@ -336,10 +339,8 @@ fn publish_status(domain: &DomainHandle) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    let _ = domain.with_mut(|domain| {
-        let key = WIFI_DEVICE_UID.to_le_bytes();
-        let _ = domain.entity_put(ENTITY_WIFI_STATUS, &key, &record, meta);
-    });
+    let key = WIFI_DEVICE_UID.to_le_bytes();
+    let _ = domain.entity_put(ENTITY_WIFI_STATUS, &key, &record, meta);
 }
 
 fn publish_scan(domain: &DomainHandle, results: &[(String, i8)]) {
@@ -355,10 +356,8 @@ fn publish_scan(domain: &DomainHandle, results: &[(String, i8)]) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    let _ = domain.with_mut(|domain| {
-        let key = WIFI_DEVICE_UID.to_le_bytes();
-        let _ = domain.entity_put(ENTITY_WIFI_SCAN, &key, &record.encode(), meta);
-    });
+    let key = WIFI_DEVICE_UID.to_le_bytes();
+    let _ = domain.entity_put(ENTITY_WIFI_SCAN, &key, &record.encode(), meta);
 }
 
 fn now_ms() -> u64 {
