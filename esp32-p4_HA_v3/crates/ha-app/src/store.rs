@@ -143,28 +143,33 @@ type DomainTable = PersistedTable<DomainKey, DomainSlot>;
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 static DOMAIN_DB: Mutex<Option<DomainTable>> = Mutex::new(None);
 
+/// A partition may be formatted only when every byte is erased.
+fn partition_erased<F: NorFlash>(flash: &mut F) -> bool {
+    let capacity = flash.capacity();
+    let mut offset = 0;
+    let mut buf = [0u8; 256];
+    while offset < capacity {
+        let len = (capacity - offset).min(buf.len());
+        if flash.read(offset, &mut buf[..len]).is_err() {
+            return false;
+        }
+        if buf[..len].iter().any(|byte| *byte != 0xFF) {
+            return false;
+        }
+        offset += len;
+    }
+    true
+}
+
 pub fn init() {
     let mut flash = CFlash::MSTORE;
-    let size = flash.capacity();
-    let mut header = [0u8; 64];
-    if flash.read(0, &mut header).is_err() {
-        log::error!("registry: mstore not readable");
-        return;
-    }
-    // With two banks either header can be the active one; only a fully erased
-    // region may be formatted.
-    let mut standby_header = [0u8; 64];
-    let standby_erased = flash
-        .read(size / 2, &mut standby_header)
-        .map(|()| standby_header.iter().all(|byte| *byte == 0xFF))
-        .unwrap_or(false);
-    let erased = header.iter().all(|byte| *byte == 0xFF) && standby_erased;
-
     let registry = match Registry::open(&mut flash, CAPACITY) {
         Ok(registry) => registry,
-        // Only a fully erased partition may be initialised. A corrupt header or
-        // CRC is a diagnostic condition: keep the data for inspection.
-        Err(error) if erased => {
+        Err(error) => {
+            if !partition_erased(&mut flash) {
+                log::error!("registry: not mounted ({error:?}); data preserved");
+                return;
+            }
             log::warn!("registry: mstore empty ({error:?}); initialising");
             match Registry::format(&mut flash, CAPACITY) {
                 Ok(registry) => registry,
@@ -173,10 +178,6 @@ pub fn init() {
                     return;
                 }
             }
-        }
-        Err(error) => {
-            log::error!("registry: not mounted ({error:?}); data preserved");
-            return;
         }
     };
     let (bank, seq) = registry.bank_state();
@@ -196,12 +197,6 @@ fn init_domain() -> Option<DomainTable> {
         log::error!("domain: partition not found");
         return None;
     }
-    let mut first = [0u8; 64];
-    let mut second = [0u8; 64];
-    let erased = flash.read(0, &mut first).is_ok()
-        && first.iter().all(|byte| *byte == 0xFF)
-        && flash.read(size / 2, &mut second).is_ok()
-        && second.iter().all(|byte| *byte == 0xFF);
     match DomainTable::open(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
         Ok(table) => {
             let (bank, seq) = table.bank_state();
@@ -211,17 +206,11 @@ fn init_domain() -> Option<DomainTable> {
             );
             Some(table)
         }
-        Err(micro_db::Error::InvalidSize) => {
-            log::warn!("domain: schema changed; formatting");
-            match DomainTable::format(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
-                Ok(table) => Some(table),
-                Err(error) => {
-                    log::error!("domain: format after schema change failed: {error:?}");
-                    None
-                }
+        Err(error) => {
+            if !partition_erased(&mut flash) {
+                log::error!("domain: not mounted ({error:?}); data preserved");
+                return None;
             }
-        }
-        Err(error) if erased => {
             log::warn!("domain: empty ({error:?}); initialising");
             match DomainTable::format(&mut flash, DOMAIN_CAPACITY, DOMAIN_PERSIST_ID) {
                 Ok(table) => Some(table),
@@ -230,10 +219,6 @@ fn init_domain() -> Option<DomainTable> {
                     None
                 }
             }
-        }
-        Err(error) => {
-            log::error!("domain: not mounted ({error:?}); data preserved");
-            None
         }
     }
 }

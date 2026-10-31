@@ -7,9 +7,7 @@
 
 use core::hash::Hash;
 
-use crate::flash::{
-    persist_id_bytes, FlashError, FlashMeta, FlashTable, Geometry, NorFlash, KIND_META, KIND_SET,
-};
+use crate::flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash, KIND_SET};
 use crate::{Error, Handle, Meta, Table};
 
 pub trait Fixed: Copy + Eq + Hash {
@@ -40,6 +38,7 @@ impl From<FlashError> for Error {
             FlashError::NoSpace => Error::NoSpace,
             FlashError::InvalidSize => Error::InvalidSize,
             FlashError::NotFound => Error::NotFound,
+            FlashError::InvalidState => Error::InvalidState,
         }
     }
 }
@@ -65,10 +64,7 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
             key_size: K::SIZE,
             payload_size: V::SIZE,
         };
-        let flash_table = FlashTable::open(flash, geometry)?;
-        if flash_table.id() != persist_id_bytes(persist_id) {
-            return Err(Error::Corrupt);
-        }
+        let flash_table = FlashTable::open(flash, geometry, persist_id)?;
         let mut table = Table::new(capacity)?;
         let mut journal = vec![None; capacity];
         let mut key_bytes = vec![0u8; K::SIZE];
@@ -155,10 +151,6 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
                 .position(Option::is_none)
                 .ok_or(Error::NoSpace)?,
         };
-        if !self.flash.can_append(KIND_SET) {
-            return Err(Error::NoSpace);
-        }
-
         let existing = self.table.handle(&key).ok();
         let old_payload = match existing {
             Some(handle) => Some(*self.table.read(handle.slot)?.payload),
@@ -209,9 +201,6 @@ impl<K: Fixed, V: Fixed> PersistedTable<K, V> {
             .iter()
             .position(|slot| slot.as_ref() == Some(key))
             .ok_or(Error::NotFound)?;
-        if !self.flash.can_append(KIND_META) {
-            return Err(Error::NoSpace);
-        }
         let meta = self.table.meta(handle.slot)?;
         self.flash.append_meta(
             flash,
@@ -326,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn no_space_is_rejected_before_ram_changes() {
+    fn no_space_leaves_ram_unchanged() {
         let mut flash = SimFlash::new(512, 256);
         let mut store: PersistedTable<[u8; 8], [u8; 12]> =
             PersistedTable::format(&mut flash, 4, "devices").unwrap();
@@ -343,6 +332,8 @@ mod tests {
         let result = store.put(&mut flash, [9u8; 8], values());
         assert_eq!(result, Err(Error::NoSpace));
         assert_eq!(store.len(), before);
+        let mut out = [0u8; 12];
+        assert_eq!(store.get(&[9u8; 8], &mut out), Err(Error::NotFound));
     }
 
     #[test]
@@ -360,30 +351,29 @@ mod tests {
     }
 
     #[test]
-    fn capacity_can_grow_without_reformat() {
+    fn capacity_growth_is_invalid_state() {
+        let mut flash = SimFlash::new(8192, 4096);
+        PersistedTable::<[u8; 8], [u8; 12]>::format(&mut flash, 4, "devices").unwrap();
+        assert_eq!(
+            PersistedTable::<[u8; 8], [u8; 12]>::open(&mut flash, 8, "devices").err(),
+            Some(Error::InvalidState)
+        );
+        assert_eq!(
+            PersistedTable::<[u8; 8], [u8; 12]>::open(&mut flash, 2, "devices").err(),
+            Some(Error::InvalidState)
+        );
+    }
+
+    #[test]
+    fn open_initializes_erased_partition() {
         let mut flash = SimFlash::new(8192, 4096);
         let mut store: PersistedTable<[u8; 8], [u8; 12]> =
-            PersistedTable::format(&mut flash, 4, "devices").unwrap();
-        for index in 0..4u8 {
-            assert!(store.put(&mut flash, [index; 8], [index; 12]).is_ok());
-        }
-
-        let mut grown = PersistedTable::open(&mut flash, 8, "devices").unwrap();
-        for index in 0..4u8 {
-            let mut out = [0u8; 12];
-            grown.get(&[index; 8], &mut out).unwrap();
-            assert_eq!(out, [index; 12]);
-        }
-        for index in 4..8u8 {
-            assert!(grown.put(&mut flash, [index; 8], [index; 12]).is_ok());
-        }
-
-        let restarted = PersistedTable::open(&mut flash, 8, "devices").unwrap();
-        for index in 0..8u8 {
-            let mut out = [0u8; 12];
-            restarted.get(&[index; 8], &mut out).unwrap();
-            assert_eq!(out, [index; 12]);
-        }
+            PersistedTable::open(&mut flash, 4, "devices").unwrap();
+        assert_eq!(store.len(), 0);
+        store.put(&mut flash, [1; 8], values()).unwrap();
+        let restarted: PersistedTable<[u8; 8], [u8; 12]> =
+            PersistedTable::open(&mut flash, 4, "devices").unwrap();
+        assert_eq!(restarted.len(), 1);
     }
 
     #[test]
@@ -392,7 +382,7 @@ mod tests {
         PersistedTable::<[u8; 8], [u8; 12]>::format(&mut flash, 4, "devices").unwrap();
         assert_eq!(
             PersistedTable::<[u8; 8], [u8; 12]>::open(&mut flash, 4, "other").err(),
-            Some(Error::Corrupt)
+            Some(Error::InvalidState)
         );
     }
 }

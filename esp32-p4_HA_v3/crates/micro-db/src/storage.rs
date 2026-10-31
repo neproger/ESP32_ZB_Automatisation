@@ -7,7 +7,7 @@
 //! These types are public only as a cross-crate seam for the composition root
 //! (`ha-app`); services must not use them directly.
 
-use crate::flash::{persist_id_bytes, FlashError, FlashMeta, FlashTable, KIND_SET};
+use crate::flash::{FlashError, FlashMeta, FlashTable, KIND_SET};
 use crate::{Error, Geometry, Meta, NorFlash, Result};
 
 const RAM_META_LEN: usize = 12;
@@ -49,10 +49,7 @@ pub struct FlashStorage<F: NorFlash> {
 impl<F: NorFlash> FlashStorage<F> {
     pub fn open(flash: F, geometry: Geometry, persist_id: &str) -> Result<Self> {
         let mut flash = flash;
-        let table = FlashTable::open(&mut flash, geometry)?;
-        if table.id() != persist_id_bytes(persist_id) {
-            return Err(Error::InvalidState);
-        }
+        let table = FlashTable::open(&mut flash, geometry, persist_id)?;
         Ok(Self {
             flash,
             table,
@@ -718,5 +715,45 @@ mod tests {
         assert!(meta.used);
         assert_eq!(meta.generation, 3);
         assert_eq!(meta.version, 1);
+    }
+
+    #[test]
+    fn flash_storage_open_initializes_erased_partition() {
+        let storage =
+            FlashStorage::open(SimFlash::new(8192, 1024), geometry(), "devices").unwrap();
+        assert_eq!(storage.read_meta(0).unwrap(), Meta::default());
+    }
+
+    #[test]
+    fn flash_storage_zero_payload_roundtrip() {
+        let zero = Geometry {
+            capacity: 2,
+            key_size: 8,
+            payload_size: 0,
+        };
+        let mut storage =
+            FlashStorage::format(SimFlash::new(8192, 1024), zero, "zero").unwrap();
+        storage
+            .write_slot(
+                0,
+                Meta {
+                    used: true,
+                    generation: 1,
+                    version: 1,
+                },
+                &key(6),
+                &[],
+            )
+            .unwrap();
+
+        let mut read_key = [0u8; 8];
+        let meta = storage.read_slot(0, &mut read_key, &mut []).unwrap();
+        assert!(meta.used);
+        assert_eq!(read_key, key(6));
+
+        let flash = storage.into_flash();
+        let storage = FlashStorage::open(flash, zero, "zero").unwrap();
+        let meta = storage.read_slot(0, &mut read_key, &mut []).unwrap();
+        assert!(meta.used);
     }
 }
