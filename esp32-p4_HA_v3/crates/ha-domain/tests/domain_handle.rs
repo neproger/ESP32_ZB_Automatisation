@@ -27,6 +27,13 @@ fn meta() -> FactMeta {
     }
 }
 
+fn meta_value(value: u32) -> FactMeta {
+    FactMeta {
+        source: 1,
+        value: Value::u32(value),
+    }
+}
+
 #[test]
 fn post_publishes_one_command_sent_on_ok() {
     let domain = handle();
@@ -80,6 +87,72 @@ fn post_error_publishes_no_command_sent() {
     assert_eq!(domain.post(1, &[], None, meta()), Err(Error::InvalidState));
     domain.dispatch_once().unwrap();
     assert_eq!(facts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn executor_runs_without_domain_lock() {
+    let domain = handle();
+    domain.entity_put(7, &[1u8; 8], &[2u8; 8], meta()).unwrap();
+    let nested = domain.clone();
+    domain
+        .register_command(1, move |_| {
+            nested.entity_get(7, &[1u8; 8], &mut [0u8; 8])?;
+            Ok(())
+        })
+        .unwrap();
+
+    domain.post(1, &[], None, meta()).unwrap();
+}
+
+#[test]
+fn command_sent_follows_executor_order() {
+    let domain = handle();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&executed);
+    domain
+        .register_command(1, move |args| {
+            sink.lock()
+                .unwrap()
+                .push(u32::from_le_bytes(args.try_into().unwrap()));
+            Ok(())
+        })
+        .unwrap();
+    let published = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&published);
+    domain
+        .with_mut(|domain| {
+            domain.subscribe(Filter::all(), move |fact| {
+                if fact.kind == FactKind::CommandSent {
+                    sink.lock().unwrap().push(fact.value.as_u32().unwrap());
+                }
+                true
+            })
+        })
+        .unwrap();
+
+    domain
+        .post(1, &1u32.to_le_bytes(), None, meta_value(1))
+        .unwrap();
+    domain
+        .post(1, &2u32.to_le_bytes(), None, meta_value(2))
+        .unwrap();
+    domain.dispatch_once().unwrap();
+
+    assert_eq!(*executed.lock().unwrap(), vec![1, 2]);
+    assert_eq!(*published.lock().unwrap(), vec![1, 2]);
+}
+
+#[test]
+fn executor_panic_poisons_command_lane() {
+    let domain = handle();
+    domain
+        .register_command(1, |_| panic!("executor panic"))
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        domain.post(1, &[], None, meta())
+    }));
+    assert!(result.is_err());
+    assert_eq!(domain.post(1, &[], None, meta()), Err(Error::InvalidState));
 }
 
 #[test]
