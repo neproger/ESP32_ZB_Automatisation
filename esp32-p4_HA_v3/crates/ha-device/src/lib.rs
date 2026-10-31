@@ -37,7 +37,7 @@ pub struct RemovalRecord {
     pub version: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RemovalPlan {
     device: DeviceId,
     source: SourceId,
@@ -46,12 +46,12 @@ pub struct RemovalPlan {
     records: Vec<RemovalRecord>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct RemovalProgress {
     bits: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RemovalTicket {
     plan: RemovalPlan,
     native: NativeRemoval,
@@ -226,6 +226,10 @@ pub fn set_capabilities(
     }
     let mut current = [0u8; ENTITY_RECORD_LEN];
     domain.entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut current)?;
+    let owner = u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
+    if owner == 0 {
+        return Err(Error::InvalidState);
+    }
     let encoded = capabilities.encode();
     domain.entity_put(
         ENTITY_CAPABILITIES,
@@ -319,16 +323,24 @@ pub fn prepare_remove(domain: &Domain, device: DeviceId) -> Result<RemovalPlan, 
     let native_id = record.native_id[..native_len].to_vec();
 
     let mut entities = Vec::new();
+    let mut entities_overflow = false;
     domain
         .entity_iter(ENTITY_ENTITY, |key, value| {
             if key.len() == 8
                 && value.len() >= 8
                 && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == device
             {
-                entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
+                if entities.len() == REMOVAL_RECORDS_MAX {
+                    entities_overflow = true;
+                } else {
+                    entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
+                }
             }
         })
         .map_err(RemovalError::Canonical)?;
+    if entities_overflow {
+        return Err(RemovalError::Canonical(Error::NoSpace));
+    }
     entities.sort_unstable();
 
     let mut records = Vec::new();
@@ -336,20 +348,33 @@ pub fn prepare_remove(domain: &Domain, device: DeviceId) -> Result<RemovalPlan, 
         let entity_bytes = entity.to_le_bytes();
         let mut states = Vec::new();
         let mut group_items = Vec::new();
+        let mut states_overflow = false;
+        let mut group_items_overflow = false;
         domain
             .entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
                 if key.len() == STATE_KEY_LEN && key[..8] == entity_bytes {
-                    states.push(key.to_vec());
+                    if states.len() == REMOVAL_RECORDS_MAX {
+                        states_overflow = true;
+                    } else {
+                        states.push(key.to_vec());
+                    }
                 }
             })
             .map_err(RemovalError::Canonical)?;
         domain
             .entity_iter(ENTITY_GROUP_ITEM, |key, _| {
                 if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes {
-                    group_items.push(key.to_vec());
+                    if group_items.len() == REMOVAL_RECORDS_MAX {
+                        group_items_overflow = true;
+                    } else {
+                        group_items.push(key.to_vec());
+                    }
                 }
             })
             .map_err(RemovalError::Canonical)?;
+        if states_overflow || group_items_overflow {
+            return Err(RemovalError::Canonical(Error::NoSpace));
+        }
         states.sort();
         group_items.sort();
         for state in states {
@@ -358,11 +383,12 @@ pub fn prepare_remove(domain: &Domain, device: DeviceId) -> Result<RemovalPlan, 
         for item in group_items {
             push_record(domain, ENTITY_GROUP_ITEM, &item, &mut records)?;
         }
-        if domain
-            .entity_meta(ENTITY_CAPABILITIES, &entity_bytes)
-            .is_ok()
-        {
-            push_record(domain, ENTITY_CAPABILITIES, &entity_bytes, &mut records)?;
+        match domain.entity_meta(ENTITY_CAPABILITIES, &entity_bytes) {
+            Ok(_) => {
+                push_record(domain, ENTITY_CAPABILITIES, &entity_bytes, &mut records)?;
+            }
+            Err(Error::NotFound) => {}
+            Err(error) => return Err(RemovalError::Canonical(error)),
         }
         push_record(domain, ENTITY_ENTITY, &entity_bytes, &mut records)?;
     }
