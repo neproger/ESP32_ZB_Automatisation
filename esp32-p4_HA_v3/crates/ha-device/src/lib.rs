@@ -6,16 +6,82 @@
 use std::sync::Mutex;
 
 use ha_domain::canonical::{
-    device_id_derive, DeviceId, EntityId, LogicalDeviceRecord, SourceId, DEVICE_RECORD_LEN,
-    ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP_ITEM, ENTITY_LOGICAL_DEVICE,
-    ENTITY_PROPERTY_STATE, GROUP_ITEM_KEY_LEN, STATE_KEY_LEN,
+    device_id_derive, CapabilitiesRecord, DeviceId, EntityId, EntityRecord, LogicalDeviceRecord,
+    SourceId, DEVICE_RECORD_LEN, ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP_ITEM,
+    ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_RECORD_LEN, GROUP_ITEM_KEY_LEN,
+    STATE_KEY_LEN,
 };
 use ha_domain::Error;
 use ha_domain::{Domain, FactMeta, Value};
 
-pub type Operation = fn(&[u8]) -> Result<(), Error>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeRemoval {
+    Removed,
+    AlreadyAbsent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemovalError {
+    Remover(Error),
+    Canonical(Error),
+    Progress(Error),
+    StalePlan,
+}
+
+pub type Operation = fn(&[u8]) -> Result<NativeRemoval, Error>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovalRecord {
+    pub entity: u32,
+    pub key: Vec<u8>,
+    pub version: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovalPlan {
+    device: DeviceId,
+    source: SourceId,
+    native_id: Vec<u8>,
+    device_version: u32,
+    records: Vec<RemovalRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemovalProgress {
+    bits: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovalTicket {
+    plan: RemovalPlan,
+    native: NativeRemoval,
+    progress: RemovalProgress,
+}
+
+impl RemovalProgress {
+    fn new(records: usize) -> Result<Self, Error> {
+        let bytes = records.checked_add(7).ok_or(Error::Overflow)? / 8;
+        let mut bits = Vec::new();
+        bits.try_reserve_exact(bytes).map_err(|_| Error::NoMemory)?;
+        bits.resize(bytes, 0);
+        Ok(Self { bits })
+    }
+
+    fn is_done(&self, index: usize) -> bool {
+        self.bits
+            .get(index / 8)
+            .is_some_and(|byte| byte & (1 << (index % 8)) != 0)
+    }
+
+    fn mark(&mut self, index: usize) {
+        if let Some(byte) = self.bits.get_mut(index / 8) {
+            *byte |= 1 << (index % 8);
+        }
+    }
+}
 
 const REMOVERS_MAX: usize = 4;
+const REMOVAL_RECORDS_MAX: usize = 1024;
 
 struct Remover {
     source: SourceId,
@@ -23,18 +89,6 @@ struct Remover {
 }
 
 static REMOVERS: Mutex<Vec<Remover>> = Mutex::new(Vec::new());
-
-pub trait Sink {
-    fn put(&mut self, entity: u32, key: &[u8], record: &[u8]);
-    fn remove(&mut self, entity: u32, key: &[u8]);
-}
-
-pub struct NoSink;
-
-impl Sink for NoSink {
-    fn put(&mut self, _entity: u32, _key: &[u8], _record: &[u8]) {}
-    fn remove(&mut self, _entity: u32, _key: &[u8]) {}
-}
 
 #[derive(Clone, Copy)]
 pub struct DeviceDesc<'a> {
@@ -95,12 +149,7 @@ fn decode_device(bytes: &[u8; DEVICE_RECORD_LEN]) -> LogicalDeviceRecord {
     }
 }
 
-pub fn register(
-    domain: &mut Domain,
-    origin: u8,
-    desc: &DeviceDesc<'_>,
-    sink: &mut dyn Sink,
-) -> Result<DeviceId, Error> {
+pub fn register(domain: &mut Domain, origin: u8, desc: &DeviceDesc<'_>) -> Result<DeviceId, Error> {
     if desc.source == 0 || desc.native_id.is_empty() {
         return Err(Error::InvalidArg);
     }
@@ -126,19 +175,64 @@ pub fn register(
         if record.name[0] == 0 && !desc.name.is_empty() {
             put_name(&mut record.name, desc.name);
             let encoded = record.encode();
-            if domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))? {
-                sink.put(ENTITY_LOGICAL_DEVICE, &key, &encoded);
-            }
+            domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))?;
         }
         return Ok(id);
     }
 
     let record = LogicalDeviceRecord::new(desc.source, parent, desc.native_id, desc.name);
     let encoded = record.encode();
-    if domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))? {
-        sink.put(ENTITY_LOGICAL_DEVICE, &key, &encoded);
-    }
+    domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))?;
     Ok(id)
+}
+
+pub fn ensure_entity(
+    domain: &mut Domain,
+    origin: u8,
+    device: DeviceId,
+    entity: EntityId,
+    name: &str,
+) -> Result<bool, Error> {
+    if device == 0 || entity == 0 {
+        return Err(Error::InvalidArg);
+    }
+    let key = entity.to_le_bytes();
+    let mut current = [0u8; ENTITY_RECORD_LEN];
+    match domain.entity_get(ENTITY_ENTITY, &key, &mut current) {
+        Ok(()) => {
+            let owner = u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
+            if owner != 0 && owner != device {
+                return Err(Error::InvalidState);
+            }
+            Ok(false)
+        }
+        Err(Error::NotFound) => {
+            let record = EntityRecord::new(device, name);
+            let encoded = record.encode();
+            domain.entity_put(ENTITY_ENTITY, &key, &encoded, meta(origin))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn set_capabilities(
+    domain: &mut Domain,
+    origin: u8,
+    entity: EntityId,
+    capabilities: &CapabilitiesRecord,
+) -> Result<bool, Error> {
+    if entity == 0 {
+        return Err(Error::InvalidArg);
+    }
+    let mut current = [0u8; ENTITY_RECORD_LEN];
+    domain.entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut current)?;
+    let encoded = capabilities.encode();
+    domain.entity_put(
+        ENTITY_CAPABILITIES,
+        &entity.to_le_bytes(),
+        &encoded,
+        meta(origin),
+    )
 }
 
 pub fn bind_entity(
@@ -146,7 +240,6 @@ pub fn bind_entity(
     origin: u8,
     device: DeviceId,
     entity: EntityId,
-    sink: &mut dyn Sink,
 ) -> Result<bool, Error> {
     if device == 0 || entity == 0 {
         return Err(Error::InvalidArg);
@@ -162,11 +255,7 @@ pub fn bind_entity(
         return Err(Error::InvalidState);
     }
     record[..8].copy_from_slice(&device.to_le_bytes());
-    let changed = domain.entity_put(ENTITY_ENTITY, &key, &record, meta(origin))?;
-    if changed {
-        sink.put(ENTITY_ENTITY, &key, &record);
-    }
-    Ok(changed)
+    domain.entity_put(ENTITY_ENTITY, &key, &record, meta(origin))
 }
 
 pub fn rename(
@@ -174,7 +263,6 @@ pub fn rename(
     origin: u8,
     device: DeviceId,
     name: &str,
-    sink: &mut dyn Sink,
 ) -> Result<bool, Error> {
     if device == 0 {
         return Err(Error::InvalidArg);
@@ -185,114 +273,258 @@ pub fn rename(
     let mut record = decode_device(&current);
     put_name(&mut record.name, name);
     let encoded = record.encode();
-    let changed = domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))?;
-    if changed {
-        sink.put(ENTITY_LOGICAL_DEVICE, &key, &encoded);
-    }
-    Ok(changed)
+    domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))
 }
 
-fn cascade_entity(
-    domain: &mut Domain,
-    origin: u8,
-    entity: EntityId,
-    sink: &mut dyn Sink,
-) -> Result<(), Error> {
-    let entity_bytes = entity.to_le_bytes();
-    let states = {
-        let mut keys = Vec::new();
-        domain.entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
-            if key.len() == STATE_KEY_LEN && key[..8] == entity_bytes {
-                keys.push(key.to_vec());
-            }
-        })?;
-        keys
-    };
-    for key in states {
-        let _ = domain.entity_remove(ENTITY_PROPERTY_STATE, &key, meta(origin));
+fn push_record(
+    domain: &Domain,
+    entity: u32,
+    key: &[u8],
+    records: &mut Vec<RemovalRecord>,
+) -> Result<(), RemovalError> {
+    if records.len() == REMOVAL_RECORDS_MAX {
+        return Err(RemovalError::Canonical(Error::NoSpace));
     }
-
-    let group_items = {
-        let mut keys = Vec::new();
-        domain.entity_iter(ENTITY_GROUP_ITEM, |key, _| {
-            if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes {
-                keys.push(key.to_vec());
-            }
-        })?;
-        keys
-    };
-    for key in group_items {
-        if domain
-            .entity_remove(ENTITY_GROUP_ITEM, &key, meta(origin))
-            .is_ok()
-        {
-            sink.remove(ENTITY_GROUP_ITEM, &key);
-        }
-    }
-
-    if domain
-        .entity_remove(ENTITY_CAPABILITIES, &entity_bytes, meta(origin))
-        .is_ok()
-    {
-        sink.remove(ENTITY_CAPABILITIES, &entity_bytes);
-    }
-    if domain
-        .entity_remove(ENTITY_ENTITY, &entity_bytes, meta(origin))
-        .is_ok()
-    {
-        sink.remove(ENTITY_ENTITY, &entity_bytes);
-    }
+    let version = domain
+        .entity_meta(entity, key)
+        .map_err(RemovalError::Canonical)?
+        .version;
+    records.push(RemovalRecord {
+        entity,
+        key: key.to_vec(),
+        version,
+    });
     Ok(())
 }
 
-pub fn remove(
-    domain: &mut Domain,
-    origin: u8,
-    device: DeviceId,
-    sink: &mut dyn Sink,
-) -> Result<usize, Error> {
+pub fn prepare_remove(domain: &Domain, device: DeviceId) -> Result<RemovalPlan, RemovalError> {
     if device == 0 {
-        return Err(Error::InvalidArg);
+        return Err(RemovalError::Canonical(Error::InvalidArg));
     }
     let key = device.to_le_bytes();
     let mut current = [0u8; DEVICE_RECORD_LEN];
-    domain.entity_get(ENTITY_LOGICAL_DEVICE, &key, &mut current)?;
+    domain
+        .entity_get(ENTITY_LOGICAL_DEVICE, &key, &mut current)
+        .map_err(RemovalError::Canonical)?;
     let record = decode_device(&current);
-    let remove_native = remover(record.source).ok_or(Error::InvalidState)?;
-
+    let device_version = domain
+        .entity_meta(ENTITY_LOGICAL_DEVICE, &key)
+        .map_err(RemovalError::Canonical)?
+        .version;
     let native_len = record
         .native_id
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(record.native_id.len());
-    remove_native(&record.native_id[..native_len])?;
+    let native_id = record.native_id[..native_len].to_vec();
 
-    let owned = {
-        let mut keys = Vec::new();
-        domain.entity_iter(ENTITY_ENTITY, |key, value| {
-            if value.len() >= 8
+    let mut entities = Vec::new();
+    domain
+        .entity_iter(ENTITY_ENTITY, |key, value| {
+            if key.len() == 8
+                && value.len() >= 8
                 && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == device
             {
-                keys.push(key.to_vec());
+                entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
             }
-        })?;
-        keys
-    };
-    let mut removed = 0;
-    for key in owned {
-        let entity = u64::from_le_bytes(key[..8].try_into().expect("entity key"));
-        cascade_entity(domain, origin, entity, sink)?;
-        removed += 1;
+        })
+        .map_err(RemovalError::Canonical)?;
+    entities.sort_unstable();
+
+    let mut records = Vec::new();
+    for entity in entities {
+        let entity_bytes = entity.to_le_bytes();
+        let mut states = Vec::new();
+        let mut group_items = Vec::new();
+        domain
+            .entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
+                if key.len() == STATE_KEY_LEN && key[..8] == entity_bytes {
+                    states.push(key.to_vec());
+                }
+            })
+            .map_err(RemovalError::Canonical)?;
+        domain
+            .entity_iter(ENTITY_GROUP_ITEM, |key, _| {
+                if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes {
+                    group_items.push(key.to_vec());
+                }
+            })
+            .map_err(RemovalError::Canonical)?;
+        states.sort();
+        group_items.sort();
+        for state in states {
+            push_record(domain, ENTITY_PROPERTY_STATE, &state, &mut records)?;
+        }
+        for item in group_items {
+            push_record(domain, ENTITY_GROUP_ITEM, &item, &mut records)?;
+        }
+        if domain
+            .entity_meta(ENTITY_CAPABILITIES, &entity_bytes)
+            .is_ok()
+        {
+            push_record(domain, ENTITY_CAPABILITIES, &entity_bytes, &mut records)?;
+        }
+        push_record(domain, ENTITY_ENTITY, &entity_bytes, &mut records)?;
+    }
+    push_record(domain, ENTITY_LOGICAL_DEVICE, &key, &mut records)?;
+
+    Ok(RemovalPlan {
+        device,
+        source: record.source,
+        native_id,
+        device_version,
+        records,
+    })
+}
+
+fn plan_has(plan: &RemovalPlan, entity: u32, key: &[u8]) -> bool {
+    plan.records
+        .iter()
+        .any(|record| record.entity == entity && record.key == key)
+}
+
+fn plan_owned_entity(plan: &RemovalPlan, entity: EntityId) -> bool {
+    plan.records.iter().any(|record| {
+        record.entity == ENTITY_ENTITY
+            && record.key.len() == 8
+            && u64::from_le_bytes(record.key[..8].try_into().expect("entity key")) == entity
+    })
+}
+
+fn validate_plan(
+    domain: &Domain,
+    plan: &RemovalPlan,
+    progress: &RemovalProgress,
+) -> Result<(), RemovalError> {
+    for (index, planned) in plan.records.iter().enumerate() {
+        let done = progress.is_done(index);
+        match domain.entity_meta(planned.entity, &planned.key) {
+            Ok(meta) => {
+                if done
+                    || meta.version != planned.version
+                    || (planned.entity == ENTITY_LOGICAL_DEVICE
+                        && meta.version != plan.device_version)
+                {
+                    return Err(RemovalError::StalePlan);
+                }
+                if planned.entity == ENTITY_ENTITY {
+                    let mut record = [0u8; ENTITY_RECORD_LEN];
+                    domain
+                        .entity_get(ENTITY_ENTITY, &planned.key, &mut record)
+                        .map_err(RemovalError::Canonical)?;
+                    let owner = u64::from_le_bytes(record[..8].try_into().expect("entity owner"));
+                    if owner != plan.device {
+                        return Err(RemovalError::StalePlan);
+                    }
+                } else if planned.entity == ENTITY_LOGICAL_DEVICE {
+                    let mut record = [0u8; DEVICE_RECORD_LEN];
+                    domain
+                        .entity_get(ENTITY_LOGICAL_DEVICE, &planned.key, &mut record)
+                        .map_err(RemovalError::Canonical)?;
+                    let current = decode_device(&record);
+                    let native_len = current
+                        .native_id
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(current.native_id.len());
+                    if current.source != plan.source
+                        || current.native_id[..native_len] != plan.native_id[..]
+                    {
+                        return Err(RemovalError::StalePlan);
+                    }
+                }
+            }
+            Err(Error::NotFound) if done => {}
+            Err(Error::NotFound) => return Err(RemovalError::StalePlan),
+            Err(error) => return Err(RemovalError::Canonical(error)),
+        }
     }
 
-    if domain
-        .entity_remove(ENTITY_LOGICAL_DEVICE, &key, meta(origin))
-        .is_ok()
-    {
-        sink.remove(ENTITY_LOGICAL_DEVICE, &key);
+    let mut extra = false;
+    domain
+        .entity_iter(ENTITY_ENTITY, |key, value| {
+            if key.len() == 8
+                && value.len() >= 8
+                && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == plan.device
+            {
+                let entity = u64::from_le_bytes(key.try_into().expect("entity key"));
+                if !plan_has(plan, ENTITY_ENTITY, &entity.to_le_bytes()) {
+                    extra = true;
+                }
+            }
+        })
+        .map_err(RemovalError::Canonical)?;
+    domain
+        .entity_iter(ENTITY_CAPABILITIES, |key, _| {
+            if key.len() == 8 {
+                let entity = u64::from_le_bytes(key.try_into().expect("cap entity"));
+                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_CAPABILITIES, key) {
+                    extra = true;
+                }
+            }
+        })
+        .map_err(RemovalError::Canonical)?;
+    domain
+        .entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
+            if key.len() >= 8 {
+                let entity = u64::from_le_bytes(key[..8].try_into().expect("state entity"));
+                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_PROPERTY_STATE, key) {
+                    extra = true;
+                }
+            }
+        })
+        .map_err(RemovalError::Canonical)?;
+    domain
+        .entity_iter(ENTITY_GROUP_ITEM, |key, _| {
+            if key.len() == GROUP_ITEM_KEY_LEN {
+                let entity = u64::from_le_bytes(key[8..16].try_into().expect("group item entity"));
+                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_GROUP_ITEM, key) {
+                    extra = true;
+                }
+            }
+        })
+        .map_err(RemovalError::Canonical)?;
+    if extra {
+        return Err(RemovalError::StalePlan);
+    }
+    Ok(())
+}
+
+pub fn invoke_remover(plan: RemovalPlan) -> Result<RemovalTicket, RemovalError> {
+    let progress = RemovalProgress::new(plan.records.len()).map_err(RemovalError::Progress)?;
+    let operation = remover(plan.source).ok_or(RemovalError::Remover(Error::InvalidState))?;
+    let native = operation(&plan.native_id).map_err(RemovalError::Remover)?;
+    Ok(RemovalTicket {
+        plan,
+        native,
+        progress,
+    })
+}
+
+pub fn remove_canonical(
+    domain: &mut Domain,
+    origin: u8,
+    ticket: &mut RemovalTicket,
+) -> Result<usize, RemovalError> {
+    validate_plan(domain, &ticket.plan, &ticket.progress)?;
+    let mut removed = 0;
+    for (index, record) in ticket.plan.records.iter().enumerate() {
+        if ticket.progress.is_done(index) {
+            continue;
+        }
+        domain
+            .entity_remove(record.entity, &record.key, meta(origin))
+            .map_err(RemovalError::Canonical)?;
+        ticket.progress.mark(index);
         removed += 1;
     }
     Ok(removed)
+}
+
+impl RemovalTicket {
+    pub fn native_removal(&self) -> NativeRemoval {
+        self.native
+    }
 }
 
 #[cfg(test)]
@@ -303,9 +535,13 @@ mod tests {
 
     static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
-    fn remover(_native: &[u8]) -> Result<(), Error> {
+    fn remover(_native: &[u8]) -> Result<NativeRemoval, Error> {
         REMOVED.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        Ok(NativeRemoval::Removed)
+    }
+
+    fn absent_remover(_native: &[u8]) -> Result<NativeRemoval, Error> {
+        Ok(NativeRemoval::AlreadyAbsent)
     }
 
     fn domain() -> Domain {
@@ -339,19 +575,18 @@ mod tests {
     #[test]
     fn register_is_idempotent_and_keeps_the_initial_name() {
         let mut domain = domain();
-        let mut sink = NoSink;
         let desc = DeviceDesc {
             source: 1,
             native_id: "abc",
             parent_native_id: None,
             name: "lamp",
         };
-        let id = register(&mut domain, 2, &desc, &mut sink).unwrap();
+        let id = register(&mut domain, 2, &desc).unwrap();
         let renamed = DeviceDesc {
             name: "other",
             ..desc
         };
-        assert_eq!(register(&mut domain, 2, &renamed, &mut sink), Ok(id));
+        assert_eq!(register(&mut domain, 2, &renamed), Ok(id));
         let key = id.to_le_bytes();
         let mut bytes = [0u8; DEVICE_RECORD_LEN];
         domain
@@ -363,7 +598,6 @@ mod tests {
     #[test]
     fn bind_rejects_reassignment_and_missing_entities() {
         let mut domain = domain();
-        let mut sink = NoSink;
         let a = register(
             &mut domain,
             2,
@@ -373,7 +607,6 @@ mod tests {
                 parent_native_id: None,
                 name: "",
             },
-            &mut sink,
         )
         .unwrap();
         let b = register(
@@ -385,7 +618,6 @@ mod tests {
                 parent_native_id: None,
                 name: "",
             },
-            &mut sink,
         )
         .unwrap();
         let entity: u64 = 7;
@@ -393,46 +625,25 @@ mod tests {
         domain
             .entity_put(ENTITY_ENTITY, &entity.to_le_bytes(), &record, meta(2))
             .unwrap();
-        assert_eq!(bind_entity(&mut domain, 2, a, entity, &mut sink), Ok(true));
-        assert_eq!(bind_entity(&mut domain, 2, a, entity, &mut sink), Ok(false));
+        assert_eq!(bind_entity(&mut domain, 2, a, entity), Ok(true));
+        assert_eq!(bind_entity(&mut domain, 2, a, entity), Ok(false));
         assert_eq!(
-            bind_entity(&mut domain, 2, b, entity, &mut sink),
+            bind_entity(&mut domain, 2, b, entity),
             Err(Error::InvalidState)
         );
         record[..8].copy_from_slice(&a.to_le_bytes());
-        assert_eq!(
-            bind_entity(&mut domain, 2, b, 8, &mut sink),
-            Err(Error::NotFound)
-        );
+        assert_eq!(bind_entity(&mut domain, 2, b, 8), Err(Error::NotFound));
     }
 
-    #[test]
-    fn remove_calls_the_source_remover_then_cascades_canonical_records() {
-        let mut domain = domain();
-        register_remover(1, remover).unwrap();
-        let mut sink = NoSink;
-        let id = register(
-            &mut domain,
-            2,
-            &DeviceDesc {
-                source: 1,
-                native_id: "abc",
-                parent_native_id: None,
-                name: "lamp",
-            },
-            &mut sink,
-        )
-        .unwrap();
-        let entity: u64 = 7;
-        let mut entity_record = [0u8; ha_domain::canonical::ENTITY_RECORD_LEN];
-        entity_record[..8].copy_from_slice(&id.to_le_bytes());
+    fn add_entity(domain: &mut Domain, device: DeviceId, entity: EntityId) {
+        let mut record = [0u8; ENTITY_RECORD_LEN];
+        record[..8].copy_from_slice(&device.to_le_bytes());
         domain
-            .entity_put(
-                ENTITY_ENTITY,
-                &entity.to_le_bytes(),
-                &entity_record,
-                meta(2),
-            )
+            .entity_put(ENTITY_ENTITY, &entity.to_le_bytes(), &record, meta(2))
+            .unwrap();
+        let caps = CapabilitiesRecord::default().encode();
+        domain
+            .entity_put(ENTITY_CAPABILITIES, &entity.to_le_bytes(), &caps, meta(2))
             .unwrap();
         let state = ha_domain::canonical::StateKey {
             entity,
@@ -447,21 +658,218 @@ mod tests {
         domain
             .entity_put(ENTITY_GROUP_ITEM, &group, &[0u8; 36], meta(2))
             .unwrap();
+    }
 
-        let before = REMOVED.load(Ordering::Relaxed);
-        assert!(remove(&mut domain, 2, id, &mut sink).unwrap() >= 2);
-        assert_eq!(REMOVED.load(Ordering::Relaxed), before + 1);
+    #[test]
+    fn ensure_entity_and_capabilities_are_device_owned() {
+        let mut domain = domain();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "ensure",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let entity = 7;
+        assert!(ensure_entity(&mut domain, 2, id, entity, "lamp").unwrap());
+        assert!(!ensure_entity(&mut domain, 2, id, entity, "other").unwrap());
+        let caps = CapabilitiesRecord::default();
+        assert!(set_capabilities(&mut domain, 2, entity, &caps).unwrap());
+        assert!(domain
+            .entity_get(
+                ENTITY_CAPABILITIES,
+                &entity.to_le_bytes(),
+                &mut [0u8; ha_domain::canonical::CAPABILITIES_LEN]
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn remove_calls_the_source_remover_then_cascades_canonical_records() {
+        let mut domain = domain();
+        register_remover(1, remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "abc",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let entity: u64 = 7;
+        add_entity(&mut domain, id, entity);
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut ticket = invoke_remover(plan).unwrap();
+        assert!(remove_canonical(&mut domain, 2, &mut ticket).unwrap() >= 5);
         assert!(domain
             .entity_get(ENTITY_LOGICAL_DEVICE, &id.to_le_bytes(), &mut [0u8; 80])
             .is_err());
         assert!(domain
-            .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut entity_record)
+            .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut [0u8; 36])
             .is_err());
+        assert!(remove_canonical(&mut domain, 2, &mut ticket).unwrap() == 0);
+    }
+
+    #[test]
+    fn stale_plan_does_not_delete_changed_or_new_records() {
+        let mut domain = domain();
+        register_remover(1, remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "stale",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let entity = 7;
+        add_entity(&mut domain, id, entity);
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut ticket = invoke_remover(plan).unwrap();
+
+        let mut record = [0u8; ENTITY_RECORD_LEN];
+        domain
+            .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut record)
+            .unwrap();
+        record[8] = 1;
+        domain
+            .entity_put(ENTITY_ENTITY, &entity.to_le_bytes(), &record, meta(2))
+            .unwrap();
+        assert_eq!(
+            remove_canonical(&mut domain, 2, &mut ticket),
+            Err(RemovalError::StalePlan)
+        );
         assert!(domain
-            .entity_get(ENTITY_PROPERTY_STATE, &state, &mut [0u8; 8])
-            .is_err());
+            .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut record)
+            .is_ok());
+    }
+
+    #[test]
+    fn completed_progress_is_skipped_and_ticket_retry_is_safe() {
+        let mut domain = domain();
+        register_remover(1, remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "progress",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let entity = 7;
+        add_entity(&mut domain, id, entity);
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut ticket = invoke_remover(plan).unwrap();
+        let first = ticket.plan.records[0].clone();
+        domain
+            .entity_remove(first.entity, &first.key, meta(2))
+            .unwrap();
+        ticket.progress.mark(0);
+        assert!(remove_canonical(&mut domain, 2, &mut ticket).unwrap() >= 4);
+        assert!(remove_canonical(&mut domain, 2, &mut ticket).unwrap() == 0);
+    }
+
+    #[test]
+    fn missing_without_progress_or_reappearing_record_is_stale() {
+        let mut domain = domain();
+        register_remover(1, remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "missing",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let entity = 7;
+        add_entity(&mut domain, id, entity);
+
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut missing_ticket = invoke_remover(plan).unwrap();
+        let first = missing_ticket.plan.records[0].clone();
+        domain
+            .entity_remove(first.entity, &first.key, meta(2))
+            .unwrap();
+        assert_eq!(
+            remove_canonical(&mut domain, 2, &mut missing_ticket),
+            Err(RemovalError::StalePlan)
+        );
+
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut reappearing_ticket = invoke_remover(plan).unwrap();
+        reappearing_ticket.progress.mark(0);
+        assert_eq!(
+            remove_canonical(&mut domain, 2, &mut reappearing_ticket),
+            Err(RemovalError::StalePlan)
+        );
+    }
+
+    #[test]
+    fn new_owned_entity_after_plan_is_stale() {
+        let mut domain = domain();
+        register_remover(1, remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "new-entity",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        add_entity(&mut domain, id, 7);
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut ticket = invoke_remover(plan).unwrap();
+        add_entity(&mut domain, id, 8);
+        assert_eq!(
+            remove_canonical(&mut domain, 2, &mut ticket),
+            Err(RemovalError::StalePlan)
+        );
         assert!(domain
-            .entity_get(ENTITY_GROUP_ITEM, &group, &mut [0u8; 36])
-            .is_err());
+            .entity_get(
+                ENTITY_ENTITY,
+                &7u64.to_le_bytes(),
+                &mut [0u8; ENTITY_RECORD_LEN]
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn already_absent_remover_is_successful() {
+        let mut domain = domain();
+        register_remover(2, absent_remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 2,
+                native_id: "absent",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        let plan = prepare_remove(&domain, id).unwrap();
+        let mut ticket = invoke_remover(plan).unwrap();
+        assert_eq!(ticket.native_removal(), NativeRemoval::AlreadyAbsent);
+        assert!(remove_canonical(&mut domain, 2, &mut ticket).unwrap() >= 1);
     }
 }

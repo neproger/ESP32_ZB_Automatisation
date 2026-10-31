@@ -135,16 +135,16 @@ pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
     (Handle { requests: tx }, state)
 }
 
-fn zigbee_remover(native: &[u8]) -> Result<(), ha_domain::Error> {
+fn zigbee_remover(native: &[u8]) -> Result<ha_device::NativeRemoval, ha_domain::Error> {
     let text = std::str::from_utf8(native).map_err(|_| ha_domain::Error::InvalidArg)?;
     let eui = u64::from_str_radix(text, 16).map_err(|_| ha_domain::Error::InvalidArg)?;
     if !store::mark_removed(eui) {
-        return Err(ha_domain::Error::InvalidState);
+        return Ok(ha_device::NativeRemoval::AlreadyAbsent);
     }
     interview::forget(eui);
     configure::forget(eui);
     REMOVALS.lock().unwrap().push(eui);
-    Ok(())
+    Ok(ha_device::NativeRemoval::Removed)
 }
 
 fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Request>) {
@@ -334,7 +334,7 @@ fn register_domain(
         name,
     };
     let device = match domain
-        .with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc, &mut sink))
+        .with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc))
     {
         Ok(Ok(device)) => device,
         Ok(Err(error)) | Err(error) => {
@@ -367,7 +367,7 @@ fn register_domain(
         }
     };
     match domain.with_mut(|domain| {
-        ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity, &mut sink)
+        ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity)
     }) {
         Ok(Ok(_)) => {}
         Ok(Err(error)) | Err(error) => {
@@ -421,11 +421,35 @@ fn request_leave(state: &Arc<Mutex<State>>, eui: u64, short: u16, now: u64) -> b
 }
 
 fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) {
-    let mut sink = crate::StoreSink;
-    match domain.with_mut(|domain| ha_device::remove(domain, SOURCE_UI as u8, device, &mut sink)) {
+    let plan = match domain.with_mut(|domain| ha_device::prepare_remove(domain, device)) {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(error)) => {
+            log::warn!("device: prepare removal device={device:016x} failed: {error:?}");
+            return;
+        }
+        Err(error) => {
+            log::warn!("device: prepare removal lock device={device:016x} failed: {error:?}");
+            return;
+        }
+    };
+    let mut ticket = match ha_device::invoke_remover(plan) {
+        Ok(ticket) => ticket,
+        Err(error) => {
+            log::warn!("device: remover device={device:016x} failed: {error:?}");
+            return;
+        }
+    };
+    match domain.with_mut(|domain| {
+        ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket)
+    }) {
         Ok(Ok(count)) => log::info!("device: removed device={device:016x} records={count}"),
-        Ok(Err(error)) | Err(error) => {
-            log::warn!("device: remove device={device:016x} failed: {error:?}")
+        Ok(Err(error)) => {
+            log::warn!("device: canonical removal device={device:016x} failed: {error:?}");
+            return;
+        }
+        Err(error) => {
+            log::warn!("device: canonical removal lock device={device:016x} failed: {error:?}");
+            return;
         }
     }
     let removed: Vec<u64> = REMOVALS.lock().unwrap().drain(..).collect();

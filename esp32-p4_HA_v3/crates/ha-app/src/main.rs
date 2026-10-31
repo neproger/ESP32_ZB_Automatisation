@@ -459,16 +459,6 @@ impl zigbee_devices::RecordSink for StoreSink {
     }
 }
 
-impl ha_device::Sink for StoreSink {
-    fn put(&mut self, entity: u32, key: &[u8], record: &[u8]) {
-        store::save_domain(entity, key, record);
-    }
-
-    fn remove(&mut self, entity: u32, key: &[u8]) {
-        store::remove_domain(entity, key);
-    }
-}
-
 fn post_command(
     domain: &DomainHandle,
     command: CanonicalCommand,
@@ -669,11 +659,11 @@ fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
 }
 
 fn rename_device(domain: &mut Domain, device: u64, name: &str) {
-    let mut sink = StoreSink;
-    match ha_device::rename(domain, SOURCE_UI as u8, device, name, &mut sink) {
+    match ha_device::rename(domain, SOURCE_UI as u8, device, name) {
         Ok(_) => {
             log::info!("device: renamed device={device:016x} name={name}");
         }
         Err(error) => log::warn!("device: rename device={device:016x} failed: {error:?}"),
     }
 }
+

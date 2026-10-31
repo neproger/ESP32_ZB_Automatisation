@@ -6,7 +6,7 @@ $expected = @{
     'crates/ha-app/src/main.rs::handle_intake' = 6
     'crates/ha-app/src/zigbee_service.rs::run' = 2
     'crates/ha-app/src/zigbee_service.rs::register_domain' = 3
-    'crates/ha-app/src/zigbee_service.rs::remove_device' = 1
+    'crates/ha-app/src/zigbee_service.rs::remove_device' = 2
     'crates/ha-domain/tests/domain_handle.rs::post_publishes_one_command_sent_on_ok' = 1
     'crates/ha-domain/tests/domain_handle.rs::post_error_publishes_no_command_sent' = 1
     'crates/ha-domain/tests/domain_handle.rs::command_sent_follows_executor_order' = 1
@@ -101,4 +101,5 @@ if ($violations.Count -ne 0) {
     exit 1
 }
 Write-Output 'domain API allowlist ok'
+
 
