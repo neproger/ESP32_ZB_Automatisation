@@ -17,10 +17,12 @@
 mod flash;
 mod persisted;
 mod ring;
+mod storage;
 mod table;
 pub use flash::sim::SimFlash;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
 pub use persisted::{Fixed, PersistedTable};
+pub use storage::{FlashStorage, RamStorage, Storage};
 
 pub use ring::Ring;
 pub use table::{Error, Handle, Meta, Result, Table, View};

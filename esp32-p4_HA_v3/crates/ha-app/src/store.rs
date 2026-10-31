@@ -61,7 +61,7 @@ impl NorFlash for CFlash {
         4096
     }
 
-    fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+    fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
         if unsafe { (self.read)(offset as u32, out.as_mut_ptr(), out.len()) } == 0 {
             Ok(())
         } else {

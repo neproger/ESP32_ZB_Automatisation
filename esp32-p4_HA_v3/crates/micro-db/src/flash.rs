@@ -30,7 +30,7 @@ pub enum FlashError {
 pub trait NorFlash {
     fn capacity(&self) -> usize;
     fn erase_size(&self) -> usize;
-    fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError>;
+    fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError>;
     fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), FlashError>;
     fn erase(&mut self, offset: usize, len: usize) -> Result<(), FlashError>;
 }
@@ -387,6 +387,20 @@ impl FlashTable {
     }
 
     pub(crate) fn compact<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
+        self.compact_with(flash, false)
+    }
+
+    /// V2 `clear_all`: rewrite every recorded slot as a tombstone, keeping
+    /// generation/version, then commit the new header last.
+    pub(crate) fn clear<F: NorFlash>(&mut self, flash: &mut F) -> Result<(), FlashError> {
+        self.compact_with(flash, true)
+    }
+
+    fn compact_with<F: NorFlash>(
+        &mut self,
+        flash: &mut F,
+        clear: bool,
+    ) -> Result<(), FlashError> {
         let inactive = 1 - self.active_bank;
         let old_base = self.active_base();
         let new_base = self.bank_base(inactive);
@@ -398,16 +412,36 @@ impl FlashTable {
             let Some(entry) = self.latest[slot] else {
                 continue;
             };
-            let len = self.record_len(entry.kind);
+            let (len, kind) = if clear {
+                (self.meta_len(), KIND_META)
+            } else {
+                (self.record_len(entry.kind), entry.kind)
+            };
             if cursor + len > self.bank_size {
                 return Err(FlashError::NoSpace);
             }
-            flash.read(old_base + entry.offset, &mut self.scratch[..len])?;
+            if clear {
+                flash.read(old_base + entry.offset, &mut self.scratch[..RECORD_FIXED])?;
+                let generation = get_u32(&self.scratch, 8);
+                let version = get_u32(&self.scratch, 12);
+                let record = &mut self.scratch[..len];
+                record.fill(0xFF);
+                put_u16(record, 0, RECORD_MAGIC);
+                record[2] = KIND_META;
+                record[3] = 0;
+                put_u32(record, 4, slot as u32);
+                put_u32(record, 8, generation);
+                put_u32(record, 12, version);
+                put_u32(record, RECORD_FIXED, crc32(&record[..RECORD_FIXED]));
+                put_u32(record, RECORD_FIXED + 4, COMMIT_MARKER);
+            } else {
+                flash.read(old_base + entry.offset, &mut self.scratch[..len])?;
+            }
             flash.write(new_base + cursor, &self.scratch[..len - 4])?;
             flash.write(new_base + cursor + len - 4, &self.scratch[len - 4..])?;
             new_latest[slot] = Some(Latest {
                 offset: cursor,
-                kind: entry.kind,
+                kind,
             });
             cursor += len;
         }
@@ -426,7 +460,7 @@ impl FlashTable {
 
     pub fn read_slot<F: NorFlash>(
         &self,
-        flash: &mut F,
+        flash: &F,
         slot: u32,
         key_out: &mut [u8],
         payload_out: &mut [u8],
@@ -455,6 +489,44 @@ impl FlashTable {
             )?;
         }
         Ok((meta, entry.kind))
+    }
+
+    /// Lenient meta read: a slot without a record reports `used=false` and zero
+    /// generation/version, matching the V2 flash backend.
+    pub fn read_meta<F: NorFlash>(&self, flash: &F, slot: u32) -> Result<FlashMeta, FlashError> {
+        let Some(entry) = self.latest.get(slot as usize).and_then(|entry| *entry) else {
+            return Ok(FlashMeta::default());
+        };
+        let mut prefix = [0u8; RECORD_FIXED];
+        flash.read(self.active_base() + entry.offset, &mut prefix)?;
+        Ok(FlashMeta {
+            used: prefix[3] != 0,
+            generation: get_u32(&prefix, 8),
+            version: get_u32(&prefix, 12),
+        })
+    }
+
+    /// Lenient key read: a slot without a SET record yields zeroed key bytes.
+    pub fn read_key<F: NorFlash>(
+        &self,
+        flash: &F,
+        slot: u32,
+        out: &mut [u8],
+    ) -> Result<(), FlashError> {
+        if out.len() < self.geometry.key_size {
+            return Err(FlashError::InvalidSize);
+        }
+        out[..self.geometry.key_size].fill(0);
+        let Some(entry) = self.latest.get(slot as usize).and_then(|entry| *entry) else {
+            return Ok(());
+        };
+        if entry.kind != KIND_SET {
+            return Ok(());
+        }
+        flash.read(
+            self.active_base() + entry.offset + RECORD_FIXED,
+            &mut out[..self.geometry.key_size],
+        )
     }
 }
 pub fn persist_id_bytes(text: &str) -> [u8; 16] {
@@ -553,7 +625,7 @@ pub mod sim {
             self.erase_size
         }
 
-        fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+        fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
             let end = offset + out.len();
             if end > self.bytes.len() {
                 return Err(FlashError::InvalidSize);
@@ -881,7 +953,7 @@ mod tests {
             self.inner.erase_size()
         }
 
-        fn read(&mut self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
+        fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), FlashError> {
             self.inner.read(offset, out)
         }
 
