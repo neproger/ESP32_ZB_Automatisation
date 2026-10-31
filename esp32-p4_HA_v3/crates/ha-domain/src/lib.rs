@@ -155,6 +155,8 @@ impl EntitySnapshot {
 thread_local! {
     static IN_DOMAIN_CALLBACK: Cell<bool> = const { Cell::new(false) };
     static IN_COMMAND_EXECUTOR: Cell<bool> = const { Cell::new(false) };
+    #[cfg(test)]
+    static FAIL_NEXT_SNAPSHOT: Cell<bool> = const { Cell::new(false) };
 }
 
 struct ThreadFlagGuard(&'static LocalKey<Cell<bool>>);
@@ -607,6 +609,12 @@ impl Domain {
         if total > ENTITY_SNAPSHOT_MAX_BYTES {
             return Err(Error::InvalidSize);
         }
+        // Test-only fault injection at the allocation boundary.
+        #[cfg(test)]
+        if FAIL_NEXT_SNAPSHOT.with(Cell::get) {
+            FAIL_NEXT_SNAPSHOT.with(|flag| flag.set(false));
+            return Err(Error::NoMemory);
+        }
         let mut data = Vec::new();
         data.try_reserve_exact(total).map_err(|_| Error::NoMemory)?;
         data.resize(total, 0);
@@ -748,6 +756,7 @@ impl Domain {
 
     /// Crate-internal direct hand-off for unit tests only; production clients
     /// must use `DomainHandle::post` so the executor runs outside the mutex.
+    #[allow(dead_code)]
     pub(crate) fn post(
         &mut self,
         command_type: u32,
@@ -1045,6 +1054,36 @@ mod tests {
             source: SOURCE_ZIGBEE,
             value,
         }
+    }
+
+    #[test]
+    fn snapshot_no_memory_is_atomic_and_recoverable() {
+        let mut domain = domain(8);
+        register_device(&mut domain);
+        let first = [0x11u8; 12];
+        domain
+            .entity_put(DEVICE, &EUI64, &first, meta(Value::NONE))
+            .unwrap();
+        let version = domain.entity_meta(DEVICE, &EUI64).unwrap().version;
+
+        FAIL_NEXT_SNAPSHOT.with(|flag| flag.set(true));
+        assert_eq!(domain.snapshot(DEVICE), Err(Error::NoMemory));
+
+        let mut unchanged = [0u8; 12];
+        domain.entity_get(DEVICE, &EUI64, &mut unchanged).unwrap();
+        assert_eq!(unchanged, first);
+        assert_eq!(domain.entity_meta(DEVICE, &EUI64).unwrap().version, version);
+
+        let snapshot = domain.snapshot(DEVICE).unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot.key(0), Some(EUI64.as_slice()));
+        assert_eq!(snapshot.record(0), Some(first.as_slice()));
+
+        let second = [0x22u8; 12];
+        domain
+            .entity_put(DEVICE, &[0x55u8; 8], &second, meta(Value::NONE))
+            .unwrap();
+        assert_eq!(domain.snapshot(DEVICE).unwrap().len(), 2);
     }
 
     #[test]

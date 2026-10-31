@@ -261,7 +261,7 @@ workspace собирается и тесты зелёные.
 | snapshot_size_limit | >16 KiB → InvalidSize |
 | snapshot_overflow | checked error |
 | snapshot_empty_no_alloc | пустой snapshot |
-| snapshot_allocation_failure | NoMemory (fault injection или review) |
+| snapshot_no_memory_is_atomic_and_recoverable | NoMemory; Domain unchanged; следующий snapshot/put работает |
 | snapshot_no_per_entry_alloc | один data-буфер |
 | long_display_web_callback | Domain не блокирован |
 | concurrent_posters_readers | нет deadlock |
