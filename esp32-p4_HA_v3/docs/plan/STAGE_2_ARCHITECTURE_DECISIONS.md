@@ -172,27 +172,79 @@ pub fn register_remover(...) -> Result<()>;
 Многошаговое удаление разделяется:
 
 ```rust
-pub struct RemovalPlan { /* source, native id, canonical keys */ }
+pub struct RemovalPlan {
+    device: DeviceId,
+    source: SourceId,
+    native_id: Vec<u8>,          // bounded adapter identity
+    device_version: u32,         // canonical Logical Device version
+    entities: Vec<RemovalRecord>,
+    related: RemovalFingerprint, // keys + versions for caps/state/group items
+}
+
+pub struct RemovalTicket {
+    plan: RemovalPlan,
+    native: NativeRemoval,
+}
+
+pub enum NativeRemoval {
+    Removed,
+    AlreadyAbsent,
+}
+
+pub enum RemovalError {
+    Remover(ha_domain::Error),
+    StalePlan,
+    Canonical(ha_domain::Error),
+}
 
 pub fn prepare_remove(
     domain: &Domain,
     device: DeviceId,
-) -> Result<RemovalPlan>;
+) -> Result<RemovalPlan, RemovalError>;
 
-pub fn invoke_remover(plan: &RemovalPlan) -> Result<()>; // вне Domain mutex
+// Consumes the plan: the caller cannot invoke remover twice for one attempt.
+pub fn invoke_remover(
+    plan: RemovalPlan,
+) -> Result<RemovalTicket, RemovalError>; // вне Domain mutex
 
+// Takes the ticket by reference: a failed canonical cleanup can be retried
+// without calling remover again.
 pub fn remove_canonical(
     domain: &mut Domain,
     origin: u8,
-    plan: &RemovalPlan,
-) -> Result<usize>;
+    ticket: &RemovalTicket,
+) -> Result<usize, RemovalError>;
 ```
 
-Порядок: подготовить plan под коротким Domain read, отпустить Domain,
-вызвать Zigbee remover вне Domain lock, затем под scoped `with_mut` удалить
-canonical records. Ошибка remover не меняет canonical state. Если canonical
-удаление частично успешно, операция возвращает ошибку и требует повтора;
-полного rollback нет.
+Порядок: `prepare_remove` под коротким Domain read, `invoke_remover` вне
+Domain lock, затем `remove_canonical` под scoped `with_mut`. Ticket
+удерживается caller'ом до успешного canonical cleanup.
+
+Контракт remover:
+
+- Повторный вызов для уже отсутствующего устройства должен возвращать
+  `NativeRemoval::AlreadyAbsent` и считаться успехом; adapter может
+  реализовать это через свой `NotFound` → `AlreadyAbsent`.
+- Ошибка remover отделена от `Canonical` и не меняет canonical state.
+- После успешного `invoke_remover` повторный canonical cleanup выполняется
+  только по тому же `RemovalTicket`, без повторного вызова remover.
+
+Защита от устаревшего плана:
+
+- `RemovalPlan` фиксирует `DeviceId`, `source`, native id, версию Logical
+  Device, ожидаемые Entity records и fingerprint связанных записей.
+- `remove_canonical` перед первой мутацией повторно проверяет plan под
+  `with_mut`: существующие planned records обязаны совпадать по identity и
+  version; ownership обязан совпадать с device; новые owned entities,
+  которых нет в плане, делают план stale.
+- Записи, уже удалённые предыдущей частичной попыткой, считаются
+  выполненной частью плана; их отсутствие не делает план stale.
+- Если plan stale, `remove_canonical` не удаляет ничего и возвращает
+  `StalePlan`; вызывающий обязан сделать новый `prepare_remove`/ticket, а не
+  удалять записи по старому плану.
+- Частичный canonical cleanup не откатывается. Retry с тем же ticket
+  продолжает с недостающих записей; если ownership/version изменились,
+  возвращается `StalePlan`.
 
 No `Sink`, `NoSink`, persistence callbacks. Persistence выполняется Domain,
 когда production wiring появится в Stage 5; на host-этапе canonical state
@@ -206,8 +258,8 @@ No `Sink`, `NoSink`, persistence callbacks. Persistence выполняется D
 | `bind_entity` | Entity ownership | одна запись; ownership проверяется до записи |
 | `rename` | одна canonical запись | одна запись |
 | `prepare_remove` | только чтение | без изменений |
-| `invoke_remover` | внешний Zigbee callback | вне Domain lock; ошибка оставляет canonical state |
-| `remove_canonical` | несколько записей | не атомарно; частичное удаление возможно, повтор идемпотентен |
+| `invoke_remover` | внешний Zigbee callback | вне Domain lock; ошибка оставляет canonical state; repeated absent → успех |
+| `remove_canonical` | несколько записей | сначала revalidate plan; stale → без мутаций; частичное удаление → retry по ticket |
 
 `with_mut` даёт **сериализацию**, не атомарность. Частичная ошибка не
 откатывается автоматически и должна быть видна вызывающему коду.
@@ -315,12 +367,18 @@ production restore/erase policy — это Stage 5. Попытка сделат�
 Zigbee remover — внешний callback и не может вызываться под Domain mutex.
 Удаление разделяется:
 
-1. `prepare_remove` — короткое чтение под Domain lock, без мутации.
-2. `invoke_remover` — вне Domain lock; ошибка не меняет canonical state.
-3. `remove_canonical` — scoped `with_mut`, удаление canonical records;
-   возможна частичная ошибка, повтор идемпотентен.
+1. `prepare_remove` — короткое чтение под Domain lock, без мутации;
+   `RemovalPlan` фиксирует identity/version snapshot.
+2. `invoke_remover` — вне Domain lock, потребляет plan и возвращает
+   `RemovalTicket`; `AlreadyAbsent` — успех; ошибка remover не меняет
+   canonical state.
+3. `remove_canonical` — scoped `with_mut`, принимает ticket по ссылке,
+   сначала revalidate plan, затем удаляет canonical records. Stale plan —
+   без мутаций; частичная ошибка — retry по тому же ticket без повторного
+   remover.
 
-Порядок фиксирован: external remover не входит в `with_mut` closure.
+Порядок фиксирован: external remover не входит в `with_mut` closure;
+canonical cleanup не вызывает remover повторно.
 
 ### 7.3. Границы
 
@@ -358,7 +416,9 @@ Zigbee remover — внешний callback и не может вызыватьс
    - зафиксировать таблицу multi-record операций и поведение при частичной
      ошибке;
    - разделить `prepare_remove` / `invoke_remover` / `remove_canonical`;
-   - тесты lifecycle и частичных ошибок.
+   - реализовать `RemovalPlan`/`RemovalTicket`, stale-проверку ownership и
+     version, idempotent `AlreadyAbsent`;
+   - тесты lifecycle, частичных ошибок, retry и stale plan.
 2. **2.2 Zigbee projection**
    - выделить `write_state`/`read_state` на `DomainHandle`;
    - удалить `RecordSink`, table registration, generic CRUD;
@@ -366,7 +426,9 @@ Zigbee remover — внешний callback и не может вызыватьс
    - обновить tests.
 3. **2.3 Call-site migration**
    - `zigbee_service`: Device service для register/ensure/bind/remove;
-   - remover вызывается вне Domain mutex;
+   - remover вызывается вне Domain mutex и только один раз на ticket;
+   - повторный canonical cleanup после ошибки идёт по тому же ticket;
+   - stale `RemovalPlan` не удаляет записи и требует нового prepare;
    - `main`: временный config-слой для ещё не мигрировавших CRUD;
    - удалить adapter sink.
 4. **2.4 Delete legacy traits**
@@ -408,7 +470,15 @@ Zigbee remover — внешний callback и не может вызыватьс
   - capabilities lifecycle;
   - state projection;
   - частичную ошибку `ensure_entity` и повтор;
-  - частичную ошибку `remove_canonical` и повтор;
+  - частичную ошибку `remove_canonical` и retry по тому же ticket без
+    повторного remover;
+  - remover успешен, canonical cleanup частично неуспешен, повтор cleanup
+    завершает удаление;
+  - повторный remover для уже отсутствующего устройства →
+    `AlreadyAbsent` без ошибки;
+  - ownership/version изменились между prepare и cleanup →
+    `StalePlan`, без мутаций;
+  - устаревший plan не удаляет чужие или заново созданные записи;
   - внешний remover вне Domain lock;
   - отсутствие persistence callback;
   - отсутствие generic CRUD в adapter.
@@ -424,15 +494,19 @@ Zigbee remover — внешний callback и не может вызыватьс
 2. **with_mut:** даёт сериализацию, но не атомарность. Частичные изменения
    возможны и не откатываются; нужны тесты на частичные ошибки.
 3. **Remover:** внешний Zigbee callback обязан выполняться вне Domain mutex;
-   иначе снова появляется внешняя работа под lock.
-4. **Config CRUD:** временный `StoreSink` в `ha-app` не владеет схемой и не
+   повторный вызов для уже удалённого устройства должен возвращать
+   `AlreadyAbsent`, а не создавать неопределённую ошибку.
+4. **Stale plan:** ownership/version могут измениться между prepare и
+   canonical cleanup; такой plan обязан отказаться от удаления, а не
+   затрагивать новое состояние.
+5. **Config CRUD:** временный `StoreSink` в `ha-app` не владеет схемой и не
    содержит бизнес-правил; его удаление — обязательный критерий Stage 3.
-5. **Descriptor bootstrap:** composition root регистрирует definitions, но
+6. **Descriptor bootstrap:** composition root регистрирует definitions, но
    не владеет ими; окончательная manifest policy — Stage 5.
-6. **Capabilities ownership:** Device service принимает canonical
+7. **Capabilities ownership:** Device service принимает canonical
    `CapabilitiesRecord`, но не знает Z2M profile; adapter остаётся
    источником projection.
-7. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
+8. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
    критерии.
 
 ## 12. Что требуется утвердить
@@ -445,8 +519,10 @@ Zigbee remover — внешний callback и не может вызыватьс
 5. Scoped `with_mut` как сериализация без атомарности; удаление после
    появления transaction API.
 6. Разделённый remove: `prepare_remove` → remover вне lock →
-   `remove_canonical`.
-7. Точные Device service signatures и ownership descriptor definitions.
+   `remove_canonical`; `RemovalTicket` предотвращает повторный remover.
+7. Идемпотентность: `AlreadyAbsent` — успех; stale plan → `StalePlan` без
+   мутаций.
+8. Точные Device service signatures и ownership descriptor definitions.
 
 После утверждения можно начинать Stage 2; до этого production-код не
 меняется.
