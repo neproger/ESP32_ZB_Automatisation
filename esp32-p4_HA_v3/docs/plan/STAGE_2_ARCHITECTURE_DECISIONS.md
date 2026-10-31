@@ -184,6 +184,12 @@ pub struct RemovalPlan {
 pub struct RemovalTicket {
     plan: RemovalPlan,
     native: NativeRemoval,
+    progress: RemovalProgress,
+}
+
+pub struct RemovalProgress {
+    // Preallocated bit per plan record; no allocation under Domain lock.
+    completed: Vec<u8>,
 }
 
 pub enum NativeRemoval {
@@ -207,18 +213,20 @@ pub fn invoke_remover(
     plan: RemovalPlan,
 ) -> Result<RemovalTicket, RemovalError>; // вне Domain mutex
 
-// Takes the ticket by reference: a failed canonical cleanup can be retried
-// without calling remover again.
+// Mutable ticket: progress is recorded in the same Domain-lock operation
+// as each successful canonical deletion.
 pub fn remove_canonical(
     domain: &mut Domain,
     origin: u8,
-    ticket: &RemovalTicket,
+    ticket: &mut RemovalTicket,
 ) -> Result<usize, RemovalError>;
 ```
 
 Порядок: `prepare_remove` под коротким Domain read, `invoke_remover` вне
 Domain lock, затем `remove_canonical` под scoped `with_mut`. Ticket
-удерживается caller'ом до успешного canonical cleanup.
+удерживается caller'ом до успешного canonical cleanup. `RemovalProgress`
+аллоцируется в `prepare_remove`/`invoke_remover` и только маркируется под
+Domain lock; новые аллокации в cleanup не выполняются.
 
 Контракт remover:
 
@@ -229,7 +237,7 @@ Domain lock, затем `remove_canonical` под scoped `with_mut`. Ticket
 - После успешного `invoke_remover` повторный canonical cleanup выполняется
   только по тому же `RemovalTicket`, без повторного вызова remover.
 
-Защита от устаревшего плана:
+Защита от устаревшего плана и учёт прогресса:
 
 - `RemovalPlan` фиксирует `DeviceId`, `source`, native id, версию Logical
   Device, ожидаемые Entity records и fingerprint связанных записей.
@@ -237,14 +245,26 @@ Domain lock, затем `remove_canonical` под scoped `with_mut`. Ticket
   `with_mut`: существующие planned records обязаны совпадать по identity и
   version; ownership обязан совпадать с device; новые owned entities,
   которых нет в плане, делают план stale.
-- Записи, уже удалённые предыдущей частичной попыткой, считаются
-  выполненной частью плана; их отсутствие не делает план stale.
+- Каждая запись плана имеет свой progress bit. Успешное удаление и установка
+  bit выполняются в одной критической секции Domain, без fallible-шагов
+  между ними. `RemovalProgress` заранее аллоцирован, поэтому отметка не
+  может отказать по памяти.
+- Повторная попытка:
+  - bit установлен и запись отсутствует — запись уже завершена, skip;
+  - bit установлен и запись снова существует — план stale;
+  - bit не установлен и запись отсутствует — план stale (нельзя доказать,
+    что её удалил именно этот ticket);
+  - bit не установлен и запись существует — повторная проверка
+    identity/version/ownership, затем удаление и установка bit.
 - Если plan stale, `remove_canonical` не удаляет ничего и возвращает
   `StalePlan`; вызывающий обязан сделать новый `prepare_remove`/ticket, а не
   удалять записи по старому плану.
 - Частичный canonical cleanup не откатывается. Retry с тем же ticket
-  продолжает с недостающих записей; если ownership/version изменились,
+  продолжает с записей без progress bit; если ownership/version изменились,
   возвращается `StalePlan`.
+- При потере ticket безопасное восстановление идёт через новый
+  `prepare_remove` по текущему Domain state. `AlreadyAbsent` remover делает
+  этот путь допустимым; старый progress не переносится и не угадывается.
 
 No `Sink`, `NoSink`, persistence callbacks. Persistence выполняется Domain,
 когда production wiring появится в Stage 5; на host-этапе canonical state
@@ -259,7 +279,7 @@ No `Sink`, `NoSink`, persistence callbacks. Persistence выполняется D
 | `rename` | одна canonical запись | одна запись |
 | `prepare_remove` | только чтение | без изменений |
 | `invoke_remover` | внешний Zigbee callback | вне Domain lock; ошибка оставляет canonical state; repeated absent → успех |
-| `remove_canonical` | несколько записей | сначала revalidate plan; stale → без мутаций; частичное удаление → retry по ticket |
+| `remove_canonical` | несколько записей | revalidate; progress bit ставится после успешного удаления под тем же lock; stale → без мутаций; retry по ticket |
 
 `with_mut` даёт **сериализацию**, не атомарность. Частичная ошибка не
 откатывается автоматически и должна быть видна вызывающему коду.
@@ -372,13 +392,15 @@ Zigbee remover — внешний callback и не может вызыватьс
 2. `invoke_remover` — вне Domain lock, потребляет plan и возвращает
    `RemovalTicket`; `AlreadyAbsent` — успех; ошибка remover не меняет
    canonical state.
-3. `remove_canonical` — scoped `with_mut`, принимает ticket по ссылке,
-   сначала revalidate plan, затем удаляет canonical records. Stale plan —
-   без мутаций; частичная ошибка — retry по тому же ticket без повторного
-   remover.
+3. `remove_canonical` — scoped `with_mut`, принимает `&mut RemovalTicket`,
+   сначала revalidate plan, затем удаляет canonical records и сразу
+   маркирует progress bit в той же критической секции. Stale plan — без
+   мутаций; частичная ошибка — retry по тому же ticket без повторного
+   remover. Missing record без progress bit — stale, а не «уже завершено».
 
 Порядок фиксирован: external remover не входит в `with_mut` closure;
-canonical cleanup не вызывает remover повторно.
+canonical cleanup не вызывает remover повторно; progress обновляется только
+под Domain lock.
 
 ### 7.3. Границы
 
@@ -416,9 +438,10 @@ canonical cleanup не вызывает remover повторно.
    - зафиксировать таблицу multi-record операций и поведение при частичной
      ошибке;
    - разделить `prepare_remove` / `invoke_remover` / `remove_canonical`;
-   - реализовать `RemovalPlan`/`RemovalTicket`, stale-проверку ownership и
-     version, idempotent `AlreadyAbsent`;
-   - тесты lifecycle, частичных ошибок, retry и stale plan.
+   - реализовать `RemovalPlan`/`RemovalTicket`, preallocated
+     `RemovalProgress`, stale-проверку ownership/version и idempotent
+     `AlreadyAbsent`;
+   - тесты lifecycle, частичных ошибок, retry, progress bitmap и stale plan.
 2. **2.2 Zigbee projection**
    - выделить `write_state`/`read_state` на `DomainHandle`;
    - удалить `RecordSink`, table registration, generic CRUD;
@@ -427,7 +450,10 @@ canonical cleanup не вызывает remover повторно.
 3. **2.3 Call-site migration**
    - `zigbee_service`: Device service для register/ensure/bind/remove;
    - remover вызывается вне Domain mutex и только один раз на ticket;
+   - progress обновляется в той же критической секции, что и удаление;
    - повторный canonical cleanup после ошибки идёт по тому же ticket;
+   - потеря ticket восстанавливается через новый `prepare_remove` и
+     `AlreadyAbsent`, без угадывания старого progress;
    - stale `RemovalPlan` не удаляет записи и требует нового prepare;
    - `main`: временный config-слой для ещё не мигрировавших CRUD;
    - удалить adapter sink.
@@ -479,6 +505,11 @@ canonical cleanup не вызывает remover повторно.
   - ownership/version изменились между prepare и cleanup →
     `StalePlan`, без мутаций;
   - устаревший plan не удаляет чужие или заново созданные записи;
+  - progress bit устанавливается только после успешного удаления в той же
+    критической секции;
+  - отсутствующая запись без progress bit → `StalePlan`, без удалений;
+  - потеря ticket → новый `prepare_remove` + `AlreadyAbsent` восстанавливает
+    cleanup без угадывания старого progress;
   - внешний remover вне Domain lock;
   - отсутствие persistence callback;
   - отсутствие generic CRUD в adapter.
@@ -499,14 +530,17 @@ canonical cleanup не вызывает remover повторно.
 4. **Stale plan:** ownership/version могут измениться между prepare и
    canonical cleanup; такой plan обязан отказаться от удаления, а не
    затрагивать новое состояние.
-5. **Config CRUD:** временный `StoreSink` в `ha-app` не владеет схемой и не
+5. **Progress/ticket:** отсутствие записи без progress bit нельзя считать
+   завершённым; потеря ticket восстанавливается через новый prepare и
+   `AlreadyAbsent`. Progress/битовая карта не являются Domain state.
+6. **Config CRUD:** временный `StoreSink` в `ha-app` не владеет схемой и не
    содержит бизнес-правил; его удаление — обязательный критерий Stage 3.
-6. **Descriptor bootstrap:** composition root регистрирует definitions, но
+7. **Descriptor bootstrap:** composition root регистрирует definitions, но
    не владеет ими; окончательная manifest policy — Stage 5.
-7. **Capabilities ownership:** Device service принимает canonical
+8. **Capabilities ownership:** Device service принимает canonical
    `CapabilitiesRecord`, но не знает Z2M profile; adapter остаётся
    источником projection.
-8. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
+9. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
    критерии.
 
 ## 12. Что требуется утвердить
@@ -520,9 +554,11 @@ canonical cleanup не вызывает remover повторно.
    появления transaction API.
 6. Разделённый remove: `prepare_remove` → remover вне lock →
    `remove_canonical`; `RemovalTicket` предотвращает повторный remover.
-7. Идемпотентность: `AlreadyAbsent` — успех; stale plan → `StalePlan` без
+7. Progress contract: preallocated bitmap, marking under same Domain lock,
+   missing without bit → stale, ticket loss recovery via new prepare.
+8. Идемпотентность: `AlreadyAbsent` — успех; stale plan → `StalePlan` без
    мутаций.
-8. Точные Device service signatures и ownership descriptor definitions.
+9. Точные Device service signatures и ownership descriptor definitions.
 
 После утверждения можно начинать Stage 2; до этого production-код не
 меняется.
