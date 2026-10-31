@@ -1,5 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use ha_domain::{
     Backing, Domain, DomainHandle, EntityDesc, Error, FactKind, FactMeta, Filter, Value,
@@ -105,6 +107,79 @@ fn executor_runs_without_domain_lock() {
 }
 
 #[test]
+fn executor_can_mutate_domain() {
+    let domain = handle();
+    let nested = domain.clone();
+    domain
+        .register_command(1, move |_| {
+            nested.entity_put(7, &[3u8; 8], &[4u8; 8], meta())?;
+            Ok(())
+        })
+        .unwrap();
+
+    domain.post(1, &[], None, meta()).unwrap();
+    let mut record = [0u8; 8];
+    assert_eq!(
+        domain.entity_get(7, &[3u8; 8], &mut record).map(|_| record),
+        Ok([4u8; 8])
+    );
+}
+
+#[test]
+fn unknown_command_does_not_run_executor() {
+    let domain = handle();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::clone(&calls);
+    domain
+        .register_command(1, move |_| {
+            sink.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(domain.post(2, &[], None, meta()), Err(Error::NotFound));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn commands_are_serialized() {
+    let domain = handle();
+    let active = Arc::new(AtomicUsize::new(0));
+    let overlap = Arc::new(AtomicBool::new(false));
+    let active_sink = Arc::clone(&active);
+    let overlap_sink = Arc::clone(&overlap);
+    domain
+        .register_command(1, move |_| {
+            if active_sink.fetch_add(1, Ordering::SeqCst) != 0 {
+                overlap_sink.store(true, Ordering::SeqCst);
+            }
+            thread::sleep(Duration::from_millis(1));
+            active_sink.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+
+    let barrier = Arc::new(Barrier::new(3));
+    let posters: Vec<_> = (0..2)
+        .map(|_| {
+            let domain = domain.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..50 {
+                    domain.post(1, &[], None, meta()).unwrap();
+                }
+            })
+        })
+        .collect();
+    barrier.wait();
+    for poster in posters {
+        poster.join().unwrap();
+    }
+    assert!(!overlap.load(Ordering::SeqCst));
+}
+
+#[test]
 fn command_sent_follows_executor_order() {
     let domain = handle();
     let executed = Arc::new(Mutex::new(Vec::new()));
@@ -180,6 +255,14 @@ fn post_from_with_mut_returns_invalid_state() {
         .with_mut(|_| nested.post(1, &[], None, meta()))
         .unwrap();
     assert_eq!(result, Err(Error::InvalidState));
+}
+
+#[test]
+fn empty_entity_snapshot_is_empty() {
+    let domain = handle();
+    let snapshot = domain.entity_snapshot(7).unwrap();
+    assert_eq!(snapshot.len(), 0);
+    assert_eq!(snapshot.key(0), None);
 }
 
 #[test]
