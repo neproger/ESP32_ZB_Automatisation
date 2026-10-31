@@ -321,3 +321,17 @@ main может временно использовать transitional `with_mut
 - Изменения ограничены `ha-domain` и необходимыми call sites `ha-app`/
   `zigbee-devices`/`ha-device` в рамках Stage 1d.
 - Stage 1d.4 review готов; Stage 2/5 не начаты.
+
+## 10. Verification
+
+```powershell
+cd esp32-p4_HA_v3
+cargo test --workspace
+.\tools\build-ha-app.ps1
+.\tools\check-domain-api.ps1
+```
+
+`check-domain-api.ps1` запрещает legacy `domain.lock()`/`domain.with()` и
+разрешает `with_mut` только в `ha-app/src/main.rs`,
+`ha-app/src/zigbee_service.rs` и `ha-domain/tests/domain_handle.rs`.
+`DomainHandle::lock`/`with` удалены; `with_mut` помечен `#[doc(hidden)]`.
