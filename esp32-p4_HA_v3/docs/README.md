@@ -13,6 +13,8 @@
   правила выполнения, контрактные тесты и DoD.
 - [plan/STAGE_1D_4_P4_VALIDATION.md](plan/STAGE_1D_4_P4_VALIDATION.md) — P4
   readiness, lock instrumentation и воспроизводимый hardware protocol.
+- [plan/STAGE_2_ARCHITECTURE_DECISIONS.md](plan/STAGE_2_ARCHITECTURE_DECISIONS.md) —
+  границы Zigbee adapter / Device service и контракты Stage 2.
 
 ## Аудиты
 
