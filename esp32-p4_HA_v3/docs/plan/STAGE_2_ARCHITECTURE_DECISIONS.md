@@ -136,7 +136,11 @@ storage-правил: используются существующие Stage 1c
 
 Точные сигнатуры утверждаются вместе с transaction-решением.
 
-### 5.1. Device service
+### 5.1. Device service (transitional)
+
+`&mut Domain` ниже означает **только** вызов внутри утверждённого scoped
+`with_mut`; это переходный контракт, а не разрешение другим сервисам напрямую
+работать с Domain.
 
 ```rust
 pub fn register(
@@ -162,26 +166,67 @@ pub fn set_capabilities(
 
 pub fn bind_entity(...) -> Result<bool>;
 pub fn rename(...) -> Result<bool>;
-pub fn remove(...) -> Result<usize>;
 pub fn register_remover(...) -> Result<()>;
 ```
+
+Многошаговое удаление разделяется:
+
+```rust
+pub struct RemovalPlan { /* source, native id, canonical keys */ }
+
+pub fn prepare_remove(
+    domain: &Domain,
+    device: DeviceId,
+) -> Result<RemovalPlan>;
+
+pub fn invoke_remover(plan: &RemovalPlan) -> Result<()>; // вне Domain mutex
+
+pub fn remove_canonical(
+    domain: &mut Domain,
+    origin: u8,
+    plan: &RemovalPlan,
+) -> Result<usize>;
+```
+
+Порядок: подготовить plan под коротким Domain read, отпустить Domain,
+вызвать Zigbee remover вне Domain lock, затем под scoped `with_mut` удалить
+canonical records. Ошибка remover не меняет canonical state. Если canonical
+удаление частично успешно, операция возвращает ошибку и требует повтора;
+полного rollback нет.
 
 No `Sink`, `NoSink`, persistence callbacks. Persistence выполняется Domain,
 когда production wiring появится в Stage 5; на host-этапе canonical state
 остаётся в Domain.
 
+| Операция | Записи | Гарантия при ошибке |
+|---|---|---|
+| `register` | Logical Device | одна запись; идемпотентно |
+| `ensure_entity` | Entity + Capabilities | Entity может остаться без Capabilities; повторный вызов завершает |
+| `set_capabilities` | Capabilities | одна запись |
+| `bind_entity` | Entity ownership | одна запись; ownership проверяется до записи |
+| `rename` | одна canonical запись | одна запись |
+| `prepare_remove` | только чтение | без изменений |
+| `invoke_remover` | внешний Zigbee callback | вне Domain lock; ошибка оставляет canonical state |
+| `remove_canonical` | несколько записей | не атомарно; частичное удаление возможно, повтор идемпотентен |
+
+`with_mut` даёт **сериализацию**, не атомарность. Частичная ошибка не
+откатывается автоматически и должна быть видна вызывающему коду.
+
 ### 5.2. Zigbee projection
+
+`PROPERTY_STATE` write/read идут через явные `DomainHandle` методы, без
+публичного `&mut Domain`:
 
 ```rust
 pub fn write_state(
-    domain: &mut Domain,
+    domain: &DomainHandle,
     entity: EntityId,
     property: PropertyId,
     value: Value,
 ) -> Result<bool>;
 
 pub fn read_state(
-    domain: &Domain,
+    domain: &DomainHandle,
     entity: EntityId,
     property: PropertyId,
 ) -> Option<Value>;
@@ -194,14 +239,16 @@ config-слой.
 
 ### 5.3. Descriptor bootstrap
 
-`DomainAdapter::register_tables` не принадлежит Zigbee adapter. На время
-Stage 2 descriptors переносятся в composition root (`ha-app::store` или
-отдельный bootstrap helper); окончательная manifest-политика — Stage 5.
-Domain не получает магических знаний о Zigbee.
+`DomainAdapter::register_tables` не принадлежит Zigbee adapter. Definitions
+descriptors остаются в архитектурных модулях, которые ими владеют
+(`ha-model`/`ha-domain`/Zigbee projection). Composition root только собирает
+эти definitions и регистрирует их; он не становится владельцем схемы.
+Временная регистрация может жить в bootstrap helper (`ha-app`), окончательная
+manifest policy — Stage 5.
 
 ## 6. Persistence boundary
 
-### 6.1. Рекомендация
+### 6.1. Рекомендация и явные ограничения
 
 - Удалить `RecordSink` и `ha_device::Sink` из adapter/device.
 - Device service больше не вызывает persistence callbacks.
@@ -209,9 +256,35 @@ Domain не получает магических знаний о Zigbee.
 - `StoreSink` может остаться только как временный config-слой в `ha-app`
   для ещё не мигрировавших групп/автоматизаций/настроек; после Stage 3 он
   удаляется.
-- Считать это осознанным переходным долгом: после Stage 2 Zigbee
-  Device/Entity lifecycle не имеет production persistence до Stage 5.
-  Host-тесты от этого не зависят; P4 на этом этапе не требуется.
+- Ответственность за persistence остаётся у Domain; Stage 2 лишь убирает
+  callback-путь adapter/device. Это не новая постоянная модель.
+
+Последствия временного persistence gap:
+
+| Аспект | До Stage 2 | После Stage 2 до Stage 5 |
+|---|---|---|
+| Device/Entity/Capabilities в RAM | да | да |
+| Durable production persistence | через `StoreSink` | **отсутствует** |
+| Изменения после reboot | сохраняются | **могут быть потеряны** |
+| Crash consistency | по текущему store-пути | **не гарантируется** |
+| `PROPERTY_STATE` | RAM-only | RAM-only, без изменений |
+| Config groups/automation/settings | через `StoreSink` | временный config-слой |
+
+Затронутые операции: `ha_device::register`, `ensure_entity`,
+`set_capabilities`, `bind_entity`, `rename`, `remove_canonical` и создание
+Entity/Capabilities Zigbee projection. Не затронут `PROPERTY_STATE`: он и
+раньше был RAM-only.
+
+Stage 2 **не считается готовым к production-развёртыванию с гарантией
+сохранности Device/Entity**. Stage 5 обязан:
+
+- подключить production Domain storage;
+- восстановить durable save/restore для затронутых записей;
+- проверить reboot/crash сценарии;
+- только после этого вернуть production-гарантию persistence.
+
+Host-тесты Stage 2 проверяют in-process Domain semantics, а не сохранность
+после reboot. P4 на этом этапе не требуется.
 
 ### 6.2. Почему не тянуть wiring Domain storage в Stage 2
 
@@ -222,16 +295,43 @@ production restore/erase policy — это Stage 5. Попытка сделат�
 
 ## 7. Locking / transaction
 
-- Stage 2 не добавляет новых публичных блокировок.
-- Lifecycle операции, меняющие несколько записей, остаются в scoped
-  `DomainHandle::with_mut` до появления явного Domain transaction API.
-- `with_mut` не должен вызывать executor/UI/Web и не должен вызывать
-  persistence sink.
+### 7.1. Scoped `with_mut`
+
+`with_mut` остаётся переходным механизмом **сериализации**, но не
+атомарности. Lifecycle-операция, изменившая часть записей, может вернуть
+ошибку с частично изменённым Domain; автоматического rollback нет.
+
+Обязательные ограничения callback:
+
+1. Только утверждённые lifecycle call sites.
+2. Никакого executor, UI, Web или persistence callback внутри.
+3. Никакого обращения к Zigbee stack или другим внешним сервисам.
+4. Минимальная продолжительность удержания Domain mutex.
+5. Static checker проверяет конкретные функции и места вызова.
+6. Частичная ошибка документируется и возвращается вызывающему коду.
+
+### 7.2. Remover вне Domain lock
+
+Zigbee remover — внешний callback и не может вызываться под Domain mutex.
+Удаление разделяется:
+
+1. `prepare_remove` — короткое чтение под Domain lock, без мутации.
+2. `invoke_remover` — вне Domain lock; ошибка не меняет canonical state.
+3. `remove_canonical` — scoped `with_mut`, удаление canonical records;
+   возможна частичная ошибка, повтор идемпотентен.
+
+Порядок фиксирован: external remover не входит в `with_mut` closure.
+
+### 7.3. Границы
+
+- `DomainHandle` explicit methods для `PROPERTY_STATE` — только короткие
+  операции, без `&mut Domain`.
+- `&mut Domain` в Device service — только transitional аргумент внутри
+  approved `with_mut`.
 - Удаление `with_mut` из adapter/device переносится в Stage 3 или в отдельную
-  задачу после Stage 2; для этого нужно решить, нужен ли atomic lifecycle
-  transaction API.
-- Static checker должен разрешать `with_mut` только для утверждённых
-  lifecycle/config call sites.
+  задачу после появления Domain transaction API.
+- Static checker разрешает `with_mut` только для утверждённых
+  lifecycle/config call sites и запрещает внешние вызовы внутри callback.
 
 ## 8. Разрешённые изменения
 
@@ -255,21 +355,28 @@ production restore/erase policy — это Stage 5. Попытка сделат�
 1. **2.1 Device service contracts**
    - убрать `Sink`/`NoSink` из `ha-device`;
    - добавить `ensure_entity`/`set_capabilities` без persistence;
-   - тесты lifecycle.
+   - зафиксировать таблицу multi-record операций и поведение при частичной
+     ошибке;
+   - разделить `prepare_remove` / `invoke_remover` / `remove_canonical`;
+   - тесты lifecycle и частичных ошибок.
 2. **2.2 Zigbee projection**
-   - выделить `write_state`/`read_state`;
+   - выделить `write_state`/`read_state` на `DomainHandle`;
    - удалить `RecordSink`, table registration, generic CRUD;
+   - удалить создание Logical Device/Entity из adapter;
    - обновить tests.
 3. **2.3 Call-site migration**
    - `zigbee_service`: Device service для register/ensure/bind/remove;
+   - remover вызывается вне Domain mutex;
    - `main`: временный config-слой для ещё не мигрировавших CRUD;
    - удалить adapter sink.
 4. **2.4 Delete legacy traits**
    - удалить `RecordSink` и `ha_device::Sink`;
    - удалить недостижимые adapter APIs;
-   - обновить static checks.
+   - обновить static checks: no sink, no store calls, no adapter table
+     registration, no adapter lifecycle, no remover under lock, no
+     unauthorized `with_mut`.
 5. **2.5 Verification**
-   - host tests + no-sink grep;
+   - host tests + static checks for all bypass paths;
    - build `ha-app` допускается, P4 не требуется.
 
 ## 10. Критерии приёмки
@@ -279,46 +386,67 @@ production restore/erase policy — это Stage 5. Попытка сделат�
 - `ha-device` не содержит `Sink`/`NoSink` и persistence callbacks.
 - Zigbee adapter не создаёт/не удаляет Logical Device/Entity.
 - Device service владеет register/ensure/bind/rename/remove и capabilities.
-- `PROPERTY_STATE` пишет только projection path через Domain.
+- `PROPERTY_STATE` пишет только projection path через `DomainHandle`.
 - Никакой adapter/device path не вызывает `store::save_domain`/`remove_domain`.
+- Zigbee remover не вызывается внутри `with_mut`/Domain mutex.
 - `main.rs` содержит только механическую адаптацию и временный config-слой;
   новой business logic нет.
 - `cargo test --workspace` зелёный.
-- `check-domain-api.ps1` обновлён под новый allowlist `with_mut`.
+- `check-domain-api.ps1` обновлён под новый allowlist `with_mut` и проверяет
+  отсутствие запрещённых вызовов внутри callback.
+- Static checks дополнительно проверяют:
+  - отсутствие `store::save_domain/remove_domain` в `zigbee-devices` и
+    `ha-device`;
+  - отсутствие регистрации canonical tables в Zigbee adapter;
+  - отсутствие создания Logical Device/Entity в Zigbee adapter;
+  - отсутствие generic CRUD в Zigbee adapter;
+  - отсутствие неутверждённых `with_mut` call sites;
+  - отсутствие remover callback под Domain lock.
 - Host tests покрывают:
   - idempotent register/bind;
   - ownership/cascade remove;
   - capabilities lifecycle;
   - state projection;
+  - частичную ошибку `ensure_entity` и повтор;
+  - частичную ошибку `remove_canonical` и повтор;
+  - внешний remover вне Domain lock;
   - отсутствие persistence callback;
   - отсутствие generic CRUD в adapter.
-- P4 не требуется; production persistence gap до Stage 5 зафиксирован.
+- P4 не требуется; production persistence gap до Stage 5 зафиксирован и
+  включает явную таблицу затронутых операций/гарантий.
 
 ## 11. Риски и открытые решения
 
-1. **Persistence gap:** после удаления sink Device/Entity config не
-   сохраняется до Stage 5. Нужно утвердить как допустимый переходный риск.
-2. **with_mut:** без transaction API lifecycle остаётся под scoped lock.
-   Удаление `with_mut` — Stage 3/отдельная задача; иначе нужен
-   Domain transaction contract.
-3. **Config CRUD:** временный `StoreSink` в `ha-app` сохраняет старый путь
-   для групп/автоматизаций; его удаление — Stage 3.
-4. **Descriptor bootstrap:** перенос регистрации таблиц в composition root
-   должен быть временным; окончательная manifest policy — Stage 5.
-5. **Capabilities ownership:** Device service принимает canonical
+1. **Persistence gap:** подтверждён только как явно ограниченный временный
+   режим. Production persistence Device/Entity отсутствует до Stage 5;
+   после reboot изменения могут быть потеряны. Это не production-ready
+   состояние и не новая постоянная модель.
+2. **with_mut:** даёт сериализацию, но не атомарность. Частичные изменения
+   возможны и не откатываются; нужны тесты на частичные ошибки.
+3. **Remover:** внешний Zigbee callback обязан выполняться вне Domain mutex;
+   иначе снова появляется внешняя работа под lock.
+4. **Config CRUD:** временный `StoreSink` в `ha-app` не владеет схемой и не
+   содержит бизнес-правил; его удаление — обязательный критерий Stage 3.
+5. **Descriptor bootstrap:** composition root регистрирует definitions, но
+   не владеет ими; окончательная manifest policy — Stage 5.
+6. **Capabilities ownership:** Device service принимает canonical
    `CapabilitiesRecord`, но не знает Z2M profile; adapter остаётся
-   единственным источником projection.
-6. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
+   источником projection.
+7. **P4:** не входит в Stage 2; текущая отложенная валидация не меняет
    критерии.
 
 ## 12. Что требуется утвердить
 
 1. Ownership: adapter только projection, Device service — lifecycle.
 2. Удаление `RecordSink`/`ha_device::Sink` из adapter/device.
-3. Persistence gap до Stage 5 как допустимый переходный риск.
-4. Временный config-слой в `ha-app` до Stage 3.
-5. Сохранение scoped `with_mut` для lifecycle до появления transaction API.
-6. Точные Device service signatures и bootstrap-владелец descriptors.
+3. Persistence gap как ограниченный временный режим с явными гарантиями,
+   а не как допустимая потеря данных в production.
+4. Временный config-слой в `ha-app` до Stage 3; удаление обязательно.
+5. Scoped `with_mut` как сериализация без атомарности; удаление после
+   появления transaction API.
+6. Разделённый remove: `prepare_remove` → remover вне lock →
+   `remove_canonical`.
+7. Точные Device service signatures и ownership descriptor definitions.
 
 После утверждения можно начинать Stage 2; до этого production-код не
 меняется.
