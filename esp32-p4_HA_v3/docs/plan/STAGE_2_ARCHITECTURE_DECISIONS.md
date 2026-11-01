@@ -1,10 +1,11 @@
 # Stage 2 — архитектурное решение (предложение)
 
-> Статус: **предложение для согласования**. Stage 2 не начат, код не менялся.
+> Статус: **историческая запись реализованных решений Stage 2**.
+> Не активный план. Активный план:
+> [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 >
-> Основание: `V3_IMPLEMENTATION_PLAN.md` §5, `STAGE_1D_ARCHITECTURE_DECISIONS.md`,
-> `V3_LAYERS.md` и фактический код `zigbee-devices`, `ha-device`, `ha-app`,
-> `ha-domain`.
+> Основание: `STAGE_1D_ARCHITECTURE_DECISIONS.md`, `V3_LAYERS.md` и фактический
+> код `zigbee-devices`, `ha-device`, `ha-app`, `ha-domain`.
 
 ## 1. Цель Stage 2
 

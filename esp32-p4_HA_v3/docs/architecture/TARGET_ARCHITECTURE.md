@@ -12,7 +12,9 @@
 > `RECORD_MODEL.md`, `storage/MSTORE_BENCH.md`.
 >
 > При расхождении по слоям/runtime действует `V3_LAYERS.md`, по canonical-контракту —
-> этот документ, а по архитектурному эталону — V2.
+> этот документ, а по архитектурному эталону — V2. Исключение: Zigbee —
+> текущая реализация V2+Z2M; см. [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md),
+> раздел «Особенности Zigbee-слоя».
 
 ## 1. Главный принцип
 
@@ -391,7 +393,7 @@ Subscriber:     inbox → прочитать state/payload → своя рабо
 
 Исторический срез несоответствий и порядок миграции в этом документе не ведутся:
 текущее состояние и расхождения — [V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md),
-порядок работ и DoD — [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
+порядок работ и DoD — [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md).
 Критерии приёмки — сценарии этапа 6 плана.
 
 ## 13. Критерии готовности

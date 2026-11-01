@@ -1,6 +1,8 @@
 # Stage 1d.3 — Implementation Plan
 
-> Статус: **план реализации для согласования**. Код не менялся.
+> Статус: **историческая запись завершённого Stage 1d.3**.
+> Не активный план. Активный план:
+> [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 >
 > Архитектурная основа: `STAGE_1D_ARCHITECTURE_DECISIONS.md` (`fd94da8`).
 > Границы: только `DomainHandle`, command execution, call sites в `ha-app`,
@@ -177,7 +179,8 @@ workspace собирается и тесты зелёные.
 2. Проверить отсутствие `post()` внутри `with_mut`/executor.
 3. Проверить отсутствие `lock`/`with` в публичном API и call sites.
 4. Обновить архитектурную документацию:
-   - `V3_LAYERS.md` / `V3_IMPLEMENTATION_PLAN.md` при необходимости;
+   - `V3_LAYERS.md` / [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md)
+     при необходимости;
    - зафиксировать, что `lock`/`with` удалены, `with_mut` переходный.
 5. Зафиксировать known limitations.
 

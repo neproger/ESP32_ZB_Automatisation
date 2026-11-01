@@ -17,11 +17,17 @@
 > `services/WIFI.md`, `services/WEB.md`, `services/WEB_PROTOCOL.md`,
 > `clients/DISPLAY.md`, `storage/MSTORE.md`.
 >
-> План реализации и порядок этапов: [V3_IMPLEMENTATION_PLAN.md](../plan/V3_IMPLEMENTATION_PLAN.md).
+> Главный принцип: [V2_TO_RUST_PORTING_PRINCIPLES.md](../plan/V2_TO_RUST_PORTING_PRINCIPLES.md).
+>
+> План реализации и порядок этапов: [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md).
 >
 > Если документ V3 расходится с V2-контрактом, действует V2, пока расхождение не
 > оформлено как отдельное платформенное исключение. Такое исключение должно быть
 > явным и обоснованным; «так удобнее в Rust» — не обоснование.
+>
+> Предусмотренное исключение: Zigbee — текущая реализация на основе V2 + Z2M;
+> её архитектура может отличаться от Zigbee V2. См. раздел «Особенности
+> Zigbee-слоя» в [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md).
 
 ## 1. Неподвижные принципы
 
@@ -378,7 +384,8 @@ Display:
 ## 14. Соответствие V2 → V3
 
 Текущий аудит и статус каждого компонента:
-[V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md).
+[V2_TO_V3_MAPPING.md](../audits/V2_TO_V3_MAPPING.md); активный порядок работ —
+[V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md).
 
 Детали canonical-модели и потоков:
 [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).

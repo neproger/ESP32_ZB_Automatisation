@@ -1,7 +1,7 @@
 # Аудит V2 Flash / Region Manager / Ring
 
-> Статус: **контракт Flash, Region Manager и Ring сверен по исходникам**. Код и
-> `V3_IMPLEMENTATION_PLAN.md` не менялись.
+> Статус: **контракт Flash, Region Manager и Ring сверен по исходникам**.
+> Активный план: [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md).
 >
 > Эталон V2: `mstore/src/storage/mstore_region.{c,h}`,
 > `mstore/src/storage/mstore_storage_flash.c`, `mstore/src/mstore_ring.c`,

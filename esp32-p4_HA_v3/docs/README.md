@@ -1,30 +1,54 @@
-# Документация HA V3
+# Документация HA V2 → Rust
 
-Каталог разложен по назначению. Нормативные документы — `architecture/` и `plan/`;
-остальное — аудиты, сборка, исследования Zigbee и архив.
+Главная задача проекта: **последовательно портировать проверенную реализацию
+Home Assistant V2 на Rust**, сохраняя поведение и подключая слои к уже
+существующему Domain.
 
-## Нормативные
+## Нормативные документы
 
-- [architecture/V3_LAYERS.md](architecture/V3_LAYERS.md) — архитектурный контракт V3
-  (главный документ при расхождении по слоям/runtime).
+- [plan/V2_TO_RUST_PORTING_PRINCIPLES.md](plan/V2_TO_RUST_PORTING_PRINCIPLES.md)
+  — главный принцип: V2 является эталоном, Rust — реализацией.
+- [plan/V2_TO_RUST_PORTING_PLAN.md](plan/V2_TO_RUST_PORTING_PLAN.md)
+  — единственный активный план и порядок этапов.
+- [architecture/V3_LAYERS.md](architecture/V3_LAYERS.md) — контракт слоёв,
+  владения и runtime.
 - [architecture/TARGET_ARCHITECTURE.md](architecture/TARGET_ARCHITECTURE.md) —
-  canonical-модель, потоки данных, границы модулей.
-- [plan/V3_IMPLEMENTATION_PLAN.md](plan/V3_IMPLEMENTATION_PLAN.md) — этапы 0–6,
-  правила выполнения, контрактные тесты и DoD.
-- [plan/STAGE_1D_4_P4_VALIDATION.md](plan/STAGE_1D_4_P4_VALIDATION.md) — P4
-  readiness, lock instrumentation и воспроизводимый hardware protocol.
-- [plan/STAGE_2_ARCHITECTURE_DECISIONS.md](plan/STAGE_2_ARCHITECTURE_DECISIONS.md) —
-  границы Zigbee adapter / Device service и контракты Stage 2.
+  canonical-модель и потоки данных.
 
-## Аудиты
+При расхождении по слоям/runtime действует `V3_LAYERS.md`; по canonical-
+контракту — `TARGET_ARCHITECTURE.md`; по проверенному поведению — V2.
 
-Снимки состояния на дату; не заменяют нормативные документы.
+Исключение: Zigbee — особая реализация на основе V2 и Zigbee2MQTT (Z2M);
+её архитектура может отличаться от V2. Полезные уже реализованные
+Rust-улучшения сохраняются только после технической оценки. Подробности — в
+плане портирования, разделы «Допустимые отличия от V2» и «Особенности
+Zigbee-слоя».
 
-- [audits/V2_TO_V3_MAPPING.md](audits/V2_TO_V3_MAPPING.md) — исходный аудит V2→V3.
-- [audits/HA_MODEL_AUDIT.md](audits/HA_MODEL_AUDIT.md) — canonical ABI и `ha-model`.
-- [audits/MICRO_DB_AUDIT.md](audits/MICRO_DB_AUDIT.md) — Table Engine, Storage, Ring.
-- [audits/FLASH_REGION_AUDIT.md](audits/FLASH_REGION_AUDIT.md) — Flash, Region
-  Manager, физическая раскладка.
+## Аудиты и технические контракты
+
+Это снимки и спецификации, они не заменяют активный план.
+
+- [audits/V2_TO_V3_MAPPING.md](audits/V2_TO_V3_MAPPING.md) — историческая карта
+  расхождений V2 → текущий Rust.
+- [audits/HA_MODEL_AUDIT.md](audits/HA_MODEL_AUDIT.md) — canonical ABI и
+  `ha-model`.
+- [audits/MICRO_DB_AUDIT.md](audits/MICRO_DB_AUDIT.md) — Table Engine, Storage,
+  Ring.
+- [audits/FLASH_REGION_AUDIT.md](audits/FLASH_REGION_AUDIT.md) — V2 Flash,
+  Region Manager, Ring.
+- [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
+  журнал переноса Domain ↔ z2m-rs.
+
+## Исторические записи реализации
+
+Не активные планы; полезны как обоснование уже принятых решений.
+
+- [plan/STAGE_1C_ARCHITECTURE_DECISIONS.md](plan/STAGE_1C_ARCHITECTURE_DECISIONS.md)
+- [plan/STAGE_1D_ARCHITECTURE_DECISIONS.md](plan/STAGE_1D_ARCHITECTURE_DECISIONS.md)
+- [plan/STAGE_1D_IMPLEMENTATION_PLAN.md](plan/STAGE_1D_IMPLEMENTATION_PLAN.md)
+- [plan/STAGE_2_ARCHITECTURE_DECISIONS.md](plan/STAGE_2_ARCHITECTURE_DECISIONS.md)
+- [plan/STAGE_1D_4_P4_VALIDATION.md](plan/STAGE_1D_4_P4_VALIDATION.md) —
+  протокол проверки на P4, ещё актуален.
 
 ## Сборка и платформа
 
@@ -32,7 +56,7 @@
 - [build/BUILD_ENV.md](build/BUILD_ENV.md) — окружение сборки P4.
 - [build/WIFI.md](build/WIFI.md) — AUTH_EXPIRE и TX power на C3 CP.
 - [hardware/JC4880P443C_I_W.md](hardware/JC4880P443C_I_W.md) — плата GUITION
-  JC4880P443C_I_W: распиновка, дисплей, тач, радио (копия из V2).
+  JC4880P443C_I_W: распиновка, дисплей, тач, радио.
 
 ## Zigbee / Z2M
 
@@ -41,22 +65,24 @@
   модель Request Executor.
 - `zigbee/reports/` — инвентаризации ZHC, генератор, color/lighting/property.
 
-## Архив
-
-- [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
-  журнал переноса Domain ↔ z2m-rs. Не нормативный.
-
 ## Внешний эталон
 
-`esp32-p4_HA_v2/docs/` остаётся архитектурным эталоном V2. Исключение —
-`hardware/JC4880P443C_I_W.md`: справочник по плате скопирован из V2, потому что
-на него ссылается `board_p4.h`.
+`esp32-p4_HA_v2/docs/` остаётся архитектурным и поведенческим эталоном V2.
+Исходный код и тесты V2 не копируются в этот каталог и не заменяются
+документацией Rust.
 
-## Ревизия 2026-10-31
+## Ревизия 2026-11-01
 
-Удалены как устаревшие/дублирующие (история в git):
+Удалены документы, которые описывали самостоятельную новую архитектуру или
+отдельную систему миграции, а не портирование V2:
 
-- `ARCHITECTURE_BRIEF.md` — черновик 0.2; решения перенесены в `V3_LAYERS.md`
-  и `TARGET_ARCHITECTURE.md`;
-- `MICRODB_COMPACTION.md` — заменён `audits/FLASH_REGION_AUDIT.md` и
-  `audits/MICRO_DB_AUDIT.md`.
+- `plan/STAGE_5_6_MIGRATION_PROTOCOL.md` — migration markers/recovery,
+  отсутствующие в V2;
+- `plan/STAGE_5_6_1_1_PROTOCOL_HARDENING.md` — дальнейшее развитие того же
+  migration-протокола;
+- `plan/STAGE_5_ARCHITECTURE_DECISIONS.md` — отдельная Stage 5 storage-политика
+  и migration gate, расходящиеся с V2 backing;
+- `plan/V3_IMPLEMENTATION_PLAN.md` — заменён единым
+  `plan/V2_TO_RUST_PORTING_PLAN.md`.
+
+Технические знания V2 сохранены в `audits/`, `architecture/` и V2-документации.

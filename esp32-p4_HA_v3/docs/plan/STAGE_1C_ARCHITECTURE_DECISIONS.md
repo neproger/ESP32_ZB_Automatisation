@@ -1,10 +1,11 @@
 # Stage 1c — архитектурные решения
 
-> Статус: **предложения для согласования**. Код не менялся, Stage 1c не начат.
+> Статус: **историческая запись реализованных решений Stage 1c**.
+> Не активный план. Активный план:
+> [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 >
-> Источники истины: V2 `docs/domain/*`, V2 `main/app_main.c`, V3
-> `docs/plan/V3_IMPLEMENTATION_PLAN.md`, фактический код `ha-domain`, `micro-db`,
-> `ha-app`, `zigbee-devices` и ABI Stage 1b в `ha-model`.
+> Источники истины: V2 `docs/domain/*`, V2 `main/app_main.c`, фактический код
+> `ha-domain`, `micro-db`, `ha-app`, `zigbee-devices` и ABI в `ha-model`.
 
 ## 1. ERROR-факты при storage-ошибках
 
@@ -25,9 +26,9 @@
   (`esp32-p4_HA_v2/domain/src/domain_entity.c:64-72`).
 - V2 `remove_locked()` при `NOT_FOUND` возвращает ошибку **без** `ERROR`-факта
   (`domain_entity.c:173-201`).
-- План V3 §4.5 говорит: при ошибке storage возвращается ошибка, факт не
-  публикуется, RAM соответствует последнему commit
-  (`docs/plan/V3_IMPLEMENTATION_PLAN.md:384-396`).
+- Старый план V3 (удалён; см. [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md))
+  §4.5 говорил: при ошибке storage возвращается ошибка, факт не публикуется,
+  RAM соответствует последнему commit.
 
 Итог: текущее V3-поведение и V2 расходятся с формулировкой плана; а
 `entity_remove(NotFound)` в V3 имеет отдельный дефект.
