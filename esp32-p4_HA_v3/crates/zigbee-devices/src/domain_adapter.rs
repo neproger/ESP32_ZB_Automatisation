@@ -8,8 +8,8 @@ use ha_domain::canonical::{
     ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_WEATHER,
     ENTITY_WIFI_KNOWN, ENTITY_WIFI_SCAN, ENTITY_WIFI_STATUS, GROUP_ITEM_KEY_LEN,
     GROUP_ITEM_RECORD_LEN, GROUP_KEY_LEN, GROUP_RECORD_LEN, LOCATION_KEY_LEN, LOCATION_RECORD_LEN,
-    SETTINGS_RECORD_LEN, SOURCE_ZIGBEE, WEATHER_RECORD_LEN, WIFI_KNOWN_MAX,
-    WIFI_KNOWN_RECORD_LEN, WIFI_SCAN_RECORD_LEN, WIFI_STATUS_RECORD_LEN,
+    SETTINGS_RECORD_LEN, SOURCE_ZIGBEE, WEATHER_RECORD_LEN, WIFI_KNOWN_MAX, WIFI_KNOWN_RECORD_LEN,
+    WIFI_SCAN_RECORD_LEN, WIFI_STATUS_RECORD_LEN,
 };
 use ha_domain::{Backing, Domain, EntityDesc, FactMeta, Value as DomainValue};
 use z2m_rs::Profile;
@@ -459,43 +459,75 @@ impl<'a> DomainAdapter<'a> {
         Ok(())
     }
 
-    fn remove_states(&mut self, entity: EntityId) -> Result<(), ha_domain::Error> {
-        let mut keys: Vec<Vec<u8>> = Vec::new();
-        self.domain.entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
-            if key.len() >= 8
-                && u64::from_le_bytes(key[..8].try_into().expect("state entity")) == entity
-            {
-                keys.push(key.to_vec());
-            }
-        })?;
-        for key in keys {
-            let _ = self
-                .domain
-                .entity_remove(ENTITY_PROPERTY_STATE, &key, fact_meta());
-        }
-        Ok(())
-    }
-
     /// Removes every record of one logical device and returns how many rows
     /// were removed. The caller mirrors the same removals to the web model.
     pub fn remove_device_records(&mut self, device: DeviceId) -> Result<usize, ha_domain::Error> {
+        let entity_snapshot = self.domain.entity_snapshot(ENTITY_ENTITY)?;
         let mut entities: Vec<u64> = Vec::new();
-        self.domain.entity_iter(ENTITY_ENTITY, |key, record| {
+        for index in 0..entity_snapshot.len() {
+            let key = entity_snapshot.key(index).expect("entity snapshot key");
+            let record = entity_snapshot
+                .record(index)
+                .expect("entity snapshot record");
             if key.len() == 8
                 && record.len() >= 8
                 && u64::from_le_bytes(record[..8].try_into().expect("entity device")) == device
             {
                 entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
             }
-        })?;
+        }
+
+        let mut state_keys = Vec::new();
+        match self.domain.entity_snapshot(ENTITY_PROPERTY_STATE) {
+            Ok(snapshot) => {
+                for index in 0..snapshot.len() {
+                    let key = snapshot.key(index).expect("state snapshot key");
+                    if key.len() >= 8 {
+                        state_keys.push((
+                            u64::from_le_bytes(key[..8].try_into().expect("state entity")),
+                            key.to_vec(),
+                        ));
+                    }
+                }
+            }
+            Err(ha_domain::Error::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+        let mut group_item_keys = Vec::new();
+        match self.domain.entity_snapshot(ENTITY_GROUP_ITEM) {
+            Ok(snapshot) => {
+                for index in 0..snapshot.len() {
+                    let key = snapshot.key(index).expect("group item snapshot key");
+                    if key.len() == GROUP_ITEM_KEY_LEN {
+                        group_item_keys.push((
+                            u64::from_le_bytes(key[8..16].try_into().expect("group item entity")),
+                            key.to_vec(),
+                        ));
+                    }
+                }
+            }
+            Err(ha_domain::Error::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+
         let mut removed = 0;
         for entity in entities {
             if self.remove_entity(entity).is_ok() {
                 removed += 1;
             }
             let _ = self.remove_capabilities(entity);
-            let _ = self.remove_states(entity);
-            let _ = self.remove_group_items(entity);
+            for (owner, key) in &state_keys {
+                if *owner == entity {
+                    let _ = self
+                        .domain
+                        .entity_remove(ENTITY_PROPERTY_STATE, key, fact_meta());
+                }
+            }
+            for (owner, key) in &group_item_keys {
+                if *owner == entity {
+                    let _ = self.remove_record(ENTITY_GROUP_ITEM, key);
+                }
+            }
         }
         let key = device.to_le_bytes();
         if self
@@ -534,38 +566,38 @@ impl<'a> DomainAdapter<'a> {
         }
     }
 
-    /// V2 `cascade_entity`: drop group tiles that reference a removed entity.
-    fn remove_group_items(&mut self, entity: EntityId) -> Result<(), ha_domain::Error> {
-        let entity_bytes = entity.to_le_bytes();
-        let mut keys = Vec::new();
-        match self.domain.entity_iter(ENTITY_GROUP_ITEM, |key, _| {
-            if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes[..] {
-                keys.push(key.to_vec());
-            }
-        }) {
-            Ok(()) | Err(ha_domain::Error::NotFound) => {}
-            Err(error) => return Err(error),
-        }
-        for key in keys {
-            let _ = self.remove_record(ENTITY_GROUP_ITEM, &key);
-        }
-        Ok(())
-    }
-
     pub fn remove_group(&mut self, group: u64) -> Result<usize, ha_domain::Error> {
         let group_bytes = group.to_le_bytes();
+        let mut group_item_keys = Vec::new();
+        let group_item_snapshot = self.domain.entity_snapshot(ENTITY_GROUP_ITEM)?;
+        for index in 0..group_item_snapshot.len() {
+            let key = group_item_snapshot
+                .key(index)
+                .expect("group item snapshot key");
+            if key.len() == GROUP_ITEM_KEY_LEN && key[..8] == group_bytes[..] {
+                group_item_keys.push(key.to_vec());
+            }
+        }
+        let mut group_automation_keys = Vec::new();
+        let group_automation_snapshot = self.domain.entity_snapshot(ENTITY_GROUP_AUTOMATION)?;
+        for index in 0..group_automation_snapshot.len() {
+            let key = group_automation_snapshot
+                .key(index)
+                .expect("group automation snapshot key");
+            if key.len() == GROUP_ITEM_KEY_LEN && key[..8] == group_bytes[..] {
+                group_automation_keys.push(key.to_vec());
+            }
+        }
+
         let mut removed = 0;
-        for entity in [ENTITY_GROUP_ITEM, ENTITY_GROUP_AUTOMATION] {
-            let mut keys = Vec::new();
-            self.domain.entity_iter(entity, |key, _| {
-                if key.len() == GROUP_ITEM_KEY_LEN && key[..8] == group_bytes[..] {
-                    keys.push(key.to_vec());
-                }
-            })?;
-            for key in keys {
-                if self.remove_record(entity, &key)? {
-                    removed += 1;
-                }
+        for key in group_item_keys {
+            if self.remove_record(ENTITY_GROUP_ITEM, &key)? {
+                removed += 1;
+            }
+        }
+        for key in group_automation_keys {
+            if self.remove_record(ENTITY_GROUP_AUTOMATION, &key)? {
+                removed += 1;
             }
         }
         if self.remove_record(ENTITY_GROUP, &group_bytes)? {
@@ -577,12 +609,14 @@ impl<'a> DomainAdapter<'a> {
     pub fn remove_automation(&mut self, automation: u64) -> Result<usize, ha_domain::Error> {
         let id_bytes = automation.to_le_bytes();
         let mut removed = 0;
+        let snapshot = self.domain.entity_snapshot(ENTITY_GROUP_AUTOMATION)?;
         let mut keys = Vec::new();
-        self.domain.entity_iter(ENTITY_GROUP_AUTOMATION, |key, _| {
+        for index in 0..snapshot.len() {
+            let key = snapshot.key(index).expect("group automation snapshot key");
             if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == id_bytes[..] {
                 keys.push(key.to_vec());
             }
-        })?;
+        }
         for key in keys {
             if self.remove_record(ENTITY_GROUP_AUTOMATION, &key)? {
                 removed += 1;

@@ -234,15 +234,8 @@ impl Domain {
         })
     }
 
-    /// Borrowed iteration; the callback cannot mutate this domain (borrow checker).
-    pub fn entity_iter(
-        &self,
-        entity: EntityType,
-        mut visit: impl FnMut(&[u8], &[u8]),
-    ) -> Result<()> {
-        let table = self.table(entity)?;
-        table.iter(|_, _, key, record| visit(key, record))?;
-        Ok(())
+    pub fn entity_snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
+        self.snapshot(entity)
     }
 }
 

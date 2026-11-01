@@ -323,57 +323,56 @@ pub fn prepare_remove(domain: &Domain, device: DeviceId) -> Result<RemovalPlan, 
     let native_id = record.native_id[..native_len].to_vec();
 
     let mut entities = Vec::new();
-    let mut entities_overflow = false;
-    domain
-        .entity_iter(ENTITY_ENTITY, |key, value| {
-            if key.len() == 8
-                && value.len() >= 8
-                && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == device
-            {
-                if entities.len() == REMOVAL_RECORDS_MAX {
-                    entities_overflow = true;
-                } else {
-                    entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
-                }
-            }
-        })
+    let entity_snapshot = domain
+        .entity_snapshot(ENTITY_ENTITY)
         .map_err(RemovalError::Canonical)?;
-    if entities_overflow {
-        return Err(RemovalError::Canonical(Error::NoSpace));
+    for index in 0..entity_snapshot.len() {
+        let key = entity_snapshot.key(index).expect("entity snapshot key");
+        let value = entity_snapshot
+            .record(index)
+            .expect("entity snapshot record");
+        if key.len() == 8
+            && value.len() >= 8
+            && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == device
+        {
+            if entities.len() == REMOVAL_RECORDS_MAX {
+                return Err(RemovalError::Canonical(Error::NoSpace));
+            }
+            entities.push(u64::from_le_bytes(key.try_into().expect("entity key")));
+        }
     }
     entities.sort_unstable();
 
+    let state_snapshot = domain
+        .entity_snapshot(ENTITY_PROPERTY_STATE)
+        .map_err(RemovalError::Canonical)?;
+    let group_item_snapshot = domain
+        .entity_snapshot(ENTITY_GROUP_ITEM)
+        .map_err(RemovalError::Canonical)?;
     let mut records = Vec::new();
     for entity in entities {
         let entity_bytes = entity.to_le_bytes();
         let mut states = Vec::new();
         let mut group_items = Vec::new();
-        let mut states_overflow = false;
-        let mut group_items_overflow = false;
-        domain
-            .entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
-                if key.len() == STATE_KEY_LEN && key[..8] == entity_bytes {
-                    if states.len() == REMOVAL_RECORDS_MAX {
-                        states_overflow = true;
-                    } else {
-                        states.push(key.to_vec());
-                    }
+        for index in 0..state_snapshot.len() {
+            let key = state_snapshot.key(index).expect("state snapshot key");
+            if key.len() == STATE_KEY_LEN && key[..8] == entity_bytes {
+                if states.len() == REMOVAL_RECORDS_MAX {
+                    return Err(RemovalError::Canonical(Error::NoSpace));
                 }
-            })
-            .map_err(RemovalError::Canonical)?;
-        domain
-            .entity_iter(ENTITY_GROUP_ITEM, |key, _| {
-                if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes {
-                    if group_items.len() == REMOVAL_RECORDS_MAX {
-                        group_items_overflow = true;
-                    } else {
-                        group_items.push(key.to_vec());
-                    }
+                states.push(key.to_vec());
+            }
+        }
+        for index in 0..group_item_snapshot.len() {
+            let key = group_item_snapshot
+                .key(index)
+                .expect("group item snapshot key");
+            if key.len() == GROUP_ITEM_KEY_LEN && key[8..16] == entity_bytes {
+                if group_items.len() == REMOVAL_RECORDS_MAX {
+                    return Err(RemovalError::Canonical(Error::NoSpace));
                 }
-            })
-            .map_err(RemovalError::Canonical)?;
-        if states_overflow || group_items_overflow {
-            return Err(RemovalError::Canonical(Error::NoSpace));
+                group_items.push(key.to_vec());
+            }
         }
         states.sort();
         group_items.sort();
@@ -467,49 +466,64 @@ fn validate_plan(
     }
 
     let mut extra = false;
-    domain
-        .entity_iter(ENTITY_ENTITY, |key, value| {
-            if key.len() == 8
-                && value.len() >= 8
-                && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == plan.device
-            {
-                let entity = u64::from_le_bytes(key.try_into().expect("entity key"));
-                if !plan_has(plan, ENTITY_ENTITY, &entity.to_le_bytes()) {
-                    extra = true;
-                }
-            }
-        })
+    let entity_snapshot = domain
+        .entity_snapshot(ENTITY_ENTITY)
         .map_err(RemovalError::Canonical)?;
-    domain
-        .entity_iter(ENTITY_CAPABILITIES, |key, _| {
-            if key.len() == 8 {
-                let entity = u64::from_le_bytes(key.try_into().expect("cap entity"));
-                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_CAPABILITIES, key) {
-                    extra = true;
-                }
+    for index in 0..entity_snapshot.len() {
+        let key = entity_snapshot.key(index).expect("entity snapshot key");
+        let value = entity_snapshot
+            .record(index)
+            .expect("entity snapshot record");
+        if key.len() == 8
+            && value.len() >= 8
+            && u64::from_le_bytes(value[..8].try_into().expect("entity owner")) == plan.device
+        {
+            let entity = u64::from_le_bytes(key.try_into().expect("entity key"));
+            if !plan_has(plan, ENTITY_ENTITY, &entity.to_le_bytes()) {
+                extra = true;
             }
-        })
+        }
+    }
+    let capability_snapshot = domain
+        .entity_snapshot(ENTITY_CAPABILITIES)
         .map_err(RemovalError::Canonical)?;
-    domain
-        .entity_iter(ENTITY_PROPERTY_STATE, |key, _| {
-            if key.len() >= 8 {
-                let entity = u64::from_le_bytes(key[..8].try_into().expect("state entity"));
-                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_PROPERTY_STATE, key) {
-                    extra = true;
-                }
+    for index in 0..capability_snapshot.len() {
+        let key = capability_snapshot
+            .key(index)
+            .expect("capability snapshot key");
+        if key.len() == 8 {
+            let entity = u64::from_le_bytes(key.try_into().expect("cap entity"));
+            if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_CAPABILITIES, key) {
+                extra = true;
             }
-        })
+        }
+    }
+    let state_snapshot = domain
+        .entity_snapshot(ENTITY_PROPERTY_STATE)
         .map_err(RemovalError::Canonical)?;
-    domain
-        .entity_iter(ENTITY_GROUP_ITEM, |key, _| {
-            if key.len() == GROUP_ITEM_KEY_LEN {
-                let entity = u64::from_le_bytes(key[8..16].try_into().expect("group item entity"));
-                if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_GROUP_ITEM, key) {
-                    extra = true;
-                }
+    for index in 0..state_snapshot.len() {
+        let key = state_snapshot.key(index).expect("state snapshot key");
+        if key.len() >= 8 {
+            let entity = u64::from_le_bytes(key[..8].try_into().expect("state entity"));
+            if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_PROPERTY_STATE, key) {
+                extra = true;
             }
-        })
+        }
+    }
+    let group_item_snapshot = domain
+        .entity_snapshot(ENTITY_GROUP_ITEM)
         .map_err(RemovalError::Canonical)?;
+    for index in 0..group_item_snapshot.len() {
+        let key = group_item_snapshot
+            .key(index)
+            .expect("group item snapshot key");
+        if key.len() == GROUP_ITEM_KEY_LEN {
+            let entity = u64::from_le_bytes(key[8..16].try_into().expect("group item entity"));
+            if plan_owned_entity(plan, entity) && !plan_has(plan, ENTITY_GROUP_ITEM, key) {
+                extra = true;
+            }
+        }
+    }
     if extra {
         return Err(RemovalError::StalePlan);
     }
@@ -711,6 +725,63 @@ mod tests {
                 &entity.to_le_bytes(),
                 &mut [0u8; ha_domain::canonical::CAPABILITIES_LEN]
             )
+            .is_ok());
+    }
+
+    #[test]
+    fn prepare_remove_snapshot_error_does_not_mutate_domain() {
+        let mut domain = Domain::new(16, 4, 32).unwrap();
+        domain
+            .register_entity(EntityDesc {
+                entity: ENTITY_LOGICAL_DEVICE,
+                key_size: 8,
+                record_size: DEVICE_RECORD_LEN,
+                capacity: 1,
+                backing: Backing::Ram,
+                persist_key: None,
+            })
+            .unwrap();
+        domain
+            .register_entity(EntityDesc {
+                entity: ENTITY_ENTITY,
+                key_size: 8,
+                record_size: ENTITY_RECORD_LEN,
+                capacity: 512,
+                backing: Backing::Ram,
+                persist_key: None,
+            })
+            .unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "oversized",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        for index in 0..410u64 {
+            let mut key = [0u8; 8];
+            key.copy_from_slice(&index.to_le_bytes());
+            domain
+                .entity_put(ENTITY_ENTITY, &key, &[0u8; ENTITY_RECORD_LEN], meta(2))
+                .unwrap();
+        }
+        assert_eq!(
+            prepare_remove(&domain, id),
+            Err(RemovalError::Canonical(Error::InvalidSize))
+        );
+        assert!(domain
+            .entity_get(
+                ENTITY_LOGICAL_DEVICE,
+                &id.to_le_bytes(),
+                &mut [0u8; DEVICE_RECORD_LEN]
+            )
+            .is_ok());
+        assert!(domain
+            .entity_get(ENTITY_ENTITY, &[0u8; 8], &mut [0u8; ENTITY_RECORD_LEN])
             .is_ok());
     }
 
