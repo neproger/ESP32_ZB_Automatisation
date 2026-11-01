@@ -131,7 +131,10 @@ type-erased и не предоставляет `compact`/`bank_state`; `Domain::
    Domain maintenance API.
 2. Мутации и compaction сериализуются per-table gate.
 3. `NoSpace` имеет явную политику: maintenance или ошибка вызывающему.
-4. Startup compaction выполняется до `DomainHandle` и до старта сервисов.
+4. Maintenance выполняется явно через `DomainMaintenance` по решению
+   composition root. Автоматический startup или periodic compaction в рамках
+   Stage 5 не вводится. Если перед запуском требуется обслуживание таблицы,
+   composition root должен выполнить его явно до передачи Domain сервисам.
 5. Долгая compaction не блокирует весь Domain.
 
 ## 6. Restore и bootstrap Display/Web

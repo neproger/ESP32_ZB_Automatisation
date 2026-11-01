@@ -501,7 +501,8 @@ domain.post(...)?
   `NoSpace`; bounds/CRC → `Corrupt`;
 - владение — RAM-таблица, `release` на закрытии; регион отдаётся как view с
   bounds-check; backend считает регион своим устройством;
-- авто-формата и миграции нет (`MSTORE_FLASH_REGIONS.md` §9.8).
+- автоформатирование запрещено. Миграция старого generic Domain layout
+  выполняется отдельно по протоколу Stage 5.6.
 
 Domain получает per-entity таблицы; переход с текущей раскладки `ha_domain` —
 power-fail-safe миграция (см. §4.4 и Stage 5 ADR); erase без миграции запрещён.
@@ -616,7 +617,9 @@ Manager: формат и данные не меняются (M9).
 - `post` вызывает executor вне Domain-lock;
 - `restore` не публикует факты и не зависит от `source`;
 - Region Manager и Registry-разделение по M8/M9; Domain-раздел переведён на
-  per-entity регионы с разовым erase;
+  per-entity регионы посредством power-fail-safe миграции старого generic
+  layout с сохранением исходных данных. Erase без подтверждённой миграции
+  запрещён.
 - все контрактные тесты зелёные;
 - host-сборка и host-тесты проходят; работоспособность на P4 не требуется до
   этапа 6;
