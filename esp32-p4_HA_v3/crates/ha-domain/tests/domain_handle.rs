@@ -48,23 +48,19 @@ fn post_publishes_one_command_sent_on_ok() {
         })
         .unwrap();
 
-    let facts = Arc::new(AtomicUsize::new(0));
-    let sink = Arc::clone(&facts);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     domain
-        .with_mut(|domain| {
-            domain.subscribe(Filter::all(), move |fact| {
-                if fact.kind == FactKind::CommandSent {
-                    sink.fetch_add(1, Ordering::SeqCst);
-                }
-                true
-            })
-        })
+        .with_mut(|domain| domain.subscribe_channel(Filter::all(), sender))
         .unwrap();
 
     domain.post(1, &[], None, meta()).unwrap();
     domain.dispatch_once().unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(facts.load(Ordering::SeqCst), 1);
+    assert_eq!(receiver.try_recv().unwrap().kind, FactKind::CommandSent);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 #[test]
@@ -73,22 +69,17 @@ fn post_error_publishes_no_command_sent() {
     domain
         .register_command(1, |_| Err(Error::InvalidState))
         .unwrap();
-    let facts = Arc::new(AtomicUsize::new(0));
-    let sink = Arc::clone(&facts);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     domain
-        .with_mut(|domain| {
-            domain.subscribe(Filter::all(), move |fact| {
-                if fact.kind == FactKind::CommandSent {
-                    sink.fetch_add(1, Ordering::SeqCst);
-                }
-                true
-            })
-        })
+        .with_mut(|domain| domain.subscribe_channel(Filter::all(), sender))
         .unwrap();
 
     assert_eq!(domain.post(1, &[], None, meta()), Err(Error::InvalidState));
     domain.dispatch_once().unwrap();
-    assert_eq!(facts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 #[test]
@@ -232,17 +223,9 @@ fn command_sent_follows_executor_order() {
             Ok(())
         })
         .unwrap();
-    let published = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&published);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
     domain
-        .with_mut(|domain| {
-            domain.subscribe(Filter::all(), move |fact| {
-                if fact.kind == FactKind::CommandSent {
-                    sink.lock().unwrap().push(fact.value.as_u32().unwrap());
-                }
-                true
-            })
-        })
+        .with_mut(|domain| domain.subscribe_channel(Filter::all(), sender))
         .unwrap();
 
     domain
@@ -253,8 +236,12 @@ fn command_sent_follows_executor_order() {
         .unwrap();
     domain.dispatch_once().unwrap();
 
+    let published: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok())
+        .filter(|fact| fact.kind == FactKind::CommandSent)
+        .map(|fact| fact.value.as_u32().unwrap())
+        .collect();
     assert_eq!(*executed.lock().unwrap(), vec![1, 2]);
-    assert_eq!(*published.lock().unwrap(), vec![1, 2]);
+    assert_eq!(published, vec![1, 2]);
 }
 
 #[test]

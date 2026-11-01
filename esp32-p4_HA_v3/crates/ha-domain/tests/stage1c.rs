@@ -5,8 +5,8 @@ use ha_domain::canonical::{
     ENTITY_PROPERTY_STATE, GROUP_KEY_LEN, GROUP_RECORD_LEN, STATE_KEY_LEN, STATE_RECORD_LEN,
 };
 use ha_domain::{
-    Backing, Domain, EntityDesc, EntityType, Error, FactMeta, RestorePhase, StorageBackend,
-    StorageProvider, Value,
+    Backing, Domain, EntityDesc, EntityType, Error, FactKind, FactMeta, RestorePhase,
+    StorageBackend, StorageProvider, Value,
 };
 use micro_db::{
     FlashError, Geometry, Meta, NorFlash, RamFlashStorage, RamStorage, RegionManager, SimFlash,
@@ -353,15 +353,14 @@ fn restore_does_not_publish_facts() {
 
     let mut reopened = new_domain(RegionProvider::new(flash).unwrap());
     register_manifest(&mut reopened);
-    let seen = Arc::new(Mutex::new(0usize));
-    let sink = Arc::clone(&seen);
-    reopened.subscribe(ha_domain::Filter::all(), move |_| {
-        *sink.lock().unwrap() += 1;
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    reopened.subscribe_channel(ha_domain::Filter::all(), sender);
     reopened.restore().unwrap();
     assert_eq!(reopened.dispatch_once(), 0);
-    assert_eq!(*seen.lock().unwrap(), 0);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 #[test]
@@ -382,12 +381,8 @@ fn storage_write_error_returns_err_without_fact() {
         .unwrap();
     domain.restore().unwrap();
 
-    let seen = Arc::new(Mutex::new(0usize));
-    let sink = Arc::clone(&seen);
-    domain.subscribe(ha_domain::Filter::all(), move |_| {
-        *sink.lock().unwrap() += 1;
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(ha_domain::Filter::all(), sender);
     *fail.lock().unwrap() = true;
     assert_eq!(
         domain.entity_put(RAM_ENTITY, &[1u8; 8], &[2u8; 8], meta()),
@@ -399,7 +394,10 @@ fn storage_write_error_returns_err_without_fact() {
         Err(Error::NotFound)
     );
     assert_eq!(domain.dispatch_once(), 0);
-    assert_eq!(*seen.lock().unwrap(), 0);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 
     *fail.lock().unwrap() = false;
     domain
@@ -409,6 +407,7 @@ fn storage_write_error_returns_err_without_fact() {
     domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out).unwrap();
     assert_eq!(out, [2u8; 8]);
     domain.dispatch_once();
+    assert_eq!(receiver.try_recv().unwrap().kind, FactKind::EntityUpserted);
     *fail.lock().unwrap() = true;
     assert_eq!(
         domain.entity_remove(RAM_ENTITY, &[1u8; 8], meta()),
@@ -421,7 +420,10 @@ fn storage_write_error_returns_err_without_fact() {
         version
     );
     assert_eq!(domain.dispatch_once(), 0);
-    assert_eq!(*seen.lock().unwrap(), 1);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 struct WrongGeometryStorage<S> {

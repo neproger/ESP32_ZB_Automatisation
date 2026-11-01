@@ -66,17 +66,13 @@ fn snapshot_no_memory_is_atomic_and_recoverable() {
 fn injected_clock_sets_fact_time() {
     let mut domain = Domain::new_with_clock(4, 1, 8, || 1_234).unwrap();
     register_device(&mut domain);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&seen);
-    domain.subscribe(Filter::all(), move |fact| {
-        sink.lock().unwrap().push(fact.ts);
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(Filter::all(), sender);
     domain
         .entity_put(DEVICE, &EUI64, &[0u8; 12], meta(Value::NONE))
         .unwrap();
     domain.dispatch_once();
-    assert_eq!(*seen.lock().unwrap(), vec![1_234]);
+    assert_eq!(receiver.try_recv().unwrap().ts, 1_234);
 }
 
 #[test]
@@ -206,19 +202,13 @@ fn journal_delivers_only_real_changes_to_matching_subscribers() {
         })
         .unwrap();
 
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&seen);
-    domain.subscribe(
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(
         Filter {
             kind_mask: FactKind::EntityUpserted.bit(),
             ..Filter::entity(DEVICE)
         },
-        move |fact| {
-            sink.lock()
-                .unwrap()
-                .push((fact.entity, fact.key().to_vec(), fact.value));
-            true
-        },
+        sender,
     );
 
     assert!(domain
@@ -235,11 +225,16 @@ fn journal_delivers_only_real_changes_to_matching_subscribers() {
         .unwrap());
 
     assert_eq!(domain.dispatch_once(), 2);
-    let seen = seen.lock().unwrap();
-    assert_eq!(seen.len(), 2);
-    assert_eq!(seen[0].0, DEVICE);
-    assert_eq!(seen[0].1, EUI64);
-    assert_eq!(seen[1].1, EUI64);
+    let first = receiver.try_recv().expect("first fact");
+    let second = receiver.try_recv().expect("second fact");
+    assert_eq!(first.entity, DEVICE);
+    assert_eq!(first.key(), EUI64);
+    assert_eq!(second.entity, DEVICE);
+    assert_eq!(second.key(), EUI64);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
     assert_eq!(domain.dispatch_once(), 0);
 }
 
@@ -301,12 +296,8 @@ fn full_channel_counts_subscriber_drops() {
 fn dispatcher_reports_evicted_facts_as_a_gap() {
     let mut domain = domain(2);
     register_device(&mut domain);
-    let seen = Arc::new(Mutex::new(0u32));
-    let sink = Arc::clone(&seen);
-    domain.subscribe(Filter::all(), move |_| {
-        *sink.lock().unwrap() += 1;
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(Filter::all(), sender);
 
     for value in [1u8, 2, 3] {
         let mut record = [0u8; 12];
@@ -316,7 +307,8 @@ fn dispatcher_reports_evicted_facts_as_a_gap() {
             .unwrap();
     }
     assert_eq!(domain.dispatch_once(), 2);
-    assert_eq!(*seen.lock().unwrap(), 2);
+    assert_eq!(receiver.try_recv().unwrap().event_id, 2);
+    assert_eq!(receiver.try_recv().unwrap().event_id, 3);
     assert_eq!(domain.gaps(), 1);
 }
 
@@ -354,18 +346,20 @@ fn payload_ring_publishes_and_evicts() {
     let mut small = [0u8; 0];
     assert_eq!(domain.payload_get(3, &mut small), Err(Error::InvalidSize));
 
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&events);
-    domain.subscribe(Filter::kinds(FactKind::Event.bit()), move |fact| {
-        sink.lock()
-            .unwrap()
-            .push((fact.payload_ref, fact.payload_size, fact.value));
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    domain.subscribe_channel(Filter::kinds(FactKind::Event.bit()), sender);
     assert_eq!(domain.dispatch_once(), 3);
-    let events = events.lock().unwrap();
-    assert_eq!(events[1], (2, 4, Value::u32(2)));
-    assert_eq!(events[2].0, 3);
+    let events: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok()).collect();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        (
+            events[1].payload_ref,
+            events[1].payload_size,
+            events[1].value
+        ),
+        (2, 4, Value::u32(2))
+    );
+    assert_eq!(events[2].payload_ref, 3);
 }
 
 #[test]
@@ -395,16 +389,17 @@ fn commands_are_handed_off_and_journaled() {
         Err(Error::NotFound)
     );
 
-    let seen = Arc::new(Mutex::new(0u32));
-    let sink = Arc::clone(&seen);
-    domain.subscribe(Filter::kinds(FactKind::CommandSent.bit()), move |fact| {
-        assert_eq!(fact.op, Op::Command);
-        assert_eq!(fact.key(), EUI64);
-        *sink.lock().unwrap() += 1;
-        true
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(Filter::kinds(FactKind::CommandSent.bit()), sender);
     assert_eq!(domain.dispatch_once(), 1);
-    assert_eq!(*seen.lock().unwrap(), 1);
+    let fact = receiver.try_recv().expect("command fact");
+    assert_eq!(fact.kind, FactKind::CommandSent);
+    assert_eq!(fact.op, Op::Command);
+    assert_eq!(fact.key(), EUI64);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 /// Vertical slice: the exact event captured from TS0041 on hardware
@@ -414,20 +409,13 @@ fn commands_are_handed_off_and_journaled() {
 fn ts0041_event_becomes_entity_state_and_delta() {
     let mut domain = domain(8);
     register_device(&mut domain);
-    let deltas = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&deltas);
-    domain.subscribe(
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    domain.subscribe_channel(
         Filter {
             kind_mask: FactKind::EntityUpserted.bit(),
             ..Filter::entity(DEVICE)
         },
-        move |fact| {
-            assert_eq!(fact.source, SOURCE_ZIGBEE);
-            assert_eq!(fact.key(), EUI64);
-            assert_eq!(fact.op, Op::EntityPut);
-            sink.lock().unwrap().push(fact.value);
-            true
-        },
+        sender,
     );
 
     let events = [(0x00u8, 0u32), (0x01, 1), (0x02, 2)];
@@ -441,11 +429,17 @@ fn ts0041_event_becomes_entity_state_and_delta() {
     }
 
     assert_eq!(domain.dispatch_once(), 3);
-    let deltas = deltas.lock().unwrap();
+    let deltas: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok()).collect();
+    assert_eq!(deltas.len(), 3);
+    for fact in &deltas {
+        assert_eq!(fact.source, SOURCE_ZIGBEE);
+        assert_eq!(fact.key(), EUI64);
+        assert_eq!(fact.op, Op::EntityPut);
+    }
     assert_eq!(
         deltas
             .iter()
-            .map(|value| value.as_enum().unwrap())
+            .map(|fact| fact.value.as_enum().unwrap())
             .collect::<Vec<_>>(),
         vec![0, 1, 2]
     );

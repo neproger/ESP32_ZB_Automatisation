@@ -1,13 +1,8 @@
 use super::*;
 
-pub(crate) enum SubscriptionSink {
-    Callback(Box<dyn FnMut(&Fact) -> bool + Send>),
-    Channel(std::sync::mpsc::SyncSender<Fact>),
-}
-
 pub(crate) struct Subscription {
     pub(crate) filter: Filter,
-    pub(crate) sink: SubscriptionSink,
+    pub(crate) sender: std::sync::mpsc::SyncSender<Fact>,
     pub(crate) dropped: u64,
 }
 
@@ -40,14 +35,6 @@ impl DispatchHandle {
 }
 
 impl Domain {
-    pub fn subscribe(&mut self, filter: Filter, sink: impl FnMut(&Fact) -> bool + Send + 'static) {
-        self.subscriptions.push(Subscription {
-            filter,
-            sink: SubscriptionSink::Callback(Box::new(sink)),
-            dropped: 0,
-        });
-    }
-
     pub fn dispatch_handle(&self) -> DispatchHandle {
         DispatchHandle {
             signal: Arc::clone(&self.dispatch),
@@ -60,7 +47,7 @@ impl Domain {
     pub fn subscribe_channel(&mut self, filter: Filter, sender: std::sync::mpsc::SyncSender<Fact>) {
         self.subscriptions.push(Subscription {
             filter,
-            sink: SubscriptionSink::Channel(sender),
+            sender,
             dropped: 0,
         });
     }
@@ -91,10 +78,7 @@ impl Domain {
                 if !subscription.filter.matches(&fact) {
                     continue;
                 }
-                let accepted = match &mut subscription.sink {
-                    SubscriptionSink::Callback(callback) => callback(&fact),
-                    SubscriptionSink::Channel(sender) => sender.try_send(fact).is_ok(),
-                };
+                let accepted = subscription.sender.try_send(fact).is_ok();
                 if accepted {
                     delivered += 1;
                 } else {

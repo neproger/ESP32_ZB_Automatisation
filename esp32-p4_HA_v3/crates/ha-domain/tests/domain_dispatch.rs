@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use ha_domain::{Backing, Domain, DomainHandle, EntityDesc, Error, Fact, FactMeta, Filter, Value};
+use ha_domain::{Backing, Domain, DomainHandle, EntityDesc, Fact, FactMeta, Filter, Value};
 
 const ENTITY: u32 = 7;
 
@@ -30,6 +30,25 @@ fn harness() -> (DomainHandle, Receiver<Fact>) {
     let (sender, receiver) = sync_channel(64);
     domain.subscribe_channel(Filter::all(), sender);
     (DomainHandle::new(domain), receiver)
+}
+
+fn harness_two() -> (DomainHandle, Receiver<Fact>, Receiver<Fact>) {
+    let mut domain = Domain::new(256, 16, 64).unwrap();
+    domain
+        .register_entity(EntityDesc {
+            entity: ENTITY,
+            key_size: 8,
+            record_size: 8,
+            capacity: 256,
+            backing: Backing::Ram,
+            persist_key: None,
+        })
+        .unwrap();
+    let (first_sender, first_receiver) = sync_channel(64);
+    let (second_sender, second_receiver) = sync_channel(64);
+    domain.subscribe_channel(Filter::all(), first_sender);
+    domain.subscribe_channel(Filter::all(), second_sender);
+    (DomainHandle::new(domain), first_receiver, second_receiver)
 }
 
 fn put(domain: &DomainHandle, key: u64, value: u8) -> bool {
@@ -95,6 +114,53 @@ impl Drop for Dispatcher {
         // Do not join here: a failed test may expose a blocked dispatcher.
         self.stop.store(true, Ordering::Relaxed);
     }
+}
+
+#[test]
+fn empty_inbox_is_empty() {
+    let mut domain = Domain::new(8, 4, 8).unwrap();
+    let (sender, receiver) = sync_channel(4);
+    domain.subscribe_channel(Filter::all(), sender);
+    assert_eq!(domain.dispatch_once(), 0);
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+}
+
+#[test]
+fn multiple_subscribers_receive_independent_ordered_facts() {
+    let (domain, receiver, second_receiver) = harness_two();
+
+    assert!(put(&domain, 1, 0x11));
+    assert!(put(&domain, 2, 0x22));
+    assert_eq!(domain.dispatch_once().unwrap(), 4);
+
+    let first = receiver.try_recv().unwrap();
+    let second = receiver.try_recv().unwrap();
+    let first_other = second_receiver.try_recv().unwrap();
+    let second_other = second_receiver.try_recv().unwrap();
+
+    assert_eq!(
+        (first.event_id, second.event_id),
+        (1, 2),
+        "first inbox order"
+    );
+    assert_eq!(
+        (first_other.event_id, second_other.event_id),
+        (1, 2),
+        "second inbox order"
+    );
+    assert_eq!(first.key(), first_other.key());
+    assert_eq!(second.key(), second_other.key());
+    assert_eq!(
+        receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
+    assert_eq!(
+        second_receiver.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    );
 }
 
 #[test]
@@ -213,37 +279,4 @@ fn stopped_consumer_overflows_and_recovers() {
     assert_eq!(record, [0xaa; 8]);
 
     dispatcher.shutdown();
-}
-
-// Production subscriptions must use the non-blocking channel sink. Callback
-// sinks execute under the Domain lock and are suitable only for short work.
-// A panic can poison Domain only while dispatch_once holds the guard; this is
-// an indirect lock-contract check, not a proof of UI/WS non-blocking.
-#[test]
-fn callback_sink_runs_under_domain_lock() {
-    let mut domain = Domain::new(8, 4, 8).unwrap();
-    domain
-        .register_entity(EntityDesc {
-            entity: ENTITY,
-            key_size: 8,
-            record_size: 8,
-            capacity: 8,
-            backing: Backing::Ram,
-            persist_key: None,
-        })
-        .unwrap();
-    domain.subscribe(Filter::all(), |_| panic!("callback sink"));
-    domain
-        .entity_put(ENTITY, &1u64.to_le_bytes(), &[1u8; 8], meta())
-        .unwrap();
-
-    let domain = DomainHandle::new(domain);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = domain.dispatch_once();
-    }));
-    assert!(result.is_err());
-    assert_eq!(
-        domain.entity_get(ENTITY, &1u64.to_le_bytes(), &mut [0u8; 8]),
-        Err(Error::InvalidState)
-    );
 }
