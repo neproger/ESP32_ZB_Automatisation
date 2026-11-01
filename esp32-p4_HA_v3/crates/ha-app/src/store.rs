@@ -6,27 +6,13 @@
 
 use std::sync::Mutex;
 
-use ha_domain::{
-    Backing, Domain, EntityDesc, FactMeta, StorageBackend, StorageProvider, Value,
-};
-use micro_db::{
-    FlashError, Geometry, Handle, NorFlash, RamFlashStorage, RamStorage, RegionManager, Table,
-};
+use ha_domain::{Backing, EntityDesc, StorageBackend, StorageProvider};
+use micro_db::{FlashError, Geometry, NorFlash, RamFlashStorage, RamStorage, RegionManager};
 use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
 pub const MAX_DEVICES: usize = 32;
 const CAPACITY: usize = MAX_DEVICES;
 const DEFINITION_VERSION: u16 = 1;
-
-const DOMAIN_KEY_MAX: usize = ha_domain::canonical::STATE_KEY_LEN;
-const DOMAIN_RECORD_MAX: usize = ha_domain::canonical::AUTOMATION_RECORD_LEN;
-const DOMAIN_KEY_SIZE: usize = 4 + 1 + DOMAIN_KEY_MAX;
-const DOMAIN_SLOT_SIZE: usize = 2 + DOMAIN_RECORD_MAX;
-const DOMAIN_CAPACITY: usize = 384;
-const DOMAIN_PERSIST_ID: &str = "ha_domain";
-
-const _: () = assert!(DOMAIN_KEY_SIZE == 21);
-const _: () = assert!(DOMAIN_SLOT_SIZE == 458);
 
 struct CFlash {
     size: unsafe extern "C" fn() -> u32,
@@ -96,15 +82,10 @@ impl NorFlash for CFlash {
 }
 
 /// Production storage provider for Domain tables.
-///
-/// Stage 5.1 only opens the provider; wiring into `main` and the persistent
-/// manifest is done in later Stage 5 steps.
-#[allow(dead_code)]
 pub struct DomainStorageProvider {
     manager: RegionManager,
 }
 
-#[allow(dead_code)]
 impl DomainStorageProvider {
     pub fn new() -> Result<Self, ha_domain::Error> {
         Ok(Self {
@@ -124,9 +105,9 @@ impl StorageProvider for DomainStorageProvider {
             Backing::Ram => Ok(StorageBackend::new(RamStorage::new(geometry)?)),
             Backing::RamFlash => {
                 let key = desc.persist_key.ok_or(ha_domain::Error::InvalidArg)?;
-                let view = self
-                    .manager
-                    .bind(key, desc.capacity, desc.key_size, desc.record_size)?;
+                let view =
+                    self.manager
+                        .bind(key, desc.capacity, desc.key_size, desc.record_size)?;
                 let storage = RamFlashStorage::open(view, geometry, key)?;
                 Ok(StorageBackend::new(storage))
             }
@@ -135,62 +116,7 @@ impl StorageProvider for DomainStorageProvider {
     }
 }
 
-/// One persisted Domain record: entity type + canonical key + record bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct DomainKey {
-    entity: u32,
-    key_len: u8,
-    key: [u8; DOMAIN_KEY_MAX],
-}
-
-impl DomainKey {
-    fn to_bytes(&self) -> [u8; DOMAIN_KEY_SIZE] {
-        let mut out = [0u8; DOMAIN_KEY_SIZE];
-        out[..4].copy_from_slice(&self.entity.to_le_bytes());
-        out[4] = self.key_len;
-        out[5..5 + DOMAIN_KEY_MAX].copy_from_slice(&self.key);
-        out
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut key = [0u8; DOMAIN_KEY_MAX];
-        key.copy_from_slice(&bytes[5..5 + DOMAIN_KEY_MAX]);
-        Self {
-            entity: u32::from_le_bytes(bytes[0..4].try_into().expect("domain key entity")),
-            key_len: bytes[4].min(DOMAIN_KEY_MAX as u8),
-            key,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct DomainSlot {
-    len: u16,
-    bytes: [u8; DOMAIN_RECORD_MAX],
-}
-
-impl DomainSlot {
-    fn to_bytes(&self) -> [u8; DOMAIN_SLOT_SIZE] {
-        let mut out = [0u8; DOMAIN_SLOT_SIZE];
-        out[..2].copy_from_slice(&self.len.to_le_bytes());
-        out[2..2 + DOMAIN_RECORD_MAX].copy_from_slice(&self.bytes);
-        out
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut record = [0u8; DOMAIN_RECORD_MAX];
-        record.copy_from_slice(&bytes[2..2 + DOMAIN_RECORD_MAX]);
-        Self {
-            len: u16::from_le_bytes(bytes[0..2].try_into().expect("domain slot len")),
-            bytes: record,
-        }
-    }
-}
-
-type DomainTable = Table<RamFlashStorage<CFlash>>;
-
 static REGISTRY: Mutex<Option<Registry<CFlash>>> = Mutex::new(None);
-static DOMAIN_DB: Mutex<Option<DomainTable>> = Mutex::new(None);
 
 pub fn init() {
     let flash = CFlash::MSTORE;
@@ -208,41 +134,6 @@ pub fn init() {
         registry.len()
     );
     *REGISTRY.lock().unwrap() = Some(registry);
-    *DOMAIN_DB.lock().unwrap() = init_domain();
-}
-
-fn init_domain() -> Option<DomainTable> {
-    let flash = CFlash::DOMAIN;
-    let size = flash.capacity();
-    if size == 0 {
-        log::error!("domain: partition not found");
-        return None;
-    }
-    let geometry = Geometry {
-        capacity: DOMAIN_CAPACITY,
-        key_size: DOMAIN_KEY_SIZE,
-        payload_size: DOMAIN_SLOT_SIZE,
-    };
-    let storage = match RamFlashStorage::open(flash, geometry, DOMAIN_PERSIST_ID) {
-        Ok(storage) => storage,
-        Err(error) => {
-            log::error!("domain: not mounted ({error:?}); data preserved");
-            return None;
-        }
-    };
-    let table = match Table::open(geometry, storage) {
-        Ok(table) => table,
-        Err(error) => {
-            log::error!("domain: not mounted ({error:?}); data preserved");
-            return None;
-        }
-    };
-    let (bank, seq) = table.bank_state().unwrap_or((0, 0));
-    log::info!(
-        "domain ready: domain={size} bytes entries={} bank={bank} seq={seq}",
-        table.len()
-    );
-    Some(table)
 }
 
 pub fn lookup(ieee: u64) -> Option<&'static z2m_rs::Profile> {
@@ -392,142 +283,6 @@ pub fn device_addresses() -> ([(u64, u16); CAPACITY], usize) {
         }
     }
     (out, count)
-}
-
-/// Persist one canonical Domain record. Called from the Domain adapter sink.
-pub fn save_domain(entity: u32, key: &[u8], record: &[u8]) {
-    if key.len() > DOMAIN_KEY_MAX || record.len() > DOMAIN_RECORD_MAX {
-        log::error!(
-            "domain: persist size entity={entity} key={} record={}",
-            key.len(),
-            record.len()
-        );
-        return;
-    }
-    let mut key_slot = DomainKey {
-        entity,
-        key_len: key.len() as u8,
-        key: [0; DOMAIN_KEY_MAX],
-    };
-    key_slot.key[..key.len()].copy_from_slice(key);
-    let key_bytes = key_slot.to_bytes();
-    let mut record_slot = DomainSlot {
-        len: record.len() as u16,
-        bytes: [0; DOMAIN_RECORD_MAX],
-    };
-    record_slot.bytes[..record.len()].copy_from_slice(record);
-    let payload = record_slot.to_bytes();
-
-    let mut guard = DOMAIN_DB.lock().unwrap();
-    let Some(table) = guard.as_mut() else {
-        return;
-    };
-    let result = match table.find(&key_bytes) {
-        Ok(slot) => match table.meta(slot) {
-            Ok(meta) => table
-                .update(
-                    Handle {
-                        slot,
-                        generation: meta.generation,
-                        version: meta.version,
-                    },
-                    &payload,
-                )
-                .map(|_| ()),
-            Err(error) => Err(error),
-        },
-        Err(micro_db::Error::NotFound) => table.allocate(&key_bytes, &payload).map(|_| ()),
-        Err(error) => Err(error),
-    };
-    if let Err(error) = result {
-        log::error!("domain: persist entity={entity} failed: {error:?}");
-    }
-}
-
-pub fn remove_domain(entity: u32, key: &[u8]) {
-    if key.len() > DOMAIN_KEY_MAX {
-        return;
-    }
-    let mut key_slot = DomainKey {
-        entity,
-        key_len: key.len() as u8,
-        key: [0; DOMAIN_KEY_MAX],
-    };
-    key_slot.key[..key.len()].copy_from_slice(key);
-    let key_bytes = key_slot.to_bytes();
-
-    let mut guard = DOMAIN_DB.lock().unwrap();
-    let Some(table) = guard.as_mut() else {
-        return;
-    };
-    let result = match table.find(&key_bytes) {
-        Ok(slot) => match table.meta(slot) {
-            Ok(meta) => table.free(Handle {
-                slot,
-                generation: meta.generation,
-                version: meta.version,
-            }),
-            Err(error) => Err(error),
-        },
-        Err(error) => Err(error),
-    };
-    if let Err(error) = result {
-        log::error!("domain: remove entity={entity} failed: {error:?}");
-    }
-}
-
-/// Load persistent device/config records back into RAM and mirror them to the UI.
-///
-/// PROPERTY_STATE is deliberately not restored: it is RAM truth and devices
-/// report it again after boot. Nothing is written to or cleaned from flash for
-/// state here.
-pub fn restore_domain(domain: &mut Domain) {
-    let guard = DOMAIN_DB.lock().unwrap();
-    let Some(table) = guard.as_ref() else {
-        return;
-    };
-
-    let mut restored = 0;
-    let mut skipped = 0;
-    // shortcut: no schema migration; an incompatible record is skipped and
-    // rewritten on the next change.
-    let result = table.iter(|_, _, key, record| {
-        let key = DomainKey::from_bytes(key);
-        if key.entity == ha_domain::canonical::ENTITY_PROPERTY_STATE {
-            return;
-        }
-        let slot = DomainSlot::from_bytes(record);
-        let key_len = usize::from(key.key_len).min(DOMAIN_KEY_MAX);
-        let record_len = usize::from(slot.len).min(DOMAIN_RECORD_MAX);
-        let meta = FactMeta {
-            source: ha_domain::canonical::SOURCE_ZIGBEE as u8,
-            value: Value::NONE,
-        };
-        match domain.entity_put(
-            key.entity,
-            &key.key[..key_len],
-            &slot.bytes[..record_len],
-            meta,
-        ) {
-            Ok(_) => {
-                if let Ok(frame_type) = u8::try_from(key.entity) {
-                    crate::web::upsert(frame_type, &key.key[..key_len], &slot.bytes[..record_len]);
-                }
-                restored += 1;
-            }
-            Err(error) => {
-                skipped += 1;
-                log::warn!(
-                    "domain: restore entity={} skipped: {error:?}",
-                    key.entity
-                );
-            }
-        }
-    });
-    if let Err(error) = result {
-        log::error!("domain: restore read failed: {error:?}");
-    }
-    log::info!("domain: restored {restored} records ({skipped} skipped)");
 }
 
 /// Diagnostic hook (kept behind the `HA_FORCE_COMPACT` build flag): moves the

@@ -248,10 +248,8 @@ function Check-ConfigLayer {
         if ($public.Body -notmatch ([regex]::Escape($item.Plan) + '\s*\(')) {
             Add-Violation "${relative}: $($item.Public) must use $($item.Plan)"
         }
-        $planAt = $public.Body.IndexOf($item.Plan)
-        $cleanupAt = $public.Body.IndexOf('store::remove_domain')
-        if (($cleanupAt -lt 0) -or ($cleanupAt -lt $planAt)) {
-            Add-Violation "${relative}: $($item.Public) must clean persistence after the transaction plan"
+        if ($public.Body -match 'store::(?:save|remove)_domain') {
+            Add-Violation "${relative}: $($item.Public) must not use a second persistence path"
         }
 
         $plan = Get-RustFunction $source $item.Plan

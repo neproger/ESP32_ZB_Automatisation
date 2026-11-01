@@ -26,24 +26,24 @@ pub fn manifest() -> [EntityDesc<'static>; 14] {
             key_size: 8,
             record_size: ha_domain::canonical::DEVICE_RECORD_LEN,
             capacity: DEVICE_CAPACITY,
-            backing: Backing::RamFlash,
-            persist_key: Some("logical_device"),
+            backing: Backing::Ram,
+            persist_key: None,
         },
         EntityDesc {
             entity: ENTITY_ENTITY,
             key_size: 8,
             record_size: ha_domain::canonical::ENTITY_RECORD_LEN,
             capacity: ENTITY_CAPACITY,
-            backing: Backing::RamFlash,
-            persist_key: Some("entity"),
+            backing: Backing::Ram,
+            persist_key: None,
         },
         EntityDesc {
             entity: ENTITY_CAPABILITIES,
             key_size: 8,
             record_size: ha_domain::canonical::CAPABILITIES_LEN,
             capacity: ENTITY_CAPACITY,
-            backing: Backing::RamFlash,
-            persist_key: Some("capabilities"),
+            backing: Backing::Ram,
+            persist_key: None,
         },
         EntityDesc {
             entity: ENTITY_PROPERTY_STATE,
@@ -67,7 +67,7 @@ pub fn manifest() -> [EntityDesc<'static>; 14] {
             record_size: GROUP_ITEM_RECORD_LEN,
             capacity: GROUP_ITEM_CAPACITY,
             backing: Backing::RamFlash,
-            persist_key: Some("group_item"),
+            persist_key: Some("group_item_v3"),
         },
         EntityDesc {
             entity: ENTITY_GROUP_AUTOMATION,
@@ -75,7 +75,7 @@ pub fn manifest() -> [EntityDesc<'static>; 14] {
             record_size: GROUP_ITEM_RECORD_LEN,
             capacity: GROUP_AUTOMATION_CAPACITY,
             backing: Backing::RamFlash,
-            persist_key: Some("group_automation"),
+            persist_key: Some("group_auto_v1"),
         },
         EntityDesc {
             entity: ENTITY_AUTOMATION,
@@ -83,7 +83,7 @@ pub fn manifest() -> [EntityDesc<'static>; 14] {
             record_size: AUTOMATION_RECORD_LEN,
             capacity: AUTOMATION_CAPACITY,
             backing: Backing::RamFlash,
-            persist_key: Some("automation"),
+            persist_key: Some("automation_v5"),
         },
         EntityDesc {
             entity: ENTITY_LOCATION,
@@ -136,19 +136,9 @@ pub fn manifest() -> [EntityDesc<'static>; 14] {
     ]
 }
 
-fn legacy_desc(desc: EntityDesc<'static>) -> EntityDesc<'static> {
-    EntityDesc {
-        backing: Backing::Ram,
-        persist_key: None,
-        ..desc
-    }
-}
-
-/// Legacy RAM registration. The production manifest-backed registration is
-/// wired after the old Flash format is migrated.
 pub fn register(domain: &mut Domain) -> Result<(), ha_domain::Error> {
     for desc in manifest() {
-        match domain.register_entity(legacy_desc(desc)) {
+        match domain.register_entity(desc) {
             Ok(()) | Err(ha_domain::Error::AlreadyExists) => {}
             Err(error) => return Err(error),
         }
@@ -178,14 +168,36 @@ mod tests {
             .filter(|desc| desc.backing == Backing::Ram)
             .collect();
 
-        assert_eq!(persistent.len(), 10);
-        assert_eq!(ram.len(), 4);
+        assert_eq!(persistent.len(), 7);
+        assert_eq!(ram.len(), 7);
         assert!(persistent.iter().all(|desc| desc.persist_key.is_some()));
         assert!(ram.iter().all(|desc| desc.persist_key.is_none()));
 
         let mut keys = std::collections::BTreeSet::new();
         for desc in persistent {
             assert!(keys.insert(desc.persist_key.unwrap()));
+        }
+
+        for entity in [ENTITY_LOGICAL_DEVICE, ENTITY_ENTITY, ENTITY_CAPABILITIES] {
+            let desc = manifest
+                .iter()
+                .find(|desc| desc.entity == entity)
+                .expect("RAM lifecycle entity");
+            assert_eq!(desc.backing, Backing::Ram);
+            assert!(desc.persist_key.is_none());
+        }
+
+        for (entity, key) in [
+            (ENTITY_AUTOMATION, "automation_v5"),
+            (ENTITY_GROUP_ITEM, "group_item_v3"),
+            (ENTITY_GROUP_AUTOMATION, "group_auto_v1"),
+        ] {
+            let desc = manifest
+                .iter()
+                .find(|desc| desc.entity == entity)
+                .expect("persistent entity");
+            assert_eq!(desc.backing, Backing::RamFlash);
+            assert_eq!(desc.persist_key, Some(key));
         }
     }
 

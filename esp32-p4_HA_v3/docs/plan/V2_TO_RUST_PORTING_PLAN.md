@@ -141,6 +141,9 @@ Domain.
 
 ### Этап 1 — Domain: persistence и restore
 
+> Статус: **реализовано в рабочем дереве**. Commit/push не выполнялись.
+> Проверки: workspace tests и `build-ha-app` зелёные; `check-domain-api` ok.
+
 **Исходный слой V2:** `domain` + регистрация таблиц в `main/app_main.c`.
 
 **Назначение:** Domain — единственный writer canonical state и persistent
@@ -413,10 +416,10 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Этап 1 — Domain persistence и restore.**
+**Stage 1 реализован; следующая задача — Stage 2 (Device service).**
 
 Технический аудит: [DOMAIN_PERSISTENCE_AUDIT.md](../audits/DOMAIN_PERSISTENCE_AUDIT.md).
-Диагностика раздела перед Stage 1:
+Диагностика раздела:
 [DOMAIN_PARTITION_DIAGNOSTIC.md](../audits/DOMAIN_PARTITION_DIAGNOSTIC.md).
 Явный сброс после решения оператора:
 [DOMAIN_RESET_PROCEDURE.md](../audits/DOMAIN_RESET_PROCEDURE.md).
@@ -424,15 +427,13 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 Решение: содержимое `domain` можно потерять; migration не выполняется.
 Сброс остаётся отдельной явной операцией, не автоматическим поведением.
 
-Перед реализацией:
+Перед первым запуском Stage 1 на устройстве всё ещё нужны:
 
-1. Сверить `domain_tables` с V2 `app_main.c` (backing, capacities, persist keys).
-2. Снять read-only dump `domain` и сохранить SHA256.
-3. Зафиксировать операторское решение и выполнить явный erase только `domain`
-   в одном окне с прошивкой Stage 1.
-4. Составить точный список изменений в `ha-app`/`ha-domain` и тестов.
+1. read-only dump `domain` и SHA256;
+2. фиксация решения оператора;
+3. явный erase только `domain` в одном окне с прошивкой Stage 1.
 
-В рамках этой задачи код не менять.
+Stage 2 реализуется после проверки Stage 1 на устройстве.
 
 ## 7. Критерии завершения всего портирования
 

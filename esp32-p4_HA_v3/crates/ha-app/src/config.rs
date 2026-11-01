@@ -1,6 +1,6 @@
 use ha_domain::canonical::{
     ENTITY_AUTOMATION, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
-    ENTITY_PROPERTY_STATE, GROUP_ITEM_KEY_LEN, SOURCE_ZIGBEE,
+    GROUP_ITEM_KEY_LEN, SOURCE_ZIGBEE,
 };
 use ha_domain::{DomainHandle, DomainTransaction, FactMeta, Value};
 
@@ -17,13 +17,9 @@ pub fn put_record(
     key: &[u8],
     record: &[u8],
 ) -> Result<bool, ha_domain::Error> {
-    let changed = domain.transaction::<bool, ha_domain::Error>(|transaction| {
+    domain.transaction::<bool, ha_domain::Error>(|transaction| {
         transaction.entity_put(entity, key, record, meta())
-    })?;
-    if changed && entity != ENTITY_PROPERTY_STATE {
-        crate::store::save_domain(entity, key, record);
-    }
-    Ok(changed)
+    })
 }
 
 pub fn remove_record(
@@ -31,17 +27,13 @@ pub fn remove_record(
     entity: u32,
     key: &[u8],
 ) -> Result<bool, ha_domain::Error> {
-    let removed = domain.transaction::<bool, ha_domain::Error>(|transaction| match transaction
-        .entity_remove(entity, key, meta())
-    {
-        Ok(()) => Ok(true),
-        Err(ha_domain::Error::NotFound) => Ok(false),
-        Err(error) => Err(error),
-    })?;
-    if removed && entity != ENTITY_PROPERTY_STATE {
-        crate::store::remove_domain(entity, key);
-    }
-    Ok(removed)
+    domain.transaction::<bool, ha_domain::Error>(|transaction| {
+        match transaction.entity_remove(entity, key, meta()) {
+            Ok(()) => Ok(true),
+            Err(ha_domain::Error::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    })
 }
 
 fn remove_record_cascade(
@@ -98,13 +90,7 @@ fn remove_group_plan(
 }
 
 pub fn remove_group(domain: &DomainHandle, group: u64) -> Result<usize, ha_domain::Error> {
-    let removed = remove_group_plan(domain, group)?;
-    for (entity, key) in &removed {
-        if *entity != ENTITY_PROPERTY_STATE {
-            crate::store::remove_domain(*entity, key);
-        }
-    }
-    Ok(removed.len())
+    Ok(remove_group_plan(domain, group)?.len())
 }
 
 fn remove_automation_plan(
@@ -135,13 +121,7 @@ pub fn remove_automation(
     domain: &DomainHandle,
     automation: u64,
 ) -> Result<usize, ha_domain::Error> {
-    let removed = remove_automation_plan(domain, automation)?;
-    for (entity, key) in &removed {
-        if *entity != ENTITY_PROPERTY_STATE {
-            crate::store::remove_domain(*entity, key);
-        }
-    }
-    Ok(removed.len())
+    Ok(remove_automation_plan(domain, automation)?.len())
 }
 
 #[cfg(test)]

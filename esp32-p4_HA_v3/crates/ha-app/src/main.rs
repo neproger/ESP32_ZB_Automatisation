@@ -57,7 +57,31 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let mut domain = Domain::new_with_clock(64, 8, 64, now_ms).expect("domain");
+    store::init();
+
+    let storage = match store::DomainStorageProvider::new() {
+        Ok(storage) => storage,
+        Err(error) => {
+            log::error!("domain: storage open failed: {error:?}");
+            return;
+        }
+    };
+    let mut domain = match Domain::new_with_storage(64, 8, 64, now_ms, storage) {
+        Ok(domain) => domain,
+        Err(error) => {
+            log::error!("domain: init failed: {error:?}");
+            return;
+        }
+    };
+    if let Err(error) = domain_tables::register(&mut domain) {
+        log::error!("domain: table init failed: {error:?}");
+        return;
+    }
+    if let Err(error) = domain.restore() {
+        log::error!("domain: restore failed: {error:?}");
+        return;
+    }
+
     let (display_tx, display_rx) = sync_channel(64);
     let (web_tx, web_rx) = sync_channel(64);
     let (automation_tx, automation_rx) = sync_channel(64);
@@ -81,11 +105,6 @@ fn main() {
     frames::install();
     exec::install();
     interview::install();
-    store::init();
-    if let Err(error) = domain_tables::register(&mut domain) {
-        log::error!("domain: table init failed: {error:?}");
-    }
-    store::restore_domain(&mut domain);
     if let Some(count) = option_env!("HA_FORCE_COMPACT") {
         for _ in 0..count.parse::<u32>().unwrap_or(0) {
             store::compact_for_test();

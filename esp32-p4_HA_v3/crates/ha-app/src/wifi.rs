@@ -190,12 +190,7 @@ fn remember_known(domain: &DomainHandle, ssid: &str, password: &str) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    let changed = domain
-        .entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta)
-        .unwrap_or(false);
-    if changed {
-        crate::store::save_domain(ENTITY_WIFI_KNOWN, &key, &encoded);
-    }
+    let _ = domain.entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta);
     add_radio_known(ssid, password);
 }
 
