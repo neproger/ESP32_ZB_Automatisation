@@ -6,8 +6,12 @@
 
 use std::sync::Mutex;
 
-use ha_domain::{Domain, FactMeta, Value};
-use micro_db::{FlashError, Geometry, Handle, NorFlash, RamFlashStorage, Table};
+use ha_domain::{
+    Backing, Domain, EntityDesc, FactMeta, StorageBackend, StorageProvider, Value,
+};
+use micro_db::{
+    FlashError, Geometry, Handle, NorFlash, RamFlashStorage, RamStorage, RegionManager, Table,
+};
 use zigbee_devices::{DeviceDescriptor, DeviceRecord, InterviewStatus, Registry, SIGNATURE_MAX};
 
 pub const MAX_DEVICES: usize = 32;
@@ -87,6 +91,46 @@ impl NorFlash for CFlash {
             Ok(())
         } else {
             Err(FlashError::Io)
+        }
+    }
+}
+
+/// Production storage provider for Domain tables.
+///
+/// Stage 5.1 only opens the provider; wiring into `main` and the persistent
+/// manifest is done in later Stage 5 steps.
+#[allow(dead_code)]
+pub struct DomainStorageProvider {
+    manager: RegionManager,
+}
+
+#[allow(dead_code)]
+impl DomainStorageProvider {
+    pub fn new() -> Result<Self, ha_domain::Error> {
+        Ok(Self {
+            manager: RegionManager::new(CFlash::DOMAIN)?,
+        })
+    }
+}
+
+impl StorageProvider for DomainStorageProvider {
+    fn open(&mut self, desc: &EntityDesc<'_>) -> Result<StorageBackend, ha_domain::Error> {
+        let geometry = Geometry {
+            capacity: desc.capacity,
+            key_size: desc.key_size,
+            payload_size: desc.record_size,
+        };
+        match desc.backing {
+            Backing::Ram => Ok(StorageBackend::new(RamStorage::new(geometry)?)),
+            Backing::RamFlash => {
+                let key = desc.persist_key.ok_or(ha_domain::Error::InvalidArg)?;
+                let view = self
+                    .manager
+                    .bind(key, desc.capacity, desc.key_size, desc.record_size)?;
+                let storage = RamFlashStorage::open(view, geometry, key)?;
+                Ok(StorageBackend::new(storage))
+            }
+            Backing::Flash => Err(ha_domain::Error::InvalidState),
         }
     }
 }
@@ -193,7 +237,7 @@ fn init_domain() -> Option<DomainTable> {
             return None;
         }
     };
-    let (bank, seq) = table.bank_state();
+    let (bank, seq) = table.bank_state().unwrap_or((0, 0));
     log::info!(
         "domain ready: domain={size} bytes entries={} bank={bank} seq={seq}",
         table.len()

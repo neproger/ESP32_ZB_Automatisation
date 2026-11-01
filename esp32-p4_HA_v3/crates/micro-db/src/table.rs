@@ -1,7 +1,7 @@
 use core::hash::Hasher;
 
-use crate::flash::{Geometry, NorFlash};
-use crate::storage::{FlashStorage, RamFlashStorage, Storage};
+use crate::flash::Geometry;
+use crate::storage::{Storage, StorageMaintenance};
 
 /// Operation outcome. Names match V2 `SYS_CODE_*` used by mstore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -420,30 +420,24 @@ impl<S: Storage> Table<S> {
     }
 }
 
-impl<F: NorFlash> Table<FlashStorage<F>> {
+impl<S: Storage + StorageMaintenance> Table<S> {
     pub fn compact(&mut self) -> Result<()> {
         self.storage.compact()
     }
 
-    pub fn bank_state(&self) -> (usize, u32) {
+    pub fn bank_state(&self) -> Option<(usize, u32)> {
         self.storage.bank_state()
     }
-}
 
-impl<F: NorFlash> Table<RamFlashStorage<F>> {
-    pub fn compact(&mut self) -> Result<()> {
-        self.storage.compact()
-    }
-
-    pub fn bank_state(&self) -> (usize, u32) {
-        self.storage.bank_state()
+    pub fn sync(&mut self) -> Result<()> {
+        StorageMaintenance::sync(&mut self.storage)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flash::FlashError;
+    use crate::flash::{FlashError, NorFlash};
     use crate::ring::Ring;
     use crate::{RamFlashStorage, RamStorage, SimFlash, Storage};
     use std::cell::Cell;

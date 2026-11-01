@@ -22,8 +22,8 @@ mod storage;
 mod table;
 pub use flash::sim::SimFlash;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
-pub use region::{RegionLocation, RegionManager, RegionView};
-pub use storage::{FlashStorage, RamFlashStorage, RamStorage, Storage};
+pub use region::{region_size, RegionLocation, RegionManager, RegionView, MAX_ENTRIES};
+pub use storage::{FlashStorage, RamFlashStorage, RamStorage, Storage, StorageMaintenance};
 
 pub use ring::Ring;
 pub use table::{Error, Handle, HandleStatus, Meta, Result, Table};

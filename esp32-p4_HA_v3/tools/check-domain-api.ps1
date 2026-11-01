@@ -230,42 +230,62 @@ function Check-ConfigLayer {
         return
     }
 
-    foreach ($name in @('remove_group', 'remove_automation')) {
-        $function = Get-RustFunction $source $name
-        if ($null -eq $function) {
-            Add-Violation "${relative}: $name is missing"
+    foreach ($item in @(
+        @{ Public = 'remove_group'; Plan = 'remove_group_plan' },
+        @{ Public = 'remove_automation'; Plan = 'remove_automation_plan' }
+    )) {
+        $public = Get-RustFunction $source $item.Public
+        if ($null -eq $public) {
+            Add-Violation "${relative}: $($item.Public) is missing"
             continue
         }
-        if ($function.Signature -cmatch '\b(?:Fn|FnMut|FnOnce)\b') {
-            Add-Violation "${relative}: $name must not accept persistence callbacks"
+        if ($public.Signature -cmatch '\b(?:Fn|FnMut|FnOnce)\b') {
+            Add-Violation "${relative}: $($item.Public) must not accept persistence callbacks"
         }
-        if ($function.Signature -match '&\s*(?:mut\s+)?Domain\b') {
-            Add-Violation "${relative}: $name must not accept Domain"
+        if ($public.Signature -match '&\s*(?:mut\s+)?Domain\b') {
+            Add-Violation "${relative}: $($item.Public) must not accept Domain"
         }
-        if ($function.Body -notmatch 'domain\.transaction\s*::') {
-            Add-Violation "${relative}: $name must use DomainHandle::transaction"
+        if ($public.Body -notmatch ([regex]::Escape($item.Plan) + '\s*\(')) {
+            Add-Violation "${relative}: $($item.Public) must use $($item.Plan)"
         }
-        if ($function.Body -notmatch 'transaction\.entity_snapshot') {
-            Add-Violation "${relative}: $name must use DomainTransaction snapshot"
+        $planAt = $public.Body.IndexOf($item.Plan)
+        $cleanupAt = $public.Body.IndexOf('store::remove_domain')
+        if (($cleanupAt -lt 0) -or ($cleanupAt -lt $planAt)) {
+            Add-Violation "${relative}: $($item.Public) must clean persistence after the transaction plan"
         }
-        if ($function.Body -notmatch 'remove_record(?:_cascade)?\s*\(\s*transaction') {
-            Add-Violation "${relative}: $name must remove through DomainTransaction"
+
+        $plan = Get-RustFunction $source $item.Plan
+        if ($null -eq $plan) {
+            Add-Violation "${relative}: $($item.Plan) is missing"
+            continue
         }
-        if ($function.Body -match '\.with_mut\s*\(') {
-            Add-Violation "${relative}: $name must not use with_mut"
+        if ($plan.Signature -match '&\s*(?:mut\s+)?Domain\b') {
+            Add-Violation "${relative}: $($item.Plan) must not accept Domain"
+        }
+        if ($plan.Body -notmatch 'domain\.transaction\s*::') {
+            Add-Violation "${relative}: $($item.Plan) must use DomainHandle::transaction"
+        }
+        if ($plan.Body -notmatch 'transaction\.entity_snapshot') {
+            Add-Violation "${relative}: $($item.Plan) must use DomainTransaction snapshot"
+        }
+        if ($plan.Body -notmatch 'remove_record_cascade\s*\(\s*transaction') {
+            Add-Violation "${relative}: $($item.Plan) must remove through DomainTransaction"
+        }
+        if ($plan.Body -match '\.with_mut\s*\(') {
+            Add-Violation "${relative}: $($item.Plan) must not use with_mut"
         }
     }
 
     $removeRecord = Get-RustFunction $source 'remove_record_cascade'
     if (($null -eq $removeRecord) -or ($removeRecord.Body -notmatch 'transaction\.entity_remove')) {
-        Add-Violation "${relative}: remove_record must use DomainTransaction.entity_remove"
+        Add-Violation "${relative}: remove_record_cascade must use DomainTransaction.entity_remove"
     }
 
     if ($source -match '\.with_mut\s*\(') {
         Add-Violation "${relative}: config layer must not use with_mut"
     }
 
-    foreach ($pattern in @('DomainAdapter', '\bmicro_db\b', '\bTable\b', '\bStorage\b', 'StoreSink', 'RecordSink', '\bpersist')) {
+    foreach ($pattern in @('DomainAdapter', '\bmicro_db\b', '\bTable\b', '\bStorage\b', 'StoreSink', 'RecordSink')) {
         if ($source -match $pattern) {
             Add-Violation "${relative}: forbidden dependency/pattern '$pattern'"
         }
@@ -292,6 +312,36 @@ function Check-ZigbeeRemovalSequence {
     }
     if (($function.Body -match '\.transaction\s*::') -or ($function.Body -match '\.with_mut\s*\(')) {
         Add-Violation "${relative}: Zigbee remover must stay outside Domain transactions"
+    }
+}
+
+function Check-MaintenanceBoundary {
+    $handle = Get-Source 'crates/ha-domain/src/handle.rs'
+    if (($null -ne $handle) -and ($handle -match 'maintenance')) {
+        Add-Violation 'crates/ha-domain/src/handle.rs: DomainHandle must not expose maintenance'
+    }
+
+    foreach ($relative in @(
+        'crates/ha-device/src/lib.rs',
+        'crates/zigbee-devices/src',
+        'crates/ha-app/src/config.rs'
+    )) {
+        $path = Join-Path $script:root $relative
+        if (-not (Test-Path -LiteralPath $path)) {
+            continue
+        }
+        $files = if ((Get-Item -LiteralPath $path).PSIsContainer) {
+            Get-ChildItem -LiteralPath $path -Recurse -Filter '*.rs'
+        } else {
+            Get-Item -LiteralPath $path
+        }
+        foreach ($file in $files) {
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            if ($text -match 'take_maintenance|DomainMaintenance|SharedStorage') {
+                $scanRelative = $file.FullName.Substring($script:root.Length + 1).Replace('\', '/')
+                Add-Violation "${scanRelative}: service code must not access maintenance capability"
+            }
+        }
     }
 }
 

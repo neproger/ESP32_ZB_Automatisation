@@ -25,6 +25,12 @@ impl From<FlashError> for Error {
     }
 }
 
+pub trait StorageMaintenance {
+    fn compact(&mut self) -> Result<()>;
+    fn bank_state(&self) -> Option<(usize, u32)>;
+    fn sync(&mut self) -> Result<()>;
+}
+
 pub trait Storage {
     fn geometry(&self) -> Geometry;
 
@@ -106,6 +112,20 @@ impl<F: NorFlash> FlashStorage<F> {
         if key.len() < self.geometry.key_size || payload.len() < self.geometry.payload_size {
             return Err(Error::InvalidSize);
         }
+        Ok(())
+    }
+}
+
+impl<F: NorFlash> StorageMaintenance for FlashStorage<F> {
+    fn compact(&mut self) -> Result<()> {
+        FlashStorage::compact(self)
+    }
+
+    fn bank_state(&self) -> Option<(usize, u32)> {
+        Some(FlashStorage::bank_state(self))
+    }
+
+    fn sync(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -215,6 +235,20 @@ impl RamStorage {
         if key.len() < self.geometry.key_size || payload.len() < self.geometry.payload_size {
             return Err(Error::InvalidSize);
         }
+        Ok(())
+    }
+}
+
+impl StorageMaintenance for RamStorage {
+    fn compact(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn bank_state(&self) -> Option<(usize, u32)> {
+        None
+    }
+
+    fn sync(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -365,6 +399,20 @@ impl<F: NorFlash> RamFlashStorage<F> {
     }
 }
 
+impl<F: NorFlash> StorageMaintenance for RamFlashStorage<F> {
+    fn compact(&mut self) -> Result<()> {
+        RamFlashStorage::compact(self)
+    }
+
+    fn bank_state(&self) -> Option<(usize, u32)> {
+        Some(RamFlashStorage::bank_state(self))
+    }
+
+    fn sync(&mut self) -> Result<()> {
+        Storage::sync(self)
+    }
+}
+
 impl<F: NorFlash> Storage for RamFlashStorage<F> {
     fn geometry(&self) -> Geometry {
         self.geometry
@@ -398,8 +446,8 @@ impl<F: NorFlash> Storage for RamFlashStorage<F> {
     }
 
     fn sync(&mut self) -> Result<()> {
-        self.flash.sync()?;
-        self.ram.sync()
+        StorageMaintenance::sync(&mut self.flash)?;
+        StorageMaintenance::sync(&mut self.ram)
     }
 }
 

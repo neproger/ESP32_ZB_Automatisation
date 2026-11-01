@@ -22,7 +22,7 @@ use crate::{Error, Result};
 
 const DIRECTORY_MAGIC: u32 = 0x4D53_4447; // MSDG
 const DIRECTORY_REVISION: u16 = 1;
-const MAX_ENTRIES: usize = 16;
+pub const MAX_ENTRIES: usize = 16;
 const HEADER_SIZE: usize = 16;
 const ENTRY_SIZE: usize = 32;
 const DIRECTORY_SLOT_BYTES: usize = HEADER_SIZE + MAX_ENTRIES * ENTRY_SIZE;
@@ -334,7 +334,7 @@ impl NorFlash for RegionView {
     }
 }
 
-fn region_size(
+pub fn region_size(
     capacity: usize,
     key_size: usize,
     payload_size: usize,

@@ -51,8 +51,8 @@ use micro_db::{Geometry, Handle, RamStorage, Ring, Table};
 
 pub use entity::{EntityDesc, EntityMeta};
 pub use storage::{
-    Backing, EntityRestore, RestoreError, RestorePhase, RestoreReport, StorageBackend,
-    StorageProvider,
+    Backing, DomainMaintenance, EntityRestore, RestoreError, RestorePhase, RestoreReport,
+    SharedStorage, StorageBackend, StorageBackendImpl, StorageProvider,
 };
 
 pub use fact::{

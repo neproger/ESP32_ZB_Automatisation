@@ -22,6 +22,7 @@ pub struct Domain {
     pub(crate) clock: fn() -> u64,
     pub(crate) dispatch: Arc<DispatchSignal>,
     pub(crate) storage: Option<Box<dyn StorageProvider>>,
+    pub(crate) maintenance: Option<DomainMaintenance>,
     pub(crate) lifecycle: Lifecycle,
     pub(crate) command_lane: Arc<StdMutex<()>>,
 }
@@ -63,6 +64,7 @@ impl Domain {
                 wake: Condvar::new(),
             }),
             storage: None,
+            maintenance: None,
             lifecycle: Lifecycle::RamOnly,
             command_lane: Arc::new(StdMutex::new(())),
         })
@@ -99,6 +101,7 @@ impl Domain {
         };
 
         let mut opened = Vec::with_capacity(self.entities.len());
+        let mut maintenance = Vec::with_capacity(self.entities.len());
         let mut report = RestoreReport::default();
         for entity in &self.entities {
             let item = entity.desc.entity;
@@ -107,12 +110,13 @@ impl Domain {
                 phase: RestorePhase::StorageOpen,
                 error,
             })?;
+            let shared = SharedStorage::new(backend);
             let geometry = Geometry {
                 capacity: entity.desc.capacity,
                 key_size: entity.desc.key_size,
                 payload_size: entity.desc.record_size,
             };
-            let table = Table::open(geometry, backend).map_err(|error| RestoreError {
+            let table = Table::open(geometry, shared.clone()).map_err(|error| RestoreError {
                 entity: item,
                 phase: RestorePhase::TableOpen,
                 error,
@@ -122,6 +126,7 @@ impl Domain {
                 records: table.len(),
             });
             opened.push((item, table));
+            maintenance.push((item, shared));
         }
 
         for (item, table) in opened {
@@ -134,8 +139,13 @@ impl Domain {
             }
         }
         self.storage = None;
+        self.maintenance = Some(DomainMaintenance::new(maintenance));
         self.lifecycle = Lifecycle::Restored;
         Ok(report)
+    }
+
+    pub fn take_maintenance(&mut self) -> Option<DomainMaintenance> {
+        self.maintenance.take()
     }
 }
 

@@ -71,7 +71,7 @@ impl EntitySnapshot {
 
 pub(crate) struct EntityTable {
     pub(crate) desc: EntityDesc<'static>,
-    pub(crate) table: Option<Table<StorageBackend>>,
+    pub(crate) table: Option<Table<SharedStorage>>,
 }
 
 pub(crate) fn check_key(key: &[u8], key_size: usize) -> Result<()> {
@@ -98,14 +98,14 @@ impl Domain {
             .ok_or(Error::NotFound)
     }
 
-    pub(crate) fn table(&self, entity: EntityType) -> Result<&Table<StorageBackend>> {
+    pub(crate) fn table(&self, entity: EntityType) -> Result<&Table<SharedStorage>> {
         self.entity(entity)?
             .table
             .as_ref()
             .ok_or(Error::InvalidState)
     }
 
-    pub(crate) fn table_mut(&mut self, entity: EntityType) -> Result<&mut Table<StorageBackend>> {
+    pub(crate) fn table_mut(&mut self, entity: EntityType) -> Result<&mut Table<SharedStorage>> {
         self.entities
             .iter_mut()
             .find(|table| table.desc.entity == entity)
@@ -282,7 +282,7 @@ impl Domain {
                 key_size: desc.key_size,
                 payload_size: desc.record_size,
             };
-            let storage = StorageBackend::new(RamStorage::new(geometry)?);
+            let storage = SharedStorage::new(StorageBackend::new(RamStorage::new(geometry)?));
             Some(Table::open(geometry, storage)?)
         } else {
             None

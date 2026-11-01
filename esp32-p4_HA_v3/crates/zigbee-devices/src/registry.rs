@@ -235,7 +235,7 @@ impl<F: NorFlash> Registry<F> {
     }
 
     pub fn bank_state(&self) -> (usize, u32) {
-        self.table.bank_state()
+        self.table.bank_state().unwrap_or((0, 0))
     }
 
     pub fn for_each(&self, mut visit: impl FnMut(RecordSlot)) -> Result<(), Error> {

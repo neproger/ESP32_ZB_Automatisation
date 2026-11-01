@@ -373,13 +373,12 @@ layout'ов V2 и V3 (§4.9), в том числе `ha_rule_t.enabled` на см
 ошибка Flash возвращает `Err` и не меняет RAM; `restore` — открытие таблицы при
 регистрации, без публикации фактов (§4.6).
 
-Переход на per-entity таблицы меняет flash layout. Решение: разовый erase раздела
-`domain` при переходе (V2 §9.8, прецедент A7); миграция не выполняется. Erase
-выполняется один раз при явном переходе со старой схемы `ha_domain` на per-entity
-regions: факт перехода фиксируется явным маркером (build-flag/one-shot, как V2 A7)
-и не повторяется при последующих запусках. `Corrupt`, `InvalidSize`,
-`InvalidState` сами по себе erase не запускают; авто-формата при повреждении нет —
-только явный erase.
+Переход на per-entity таблицы меняет flash layout. Утверждено: выполняется
+power-fail-safe миграция старого generic `ha_domain` layout в RegionManager
+layout с сохранением старой копии до успешной проверки нового состояния.
+Автоматическое форматирование и dual-read/dual-write не допускаются. Порядок
+этапов: 5.6 migration gate, затем 5.4 production wiring. Детали — в
+`STAGE_5_ARCHITECTURE_DECISIONS.md`.
 
 ### 4.5. `entity_put` / `entity_remove`
 
@@ -505,7 +504,7 @@ domain.post(...)?
 - авто-формата и миграции нет (`MSTORE_FLASH_REGIONS.md` §9.8).
 
 Domain получает per-entity таблицы; переход с текущей раскладки `ha_domain` —
-разовый erase раздела `domain` (см. §4.4).
+power-fail-safe миграция (см. §4.4 и Stage 5 ADR); erase без миграции запрещён.
 
 Device Registry остаётся отдельной таблицей в собственном разделе вне Region
 Manager: формат и данные не меняются (M9).

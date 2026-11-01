@@ -10,7 +10,7 @@ use ha_domain::{
 };
 use micro_db::{
     FlashError, Geometry, Meta, NorFlash, RamFlashStorage, RamStorage, RegionManager, SimFlash,
-    Storage,
+    Storage, StorageMaintenance,
 };
 
 const RAM_ENTITY: EntityType = 3;
@@ -105,6 +105,12 @@ struct WriteFailStorage {
     fail: Arc<Mutex<bool>>,
 }
 
+impl StorageMaintenance for WriteFailStorage {
+    fn compact(&mut self) -> Result<(), Error> { Ok(()) }
+    fn bank_state(&self) -> Option<(usize, u32)> { None }
+    fn sync(&mut self) -> Result<(), Error> { Storage::sync(&mut self.inner) }
+}
+
 impl Storage for WriteFailStorage {
     fn geometry(&self) -> Geometry {
         self.inner.geometry()
@@ -147,7 +153,7 @@ impl Storage for WriteFailStorage {
     }
 
     fn sync(&mut self) -> Result<(), Error> {
-        self.inner.sync()
+        Storage::sync(&mut self.inner)
     }
 }
 
@@ -323,6 +329,7 @@ fn restore_failure_is_atomic_and_retryable() {
     assert_eq!(error.entity, ENTITY_GROUP);
     assert_eq!(error.phase, RestorePhase::StorageOpen);
     assert_eq!(error.error, Error::Io);
+    assert!(domain.take_maintenance().is_none());
 
     let mut out = [0u8; AUTOMATION_RECORD_LEN];
     assert_eq!(
@@ -333,6 +340,8 @@ fn restore_failure_is_atomic_and_retryable() {
     assert_eq!(*fail.lock().unwrap(), false);
     let report = domain.restore().unwrap();
     assert_eq!(report.entities.len(), 3);
+    assert!(domain.take_maintenance().is_some());
+    assert!(domain.take_maintenance().is_none());
 }
 
 #[test]
@@ -431,6 +440,12 @@ struct WrongGeometryStorage<S> {
     geometry: Geometry,
 }
 
+impl<S: Storage + StorageMaintenance> StorageMaintenance for WrongGeometryStorage<S> {
+    fn compact(&mut self) -> Result<(), Error> { self.inner.compact() }
+    fn bank_state(&self) -> Option<(usize, u32)> { self.inner.bank_state() }
+    fn sync(&mut self) -> Result<(), Error> { Storage::sync(&mut self.inner) }
+}
+
 impl<S: Storage> Storage for WrongGeometryStorage<S> {
     fn geometry(&self) -> Geometry {
         self.geometry
@@ -467,7 +482,7 @@ impl<S: Storage> Storage for WrongGeometryStorage<S> {
     }
 
     fn sync(&mut self) -> Result<(), Error> {
-        self.inner.sync()
+        Storage::sync(&mut self.inner)
     }
 }
 
