@@ -9,3 +9,6 @@ z2m-rs = { path = "../z2m-rs" }
 micro-db = { path = "../micro-db" }
 ha-domain = { path = "../ha-domain" }
 zigbee-exec = { path = "../zigbee-exec" }
+
+[dev-dependencies]
+ha-device = { path = "../ha-device" }

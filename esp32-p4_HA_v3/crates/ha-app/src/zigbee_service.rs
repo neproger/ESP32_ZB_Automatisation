@@ -9,8 +9,10 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ha_domain::canonical::{CanonicalCommand, ENTITY_ENTITY, SOURCE_UI, SOURCE_ZIGBEE};
-use ha_domain::{Domain, DomainHandle, FactMeta, FactTarget, Value};
+use ha_domain::canonical::{
+    CanonicalCommand, ENTITY_CAPABILITIES, ENTITY_ENTITY, SOURCE_UI, SOURCE_ZIGBEE,
+};
+use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 use zigbee_devices::{CommandCore, CommandRouter, DomainAdapter};
 
 use crate::{configure, exec, frames, interview, store};
@@ -34,7 +36,7 @@ struct CanonicalEvent {
 }
 
 struct Ingest<'a> {
-    domain: &'a mut Domain,
+    domain: &'a DomainHandle,
     reported: &'a mut Vec<(u64, u32)>,
 }
 
@@ -181,17 +183,15 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
         }
 
         let mut reported = Vec::new();
-        if let Err(error) = domain.with_mut(|domain| {
+        {
             let mut ingest = Ingest {
-                domain,
+                domain: &domain,
                 reported: &mut reported,
             };
             if polled {
                 ingest_command(&event, &mut ingest);
             }
             frames::process_pending(&mut ingest);
-        }) {
-            log::error!("domain: ingest failed: {error:?}");
         }
         if !reported.is_empty() {
             let mut state = state.lock().unwrap();
@@ -245,14 +245,12 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
                 }
                 if let Some(read) = result.read {
                     let mut reported = Vec::new();
-                    if let Err(error) = domain.with_mut(|domain| {
+                    {
                         let mut ingest = Ingest {
-                            domain,
+                            domain: &domain,
                             reported: &mut reported,
                         };
                         ingest_read(&context, read, &mut ingest);
-                    }) {
-                        log::error!("domain: read ingest failed: {error:?}");
                     }
                     if !reported.is_empty() {
                         let mut state = state.lock().unwrap();
@@ -325,7 +323,6 @@ fn register_domain(
     profile: &'static z2m_rs::Profile,
     name: &str,
 ) {
-    let mut sink = crate::StoreSink;
     let native = format!("{eui:016x}");
     let desc = ha_device::DeviceDesc {
         source: SOURCE_ZIGBEE,
@@ -346,12 +343,30 @@ fn register_domain(
     } else {
         None
     };
+    let entity = zigbee_devices::zigbee_entity_id(eui, endpoint);
     let entity = match domain.with_mut(|domain| -> Result<(u64, bool), ha_domain::Error> {
-        let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
-        match standard_endpoint {
-            Some(descriptor) => adapter.ensure_standard_entity(eui, endpoint, name, &descriptor),
-            None => adapter.ensure_entity(eui, endpoint, name, profile),
-        }
+        let changed = ha_device::ensure_entity(domain, SOURCE_ZIGBEE as u8, device, entity, name)?;
+        let caps_changed = match standard_endpoint {
+            Some(descriptor) => {
+                if domain
+                    .entity_meta(ENTITY_CAPABILITIES, &entity.to_le_bytes())
+                    .is_ok()
+                {
+                    false
+                } else {
+                    let caps = zigbee_devices::standard::capabilities_confirmed(
+                        &descriptor,
+                        &zigbee_devices::standard::Confirmed::new(),
+                    );
+                    ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &caps)?
+                }
+            }
+            None => {
+                let caps = zigbee_devices::profile_capabilities(profile);
+                ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &caps)?
+            }
+        };
+        Ok((entity, changed || caps_changed))
     }) {
         Ok(Ok((entity, changed))) => {
             log::info!(
@@ -420,14 +435,10 @@ fn request_leave(state: &Arc<Mutex<State>>, eui: u64, short: u16, now: u64) -> b
 }
 
 fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) {
-    let plan = match domain.with_mut(|domain| ha_device::prepare_remove(domain, device)) {
-        Ok(Ok(plan)) => plan,
-        Ok(Err(error)) => {
-            log::warn!("device: prepare removal device={device:016x} failed: {error:?}");
-            return;
-        }
+    let plan = match ha_device::prepare_remove(domain, device) {
+        Ok(plan) => plan,
         Err(error) => {
-            log::warn!("device: prepare removal lock device={device:016x} failed: {error:?}");
+            log::warn!("device: prepare removal device={device:016x} failed: {error:?}");
             return;
         }
     };
@@ -438,16 +449,10 @@ fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) 
             return;
         }
     };
-    match domain
-        .with_mut(|domain| ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket))
-    {
-        Ok(Ok(count)) => log::info!("device: removed device={device:016x} records={count}"),
-        Ok(Err(error)) => {
-            log::warn!("device: canonical removal device={device:016x} failed: {error:?}");
-            return;
-        }
+    match ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket) {
+        Ok(count) => log::info!("device: removed device={device:016x} records={count}"),
         Err(error) => {
-            log::warn!("device: canonical removal lock device={device:016x} failed: {error:?}");
+            log::warn!("device: canonical removal device={device:016x} failed: {error:?}");
             return;
         }
     }
@@ -558,36 +563,27 @@ fn ingest_command(event: &PocEvent, sink: &mut dyn frames::IngestSink) {
 }
 
 fn apply_capabilities(
-    domain: &mut Domain,
+    domain: &DomainHandle,
     entity: u64,
     capabilities: ha_domain::canonical::CapabilitiesRecord,
 ) {
-    let mut sink = crate::StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        return;
-    };
-    let changed = match adapter.write_capabilities(entity, &capabilities) {
-        Ok(changed) => changed,
-        Err(error) => {
+    let result = domain.with_mut(|domain| {
+        ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
+    });
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) | Err(error) => {
             log::error!("domain: capabilities {entity:016x} failed: {error:?}");
-            return;
         }
-    };
-    drop(adapter);
-    let _ = changed;
+    }
 }
 
 fn apply_state(
-    domain: &mut Domain,
+    domain: &DomainHandle,
     reported: &mut Vec<(u64, u32)>,
     state: zigbee_devices::StateUpdate,
 ) {
-    let mut sink = crate::StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        log::error!("domain: adapter init failed");
-        return;
-    };
-    match adapter.write_state(state.entity, state.property, state.value) {
+    match DomainAdapter::write_state(domain, state.entity, state.property, state.value) {
         Ok(changed) => {
             reported.push((state.entity, state.property));
             if changed {
@@ -602,7 +598,7 @@ fn apply_state(
     }
 }
 
-fn publish_event(domain: &mut Domain, event: CanonicalEvent) {
+fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
     let key = event.entity.to_le_bytes();
     let payload = event.event.to_le_bytes();
     match domain.payload_put(

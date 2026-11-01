@@ -1,5 +1,11 @@
 use super::*;
 
+/// Canonical access for one `DomainHandle::transaction` critical section.
+///
+/// The Domain mutex is held for the whole closure. The transaction serializes
+/// reads and writes but does not provide rollback. The closure must stay short
+/// and must not perform external calls, async waits, Zigbee/UI/Web work,
+/// persistence callbacks, command execution, or nested DomainHandle access.
 pub struct DomainTransaction<'a> {
     domain: &'a mut Domain,
 }

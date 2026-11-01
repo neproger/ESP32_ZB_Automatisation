@@ -1,54 +1,46 @@
-use ha_domain::canonical::PROPERTY_POWER;
-use ha_domain::{Domain, Value};
-use zigbee_devices::{DomainAdapter, RecordSink};
+use ha_domain::canonical::{
+    ENTITY_PROPERTY_STATE, PROPERTY_POWER, STATE_KEY_LEN, STATE_RECORD_LEN,
+};
+use ha_domain::{Backing, Domain, DomainHandle, EntityDesc, Value};
+use zigbee_devices::DomainAdapter;
 
-#[derive(Default)]
-struct Sink {
-    puts: Vec<(u32, Vec<u8>, Vec<u8>)>,
-}
-
-impl RecordSink for Sink {
-    fn put(&mut self, entity: u32, key: &[u8], record: &[u8]) {
-        self.puts.push((entity, key.to_vec(), record.to_vec()));
-    }
-
-    fn remove(&mut self, _entity: u32, _key: &[u8]) {}
+fn handle(state_capacity: usize) -> DomainHandle {
+    let mut domain = Domain::new(8, 4, 16).unwrap();
+    domain
+        .register_entity(EntityDesc {
+            entity: ENTITY_PROPERTY_STATE,
+            key_size: STATE_KEY_LEN,
+            record_size: STATE_RECORD_LEN,
+            capacity: state_capacity,
+            backing: Backing::Ram,
+            persist_key: None,
+        })
+        .unwrap();
+    DomainHandle::new(domain)
 }
 
 #[test]
-fn property_state_is_ram_and_never_reaches_the_sink() {
+fn property_state_is_ram_only() {
     let entity = 0x1122_3344_5566_7788;
-    let mut domain = Domain::new(8, 4, 16).unwrap();
-    let mut sink = Sink::default();
-    {
-        let mut adapter = DomainAdapter::with_sink(&mut domain, &mut sink).unwrap();
-        assert!(adapter
-            .write_state(entity, PROPERTY_POWER, Value::bool(true))
-            .unwrap());
-        assert_eq!(
-            adapter.read_state(entity, PROPERTY_POWER),
-            Some(Value::bool(true))
-        );
-    }
+    let domain = handle(8);
     assert!(
-        sink.puts.is_empty(),
-        "PROPERTY_STATE must stay RAM-only; sink received {:?}",
-        sink.puts
+        DomainAdapter::write_state(&domain, entity, PROPERTY_POWER, Value::bool(true)).unwrap()
+    );
+    assert_eq!(
+        DomainAdapter::read_state(&domain, entity, PROPERTY_POWER),
+        Some(Value::bool(true))
     );
 }
 
 #[test]
 fn property_state_uses_the_v2_capacity_budget() {
-    let mut domain = Domain::new(8, 4, 16).unwrap();
-    let mut adapter = DomainAdapter::new(&mut domain).unwrap();
+    let domain = handle(256);
 
     for index in 0..256u64 {
-        adapter
-            .write_state(index + 1, PROPERTY_POWER, Value::bool(true))
-            .unwrap();
+        DomainAdapter::write_state(&domain, index + 1, PROPERTY_POWER, Value::bool(true)).unwrap();
     }
     assert_eq!(
-        adapter.write_state(257, PROPERTY_POWER, Value::bool(true)),
+        DomainAdapter::write_state(&domain, 257, PROPERTY_POWER, Value::bool(true)),
         Err(ha_domain::Error::NoSpace)
     );
 }

@@ -23,12 +23,13 @@ use ha_domain::canonical::{
     SOURCE_ZIGBEE, SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
 };
 use ha_domain::{Domain, DomainHandle, FactMeta, FactTarget, Filter};
-use zigbee_devices::DomainAdapter;
 
 mod automation_task;
 mod capabilities;
+mod config;
 mod configure;
 mod display;
+mod domain_tables;
 mod exec;
 mod frames;
 mod intake;
@@ -81,18 +82,18 @@ fn main() {
     exec::install();
     interview::install();
     store::init();
-    if let Err(error) = DomainAdapter::new(&mut domain) {
+    if let Err(error) = domain_tables::register(&mut domain) {
         log::error!("domain: table init failed: {error:?}");
     }
     store::restore_domain(&mut domain);
-    ensure_system_location(&mut domain);
-    ensure_settings(&mut domain);
     if let Some(count) = option_env!("HA_FORCE_COMPACT") {
         for _ in 0..count.parse::<u32>().unwrap_or(0) {
             store::compact_for_test();
         }
     }
     let domain = DomainHandle::new(domain);
+    ensure_system_location(&domain);
+    ensure_settings(&domain);
     let (zigbee, zigbee_state) = zigbee_service::start(domain.clone());
     {
         let command_state = std::sync::Arc::clone(&zigbee_state);
@@ -199,11 +200,7 @@ fn main() {
         while let Some(update) = system::take() {
             match update {
                 system::Update::Location(location) => {
-                    if let Err(error) = domain.with_mut(|domain| {
-                        apply_system_location(domain, location);
-                    }) {
-                        log::warn!("domain: location update failed: {error:?}");
-                    }
+                    apply_system_location(&domain, location);
                 }
                 system::Update::Weather(weather) => {
                     let changed = last_weather != Some(weather.condition);
@@ -307,17 +304,14 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
                 return;
             }
             record[384] = u8::from(enabled);
-            match domain.with_mut(|domain| -> Result<(), ha_domain::Error> {
-                let mut sink = StoreSink;
-                let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
-                adapter.put_record(ha_domain::canonical::ENTITY_AUTOMATION, &key, &record)?;
-                Ok(())
-            }) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    log::warn!("display: automation {id:016x} write failed: {error:?}")
-                }
-                Err(error) => log::warn!("domain: automation lock failed: {error:?}"),
+            match config::put_record(
+                domain,
+                ha_domain::canonical::ENTITY_AUTOMATION,
+                &key,
+                &record,
+            ) {
+                Ok(_) => {}
+                Err(error) => log::warn!("display: automation {id:016x} write failed: {error:?}"),
             }
         }
         intake::Request::SetSettings { brightness } => {
@@ -325,15 +319,9 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             let mut settings = read_settings(domain);
             settings.brightness_pct = brightness;
             let record = settings.encode();
-            match domain.with_mut(|domain| -> Result<(), ha_domain::Error> {
-                let mut sink = StoreSink;
-                let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
-                adapter.put_record(ENTITY_SETTINGS, &key, &record)?;
-                Ok(())
-            }) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => log::warn!("display: settings write failed: {error:?}"),
-                Err(error) => log::warn!("domain: settings lock failed: {error:?}"),
+            match config::put_record(domain, ENTITY_SETTINGS, &key, &record) {
+                Ok(_) => {}
+                Err(error) => log::warn!("display: settings write failed: {error:?}"),
             }
         }
         intake::Request::WifiConnect { ssid, password } => {
@@ -352,15 +340,8 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             record,
         } => {
             let is_location = entity == ha_domain::canonical::ENTITY_LOCATION;
-            match domain.with_mut(|domain| -> Result<(), ha_domain::Error> {
-                let mut sink = StoreSink;
-                let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
-                adapter.put_record(entity, &key, &record)?;
-                Ok(())
-            }) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => log::warn!("domain: upsert entity={entity} failed: {error:?}"),
-                Err(error) => log::warn!("domain: upsert lock failed: {error:?}"),
+            if let Err(error) = config::put_record(domain, entity, &key, &record) {
+                log::warn!("domain: upsert entity={entity} failed: {error:?}");
             }
             if is_location {
                 if let Some(location) = read_location(domain) {
@@ -369,35 +350,30 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             }
         }
         intake::Request::Remove { entity, key } => {
-            match domain.with_mut(|domain| -> Result<(), ha_domain::Error> {
-                let mut sink = StoreSink;
-                let mut adapter = DomainAdapter::with_sink(domain, &mut sink)?;
-                match entity {
-                    ha_domain::canonical::ENTITY_GROUP => {
-                        let id = key
-                            .get(..8)
-                            .and_then(|bytes| bytes.try_into().ok())
-                            .map(u64::from_le_bytes)
-                            .ok_or(ha_domain::Error::InvalidSize)?;
-                        adapter.remove_group(id)?;
-                    }
-                    ha_domain::canonical::ENTITY_AUTOMATION => {
-                        let id = key
-                            .get(..8)
-                            .and_then(|bytes| bytes.try_into().ok())
-                            .map(u64::from_le_bytes)
-                            .ok_or(ha_domain::Error::InvalidSize)?;
-                        adapter.remove_automation(id)?;
-                    }
-                    _ => {
-                        adapter.remove_record(entity, &key)?;
+            let id = || {
+                key.get(..8)
+                    .and_then(|bytes| bytes.try_into().ok())
+                    .map(u64::from_le_bytes)
+                    .ok_or(ha_domain::Error::InvalidSize)
+            };
+            match entity {
+                ha_domain::canonical::ENTITY_GROUP => {
+                    match id().and_then(|id| config::remove_group(domain, id)) {
+                        Ok(count) => log::info!("config: removed group records={count}"),
+                        Err(error) => log::warn!("config: group removal failed: {error:?}"),
                     }
                 }
-                Ok(())
-            }) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => log::warn!("domain: remove entity={entity} failed: {error:?}"),
-                Err(error) => log::warn!("domain: remove lock failed: {error:?}"),
+                ha_domain::canonical::ENTITY_AUTOMATION => {
+                    match id().and_then(|id| config::remove_automation(domain, id)) {
+                        Ok(count) => log::info!("config: removed automation records={count}"),
+                        Err(error) => log::warn!("config: automation removal failed: {error:?}"),
+                    }
+                }
+                _ => {
+                    if let Err(error) = config::remove_record(domain, entity, &key) {
+                        log::warn!("domain: remove entity={entity} failed: {error:?}");
+                    }
+                }
             }
         }
     }
@@ -408,19 +384,11 @@ fn apply_capabilities(
     entity: u64,
     capabilities: ha_domain::canonical::CapabilitiesRecord,
 ) {
-    let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        return;
-    };
-    let changed = match adapter.write_capabilities(entity, &capabilities) {
-        Ok(changed) => changed,
-        Err(error) => {
-            log::error!("domain: capabilities {entity:016x} failed: {error:?}");
-            return;
-        }
-    };
-    drop(adapter);
-    let _ = changed;
+    if let Err(error) =
+        ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
+    {
+        log::error!("domain: capabilities {entity:016x} failed: {error:?}");
+    }
 }
 
 fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
@@ -447,18 +415,6 @@ fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
         Err(error) => log::error!("domain: event write failed: {error:?}"),
     }
 }
-struct StoreSink;
-
-impl zigbee_devices::RecordSink for StoreSink {
-    fn put(&mut self, entity: u32, key: &[u8], record: &[u8]) {
-        store::save_domain(entity, key, record);
-    }
-
-    fn remove(&mut self, entity: u32, key: &[u8]) {
-        store::remove_domain(entity, key);
-    }
-}
-
 fn post_command(
     domain: &DomainHandle,
     command: CanonicalCommand,
@@ -472,7 +428,7 @@ fn post_command(
     domain.post(COMMAND_PROPERTY, &args, None, meta)
 }
 
-fn ensure_system_location(domain: &mut Domain) {
+fn ensure_system_location(domain: &DomainHandle) {
     let key = SYSTEM_DEVICE_UID.to_le_bytes();
     let mut current = [0u8; LOCATION_RECORD_LEN];
     if domain
@@ -482,19 +438,24 @@ fn ensure_system_location(domain: &mut Domain) {
         return;
     }
     let record = LocationRecord::default().encode();
-    let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        log::error!("domain: location table init failed");
-        return;
-    };
-    match adapter.put_record(ENTITY_LOCATION, &key, &record) {
+    match config::put_record(domain, ENTITY_LOCATION, &key, &record) {
         Ok(_) => log::info!("domain: location seeded"),
         Err(error) => log::warn!("domain: location seed failed: {error:?}"),
     }
 }
 
-/// Local wall-clock minute for automation Time triggers. A manual offset is
-/// applied; auto timezone falls back to UTC until GeoIP exists.
+fn ensure_settings(domain: &DomainHandle) {
+    let key = [SETTINGS_ID];
+    let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+    if domain.entity_get(ENTITY_SETTINGS, &key, &mut bytes).is_ok() {
+        return;
+    }
+    let record = SettingsRecord::default().encode();
+    match config::put_record(domain, ENTITY_SETTINGS, &key, &record) {
+        Ok(_) => log::info!("domain: settings seeded"),
+        Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
+    }
+}
 
 fn read_settings(domain: &DomainHandle) -> SettingsRecord {
     let key = [SETTINGS_ID];
@@ -504,23 +465,6 @@ fn read_settings(domain: &DomainHandle) -> SettingsRecord {
         .ok()
         .and_then(|()| SettingsRecord::decode(&bytes))
         .unwrap_or_default()
-}
-
-fn ensure_settings(domain: &mut Domain) {
-    let key = [SETTINGS_ID];
-    let mut bytes = [0u8; SETTINGS_RECORD_LEN];
-    if domain.entity_get(ENTITY_SETTINGS, &key, &mut bytes).is_ok() {
-        return;
-    }
-    let record = SettingsRecord::default().encode();
-    let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        return;
-    };
-    match adapter.put_record(ENTITY_SETTINGS, &key, &record) {
-        Ok(_) => log::info!("domain: settings seeded"),
-        Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
-    }
 }
 
 fn read_location(domain: &DomainHandle) -> Option<LocationRecord> {
@@ -535,18 +479,12 @@ fn read_location(domain: &DomainHandle) -> Option<LocationRecord> {
     LocationRecord::decode(&bytes)
 }
 
-fn apply_system_location(domain: &mut Domain, location: LocationRecord) {
+fn apply_system_location(domain: &DomainHandle, location: LocationRecord) {
     let key = SYSTEM_DEVICE_UID.to_le_bytes();
     let record = location.encode();
-    let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        return;
-    };
-    match adapter.put_record(ENTITY_LOCATION, &key, &record) {
-        Ok(_) => {}
-        Err(error) => log::warn!("system: location write failed: {error:?}"),
+    if let Err(error) = config::put_record(domain, ENTITY_LOCATION, &key, &record) {
+        log::warn!("system: location write failed: {error:?}");
     }
-    drop(adapter);
     system::set_location(location);
 }
 
@@ -645,12 +583,7 @@ fn now_ms() -> u64 {
 }
 
 fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
-    let mut sink = StoreSink;
-    let Ok(mut adapter) = DomainAdapter::with_sink(domain, &mut sink) else {
-        log::error!("domain: adapter init failed");
-        return;
-    };
-    match adapter.rename_entity(entity, name) {
+    match ha_device::rename_entity(domain, SOURCE_UI as u8, entity, name) {
         Ok(_) => {
             log::info!("domain: renamed entity={entity:016x} name={name}");
         }
@@ -666,4 +599,3 @@ fn rename_device(domain: &mut Domain, device: u64, name: &str) {
         Err(error) => log::warn!("device: rename device={device:016x} failed: {error:?}"),
     }
 }
-

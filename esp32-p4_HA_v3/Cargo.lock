@@ -53,6 +53,7 @@ version = "0.1.0"
 name = "zigbee-devices"
 version = "0.1.0"
 dependencies = [
+ "ha-device",
  "ha-domain",
  "log",
  "micro-db",

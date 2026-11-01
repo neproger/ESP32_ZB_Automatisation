@@ -38,6 +38,13 @@ impl DomainHandle {
         Ok(visit(&mut domain))
     }
 
+    /// Runs a short critical section under the Domain mutex.
+    ///
+    /// The closure may use only [`DomainTransaction`] operations. It must not
+    /// call external services, wait for async work, use persistence callbacks,
+    /// run the command executor, or call back into `DomainHandle`. The mutex is
+    /// held for the whole closure; changes are serialized but never rolled back.
+    /// A panic can poison the Domain mutex.
     pub fn transaction<R, E>(
         &self,
         visit: impl FnOnce(&mut DomainTransaction<'_>) -> core::result::Result<R, E>,

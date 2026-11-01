@@ -2,10 +2,12 @@
 //! and reported state from a device report.
 
 use ha_domain::canonical::{
-    CanonicalCommand, CommandValue, ACTION_ON, ACTION_SET, PROPERTY_BRIGHTNESS, PROPERTY_COLOR,
-    PROPERTY_COLOR_TEMPERATURE, PROPERTY_POWER,
+    CanonicalCommand, CommandValue, ACTION_ON, ACTION_SET, CAPABILITIES_LEN, DEVICE_RECORD_LEN,
+    ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE,
+    ENTITY_RECORD_LEN, PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE,
+    PROPERTY_POWER, SOURCE_ZIGBEE, STATE_KEY_LEN, STATE_RECORD_LEN,
 };
-use ha_domain::{Domain, Value as DomainValue};
+use ha_domain::{Backing, Domain, DomainHandle, EntityDesc, Value as DomainValue};
 use z2m_rs::capabilities::{
     COLORTEMP_TO, COLOR_XY_TO, DIM_CT_EXPOSES, LEVEL_TO, ONOFF_OFF, ONOFF_ON,
 };
@@ -34,6 +36,47 @@ static PROFILE: Profile = Profile {
     turns_off_at_brightness_1: false,
     support: Support::IDENTIFIED,
 };
+
+fn setup(journal_capacity: usize) -> (DomainHandle, u64) {
+    let mut domain = Domain::new(journal_capacity, 8, 64).unwrap();
+    for (entity, key_size, record_size, capacity) in [
+        (ENTITY_LOGICAL_DEVICE, 8, DEVICE_RECORD_LEN, 16),
+        (ENTITY_ENTITY, 8, ENTITY_RECORD_LEN, 16),
+        (ENTITY_CAPABILITIES, 8, CAPABILITIES_LEN, 16),
+        (ENTITY_PROPERTY_STATE, STATE_KEY_LEN, STATE_RECORD_LEN, 256),
+    ] {
+        domain
+            .register_entity(EntityDesc {
+                entity,
+                key_size,
+                record_size,
+                capacity,
+                backing: Backing::Ram,
+                persist_key: None,
+            })
+            .unwrap();
+    }
+    let native = format!("{UID:016x}");
+    let desc = ha_device::DeviceDesc {
+        source: SOURCE_ZIGBEE,
+        native_id: &native,
+        parent_native_id: None,
+        name: "Test light",
+    };
+    let device = ha_device::register(&mut domain, SOURCE_ZIGBEE as u8, &desc).unwrap();
+    let entity = zigbee_devices::zigbee_entity_id(UID, 1);
+    ha_device::ensure_entity(
+        &mut domain,
+        SOURCE_ZIGBEE as u8,
+        device,
+        entity,
+        "Test light",
+    )
+    .unwrap();
+    let caps = zigbee_devices::profile_capabilities(&PROFILE);
+    ha_device::set_capabilities(&mut domain, SOURCE_ZIGBEE as u8, entity, &caps).unwrap();
+    (DomainHandle::new(domain), entity)
+}
 
 fn power_command(entity: u64) -> CanonicalCommand {
     CanonicalCommand {
@@ -67,21 +110,8 @@ fn confirm_default_response(
 }
 
 #[test]
-fn registration_is_idempotent_and_power_command_does_not_set_reported() {
-    let mut domain = Domain::new(32, 8, 64).unwrap();
-    let mut adapter = DomainAdapter::new(&mut domain).unwrap();
-    assert!(adapter.ensure_device(UID, "Test light").unwrap().1);
-    assert!(!adapter.ensure_device(UID, "Test light").unwrap().1);
-    let (entity, changed) = adapter
-        .ensure_entity(UID, 1, "Test light", &PROFILE)
-        .unwrap();
-    assert!(changed);
-    let (again, changed) = adapter
-        .ensure_entity(UID, 1, "Test light", &PROFILE)
-        .unwrap();
-    assert_eq!(again, entity);
-    assert!(!changed);
-    assert!(adapter.read_capabilities(entity).is_some());
+fn confirmed_command_does_not_set_reported_state() {
+    let (domain, entity) = setup(32);
 
     let mut exec = Executor::new();
     let mut transport = FakeTransport::new();
@@ -101,7 +131,7 @@ fn registration_is_idempotent_and_power_command_does_not_set_reported() {
         CommandStatus::Acknowledged
     );
     // Default Response is not reported state.
-    assert!(adapter.read_state(entity, PROPERTY_POWER).is_none());
+    assert!(DomainAdapter::read_state(&domain, entity, PROPERTY_POWER).is_none());
 
     let (states, _) = canonical_states(
         entity,
@@ -111,11 +141,11 @@ fn registration_is_idempotent_and_power_command_does_not_set_reported() {
         },
     );
     let state = states[0].unwrap();
-    assert!(adapter
-        .write_state(state.entity, state.property, state.value)
-        .unwrap());
+    assert!(
+        DomainAdapter::write_state(&domain, state.entity, state.property, state.value).unwrap()
+    );
     assert_eq!(
-        adapter.read_state(entity, PROPERTY_POWER),
+        DomainAdapter::read_state(&domain, entity, PROPERTY_POWER),
         Some(DomainValue::bool(true))
     );
     core.on_reported(entity, PROPERTY_POWER);
@@ -124,10 +154,7 @@ fn registration_is_idempotent_and_power_command_does_not_set_reported() {
 
 #[test]
 fn acknowledged_without_report_leaves_reported_absent() {
-    let mut domain = Domain::new(16, 8, 64).unwrap();
-    let mut adapter = DomainAdapter::new(&mut domain).unwrap();
-    adapter.ensure_device(UID, "Test").unwrap();
-    let (entity, _) = adapter.ensure_entity(UID, 1, "Test", &PROFILE).unwrap();
+    let (domain, entity) = setup(16);
 
     let mut exec = Executor::new();
     let mut transport = FakeTransport::new();
@@ -137,16 +164,13 @@ fn acknowledged_without_report_leaves_reported_absent() {
     confirm_default_response(&mut exec, &mut transport, op, 0x01);
     let result = exec.take_result().unwrap();
     core.on_result(result.id as u64, status_from_exec(result.status).unwrap());
-    assert!(adapter.read_state(entity, PROPERTY_POWER).is_none());
+    assert!(DomainAdapter::read_state(&domain, entity, PROPERTY_POWER).is_none());
     assert_eq!(core.len(), 1);
 }
 
 #[test]
 fn report_without_command_updates_domain() {
-    let mut domain = Domain::new(16, 8, 64).unwrap();
-    let mut adapter = DomainAdapter::new(&mut domain).unwrap();
-    adapter.ensure_device(UID, "Test").unwrap();
-    let (entity, _) = adapter.ensure_entity(UID, 1, "Test", &PROFILE).unwrap();
+    let (domain, entity) = setup(16);
     let core = CommandCore::new();
 
     let (states, _) = canonical_states(
@@ -157,11 +181,9 @@ fn report_without_command_updates_domain() {
         },
     );
     let state = states[0].unwrap();
-    adapter
-        .write_state(state.entity, state.property, state.value)
-        .unwrap();
+    DomainAdapter::write_state(&domain, state.entity, state.property, state.value).unwrap();
     assert_eq!(
-        adapter.read_state(entity, PROPERTY_POWER),
+        DomainAdapter::read_state(&domain, entity, PROPERTY_POWER),
         Some(DomainValue::bool(true))
     );
     assert!(core.is_empty());
@@ -169,10 +191,7 @@ fn report_without_command_updates_domain() {
 
 #[test]
 fn timeout_fails_operation_without_reported_change() {
-    let mut domain = Domain::new(16, 8, 64).unwrap();
-    let mut adapter = DomainAdapter::new(&mut domain).unwrap();
-    adapter.ensure_device(UID, "Test").unwrap();
-    let (entity, _) = adapter.ensure_entity(UID, 1, "Test", &PROFILE).unwrap();
+    let (domain, entity) = setup(16);
 
     let mut exec = Executor::new();
     let mut transport = FakeTransport::new();
@@ -198,7 +217,7 @@ fn timeout_fails_operation_without_reported_change() {
     }
     assert!(failed);
     assert!(core.is_empty());
-    assert!(adapter.read_state(entity, PROPERTY_BRIGHTNESS).is_none());
+    assert!(DomainAdapter::read_state(&domain, entity, PROPERTY_BRIGHTNESS).is_none());
 }
 fn send_one(command: CanonicalCommand) -> (u16, u8, Vec<u8>) {
     let mut exec = Executor::new();

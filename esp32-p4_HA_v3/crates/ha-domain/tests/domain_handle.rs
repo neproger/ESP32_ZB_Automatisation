@@ -433,14 +433,22 @@ fn explicit_handle_methods_inside_transaction_return_invalid_state() {
 }
 
 #[test]
-fn post_inside_transaction_returns_invalid_state() {
+fn post_inside_transaction_returns_invalid_state_without_executor() {
     let domain = handle();
-    domain.register_command(1, |_| Ok(())).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::clone(&calls);
+    domain
+        .register_command(1, move |_| {
+            sink.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
     let result = domain.transaction::<(), Error>(|_| {
         assert_eq!(domain.post(1, &[], None, meta()), Err(Error::InvalidState));
         Ok(())
     });
     assert_eq!(result, Ok(()));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -459,4 +467,52 @@ fn transaction_panic_resets_flag_and_poisons_domain() {
         other.entity_get(7, &[0u8; 8], &mut [0u8; 8]),
         Err(Error::NotFound)
     );
+}
+
+#[test]
+fn transaction_holds_mutex_until_closure_exits() {
+    #[cfg(feature = "p4-lock-metrics")]
+    ha_domain::p4_lock_metrics_reset();
+
+    let domain = handle();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let holder = {
+        let domain = domain.clone();
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        thread::spawn(move || {
+            domain
+                .transaction::<(), Error>(|_| {
+                    entered.wait();
+                    release.wait();
+                    Ok(())
+                })
+                .unwrap();
+        })
+    };
+
+    entered.wait();
+    let (started, started_rx) = std::sync::mpsc::channel();
+    let completed = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let domain = domain.clone();
+        let completed = Arc::clone(&completed);
+        thread::spawn(move || {
+            started.send(()).unwrap();
+            let result = domain.entity_get(7, &[1u8; 8], &mut [0u8; 8]);
+            completed.store(true, Ordering::SeqCst);
+            result
+        })
+    };
+    started_rx.recv().unwrap();
+    thread::sleep(Duration::from_millis(20));
+    assert!(!completed.load(Ordering::SeqCst));
+
+    release.wait();
+    holder.join().unwrap();
+    assert_eq!(reader.join().unwrap(), Err(Error::NotFound));
+
+    #[cfg(feature = "p4-lock-metrics")]
+    assert!(ha_domain::p4_lock_metrics().hold_max_us >= 10_000);
 }

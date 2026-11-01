@@ -233,10 +233,6 @@ impl Domain {
             data,
         })
     }
-
-    pub fn entity_snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
-        self.snapshot(entity)
-    }
 }
 
 impl Domain {
