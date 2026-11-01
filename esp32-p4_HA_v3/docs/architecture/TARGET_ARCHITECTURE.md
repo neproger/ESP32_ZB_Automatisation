@@ -254,6 +254,9 @@ Dispatcher: wait → прочитать Journal → фильтр → try_push �
 
 ## 7. Хранилище и flash
 
+В текущем Rust Domain storage использует раздел `domain`; `mstore` оставлен
+для Zigbee Registry. Это platform adaptation, а не изменение V2-контракта.
+
 ### 7.1 RAM
 
 - `PROPERTY_STATE` — **RAM**, не flash.
@@ -265,13 +268,15 @@ Dispatcher: wait → прочитать Journal → фильтр → try_push �
 
 ### 7.2 Flash
 
-Persistent config только:
+Persistent config (flash) только:
 
-- Logical Device / device registry (adapter-private);
+- adapter-private device registry (Logical Device/Entity/Capabilities
+  восстанавливаются из него и интервью);
 - group / group_item / group_automation;
 - automation rules;
-- settings, location, known Wi-Fi;
-- при необходимости — entity/capabilities как кэш, но **не state**.
+- settings, location, known Wi-Fi.
+
+Canonical Logical Device/Entity/Capabilities — RAM (см. 7.1), не Domain flash.
 
 State write-through во flash запрещён: `mstore` RAM|FLASH даёт p50 ~350 µs,
 p99 ~127 ms и compaction до сотен мс — это недопустимо в hot path report'ов.
@@ -280,7 +285,8 @@ p99 ~127 ms и compaction до сотен мс — это недопустимо
 
 - После reboot state пуст; устройства присылают его заново.
 - UI не ждёт «исторического» state; показывает только подтверждённые report'ы.
-- Persistent config читается из mstore; state — нет.
+- Persistent config читается из Domain storage (V2 — mstore; текущий Rust —
+  раздел `domain`); state — нет.
 
 ## 8. Ёмкости и бюджет
 
@@ -291,7 +297,7 @@ V2 был **fixed-capacity by design**; это не «безлимит», а п�
 |---|---:|---|
 | `PROPERTY_STATE` | 256 | RAM |
 | `ENTITY` | 32 | RAM |
-| `LOGICAL_DEVICE` | 32 | RAM/flash registry |
+| `LOGICAL_DEVICE` | 32 | RAM (adapter-private registry flash) |
 | `CAPABILITIES` | 32 | RAM |
 | `GROUP` | 16 | flash |
 | `GROUP_ITEM` | 128 | flash |

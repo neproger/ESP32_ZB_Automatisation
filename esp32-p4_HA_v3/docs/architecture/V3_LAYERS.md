@@ -229,15 +229,20 @@ V3 сохраняет концепцию V2 `mstore`:
 
 Persistent config V2:
 
-- Device registry — adapter-private;
-- Logical Device, Entity, Capabilities, Groups, Rules, Settings, Location,
-  known Wi-Fi — Domain canonical records;
+- Device registry — adapter-private flash;
+- Domain persistent: Group, Group Item, Group Automation, Automation, Settings,
+  Location, known Wi-Fi;
+- Domain RAM: Logical Device, Entity, Capabilities, Property State, Weather,
+  Wi-Fi Scan, Wi-Fi Status;
+- Logical Device/Entity/Capabilities восстанавливаются из adapter-private
+  registry и интервью, а не из Domain flash;
 - `PROPERTY_STATE` — RAM;
 - state не пишется во flash;
 - Zigbee network — `zb_storage`, не общий NVS;
 - app storage — mstore/Domain, не NVS.
 
-Любая потеря ёмкости/flash-записи должна быть явной ошибкой или наблюдаемым счётчиком.
+Persistent policy должна соответствовать V2 `main/app_main.c`. Любая потеря
+ёмкости/flash-записи должна быть явной ошибкой или наблюдаемым счётчиком.
 
 ## 8. Canonical-модель и транспорт
 

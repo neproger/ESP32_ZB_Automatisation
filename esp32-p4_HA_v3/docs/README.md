@@ -36,6 +36,12 @@ Zigbee-слоя».
   Ring.
 - [audits/FLASH_REGION_AUDIT.md](audits/FLASH_REGION_AUDIT.md) — V2 Flash,
   Region Manager, Ring.
+- [audits/DOMAIN_PERSISTENCE_AUDIT.md](audits/DOMAIN_PERSISTENCE_AUDIT.md) —
+  технический аудит первого слоя: Domain persistence/restore.
+- [audits/DOMAIN_PARTITION_DIAGNOSTIC.md](audits/DOMAIN_PARTITION_DIAGNOSTIC.md) —
+  read-only диагностика раздела `domain` до Stage 1.
+- [audits/DOMAIN_RESET_PROCEDURE.md](audits/DOMAIN_RESET_PROCEDURE.md) —
+  явный destructive reset `domain` после решения оператора.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 

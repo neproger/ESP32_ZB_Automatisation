@@ -28,8 +28,8 @@
 |---|---|---|---|---|
 | `ha_model` | canonical vocabulary/ABI, не зависит от Domain | `crates/ha-model`; `ha-domain` реэкспортирует | **PORT** | ABI отделён; Domain его не содержит |
 | `ha_model` record layout | fixed ABI, zero-fill, explicit padding, stable keys | canonical records + Rust tests | **KEEP** | Сохранить layout/тесты; не менять ABI |
-| `mstore` | Table/Ring, slot/generation/version, RAM/flash | `crates/micro-db` (`Table`, `Ring`, `PersistedTable`) | **KEEP** | Сохранить концепцию; проверить, что storage-типы не протекают наружу |
-| `Domain` Entity Store | canonical state, changed=false, copy-in/out | `ha-domain` + `zigbee-devices::DomainAdapter` регистрирует таблицы | **REWORK** | Domain должен владеть lifecycle записи; adapter/persistence не должны подменять Domain |
+| `mstore` | Table/Ring, slot/generation/version, RAM/flash | `crates/micro-db` (`Table`, `Ring`, `RegionManager`, `FlashStorage`, `RamFlashStorage`) | **KEEP** | Сохранить концепцию; проверить, что storage-типы не протекают наружу |
+| `Domain` Entity Store | canonical state, changed=false, copy-in/out | `ha-domain`; `DomainAdapter` пишет только state; persistence — переходный `store.rs` | **REWORK** | Domain должен владеть lifecycle и persistence; см. `DOMAIN_PERSISTENCE_AUDIT.md` |
 | `Domain` Journal | compact facts, bounded ring, oldest eviction, gap | `ha-domain` Ring + `Fact` | **KEEP** | Сохранить; добавить task/wake в Dispatcher |
 | `Domain` Transient Payload | best-effort payload ring | `ha-domain` payload ring | **KEEP** | Сохранить |
 | `Domain` Dispatcher | отдельная задача, cursor, filter, try_push/wake | есть `DispatchHandle`/signal и отдельная dispatcher-задача; main больше не вызывает `dispatch_once` | **PORT** | Довести lock/ownership и проверить gap/drop под нагрузкой |
@@ -43,9 +43,9 @@
 | Display | LVGL task, subscription, widget по `(entity,property)`, groups | `ha-app/src/display.rs`; display-drain task вынесен | **PORT** | Довести независимость LVGL task и проверить на нагрузке |
 | System | SNTP/GeoIP/weather → Domain state/event | `ha-app/src/system.rs` | **REWORK** | Публиковать всё через Domain; убрать direct automation call |
 | Wi-Fi | owner радио, scan/known/status Domain entities, known flash | `native_net/ha_wifi.c` + `ha-app/wifi.rs` | **PORT** | Отдельная задача; known в Domain/mstore |
-| Wi-Fi known AP | Domain entity, flash | `WIFI_KNOWN` + mstore; C RAM list | **PORT** | NVS больше не app storage |
+| Wi-Fi known AP | Domain entity, flash | `WIFI_KNOWN` + Domain persistence; C RAM list | **PORT** | NVS больше не app storage |
 | Composition root | регистрация descriptors/capacities, запуск задач | `ha-app/src/main.rs` | **PORT** | Только сборка и intake CRUD |
-| Persistent policy | state RAM; config flash; Zigbee network `zb_storage` | `store.rs`, `domain_adapter.rs`, `partitions.csv` | **PORT** | Сохранить; проверить, что Domain, а не adapter, владеет canonical config lifecycle |
+| Persistent policy | state RAM; config flash; Zigbee network `zb_storage` | `store.rs`, `domain_tables.rs`, `partitions.csv` | **REWORK** | Привести к V2 manifest; Domain-owned persistence/restore |
 | Error model | `sys_error_t`, один код на слой | Rust `enum Error` (micro-db/domain/adapter) | **PORT** | Сохранить смысл кодов; не смешивать Domain и adapter ошибки |
 | Host tests | V2 layer tests | Rust tests в crates | **PORT/KEEP** | Достроить тесты на runtime ownership, drops, Domain API |
 

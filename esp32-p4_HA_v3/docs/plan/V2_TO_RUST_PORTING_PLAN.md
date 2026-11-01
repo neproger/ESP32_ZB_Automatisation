@@ -152,7 +152,9 @@ config; restore читает canonical tables, не публикует факт�
 
 - привести descriptor manifest к V2 backing/capacity из `app_main.c`;
 - использовать production `DomainStorageProvider`, `Domain::new_with_storage`,
-  `Domain::restore`, `DomainMaintenance`;
+  `Domain::restore`;
+- `DomainMaintenance` не подключать в Stage 1: V2 не требует startup/periodic
+  compaction; оставить существующий API без расширения;
 - убрать параллельный `store::save_domain`/`restore_domain`/`DOMAIN_DB` после
   замены пути;
 - сохранить V2 semantics: state — RAM, persistent config — Domain/mstore;
@@ -370,7 +372,7 @@ Zigbee — единственное заранее предусмотренно�
 |---|---|---|---|
 | `micro-db` Storage seam + `SimFlash` | Rust-разделение Engine/Storage и host-симулятор | проверка Flash-поведения без P4 | сохранить; поведение Table/Ring не менять |
 | `DomainHandle`/`DomainTransaction` | Rust-обёртки владения и scoped lock | безопасные call sites и сериализация | сохранить, если V2-семантика сохраняется |
-| `DomainMaintenance`/`SharedStorage` | явный maintenance seam | compaction без удержания Domain mutex | сохранить как реализацию, не расширять без нужды |
+| `DomainMaintenance`/`SharedStorage` | явный maintenance seam | compaction без удержания Domain mutex | сохранить API; не подключать в Stage 1 и не расширять |
 | `zigbee-exec` | TSN/correlation/retry/expiry и fake transport | надёжность ZCL-запросов | сохранить под Zigbee-исключением |
 | `z2m-rs` generated profiles/converters | Z2M-модель, не V2 catalog | покрытие устройств и configure | сохранить под Zigbee-исключением |
 | `ha-web` framing + host tests | Rust wire implementation | parity canonical protocol | сохранить; сервис привести к V2-поведению |
@@ -413,12 +415,22 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 **Этап 1 — Domain persistence и restore.**
 
+Технический аудит: [DOMAIN_PERSISTENCE_AUDIT.md](../audits/DOMAIN_PERSISTENCE_AUDIT.md).
+Диагностика раздела перед Stage 1:
+[DOMAIN_PARTITION_DIAGNOSTIC.md](../audits/DOMAIN_PARTITION_DIAGNOSTIC.md).
+Явный сброс после решения оператора:
+[DOMAIN_RESET_PROCEDURE.md](../audits/DOMAIN_RESET_PROCEDURE.md).
+
+Решение: содержимое `domain` можно потерять; migration не выполняется.
+Сброс остаётся отдельной явной операцией, не автоматическим поведением.
+
 Перед реализацией:
 
 1. Сверить `domain_tables` с V2 `app_main.c` (backing, capacities, persist keys).
-2. Подтвердить отсутствие обязательных к сохранению данных старого layout.
-   Если такие данные есть — остановиться и вынести это в отдельное решение.
-3. Составить точный список изменений в `ha-app`/`ha-domain` и тестов.
+2. Снять read-only dump `domain` и сохранить SHA256.
+3. Зафиксировать операторское решение и выполнить явный erase только `domain`
+   в одном окне с прошивкой Stage 1.
+4. Составить точный список изменений в `ha-app`/`ha-domain` и тестов.
 
 В рамках этой задачи код не менять.
 
