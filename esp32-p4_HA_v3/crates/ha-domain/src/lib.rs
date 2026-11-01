@@ -21,6 +21,7 @@ mod handle;
 mod journal;
 mod metrics;
 mod storage;
+mod transaction;
 
 use command::Command;
 use dispatch::{DispatchSignal, Subscription};
@@ -30,6 +31,7 @@ pub use dispatch::DispatchHandle;
 pub use domain::Domain;
 pub use entity::{EntitySnapshot, ENTITY_SNAPSHOT_MAX_BYTES};
 pub use handle::DomainHandle;
+pub use transaction::DomainTransaction;
 
 #[cfg(not(feature = "p4-lock-metrics"))]
 use metrics::DomainGuard;

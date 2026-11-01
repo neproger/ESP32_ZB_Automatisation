@@ -5,6 +5,7 @@ use std::thread::LocalKey;
 thread_local! {
     static IN_DOMAIN_CALLBACK: Cell<bool> = const { Cell::new(false) };
     static IN_COMMAND_EXECUTOR: Cell<bool> = const { Cell::new(false) };
+    static IN_TRANSACTION: Cell<bool> = const { Cell::new(false) };
 }
 
 struct ThreadFlagGuard(&'static LocalKey<Cell<bool>>);
@@ -37,13 +38,31 @@ impl DomainHandle {
         Ok(visit(&mut domain))
     }
 
+    pub fn transaction<R, E>(
+        &self,
+        visit: impl FnOnce(&mut DomainTransaction<'_>) -> core::result::Result<R, E>,
+    ) -> core::result::Result<R, E>
+    where
+        E: From<Error>,
+    {
+        if IN_TRANSACTION.with(Cell::get)
+            || IN_DOMAIN_CALLBACK.with(Cell::get)
+            || IN_COMMAND_EXECUTOR.with(Cell::get)
+        {
+            return Err(E::from(Error::InvalidState));
+        }
+        let mut domain = self.lock_transaction().map_err(E::from)?;
+        let _flag = ThreadFlagGuard::enter(&IN_TRANSACTION);
+        visit(&mut DomainTransaction::new(&mut domain))
+    }
+
     #[cfg(not(feature = "p4-lock-metrics"))]
-    fn lock_checked(&self) -> Result<DomainGuard<'_>> {
+    fn lock_transaction(&self) -> Result<DomainGuard<'_>> {
         self.0.lock().map_err(|_| Error::InvalidState)
     }
 
     #[cfg(feature = "p4-lock-metrics")]
-    fn lock_checked(&self) -> Result<DomainGuard<'_>> {
+    fn lock_transaction(&self) -> Result<DomainGuard<'_>> {
         let started = Instant::now();
         let guard = self.0.lock().map_err(|_| Error::InvalidState)?;
         record_wait(elapsed_us(started));
@@ -51,6 +70,13 @@ impl DomainHandle {
             guard,
             holding_since: Instant::now(),
         })
+    }
+
+    fn lock_checked(&self) -> Result<DomainGuard<'_>> {
+        if IN_TRANSACTION.with(Cell::get) {
+            return Err(Error::InvalidState);
+        }
+        self.lock_transaction()
     }
 
     pub fn entity_put(
@@ -113,7 +139,10 @@ impl DomainHandle {
         target: Option<FactTarget<'_>>,
         meta: FactMeta,
     ) -> Result<()> {
-        if IN_DOMAIN_CALLBACK.with(Cell::get) || IN_COMMAND_EXECUTOR.with(Cell::get) {
+        if IN_TRANSACTION.with(Cell::get)
+            || IN_DOMAIN_CALLBACK.with(Cell::get)
+            || IN_COMMAND_EXECUTOR.with(Cell::get)
+        {
             return Err(Error::InvalidState);
         }
         let prepared = {

@@ -346,3 +346,117 @@ fn poisoned_domain_returns_invalid_state() {
         Err(Error::InvalidState)
     );
 }
+
+#[test]
+fn transaction_reads_writes_and_snapshots() {
+    let domain = handle();
+    let changed = domain
+        .transaction::<bool, Error>(|tx| {
+            assert!(tx.entity_put(7, &[1u8; 8], &[2u8; 8], meta())?);
+            let mut record = [0u8; 8];
+            tx.entity_get(7, &[1u8; 8], &mut record)?;
+            assert_eq!(record, [2u8; 8]);
+            assert_eq!(tx.entity_meta(7, &[1u8; 8])?.version, 1);
+            assert_eq!(tx.entity_snapshot(7)?.len(), 1);
+            assert_eq!(tx.entity_record_len(7)?, 8);
+            Ok(true)
+        })
+        .unwrap();
+    assert!(changed);
+    assert_eq!(
+        domain.entity_get(7, &[1u8; 8], &mut [0u8; 8]).map(|_| ()),
+        Ok(())
+    );
+}
+
+#[test]
+fn nested_transaction_returns_invalid_state() {
+    let domain = handle();
+    let result = domain.transaction::<(), Error>(|_| {
+        domain.transaction::<(), Error>(|_| Ok(()))?;
+        Ok(())
+    });
+    assert_eq!(result, Err(Error::InvalidState));
+}
+
+#[test]
+fn with_mut_inside_transaction_returns_invalid_state() {
+    let domain = handle();
+    let result = domain.transaction::<(), Error>(|_| {
+        domain.with_mut(|_| ())?;
+        Ok(())
+    });
+    assert_eq!(result, Err(Error::InvalidState));
+}
+
+#[test]
+fn transaction_inside_with_mut_returns_invalid_state() {
+    let domain = handle();
+    let result = domain
+        .with_mut(|_| domain.transaction::<(), Error>(|_| Ok(())))
+        .unwrap();
+    assert_eq!(result, Err(Error::InvalidState));
+}
+
+#[test]
+fn transaction_inside_command_executor_returns_invalid_state() {
+    let domain = handle();
+    let nested = domain.clone();
+    domain
+        .register_command(1, move |_| {
+            assert_eq!(
+                nested.transaction::<(), Error>(|_| Ok(())),
+                Err(Error::InvalidState)
+            );
+            Ok(())
+        })
+        .unwrap();
+    domain.post(1, &[], None, meta()).unwrap();
+}
+
+#[test]
+fn explicit_handle_methods_inside_transaction_return_invalid_state() {
+    let domain = handle();
+    let result = domain.transaction::<(), Error>(|_| {
+        assert_eq!(
+            domain.entity_get(7, &[0u8; 8], &mut [0u8; 8]),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(
+            domain.entity_put(7, &[0u8; 8], &[0u8; 8], meta()),
+            Err(Error::InvalidState)
+        );
+        assert_eq!(domain.entity_snapshot(7), Err(Error::InvalidState));
+        Ok(())
+    });
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn post_inside_transaction_returns_invalid_state() {
+    let domain = handle();
+    domain.register_command(1, |_| Ok(())).unwrap();
+    let result = domain.transaction::<(), Error>(|_| {
+        assert_eq!(domain.post(1, &[], None, meta()), Err(Error::InvalidState));
+        Ok(())
+    });
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn transaction_panic_resets_flag_and_poisons_domain() {
+    let domain = handle();
+    let other = handle();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = domain.transaction::<(), Error>(|_| panic!("transaction panic"));
+    }));
+    assert!(result.is_err());
+    assert_eq!(
+        domain.entity_get(7, &[0u8; 8], &mut [0u8; 8]),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(
+        other.entity_get(7, &[0u8; 8], &mut [0u8; 8]),
+        Err(Error::NotFound)
+    );
+}
