@@ -5,7 +5,9 @@ use ha_domain::{Error, Value as DomainValue};
 use z2m_rs::capabilities::{DIM_CT_EXPOSES, DIM_CT_TO};
 use z2m_rs::{Fingerprint, Manufacturer, Profile, Support};
 use zigbee_devices::CommandCore;
-use zigbee_devices::{update_binding_short, Binding, CommandRouter, Confirmed};
+use zigbee_devices::{
+    update_binding_short, Binding, ClusterRole, CommandRouter, Confirmed, EndpointDescriptor,
+};
 use zigbee_exec::fake::FakeTransport;
 use zigbee_exec::{Executor, RequestKind};
 
@@ -214,6 +216,31 @@ fn full_command_core_is_bounded() {
         Err(Error::NoSpace)
     );
 }
+#[test]
+fn binding_confirmation_requires_matching_standard_configuration() {
+    let mut endpoint = EndpointDescriptor::new(1, 0x0104, 0);
+    assert!(endpoint.push(0x0006, ClusterRole::Server));
+    let mut confirmed = Binding {
+        standard: Some(endpoint),
+        ..binding(&PROFILE)
+    };
+
+    assert!(!confirmed.confirm(0x0008, 0x0000));
+    assert!(!confirmed.confirm(0x0006, 0x0010));
+    assert!(confirmed.confirm(0x0006, 0x0000));
+    assert!(confirmed.confirmed.is_confirmed(1, 0x0006, 0x0000));
+
+    let mut non_standard = binding(&PROFILE);
+    assert!(!non_standard.confirm(0x0006, 0x0000));
+
+    let mut wrong_endpoint = Binding {
+        endpoint: 2,
+        standard: Some(endpoint),
+        ..binding(&PROFILE)
+    };
+    assert!(!wrong_endpoint.confirm(0x0006, 0x0000));
+}
+
 #[test]
 fn rejoin_updates_short_without_changing_entity() {
     let mut bindings = [binding(&PROFILE)];

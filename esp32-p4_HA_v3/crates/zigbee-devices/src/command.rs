@@ -69,6 +69,24 @@ pub struct Binding {
     pub confirmed: Confirmed,
 }
 
+impl Binding {
+    /// Confirm only an attribute that belongs to this binding's advertised
+    /// standard endpoint. Non-standard profiles use profile capabilities and
+    /// do not need a confirmed attribute snapshot.
+    pub fn confirm(&mut self, cluster: u16, attribute: u16) -> bool {
+        let Some(standard) = self.standard.as_ref() else {
+            return false;
+        };
+        if standard.endpoint != self.endpoint
+            || !standard.has_server(cluster)
+            || crate::standard::attribute_capability(cluster, attribute).is_none()
+        {
+            return false;
+        }
+        self.confirmed.confirm(self.endpoint, cluster, attribute)
+    }
+}
+
 /// `short` is a network address and changes on rejoin; the EUI64 and entity are
 /// stable, so refresh every matching binding instead of re-registering it.
 pub fn update_binding_short(bindings: &mut [Binding], eui: u64, short: u16) -> bool {

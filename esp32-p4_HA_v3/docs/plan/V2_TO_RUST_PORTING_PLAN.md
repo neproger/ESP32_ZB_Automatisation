@@ -74,32 +74,29 @@ main       composition root
 |---|---|---|
 | `ha_model` | `ha-model` | ABI готов; есть consumer-side дублирование offsets |
 | `mstore` | `micro-db` | примитивы готовы и покрыты host-тестами |
-| `domain` | `ha-domain` | core готов; production persistence/restore не подключены |
-| `device` | `ha-device` + `zigbee_service` | API есть; adapter всё ещё создаёт Entity/Capabilities |
+| `domain` | `ha-domain` | core + Domain-owned persistence/restore готовы; hardware unique gate открыт |
+| `device` | `ha-device` + `zigbee_service` | Stage 2 закрыт: lifecycle в `ha-device`, adapter — только projection |
 | `zigbee` | `zigbee-*` + `ha-app` | особый слой V2 + Z2M; текущая архитектура сохраняется; закрываются gaps относительно собственной цели |
 | `automation` | `ha-automation` + `automation_task` | engine есть; task/inbox и ABI-парсинг требуют доводки |
 | `web` | `ha-web` + `ha-app/web.rs` | protocol готов; service использует кэш и не имеет V2 snapshot semantics |
-| `display` | `ha-app/display.rs` | subscriber есть; Wi-Fi читается в обход Domain |
+| `display` | `ha-app/display.rs` | subscriber есть; Wi-Fi читается через Domain после cleanup; остальная V2-сверка — Stage 6 |
 | `system` | `ha-app/system.rs` + `main.rs` | fetch есть; публикация/события частично в main |
-| `wifi` | `ha-app/wifi.rs` + `native_net` | радио и Domain entities есть; Display обходит Domain |
+| `wifi` | `ha-app/wifi.rs` + `native_net` | status/scan/known cleanup запушен; reconnect/backoff и System gates открыты |
 | `main` | `ha-app/main.rs` | остаётся оркестратором, а не только composition root |
 
 ### 2.4. Известные расхождения, которые нельзя закреплять как новую архитектуру
 
-1. **Persistence split.** `store.rs` ведёт отдельную generic-таблицу и
-   `restore_domain`, а `Domain::new_with_storage`/`restore` не используются.
-   V2 Domain — единственный writer canonical storage.
-2. **Manifest backing.** Текущий `domain_tables` делает persistent
-   `Logical Device`, `Entity`, `Capabilities`; V2 `app_main.c` держит их в RAM,
-   а persistent config — только group/group_item/group_automation/automation/
-   location/settings/wifi_known. Это нужно привести к V2, а не документировать
-   как новое решение.
-3. **Main orchestration.** `main` всё ещё вызывает `intake`, `system::take`,
-   `display::take_nav`, `wifi::take_scan`, `capabilities::take`.
-4. **Canonical lifecycle.** Zigbee adapter создаёт Entity/Capabilities и
-   передаёт их Device service, тогда как V2 lifecycle принадлежит Device service.
-5. **Canonical parsing.** `ha-automation`, `ha-web`, display и main местами
-   разбирают fixed records вручную вместо `ha-model` структур.
+1. **Persistence split — закрыто Stage 1.** `Domain::new_with_storage`/
+   `Domain::restore` являются production path; `store::save_domain`/
+   `restore_domain`/`DOMAIN_DB` удалены.
+2. **Manifest backing — закрыто Stage 1.** `Logical Device`/`Entity`/
+   `Capabilities` — RAM; persistent config соответствует V2.
+3. **Main orchestration — Stage 7.** `main` всё ещё вызывает `intake`,
+   `system::take`, `display::take_nav`, `wifi::take_scan`, `capabilities::take`.
+4. **Canonical lifecycle — закрыто Stage 2.** Zigbee adapter не создаёт и не
+   удаляет Logical Device/Entity/Capabilities; lifecycle в `ha-device`.
+5. **Canonical parsing — Stage 4/6.** `ha-automation`, `ha-web`, display и main
+   местами разбирают fixed records вручную вместо `ha-model` структур.
 6. **Источники фактов.** Часть System/UI-записей помечается `SOURCE_ZIGBEE`.
 7. **Zigbee functional gaps.** `Binding.confirmed` не обновляется после
    configure; report любого значения снимает desired state; transport bridge
@@ -141,10 +138,11 @@ Domain.
 
 ### Этап 1 — Domain: persistence и restore
 
-> Статус: **реализовано и проверено на P4 частично**. Commit/push не
-> выполнялись. Workspace tests, `build-ha-app` и `check-domain-api` зелёные;
-> hardware validation: [STAGE1_HARDWARE_VALIDATION.md](../audits/STAGE1_HARDWARE_VALIDATION.md).
-> Уникальный persistence test через UI/Web ещё не выполнен.
+> Статус: **реализовано, запушено, проверено на P4 частично**.
+> Коммиты: `e98d6b4`, `0fef57f`. Workspace tests, `build-ha-app` и
+> `check-domain-api` зелёные; hardware validation:
+> [STAGE1_HARDWARE_VALIDATION.md](../audits/STAGE1_HARDWARE_VALIDATION.md).
+> Уникальный persistence test через UI/Web и reboot ещё не выполнен.
 
 **Исходный слой V2:** `domain` + регистрация таблиц в `main/app_main.c`.
 
@@ -177,6 +175,10 @@ RAM/flash policy, NoSpace/ошибки storage, host-тесты на SimFlash.
 
 ### Этап 2 — Device service
 
+> Статус: **завершён и запушен**. Commit `e08418b`; P0-решения —
+> [STAGE_2_ARCHITECTURE_DECISIONS.md](STAGE_2_ARCHITECTURE_DECISIONS.md).
+> Host tests, `build-ha-app` и static checks зелёные; P4 не требовался.
+
 **Исходный слой V2:** `device`.
 
 **Назначение:** transport-neutral Logical Device/Entity ownership.
@@ -198,12 +200,19 @@ adapter remover failure, host tests.
 
 ### Этап 3 — Zigbee adapter
 
+> Статус: **следующий слой; реализация не начата**. Сначала — сверка/аудит
+> текущих Zigbee gaps против V2+Z2M, затем решения и только потом код.
+> Зависимости Stage 1/2 закрыты на host-уровне; hardware unique persistence
+> test Stage 1 и P4 scenarios остаются отдельными gates.
+
 **Исходная база:** текущий Zigbee-слой на основе V2 + Z2M.
 Это единственное предусмотренное архитектурное исключение.
 
 **Назначение:** единственный владелец ZCL/транспорта и Zigbee-private данных.
 
-**Зависимости:** Domain, Device service, `ha-model`, `z2m-rs`, `zigbee-exec`.
+**Зависимости:** Domain, Device service, `ha-model`, `z2m-rs`, `zigbee-exec`,
+`zigbee-frames`, adapter-private registry/`mstore`. Не зависит от
+Automation/System/Web/Display; их не трогать в Stage 3.
 
 **Что сделать:**
 
@@ -418,22 +427,34 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 2 Device Service — host-верификация завершена.**
+**Текущая задача: Stage 3 Zigbee adapter — 3.1–3.6 выполнены, P4 pending.**
 
-Аудит: [DEVICE_LAYER_AUDIT.md](../audits/DEVICE_LAYER_AUDIT.md).
-P0-решения зафиксированы в
-[STAGE_2_ARCHITECTURE_DECISIONS.md](STAGE_2_ARCHITECTURE_DECISIONS.md):
-`ensure_entity`/`set_capabilities` — Device service adaptations;
-`rename_entity` удалена из Device service, Entity rename остаётся
-app-level V2 command path; Zigbee adapter пишет только `PROPERTY_STATE`;
-removal остаётся `prepare_remove` → `invoke_remover` → `remove_canonical`.
+Следующий слой по плану — Zigbee adapter (V2+Z2M exception).
+Аудит: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
+ТЗ: [STAGE_3_IMPLEMENTATION_SPEC.md](STAGE_3_IMPLEMENTATION_SPEC.md).
+Реализованы этапы 3.1–3.6: binding freshness, remover failure, reconciliation,
+ZCL bridge, bounded queue, host verification. P4 hardware validation остаётся
+отдельным gate. Коммиты/push не выполнялись.
 
-Проверки Stage 2: `cargo test --workspace`, `check-domain-api.ps1` и
-`build-ha-app.ps1` зелёные. P4 для Stage 2 не требуется.
+Зависимости готовы: Stage 1 Domain persistence/restore и Stage 2 Device
+service закрыты на host-уровне. Stage 1 hardware unique persistence test и
+P4 scenarios остаются отдельными gates.
 
-Stage 1 hardware gate остаётся открытым: уникальная persistence-запись
-через UI/Web и reboot ещё не проверены. Wi-Fi заморожен; Display, System,
-Automation и остальные слои пока не трогаются.
+Stage 3 targets из плана: `Binding.confirmed` после configure, report/desired
+semantics и поддержка стандартных ZCL команд. Не трогать canonical ABI,
+canonical lifecycle, Automation/System/Web/Display.
+
+Stage 2 завершён: [DEVICE_LAYER_AUDIT.md](../audits/DEVICE_LAYER_AUDIT.md),
+P0-решения в
+[STAGE_2_ARCHITECTURE_DECISIONS.md](STAGE_2_ARCHITECTURE_DECISIONS.md).
+`ensure_entity`/`set_capabilities` — Device service adaptations; Entity
+rename остаётся app-level V2 command path; Zigbee adapter пишет только
+`PROPERTY_STATE`; removal — `prepare_remove` → `invoke_remover` →
+`remove_canonical`.
+
+Stage 1 hardware gate открыт: уникальная persistence-запись через UI/Web и
+reboot ещё не проверены. Wi-Fi заморожен; Display, System, Automation и
+остальные слои пока не трогаются.
 
 Domain API parity закрыт: [DOMAIN_API_AUDIT.md](../audits/DOMAIN_API_AUDIT.md)
 фиксирует исправленные ERROR-факты, выровненный payload contract, удалённый

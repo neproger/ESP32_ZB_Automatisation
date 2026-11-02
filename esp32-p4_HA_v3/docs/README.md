@@ -50,6 +50,8 @@ Zigbee-слоя».
   Wi-Fi V2, текущее состояние Rust и scope следующего этапа.
 - [audits/DEVICE_LAYER_AUDIT.md](audits/DEVICE_LAYER_AUDIT.md) — Device
   service V2 → Rust: ownership, lifecycle и removal.
+- [audits/ZIGBEE_LAYER_AUDIT.md](audits/ZIGBEE_LAYER_AUDIT.md) — Zigbee
+  adapter V2+Z2M: binding, command reconciliation и ZCL bridge.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 
@@ -61,6 +63,7 @@ Zigbee-слоя».
 - [plan/STAGE_1D_ARCHITECTURE_DECISIONS.md](plan/STAGE_1D_ARCHITECTURE_DECISIONS.md)
 - [plan/STAGE_1D_IMPLEMENTATION_PLAN.md](plan/STAGE_1D_IMPLEMENTATION_PLAN.md)
 - [plan/STAGE_2_ARCHITECTURE_DECISIONS.md](plan/STAGE_2_ARCHITECTURE_DECISIONS.md)
+- [plan/STAGE_3_IMPLEMENTATION_SPEC.md](plan/STAGE_3_IMPLEMENTATION_SPEC.md)
 - [plan/STAGE_1D_4_P4_VALIDATION.md](plan/STAGE_1D_4_P4_VALIDATION.md) —
   протокол проверки на P4, ещё актуален.
 

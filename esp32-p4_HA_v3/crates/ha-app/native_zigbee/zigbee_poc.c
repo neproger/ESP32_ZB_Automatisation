@@ -466,7 +466,7 @@ static int zb_exec_on_off_cmd(uint32_t op, uint64_t eui64, uint16_t short_addr, 
         return -1;
     }
     esp_zigbee_lock_release();
-    return err == EZB_ERR_NONE ? 0 : -1;
+    return err == EZB_ERR_NONE ? 0 : -2;
 }
 
 int zb_exec_on_off(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t ep, uint8_t on)
@@ -501,7 +501,7 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
         return zb_exec_on_off_cmd(op, eui64, short_addr, ep, command);
     }
     if (cluster == 0x0008u) {
-        if (len < 3u) {
+        if ((command != 0x00u && command != 0x04u) || len < 3u) {
             return -1;
         }
         ezb_zcl_level_move_to_level_cmd_t req = {0};
@@ -517,7 +517,7 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
                                   ? ezb_zcl_level_move_to_level_with_on_off_cmd_req(&req)
                                   : ezb_zcl_level_move_to_level_cmd_req(&req);
         esp_zigbee_lock_release();
-        return err == EZB_ERR_NONE ? 0 : -1;
+        return err == EZB_ERR_NONE ? 0 : -2;
     }
     if (cluster == 0x0300u) {
         if (command == 0x0Au) {
@@ -538,7 +538,7 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
             const ezb_err_t err =
                 ezb_zcl_color_control_move_to_color_temperature_cmd_req(&req);
             esp_zigbee_lock_release();
-            return err == EZB_ERR_NONE ? 0 : -1;
+            return err == EZB_ERR_NONE ? 0 : -2;
         }
         if (command == 0x07u) {
             if (len < 6u) {
@@ -557,7 +557,7 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
             }
             const ezb_err_t err = ezb_zcl_color_control_move_to_color_cmd_req(&req);
             esp_zigbee_lock_release();
-            return err == EZB_ERR_NONE ? 0 : -1;
+            return err == EZB_ERR_NONE ? 0 : -2;
         }
         if (command == 0x06u) {
             if (len < 4u) {
@@ -577,7 +577,28 @@ int zb_exec_send_zcl(uint32_t op, uint64_t eui64, uint16_t short_addr, uint8_t e
             const ezb_err_t err =
                 ezb_zcl_color_control_move_to_hue_and_saturation_cmd_req(&req);
             esp_zigbee_lock_release();
-            return err == EZB_ERR_NONE ? 0 : -1;
+            return err == EZB_ERR_NONE ? 0 : -2;
+        }
+        if (command == 0x43u) {
+            if (len < 5u) {
+                return -1;
+            }
+            ezb_zcl_color_control_enhanced_move_to_hue_and_saturation_cmd_t req = {0};
+            exec_cluster_ctrl(&req.cmd_ctrl, op, eui64, short_addr, ep);
+            req.payload.enhanced_hue =
+                (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+            req.payload.saturation = payload[2];
+            req.payload.transition_time =
+                (uint16_t)(payload[3] | ((uint16_t)payload[4] << 8));
+            req.payload.options_mask = len >= 7u ? payload[5] : 0;
+            req.payload.options_override = len >= 7u ? payload[6] : 0;
+            if (!esp_zigbee_lock_acquire(portMAX_DELAY)) {
+                return -1;
+            }
+            const ezb_err_t err =
+                ezb_zcl_color_control_enhanced_move_to_hue_and_saturation_cmd_req(&req);
+            esp_zigbee_lock_release();
+            return err == EZB_ERR_NONE ? 0 : -2;
         }
     }
     return -1;

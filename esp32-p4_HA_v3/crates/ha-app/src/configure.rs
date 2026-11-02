@@ -424,11 +424,18 @@ fn start_next(exec: &mut Executor, now: u64) {
     ));
 }
 
-pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now: u64) {
+pub type Confirmation = (u64, u8, u16, u16);
+
+pub fn on_result(
+    exec: &mut Executor,
+    result: zigbee_exec::OperationResult,
+    now: u64,
+) -> Vec<Confirmation> {
+    let mut confirmations = Vec::new();
     let outcome = {
         let mut guard = RUN.lock().unwrap();
         let Some(run) = guard.as_mut() else {
-            return;
+            return confirmations;
         };
         if run.accepts(result.id) && result.status == zigbee_exec::Status::Confirmed {
             if let Some(
@@ -450,7 +457,7 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
                         run.eui()
                     );
                     run.on_result(result);
-                    return;
+                    return confirmations;
                 };
                 for attribute in attributes {
                     if present.attributes().any(|entry| entry.id == *attribute) {
@@ -460,6 +467,7 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
                             cluster,
                             *attribute,
                         );
+                        confirmations.push((run.eui(), endpoint, cluster, *attribute));
                     }
                 }
                 if let Some(descriptor) = crate::store::descriptor(run.eui()) {
@@ -486,6 +494,7 @@ pub fn on_result(exec: &mut Executor, result: zigbee_exec::OperationResult, now:
     };
     finish_outcome(outcome, now);
     start_next(exec, now);
+    confirmations
 }
 
 pub fn tick(exec: &mut Executor, now: u64) {

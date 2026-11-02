@@ -37,7 +37,8 @@ struct CanonicalEvent {
 
 struct Ingest<'a> {
     domain: &'a DomainHandle,
-    reported: &'a mut Vec<(u64, u32)>,
+    reported: &'a mut Vec<(u64, u32, Value)>,
+    confirmations: &'a mut Vec<configure::Confirmation>,
 }
 
 impl frames::IngestSink for Ingest<'_> {
@@ -64,6 +65,10 @@ impl frames::IngestSink for Ingest<'_> {
     ) {
         apply_capabilities(self.domain, entity, capabilities);
     }
+
+    fn confirmed(&mut self, eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
+        self.confirmations.push((eui, endpoint, cluster, attribute));
+    }
 }
 
 extern "C" {
@@ -82,6 +87,16 @@ impl State {
             executor: zigbee_exec::Executor::new(),
             command_core: CommandCore::new(),
             bindings: Vec::new(),
+        }
+    }
+
+    pub fn confirm_binding(&mut self, eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
+        for binding in self
+            .bindings
+            .iter_mut()
+            .filter(|binding| binding.eui == eui && binding.endpoint == endpoint)
+        {
+            binding.confirm(cluster, attribute);
         }
     }
 
@@ -115,7 +130,40 @@ impl Handle {
     }
 }
 
-static REMOVALS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+const REMOVAL_QUEUE_CAPACITY: usize = 8;
+
+struct RemovalQueue {
+    items: [u64; REMOVAL_QUEUE_CAPACITY],
+    len: usize,
+}
+
+impl RemovalQueue {
+    const fn new() -> Self {
+        Self {
+            items: [0; REMOVAL_QUEUE_CAPACITY],
+            len: 0,
+        }
+    }
+
+    fn try_push(&mut self, eui: u64) -> Result<(), ha_domain::Error> {
+        if self.len == REMOVAL_QUEUE_CAPACITY {
+            return Err(ha_domain::Error::NoSpace);
+        }
+        self.items[self.len] = eui;
+        self.len += 1;
+        Ok(())
+    }
+
+    fn take_all(&mut self) -> ([u64; REMOVAL_QUEUE_CAPACITY], usize) {
+        let mut out = [0u64; REMOVAL_QUEUE_CAPACITY];
+        out[..self.len].copy_from_slice(&self.items[..self.len]);
+        let len = self.len;
+        self.len = 0;
+        (out, len)
+    }
+}
+
+static REMOVALS: Mutex<RemovalQueue> = Mutex::new(RemovalQueue::new());
 
 pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
     let (tx, rx) = sync_channel(8);
@@ -140,12 +188,10 @@ pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
 fn zigbee_remover(native: &[u8]) -> Result<ha_device::NativeRemoval, ha_domain::Error> {
     let text = std::str::from_utf8(native).map_err(|_| ha_domain::Error::InvalidArg)?;
     let eui = u64::from_str_radix(text, 16).map_err(|_| ha_domain::Error::InvalidArg)?;
-    if !store::mark_removed(eui) {
-        return Ok(ha_device::NativeRemoval::AlreadyAbsent);
-    }
+    store::mark_removed(eui)?;
+    REMOVALS.lock().unwrap().try_push(eui)?;
     interview::forget(eui);
     configure::forget(eui);
-    REMOVALS.lock().unwrap().push(eui);
     Ok(ha_device::NativeRemoval::Removed)
 }
 
@@ -183,20 +229,25 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
         }
 
         let mut reported = Vec::new();
+        let mut confirmations = Vec::new();
         {
             let mut ingest = Ingest {
                 domain: &domain,
                 reported: &mut reported,
+                confirmations: &mut confirmations,
             };
             if polled {
                 ingest_command(&event, &mut ingest);
             }
             frames::process_pending(&mut ingest);
         }
-        if !reported.is_empty() {
+        if !reported.is_empty() || !confirmations.is_empty() {
             let mut state = state.lock().unwrap();
-            for (entity, property) in reported {
-                state.command_core.on_reported(entity, property);
+            for (eui, endpoint, cluster, attribute) in confirmations {
+                state.confirm_binding(eui, endpoint, cluster, attribute);
+            }
+            for (entity, property, value) in reported {
+                state.command_core.on_reported(entity, property, value);
             }
         }
 
@@ -245,17 +296,22 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
                 }
                 if let Some(read) = result.read {
                     let mut reported = Vec::new();
+                    let mut confirmations = Vec::new();
                     {
                         let mut ingest = Ingest {
                             domain: &domain,
                             reported: &mut reported,
+                            confirmations: &mut confirmations,
                         };
                         ingest_read(&context, read, &mut ingest);
                     }
-                    if !reported.is_empty() {
+                    if !reported.is_empty() || !confirmations.is_empty() {
                         let mut state = state.lock().unwrap();
-                        for (entity, property) in reported {
-                            state.command_core.on_reported(entity, property);
+                        for (eui, endpoint, cluster, attribute) in confirmations {
+                            state.confirm_binding(eui, endpoint, cluster, attribute);
+                        }
+                        for (entity, property, value) in reported {
+                            state.command_core.on_reported(entity, property, value);
                         }
                     }
                 }
@@ -263,7 +319,11 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
             {
                 let mut state = state.lock().unwrap();
                 interview::on_operation_result(&mut state.executor, result, now_ms());
-                configure::on_result(&mut state.executor, result, now_ms());
+                for (eui, endpoint, cluster, attribute) in
+                    configure::on_result(&mut state.executor, result, now_ms())
+                {
+                    state.confirm_binding(eui, endpoint, cluster, attribute);
+                }
             }
         }
         {
@@ -404,7 +464,7 @@ fn register_domain(
             endpoint,
             profile,
             standard: standard_endpoint,
-            confirmed: interview::confirmed(eui),
+            confirmed: zigbee_devices::Confirmed::new(),
         });
     }
 }
@@ -458,8 +518,8 @@ fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) 
             return;
         }
     }
-    let removed: Vec<u64> = REMOVALS.lock().unwrap().drain(..).collect();
-    for eui in removed {
+    let (removed, count) = REMOVALS.lock().unwrap().take_all();
+    for eui in removed[..count].iter().copied() {
         let short = {
             let state = state.lock().unwrap();
             state
@@ -582,12 +642,12 @@ fn apply_capabilities(
 
 fn apply_state(
     domain: &DomainHandle,
-    reported: &mut Vec<(u64, u32)>,
+    reported: &mut Vec<(u64, u32, Value)>,
     state: zigbee_devices::StateUpdate,
 ) {
     match DomainAdapter::write_state(domain, state.entity, state.property, state.value) {
         Ok(changed) => {
-            reported.push((state.entity, state.property));
+            reported.push((state.entity, state.property, state.value));
             if changed {
                 log::info!(
                     "domain: state entity={:016x} property={} changed=true",
@@ -625,4 +685,25 @@ fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
 
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removal_queue_is_bounded_and_does_not_drop_requests() {
+        let mut queue = RemovalQueue::new();
+        for eui in 1..=REMOVAL_QUEUE_CAPACITY as u64 {
+            assert!(queue.try_push(eui).is_ok());
+        }
+        assert_eq!(
+            queue.try_push(REMOVAL_QUEUE_CAPACITY as u64 + 1),
+            Err(ha_domain::Error::NoSpace)
+        );
+
+        let (items, count) = queue.take_all();
+        assert_eq!(count, REMOVAL_QUEUE_CAPACITY);
+        assert_eq!(&items[..count], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(queue.try_push(9).is_ok());
+    }
 }

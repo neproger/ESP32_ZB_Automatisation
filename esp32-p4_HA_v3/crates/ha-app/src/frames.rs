@@ -22,6 +22,7 @@ static LAST_DROPPED: AtomicU32 = AtomicU32::new(0);
 pub trait IngestSink {
     fn update(&mut self, entity: u64, update: &z2m_rs::Update);
     fn capabilities(&mut self, entity: u64, capabilities: CapabilitiesRecord);
+    fn confirmed(&mut self, eui: u64, endpoint: u8, cluster: u16, attribute: u16);
 }
 
 #[repr(C)]
@@ -164,6 +165,7 @@ pub fn ingest(
                     });
                     if decoded_feature {
                         crate::interview::confirm_attribute(eui, endpoint, cluster, attr.id);
+                        sink.confirmed(eui, endpoint, cluster, attr.id);
                     }
                 }
             }

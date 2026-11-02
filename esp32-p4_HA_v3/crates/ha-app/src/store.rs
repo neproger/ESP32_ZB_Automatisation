@@ -193,21 +193,17 @@ pub fn save(
 
 /// Durable deferred-leave mark; canonical cleanup may proceed even if the
 /// immediate leave cannot be sent (the announce path retries it).
-pub fn mark_removed(ieee: u64) -> bool {
+pub fn mark_removed(ieee: u64) -> Result<(), ha_domain::Error> {
     let mut guard = REGISTRY.lock().unwrap();
     let Some(registry) = guard.as_mut() else {
-        return false;
+        return Err(ha_domain::Error::InvalidState);
     };
-    match registry.mark_removed(ieee) {
-        Ok(()) => {
-            log::info!("registry: removal marked ieee={ieee:016x}");
-            true
-        }
-        Err(error) => {
-            log::error!("registry: mark removal failed ieee={ieee:016x}: {error:?}");
-            false
-        }
-    }
+    registry.mark_removed(ieee).map_err(|error| {
+        log::error!("registry: mark removal failed ieee={ieee:016x}: {error:?}");
+        error
+    })?;
+    log::info!("registry: removal marked ieee={ieee:016x}");
+    Ok(())
 }
 
 pub fn is_removed(ieee: u64) -> bool {

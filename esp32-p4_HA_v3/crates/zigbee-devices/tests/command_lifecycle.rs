@@ -148,7 +148,7 @@ fn confirmed_command_does_not_set_reported_state() {
         DomainAdapter::read_state(&domain, entity, PROPERTY_POWER),
         Some(DomainValue::bool(true))
     );
-    core.on_reported(entity, PROPERTY_POWER);
+    core.on_reported(entity, PROPERTY_POWER, state.value);
     assert!(core.is_empty());
 }
 

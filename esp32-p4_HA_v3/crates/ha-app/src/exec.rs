@@ -315,6 +315,8 @@ impl Transport for EspTransport {
         };
         if code == 0 {
             Ok(())
+        } else if code == -1 && matches!(request.kind, RequestKind::SendZcl { .. }) {
+            Err(SendError::Unsupported)
         } else {
             Err(SendError::Io)
         }
