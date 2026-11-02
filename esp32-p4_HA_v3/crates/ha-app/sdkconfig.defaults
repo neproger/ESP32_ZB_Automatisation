@@ -82,3 +82,7 @@ CONFIG_LV_GRADIENT_MAX_STOPS=8
 # esp_lcd/esp_lcd_touch тянут legacy-драйвер i2c вместе с esp_driver_i2c.
 # Используется только новый драйвер, поэтому стартовый конфликт-чек выключаем.
 CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
+
+# P4 board has 16 MB flash; the app partition table is the HA V3 8M layout.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"

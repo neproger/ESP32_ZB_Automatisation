@@ -52,6 +52,8 @@ Zigbee-слоя».
   service V2 → Rust: ownership, lifecycle и removal.
 - [audits/ZIGBEE_LAYER_AUDIT.md](audits/ZIGBEE_LAYER_AUDIT.md) — Zigbee
   adapter V2+Z2M: binding, command reconciliation и ZCL bridge.
+- [audits/STAGE3_HARDWARE_VALIDATION.md](audits/STAGE3_HARDWARE_VALIDATION.md) — P4
+  boot blocker и непроверенные сценарии.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 

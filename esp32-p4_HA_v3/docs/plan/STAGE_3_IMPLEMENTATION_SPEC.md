@@ -1,7 +1,11 @@
 # Stage 3 — Technical Specification: Zigbee Adapter
 
-> Статус: **ТЗ согласовано; этапы 3.1–3.5 реализованы, 3.6 host-проверка
-> пройдена, 3.7 P4 ожидает hardware-проверки**. Коммиты/push не выполнялись.
+> Статус: **Host Verified / Hardware Blocked**.
+> Реализация 3.1–3.5 и host-интеграция 3.6 выполнены; queue unit test
+> проходит через `cargo test --workspace`. P4 hardware validation
+> заблокирована загрузкой ESP32-P4: flash config исправлен на 16MB,
+> partition table и firmware прошиты; приложение всё ещё останавливается
+> на `esp-hosted` WiFi init. Полная приёмка Stage 3 открыта.
 > Основание: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
 > План: [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 > Принципы: [V2_TO_RUST_PORTING_PRINCIPLES.md](V2_TO_RUST_PORTING_PRINCIPLES.md).
@@ -318,7 +322,19 @@ git diff --check
 - queue не растёт и не теряет элементы молча;
 - `0x43` и Level dispatch не подменяют команду.
 
-## 9. Acceptance criteria
+## 9. Verification status
+
+| Проверка | Статус |
+|---|---|
+| `cargo test --workspace` | Пройдено |
+| `check-domain-api.ps1` | Пройдено |
+| `build-ha-app.ps1` | Пройдено |
+| Binding/remover/reconciliation/ZCL/queue implementation | Выполнено |
+| Queue unit test | **Пройден** через `crates/zigbee-devices/tests/removal_queue.rs` (host module include) |
+| P4 hardware validation | **Заблокирована**: COM11 boot stalls at `esp-hosted` WiFi init; build/device flash-size mismatch investigated |
+| Stage 3 acceptance | **Не закрыт по P4** |
+
+## 10. Acceptance criteria
 
 - Новый binding пустой; configure/report обновляют только binding.
 - После restart binding пустой до configure/report; ложного подтверждения нет.
@@ -332,7 +348,9 @@ git diff --check
 - Ни одного изменения canonical ABI, Device lifecycle, registry format,
   Automation/System/Web/Display.
 
-## 10. P4-проверки после реализации
+## 11. P4-проверки после реализации
+
+Текущий boot blocker: [STAGE3_HARDWARE_VALIDATION.md](../audits/STAGE3_HARDWARE_VALIDATION.md).
 
 - configure → binding confirm → immediate command;
 - restart known device → configure → command;
@@ -342,7 +360,7 @@ git diff --check
 - deferred leave online/offline/reboot;
 - queue overflow behavior with multiple removals.
 
-## 11. Запрет на расширение scope
+## 12. Запрет на расширение scope
 
 Если при реализации обнаружится необходимость изменить canonical ABI,
 Domain persistence, Device lifecycle, private registry layout, profiles,
