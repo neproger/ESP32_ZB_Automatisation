@@ -36,6 +36,7 @@ mod intake;
 mod interview;
 #[cfg(feature = "p4-lock-metrics")]
 mod p4_probe;
+mod removal_queue;
 mod store;
 mod system;
 mod web;
@@ -285,8 +286,7 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
                 let key = entity.to_le_bytes();
                 let mut current = [0u8; ha_domain::canonical::ENTITY_RECORD_LEN];
                 transaction.entity_get(ENTITY_ENTITY, &key, &mut current)?;
-                let device =
-                    u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
+                let device = u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
                 let encoded = ha_domain::canonical::EntityRecord::new(device, &name).encode();
                 transaction
                     .entity_put(

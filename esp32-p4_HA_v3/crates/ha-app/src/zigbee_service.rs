@@ -15,7 +15,7 @@ use ha_domain::canonical::{
 use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 use zigbee_devices::{CommandCore, CommandRouter, DomainAdapter};
 
-use crate::{configure, exec, frames, interview, store};
+use crate::{configure, exec, frames, interview, removal_queue::RemovalQueue, store};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -127,39 +127,6 @@ impl Handle {
         self.requests
             .try_send(Request::RemoveDevice(device))
             .map_err(|_| ha_domain::Error::NoSpace)
-    }
-}
-
-const REMOVAL_QUEUE_CAPACITY: usize = 8;
-
-struct RemovalQueue {
-    items: [u64; REMOVAL_QUEUE_CAPACITY],
-    len: usize,
-}
-
-impl RemovalQueue {
-    const fn new() -> Self {
-        Self {
-            items: [0; REMOVAL_QUEUE_CAPACITY],
-            len: 0,
-        }
-    }
-
-    fn try_push(&mut self, eui: u64) -> Result<(), ha_domain::Error> {
-        if self.len == REMOVAL_QUEUE_CAPACITY {
-            return Err(ha_domain::Error::NoSpace);
-        }
-        self.items[self.len] = eui;
-        self.len += 1;
-        Ok(())
-    }
-
-    fn take_all(&mut self) -> ([u64; REMOVAL_QUEUE_CAPACITY], usize) {
-        let mut out = [0u64; REMOVAL_QUEUE_CAPACITY];
-        out[..self.len].copy_from_slice(&self.items[..self.len]);
-        let len = self.len;
-        self.len = 0;
-        (out, len)
     }
 }
 
@@ -685,25 +652,4 @@ fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
 
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn removal_queue_is_bounded_and_does_not_drop_requests() {
-        let mut queue = RemovalQueue::new();
-        for eui in 1..=REMOVAL_QUEUE_CAPACITY as u64 {
-            assert!(queue.try_push(eui).is_ok());
-        }
-        assert_eq!(
-            queue.try_push(REMOVAL_QUEUE_CAPACITY as u64 + 1),
-            Err(ha_domain::Error::NoSpace)
-        );
-
-        let (items, count) = queue.take_all();
-        assert_eq!(count, REMOVAL_QUEUE_CAPACITY);
-        assert_eq!(&items[..count], &[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert!(queue.try_push(9).is_ok());
-    }
 }
