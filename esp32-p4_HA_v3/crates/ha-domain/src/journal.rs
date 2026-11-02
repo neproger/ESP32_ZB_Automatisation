@@ -15,7 +15,19 @@ impl Domain {
         if let Some(target) = target {
             self.desc(target.entity)?;
         }
-        let reference = self.payloads.append(payload.into())?;
+        let reference = match self.payloads.append(payload.into()) {
+            Ok(reference) => reference,
+            Err(error) => {
+                self.publish_error(
+                    Op::PayloadPut,
+                    meta,
+                    target.map_or(0, |target| target.entity),
+                    target.map_or(&[], |target| target.key),
+                    error,
+                );
+                return Err(error);
+            }
+        };
         self.publish(
             FactKind::Event,
             Op::PayloadPut,
@@ -32,10 +44,10 @@ impl Domain {
 
     pub fn payload_get(&self, reference: PayloadRef, out: &mut [u8]) -> Result<()> {
         let bytes = self.payloads.get_ref(reference)?;
-        if out.len() < bytes.len() {
+        if out.len() != bytes.len() {
             return Err(Error::InvalidSize);
         }
-        out[..bytes.len()].copy_from_slice(bytes);
+        out.copy_from_slice(bytes);
         Ok(())
     }
 

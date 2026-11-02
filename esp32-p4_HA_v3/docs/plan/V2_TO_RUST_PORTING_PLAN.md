@@ -141,8 +141,10 @@ Domain.
 
 ### Этап 1 — Domain: persistence и restore
 
-> Статус: **реализовано в рабочем дереве**. Commit/push не выполнялись.
-> Проверки: workspace tests и `build-ha-app` зелёные; `check-domain-api` ok.
+> Статус: **реализовано и проверено на P4 частично**. Commit/push не
+> выполнялись. Workspace tests, `build-ha-app` и `check-domain-api` зелёные;
+> hardware validation: [STAGE1_HARDWARE_VALIDATION.md](../audits/STAGE1_HARDWARE_VALIDATION.md).
+> Уникальный persistence test через UI/Web ещё не выполнен.
 
 **Исходный слой V2:** `domain` + регистрация таблиц в `main/app_main.c`.
 
@@ -433,7 +435,10 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 2. фиксация решения оператора;
 3. явный erase только `domain` в одном окне с прошивкой Stage 1.
 
-Stage 2 реализуется после проверки Stage 1 на устройстве.
+Domain API parity закрыт: [DOMAIN_API_AUDIT.md](../audits/DOMAIN_API_AUDIT.md)
+фиксирует исправленные ERROR-факты, выровненный payload contract, удалённый
+production `with_mut` и документированные адаптации. Stage 2 остаётся после
+финальной аппаратной проверки Stage 1 (уникальная persistence-запись).
 
 ## 7. Критерии завершения всего портирования
 

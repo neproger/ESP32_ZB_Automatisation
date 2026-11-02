@@ -2,7 +2,7 @@ use z2m_rs::capabilities::{
     BATTERY_ATTR, BATTERY_VOLTAGE_ATTR, HUMIDITY_ATTR, ILLUMINANCE_ATTR, OCCUPANCY_ATTR,
     TEMPERATURE_ATTR,
 };
-use z2m_rs::{decode_frame, AttributeFrameView, Converter, Profile, Support, Update, Value};
+use z2m_rs::{decode_frame, AttributeFrameView, Profile, Support, Update, Value};
 
 static PROFILE: Profile = Profile {
     id: "test.sensor-mechanisms",

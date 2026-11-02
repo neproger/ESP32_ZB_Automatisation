@@ -42,6 +42,10 @@ Zigbee-слоя».
   read-only диагностика раздела `domain` до Stage 1.
 - [audits/DOMAIN_RESET_PROCEDURE.md](audits/DOMAIN_RESET_PROCEDURE.md) —
   явный destructive reset `domain` после решения оператора.
+- [audits/STAGE1_HARDWARE_VALIDATION.md](audits/STAGE1_HARDWARE_VALIDATION.md) —
+  результаты аппаратной проверки Stage 1.
+- [audits/DOMAIN_API_AUDIT.md](audits/DOMAIN_API_AUDIT.md) — соответствие
+  Domain API V2 и текущие переходные элементы.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 

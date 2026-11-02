@@ -264,8 +264,11 @@ fn no_space_requires_explicit_compaction_and_retry() {
     state.lock().unwrap().fail_write = true;
     assert_eq!(domain.entity_put(ENTITY, &[3; 8], &[4; 8], meta), Err(Error::NoSpace));
     assert_eq!(domain.entity_get(ENTITY, &[3; 8], &mut [0; 8]), Err(Error::NotFound));
-    assert_eq!(domain.dispatch_once(), Ok(0));
-    assert_eq!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    assert_eq!(domain.dispatch_once(), Ok(1));
+    assert_eq!(
+        receiver.try_recv().expect("put ERROR fact").kind,
+        ha_domain::FactKind::Error
+    );
 
     maintenance.compact(ENTITY).unwrap();
     domain.entity_put(ENTITY, &[3; 8], &[4; 8], meta).unwrap();
@@ -287,8 +290,11 @@ fn failed_compaction_keeps_ram_and_bank_and_publishes_no_delta() {
     assert_eq!(maintenance.compact(ENTITY), Err(Error::Io));
     assert_eq!(maintenance.bank_state(ENTITY), Ok(Some((0, 0))));
     assert_eq!(domain.entity_get(ENTITY, &[1; 8], &mut [0; 8]), Ok(()));
-    assert_eq!(domain.dispatch_once(), Ok(0));
-    assert_eq!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    assert_eq!(domain.dispatch_once(), Ok(1));
+    assert_eq!(
+        receiver.try_recv().expect("put ERROR fact").kind,
+        ha_domain::FactKind::Error
+    );
 }
 #[test]
 fn mutation_and_compaction_share_the_table_gate() {

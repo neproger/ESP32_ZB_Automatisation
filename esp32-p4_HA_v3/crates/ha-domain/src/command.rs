@@ -37,7 +37,7 @@ impl Domain {
             .iter()
             .any(|command| command.command_type == command_type)
         {
-            return Err(Error::AlreadyExists);
+            return Err(Error::InvalidState);
         }
         self.commands.push(Command {
             command_type,

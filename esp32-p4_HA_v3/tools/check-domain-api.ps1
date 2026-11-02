@@ -2,11 +2,11 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $expected = @{
-    'crates/ha-app/src/main.rs::main' = 1
-    'crates/ha-app/src/main.rs::handle_intake' = 2
+    'crates/ha-app/src/main.rs::main' = 0
+    'crates/ha-app/src/main.rs::handle_intake' = 0
     'crates/ha-app/src/zigbee_service.rs::run' = 0
-    'crates/ha-app/src/zigbee_service.rs::register_domain' = 3
-    'crates/ha-app/src/zigbee_service.rs::apply_capabilities' = 1
+    'crates/ha-app/src/zigbee_service.rs::register_domain' = 0
+    'crates/ha-app/src/zigbee_service.rs::apply_capabilities' = 0
     'crates/ha-app/src/zigbee_service.rs::remove_device' = 0
     'crates/ha-domain/tests/domain_handle.rs::post_publishes_one_command_sent_on_ok' = 1
     'crates/ha-domain/tests/domain_handle.rs::post_error_publishes_no_command_sent' = 1
@@ -175,7 +175,7 @@ function Check-DeviceRemoval {
     if ($null -eq $validate) {
         Add-Violation "${relative}: validate_plan is missing"
     } else {
-        if ($validate.Signature -notmatch '&\s*DomainTransaction\b') {
+        if ($validate.Signature -notmatch '&\s*(?:mut\s+)?DomainTransaction\b') {
             Add-Violation "${relative}: validate_plan must take &DomainTransaction"
         }
         if (($validate.Body -notmatch 'transaction\.entity_meta') -or

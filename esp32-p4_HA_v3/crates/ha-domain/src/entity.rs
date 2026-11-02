@@ -17,7 +17,7 @@ pub struct EntityDesc<'a> {
     pub record_size: usize,
     pub capacity: usize,
     pub backing: Backing,
-    /// Stable persistent identity; required by the flash backend (not ported yet).
+    /// Stable persistent identity; required by the flash backend.
     pub persist_key: Option<&'a str>,
 }
 
@@ -81,6 +81,13 @@ pub(crate) fn check_key(key: &[u8], key_size: usize) -> Result<()> {
     Ok(())
 }
 
+fn system_meta() -> FactMeta {
+    FactMeta {
+        source: crate::canonical::SOURCE_SYSTEM as u8,
+        value: Value::NONE,
+    }
+}
+
 impl Domain {
     pub fn entity_record_len(&self, entity: EntityType) -> Option<usize> {
         self.desc(entity).ok().map(|(_, record_size)| record_size)
@@ -129,7 +136,13 @@ impl Domain {
         }
         check_source(&meta)?;
 
-        let changed = self.put_record(entity, key, record)?;
+        let changed = match self.put_record(entity, key, record) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.publish_error(Op::EntityPut, meta, entity, key, error);
+                return Err(error);
+            }
+        };
         if changed {
             self.publish(
                 FactKind::EntityUpserted,
@@ -146,25 +159,46 @@ impl Domain {
         Ok(changed)
     }
 
-    pub fn entity_get(&self, entity: EntityType, key: &[u8], out: &mut [u8]) -> Result<()> {
+    pub fn entity_get(
+        &mut self,
+        entity: EntityType,
+        key: &[u8],
+        out: &mut [u8],
+    ) -> Result<()> {
         let (key_size, record_size) = self.desc(entity)?;
         check_key(key, key_size)?;
         if out.len() < record_size {
             return Err(Error::InvalidSize);
         }
-        self.table(entity)?.get(key, out)?;
+        let result = { self.table(entity)?.get(key, out) };
+        if let Err(error) = result {
+            if error != Error::NotFound {
+                self.publish_error(Op::EntityGet, system_meta(), entity, key, error);
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
-    pub fn entity_meta(&self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
+    pub fn entity_meta(&mut self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
         let (key_size, _) = self.desc(entity)?;
         check_key(key, key_size)?;
-        let table = self.table(entity)?;
-        let slot = table.find(key)?;
-        let meta = table.meta(slot)?;
-        Ok(EntityMeta {
-            version: meta.version,
-        })
+        let result = {
+            let table = self.table(entity)?;
+            table
+                .find(key)
+                .and_then(|slot| table.meta(slot))
+                .map(|meta| EntityMeta {
+                    version: meta.version,
+                })
+        };
+        if let Err(error) = result {
+            if error != Error::NotFound {
+                self.publish_error(Op::EntityGet, system_meta(), entity, key, error);
+            }
+            return Err(error);
+        }
+        result
     }
 
     pub fn entity_remove(&mut self, entity: EntityType, key: &[u8], meta: FactMeta) -> Result<()> {
@@ -172,13 +206,11 @@ impl Domain {
         check_key(key, key_size)?;
         check_source(&meta)?;
 
-        let result = self.remove_record(entity, key);
-        if let Err(err) = result {
-            if err == Error::NotFound {
-                // Separate defect: preserve current NotFound fact behavior in Stage 1c.
-                self.publish_error(Op::EntityRemove, meta, entity, key, err);
+        if let Err(error) = self.remove_record(entity, key) {
+            if error != Error::NotFound {
+                self.publish_error(Op::EntityRemove, meta, entity, key, error);
             }
-            return Err(err);
+            return Err(error);
         }
         self.publish(
             FactKind::EntityRemoved,
@@ -194,7 +226,17 @@ impl Domain {
         Ok(())
     }
 
-    pub(crate) fn snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
+    pub(crate) fn snapshot(&mut self, entity: EntityType) -> Result<EntitySnapshot> {
+        let result = self.snapshot_inner(entity);
+        if let Err(error) = result {
+            if error != Error::NotFound {
+                self.publish_error(Op::EntityIter, system_meta(), entity, &[], error);
+            }
+        }
+        result
+    }
+
+    fn snapshot_inner(&self, entity: EntityType) -> Result<EntitySnapshot> {
         let table = self.table(entity)?;
         let desc = self.entity(entity)?.desc;
         let count = table.len();

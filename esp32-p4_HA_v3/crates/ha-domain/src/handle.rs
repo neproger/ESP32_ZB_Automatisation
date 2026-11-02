@@ -31,6 +31,8 @@ impl DomainHandle {
         Self(Arc::new(StdMutex::new(domain)))
     }
 
+    /// Test-only transitional escape hatch. Production code must use
+    /// `transaction` or a typed Domain method; no production call sites remain.
     #[doc(hidden)]
     pub fn with_mut<R>(&self, visit: impl FnOnce(&mut Domain) -> R) -> Result<R> {
         let _flag = ThreadFlagGuard::enter(&IN_DOMAIN_CALLBACK);

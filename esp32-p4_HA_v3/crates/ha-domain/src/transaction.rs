@@ -15,15 +15,15 @@ impl<'a> DomainTransaction<'a> {
         Self { domain }
     }
 
-    pub fn entity_snapshot(&self, entity: EntityType) -> Result<EntitySnapshot> {
+    pub fn entity_snapshot(&mut self, entity: EntityType) -> Result<EntitySnapshot> {
         self.domain.snapshot(entity)
     }
 
-    pub fn entity_meta(&self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
+    pub fn entity_meta(&mut self, entity: EntityType, key: &[u8]) -> Result<EntityMeta> {
         self.domain.entity_meta(entity, key)
     }
 
-    pub fn entity_get(&self, entity: EntityType, key: &[u8], out: &mut [u8]) -> Result<()> {
+    pub fn entity_get(&mut self, entity: EntityType, key: &[u8], out: &mut [u8]) -> Result<()> {
         self.domain.entity_get(entity, key, out)
     }
 

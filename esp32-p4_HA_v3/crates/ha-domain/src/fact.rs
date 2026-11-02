@@ -20,9 +20,9 @@ pub enum FactKind {
 }
 
 impl FactKind {
-    /// Bit used by subscription masks (kind 0 would mean "any").
+    /// Bit used by subscription masks (same numbering as V2).
     pub fn bit(self) -> u32 {
-        1u32 << (self as u8 - 1)
+        1u32 << self as u8
     }
 }
 

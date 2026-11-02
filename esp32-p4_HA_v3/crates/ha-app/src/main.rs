@@ -22,7 +22,7 @@ use ha_domain::canonical::{
     PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_UI,
     SOURCE_ZIGBEE, SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
 };
-use ha_domain::{Domain, DomainHandle, FactMeta, FactTarget, Filter};
+use ha_domain::{Domain, DomainHandle, DomainTransaction, FactMeta, FactTarget, Filter};
 
 mod automation_task;
 mod capabilities;
@@ -238,8 +238,8 @@ fn main() {
             }
         }
         while let Some((entity, capabilities)) = capabilities::take_capabilities() {
-            if let Err(error) = domain.with_mut(|domain| {
-                apply_capabilities(domain, entity, capabilities);
+            if let Err(error) = domain.transaction(|transaction| {
+                apply_capabilities(transaction, entity, capabilities).map(|_| ())
             }) {
                 log::warn!("domain: capabilities update failed: {error:?}");
             }
@@ -295,12 +295,16 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             }
         }
         intake::Request::RenameEntity { entity, name } => {
-            if let Err(error) = domain.with_mut(|domain| rename_entity(domain, entity, &name)) {
+            if let Err(error) = domain.transaction(|transaction| {
+                ha_device::rename_entity(transaction, SOURCE_UI as u8, entity, &name).map(|_| ())
+            }) {
                 log::warn!("domain: entity rename failed: {error:?}");
             }
         }
         intake::Request::RenameDevice { device, name } => {
-            if let Err(error) = domain.with_mut(|domain| rename_device(domain, device, &name)) {
+            if let Err(error) = domain.transaction(|transaction| {
+                ha_device::rename(transaction, SOURCE_UI as u8, device, &name).map(|_| ())
+            }) {
                 log::warn!("domain: device rename failed: {error:?}");
             }
         }
@@ -399,15 +403,11 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
 }
 
 fn apply_capabilities(
-    domain: &mut Domain,
+    domain: &mut DomainTransaction<'_>,
     entity: u64,
     capabilities: ha_domain::canonical::CapabilitiesRecord,
-) {
-    if let Err(error) =
-        ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
-    {
-        log::error!("domain: capabilities {entity:016x} failed: {error:?}");
-    }
+) -> Result<bool, ha_domain::Error> {
+    ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
 }
 
 fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
@@ -599,22 +599,4 @@ fn local_minute(domain: &DomainHandle) -> Option<(u16, u8)> {
 
 fn now_ms() -> u64 {
     (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1000).max(0) as u64
-}
-
-fn rename_entity(domain: &mut Domain, entity: u64, name: &str) {
-    match ha_device::rename_entity(domain, SOURCE_UI as u8, entity, name) {
-        Ok(_) => {
-            log::info!("domain: renamed entity={entity:016x} name={name}");
-        }
-        Err(error) => log::warn!("domain: rename entity={entity:016x} failed: {error:?}"),
-    }
-}
-
-fn rename_device(domain: &mut Domain, device: u64, name: &str) {
-    match ha_device::rename(domain, SOURCE_UI as u8, device, name) {
-        Ok(_) => {
-            log::info!("device: renamed device={device:016x} name={name}");
-        }
-        Err(error) => log::warn!("device: rename device={device:016x} failed: {error:?}"),
-    }
 }

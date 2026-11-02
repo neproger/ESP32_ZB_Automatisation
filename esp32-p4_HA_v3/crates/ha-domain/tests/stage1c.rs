@@ -373,7 +373,7 @@ fn restore_does_not_publish_facts() {
 }
 
 #[test]
-fn storage_write_error_returns_err_without_fact() {
+fn storage_write_error_publishes_error_fact_and_keeps_state() {
     let fail = Arc::new(Mutex::new(false));
     let mut domain = new_domain(WriteFailProvider {
         fail: Arc::clone(&fail),
@@ -402,11 +402,13 @@ fn storage_write_error_returns_err_without_fact() {
         domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out),
         Err(Error::NotFound)
     );
-    assert_eq!(domain.dispatch_once(), 0);
-    assert_eq!(
-        receiver.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty)
-    );
+    assert_eq!(domain.dispatch_once(), 1);
+    let fact = receiver.try_recv().expect("put ERROR fact");
+    assert_eq!(fact.kind, FactKind::Error);
+    assert_eq!(fact.op, ha_domain::Op::EntityPut);
+    assert_eq!(fact.error, Some(Error::Io));
+    assert_eq!(fact.entity, RAM_ENTITY);
+    assert_eq!(fact.key(), &[1u8; 8]);
 
     *fail.lock().unwrap() = false;
     domain
@@ -428,11 +430,147 @@ fn storage_write_error_returns_err_without_fact() {
         domain.entity_meta(RAM_ENTITY, &[1u8; 8]).unwrap().version,
         version
     );
+    assert_eq!(domain.dispatch_once(), 1);
+    let fact = receiver.try_recv().expect("remove ERROR fact");
+    assert_eq!(fact.kind, FactKind::Error);
+    assert_eq!(fact.op, ha_domain::Op::EntityRemove);
+    assert_eq!(fact.error, Some(Error::Io));
+    assert_eq!(fact.key(), &[1u8; 8]);
+}
+
+#[test]
+fn remove_missing_publishes_no_error_fact() {
+    let mut domain = Domain::new(8, 2, 8).unwrap();
+    domain
+        .register_entity(EntityDesc {
+            entity: RAM_ENTITY,
+            key_size: 8,
+            record_size: 8,
+            capacity: 4,
+            backing: Backing::Ram,
+            persist_key: None,
+        })
+        .unwrap();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    domain.subscribe_channel(ha_domain::Filter::all(), sender);
+
+    assert_eq!(
+        domain.entity_remove(RAM_ENTITY, &[1u8; 8], meta()),
+        Err(Error::NotFound)
+    );
     assert_eq!(domain.dispatch_once(), 0);
     assert_eq!(
         receiver.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     );
+}
+
+struct ReadFailStorage {
+    inner: RamStorage,
+    fail: Arc<Mutex<bool>>,
+}
+
+impl StorageMaintenance for ReadFailStorage {
+    fn compact(&mut self) -> Result<(), Error> {
+        self.inner.compact()
+    }
+    fn bank_state(&self) -> Option<(usize, u32)> {
+        self.inner.bank_state()
+    }
+    fn sync(&mut self) -> Result<(), Error> {
+        Storage::sync(&mut self.inner)
+    }
+}
+
+impl Storage for ReadFailStorage {
+    fn geometry(&self) -> Geometry {
+        self.inner.geometry()
+    }
+    fn read_meta(&self, slot: u32) -> Result<Meta, Error> {
+        if *self.fail.lock().unwrap() {
+            return Err(Error::Io);
+        }
+        self.inner.read_meta(slot)
+    }
+    fn read_key(&self, slot: u32, out: &mut [u8]) -> Result<(), Error> {
+        if *self.fail.lock().unwrap() {
+            return Err(Error::Io);
+        }
+        self.inner.read_key(slot, out)
+    }
+    fn read_slot(&self, slot: u32, key: &mut [u8], payload: &mut [u8]) -> Result<Meta, Error> {
+        if *self.fail.lock().unwrap() {
+            return Err(Error::Io);
+        }
+        self.inner.read_slot(slot, key, payload)
+    }
+    fn write_slot(&mut self, slot: u32, meta: Meta, key: &[u8], payload: &[u8]) -> Result<(), Error> {
+        self.inner.write_slot(slot, meta, key, payload)
+    }
+    fn write_meta(&mut self, slot: u32, meta: Meta) -> Result<(), Error> {
+        self.inner.write_meta(slot, meta)
+    }
+    fn clear_all(&mut self) -> Result<(), Error> {
+        self.inner.clear_all()
+    }
+    fn sync(&mut self) -> Result<(), Error> {
+        Storage::sync(&mut self.inner)
+    }
+}
+
+struct ReadFailProvider {
+    fail: Arc<Mutex<bool>>,
+}
+
+impl StorageProvider for ReadFailProvider {
+    fn open(&mut self, desc: &EntityDesc<'_>) -> Result<StorageBackend, Error> {
+        let geometry = Geometry {
+            capacity: desc.capacity,
+            key_size: desc.key_size,
+            payload_size: desc.record_size,
+        };
+        Ok(StorageBackend::new(ReadFailStorage {
+            inner: RamStorage::new(geometry)?,
+            fail: Arc::clone(&self.fail),
+        }))
+    }
+}
+
+#[test]
+fn storage_read_errors_publish_error_facts() {
+    let fail = Arc::new(Mutex::new(false));
+    let mut domain = new_domain(ReadFailProvider { fail: Arc::clone(&fail) });
+    domain
+        .register_entity(EntityDesc {
+            entity: RAM_ENTITY,
+            key_size: 8,
+            record_size: 8,
+            capacity: 4,
+            backing: Backing::Ram,
+            persist_key: None,
+        })
+        .unwrap();
+    domain.restore().unwrap();
+    domain
+        .entity_put(RAM_ENTITY, &[1u8; 8], &[2u8; 8], meta())
+        .unwrap();
+    let _ = domain.dispatch_once();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    domain.subscribe_channel(ha_domain::Filter::all(), sender);
+    let domain = ha_domain::DomainHandle::new(domain);
+    *fail.lock().unwrap() = true;
+
+    let mut out = [0u8; 8];
+    assert_eq!(domain.entity_get(RAM_ENTITY, &[1u8; 8], &mut out), Err(Error::Io));
+    assert_eq!(domain.entity_meta(RAM_ENTITY, &[1u8; 8]), Err(Error::Io));
+    assert_eq!(domain.entity_snapshot(RAM_ENTITY), Err(Error::Io));
+    assert_eq!(domain.dispatch_once(), Ok(3));
+    let facts: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok()).collect();
+    assert_eq!(facts.len(), 3);
+    assert!(facts.iter().all(|fact| fact.kind == FactKind::Error));
+    assert_eq!(facts[0].op, ha_domain::Op::EntityGet);
+    assert_eq!(facts[1].op, ha_domain::Op::EntityGet);
+    assert_eq!(facts[2].op, ha_domain::Op::EntityIter);
 }
 
 struct WrongGeometryStorage<S> {

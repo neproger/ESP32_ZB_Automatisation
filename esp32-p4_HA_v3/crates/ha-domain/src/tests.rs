@@ -329,9 +329,14 @@ fn payload_ring_publishes_and_evicts() {
         domain.payload_put(Some(target), meta(Value::u32(2)), b"defg"),
         Ok(2)
     );
-    let mut buf = [0u8; 8];
+    let mut buf = [0u8; 4];
     domain.payload_get(2, &mut buf).unwrap();
-    assert_eq!(&buf[..4], b"defg");
+    assert_eq!(&buf, b"defg");
+    let mut larger = [0u8; 8];
+    assert_eq!(
+        domain.payload_get(2, &mut larger),
+        Err(Error::InvalidSize)
+    );
 
     assert_eq!(
         domain.payload_put(Some(target), meta(Value::NONE), b"0123456789"),
@@ -360,6 +365,16 @@ fn payload_ring_publishes_and_evicts() {
         (2, 4, Value::u32(2))
     );
     assert_eq!(events[2].payload_ref, 3);
+}
+
+#[test]
+fn duplicate_command_registration_returns_invalid_state() {
+    let mut domain = domain(4);
+    domain.register_command(7, |_| Ok(())).unwrap();
+    assert_eq!(
+        domain.register_command(7, |_| Ok(())),
+        Err(Error::InvalidState)
+    );
 }
 
 #[test]

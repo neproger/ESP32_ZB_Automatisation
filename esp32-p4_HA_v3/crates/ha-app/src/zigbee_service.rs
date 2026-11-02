@@ -330,25 +330,27 @@ fn register_domain(
         parent_native_id: None,
         name,
     };
-    let device =
-        match domain.with_mut(|domain| ha_device::register(domain, SOURCE_ZIGBEE as u8, &desc)) {
-            Ok(Ok(device)) => device,
-            Ok(Err(error)) | Err(error) => {
-                log::error!("device: register {eui:016x} failed: {error:?}");
-                return;
-            }
-        };
+    let device = match domain
+        .transaction(|transaction| ha_device::register(transaction, SOURCE_ZIGBEE as u8, &desc))
+    {
+        Ok(device) => device,
+        Err(error) => {
+            log::error!("device: register {eui:016x} failed: {error:?}");
+            return;
+        }
+    };
     let standard_endpoint = if profile.id == zigbee_devices::STANDARD_PROFILE_ID {
         store::descriptor(eui).and_then(|descriptor| descriptor.endpoint(endpoint).copied())
     } else {
         None
     };
     let entity = zigbee_devices::zigbee_entity_id(eui, endpoint);
-    let entity = match domain.with_mut(|domain| -> Result<(u64, bool), ha_domain::Error> {
-        let changed = ha_device::ensure_entity(domain, SOURCE_ZIGBEE as u8, device, entity, name)?;
+    let entity = match domain.transaction(|transaction| -> Result<(u64, bool), ha_domain::Error> {
+        let changed =
+            ha_device::ensure_entity(transaction, SOURCE_ZIGBEE as u8, device, entity, name)?;
         let caps_changed = match standard_endpoint {
             Some(descriptor) => {
-                if domain
+                if transaction
                     .entity_meta(ENTITY_CAPABILITIES, &entity.to_le_bytes())
                     .is_ok()
                 {
@@ -358,33 +360,33 @@ fn register_domain(
                         &descriptor,
                         &zigbee_devices::standard::Confirmed::new(),
                     );
-                    ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &caps)?
+                    ha_device::set_capabilities(transaction, SOURCE_ZIGBEE as u8, entity, &caps)?
                 }
             }
             None => {
                 let caps = zigbee_devices::profile_capabilities(profile);
-                ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &caps)?
+                ha_device::set_capabilities(transaction, SOURCE_ZIGBEE as u8, entity, &caps)?
             }
         };
         Ok((entity, changed || caps_changed))
     }) {
-        Ok(Ok((entity, changed))) => {
+        Ok((entity, changed)) => {
             log::info!(
                 "domain: entity={entity:016x} eui={eui:016x} profile={} changed={changed}",
                 profile.id
             );
             entity
         }
-        Ok(Err(error)) | Err(error) => {
+        Err(error) => {
             log::error!("domain: entity {eui:016x} failed: {error:?}");
             return;
         }
     };
-    match domain
-        .with_mut(|domain| ha_device::bind_entity(domain, SOURCE_ZIGBEE as u8, device, entity))
-    {
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) | Err(error) => {
+    match domain.transaction(|transaction| {
+        ha_device::bind_entity(transaction, SOURCE_ZIGBEE as u8, device, entity)
+    }) {
+        Ok(_) => {}
+        Err(error) => {
             log::error!("device: bind entity={entity:016x} failed: {error:?}");
             return;
         }
@@ -567,12 +569,12 @@ fn apply_capabilities(
     entity: u64,
     capabilities: ha_domain::canonical::CapabilitiesRecord,
 ) {
-    let result = domain.with_mut(|domain| {
-        ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
+    let result = domain.transaction(|transaction| {
+        ha_device::set_capabilities(transaction, SOURCE_ZIGBEE as u8, entity, &capabilities)
     });
     match result {
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) | Err(error) => {
+        Ok(_) => {}
+        Err(error) => {
             log::error!("domain: capabilities {entity:016x} failed: {error:?}");
         }
     }

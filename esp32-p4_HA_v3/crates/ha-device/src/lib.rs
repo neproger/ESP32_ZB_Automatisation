@@ -14,6 +14,52 @@ use ha_domain::canonical::{
 use ha_domain::Error;
 use ha_domain::{Domain, DomainHandle, DomainTransaction, FactMeta, Value};
 
+/// Minimal canonical entity access used by Device operations.
+///
+/// Implemented by `Domain` and `DomainTransaction`, so Device service logic
+/// can run either directly or inside one Domain critical section.
+pub trait CanonicalStore {
+    fn entity_get(&mut self, entity: u32, key: &[u8], out: &mut [u8]) -> Result<(), Error>;
+    fn entity_put(
+        &mut self,
+        entity: u32,
+        key: &[u8],
+        record: &[u8],
+        meta: FactMeta,
+    ) -> Result<bool, Error>;
+}
+
+impl CanonicalStore for Domain {
+    fn entity_get(&mut self, entity: u32, key: &[u8], out: &mut [u8]) -> Result<(), Error> {
+        Domain::entity_get(self, entity, key, out)
+    }
+
+    fn entity_put(
+        &mut self,
+        entity: u32,
+        key: &[u8],
+        record: &[u8],
+        meta: FactMeta,
+    ) -> Result<bool, Error> {
+        Domain::entity_put(self, entity, key, record, meta)
+    }
+}
+
+impl CanonicalStore for DomainTransaction<'_> {
+    fn entity_get(&mut self, entity: u32, key: &[u8], out: &mut [u8]) -> Result<(), Error> {
+        DomainTransaction::entity_get(self, entity, key, out)
+    }
+
+    fn entity_put(
+        &mut self,
+        entity: u32,
+        key: &[u8],
+        record: &[u8],
+        meta: FactMeta,
+    ) -> Result<bool, Error> {
+        DomainTransaction::entity_put(self, entity, key, record, meta)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeRemoval {
     Removed,
@@ -155,7 +201,7 @@ fn decode_device(bytes: &[u8; DEVICE_RECORD_LEN]) -> LogicalDeviceRecord {
     }
 }
 
-pub fn register(domain: &mut Domain, origin: u8, desc: &DeviceDesc<'_>) -> Result<DeviceId, Error> {
+pub fn register<S: CanonicalStore>(domain: &mut S, origin: u8, desc: &DeviceDesc<'_>) -> Result<DeviceId, Error> {
     if desc.source == 0 || desc.native_id.is_empty() {
         return Err(Error::InvalidArg);
     }
@@ -192,8 +238,8 @@ pub fn register(domain: &mut Domain, origin: u8, desc: &DeviceDesc<'_>) -> Resul
     Ok(id)
 }
 
-pub fn ensure_entity(
-    domain: &mut Domain,
+pub fn ensure_entity<S: CanonicalStore>(
+    domain: &mut S,
     origin: u8,
     device: DeviceId,
     entity: EntityId,
@@ -221,8 +267,8 @@ pub fn ensure_entity(
     }
 }
 
-pub fn set_capabilities(
-    domain: &mut Domain,
+pub fn set_capabilities<S: CanonicalStore>(
+    domain: &mut S,
     origin: u8,
     entity: EntityId,
     capabilities: &CapabilitiesRecord,
@@ -245,8 +291,8 @@ pub fn set_capabilities(
     )
 }
 
-pub fn bind_entity(
-    domain: &mut Domain,
+pub fn bind_entity<S: CanonicalStore>(
+    domain: &mut S,
     origin: u8,
     device: DeviceId,
     entity: EntityId,
@@ -268,8 +314,8 @@ pub fn bind_entity(
     domain.entity_put(ENTITY_ENTITY, &key, &record, meta(origin))
 }
 
-pub fn rename_entity(
-    domain: &mut Domain,
+pub fn rename_entity<S: CanonicalStore>(
+    domain: &mut S,
     origin: u8,
     entity: EntityId,
     name: &str,
@@ -286,8 +332,8 @@ pub fn rename_entity(
     domain.entity_put(ENTITY_ENTITY, &key, &encoded, meta(origin))
 }
 
-pub fn rename(
-    domain: &mut Domain,
+pub fn rename<S: CanonicalStore>(
+    domain: &mut S,
     origin: u8,
     device: DeviceId,
     name: &str,
@@ -305,7 +351,7 @@ pub fn rename(
 }
 
 fn push_record(
-    transaction: &DomainTransaction<'_>,
+    transaction: &mut DomainTransaction<'_>,
     entity: u32,
     key: &[u8],
     records: &mut Vec<RemovalRecord>,
@@ -439,7 +485,7 @@ fn plan_owned_entity(plan: &RemovalPlan, entity: EntityId) -> bool {
 }
 
 fn validate_plan(
-    transaction: &DomainTransaction<'_>,
+    transaction: &mut DomainTransaction<'_>,
     plan: &RemovalPlan,
     progress: &RemovalProgress,
 ) -> Result<(), RemovalError> {
