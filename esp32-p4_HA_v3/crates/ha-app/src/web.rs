@@ -89,6 +89,9 @@ pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
     while let Ok(fact) = receiver.try_recv() {
         match fact.kind {
             FactKind::EntityUpserted => {
+                if !web_visible(fact.entity) {
+                    continue;
+                }
                 let Some(record_len) = domain.entity_record_len(fact.entity).ok() else {
                     continue;
                 };
@@ -104,6 +107,9 @@ pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
                 }
             }
             FactKind::EntityRemoved => {
+                if !web_visible(fact.entity) {
+                    continue;
+                }
                 if let Ok(frame_type) = u8::try_from(fact.entity) {
                     remove(frame_type, fact.key());
                 }
@@ -123,8 +129,15 @@ pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
     }
 }
 
+fn web_visible(entity: u32) -> bool {
+    u8::try_from(entity).is_ok_and(ha_web::is_web_visible)
+}
+
 /// Mirrors one canonical record; an unchanged record is not broadcast again.
 pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
+    if !ha_web::is_web_visible(frame_type) {
+        return;
+    }
     let mut payload = Vec::with_capacity(key.len() + record.len());
     payload.extend_from_slice(key);
     payload.extend_from_slice(record);
@@ -162,6 +175,9 @@ pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
 
 /// Drops one cached record and tells clients to remove it too.
 pub fn remove(frame_type: u8, key: &[u8]) {
+    if !ha_web::is_web_visible(frame_type) {
+        return;
+    }
     let changed = {
         let mut model = MODEL.lock().unwrap();
         match model
@@ -248,6 +264,7 @@ fn snapshot_frames() -> Vec<Vec<u8>> {
         let model = MODEL.lock().unwrap();
         model
             .iter()
+            .filter(|entry| ha_web::is_web_visible(entry.frame_type))
             .map(|entry| (entry.frame_type, entry.payload.clone()))
             .collect()
     };

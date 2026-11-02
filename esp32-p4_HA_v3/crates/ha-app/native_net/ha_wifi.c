@@ -86,19 +86,6 @@ static bool link_up(void)
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
 }
 
-/* RSSI активной точки; 0 — связи нет. */
-int ha_wifi_rssi(int *rssi)
-{
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
-        return 0;
-    }
-    if (rssi != NULL) {
-        *rssi = ap.rssi;
-    }
-    return 1;
-}
-
 static void schedule_reconnect(void)
 {
     if (s_reconnect_pending || s_queue == NULL) {
@@ -169,6 +156,26 @@ int ha_wifi_known_get(int index, char *ssid, size_t len, char *password, size_t 
         strlcpy(password, s_known[index].password, password_len);
     }
     return 1;
+}
+
+int ha_wifi_known_remove(const char *ssid)
+{
+    if (ssid == NULL) {
+        return 0;
+    }
+    for (size_t i = 0; i < s_known_count; ++i) {
+        if (!ssid_equals(s_known[i].ssid, ssid)) {
+            continue;
+        }
+        if (i + 1 < s_known_count) {
+            memmove(&s_known[i], &s_known[i + 1],
+                    (s_known_count - i - 1) * sizeof(s_known[0]));
+        }
+        s_known_count--;
+        memset(&s_known[s_known_count], 0, sizeof(s_known[0]));
+        return 1;
+    }
+    return 0;
 }
 
 /* --- Radio --------------------------------------------------------------- */

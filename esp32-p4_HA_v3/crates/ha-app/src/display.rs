@@ -20,17 +20,19 @@ use std::time::{Duration, Instant};
 
 use ha_domain::canonical::{
     CommandValue, EntityId, LocationRecord, PropertyId, SettingsRecord, StateKey, WeatherRecord,
-    ACTION_OFF, ACTION_ON, ACTION_SET, AUTOMATION_RECORD_LEN, CAPABILITIES_LEN, ENTITY_AUTOMATION,
-    ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
-    ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM,
-    ENTITY_WEATHER, LOCATION_RECORD_LEN, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE,
+    WifiScanRecord, WifiStatusRecord, ACTION_OFF, ACTION_ON, ACTION_SET, AUTOMATION_RECORD_LEN,
+    CAPABILITIES_LEN, ENTITY_AUTOMATION, ENTITY_CAPABILITIES, ENTITY_ENTITY, ENTITY_GROUP,
+    ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM, ENTITY_LOCATION, ENTITY_LOGICAL_DEVICE,
+    ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER, ENTITY_WIFI_SCAN,
+    ENTITY_WIFI_STATUS, LOCATION_RECORD_LEN, PROPERTY_BATTERY_PERCENT, PROPERTY_BATTERY_VOLTAGE,
     PROPERTY_BRIGHTNESS, PROPERTY_COLOR, PROPERTY_COLOR_TEMPERATURE, PROPERTY_COLOR_X,
     PROPERTY_COLOR_Y, PROPERTY_HUMIDITY, PROPERTY_ILLUMINANCE, PROPERTY_OCCUPANCY, PROPERTY_POWER,
     PROPERTY_SYSTEM_HOUR, PROPERTY_SYSTEM_MINUTE, PROPERTY_TEMPERATURE, SETTINGS_ID,
     SETTINGS_RECORD_LEN, STATE_RECORD_LEN, WEATHER_CLEAR, WEATHER_CLEAR_NIGHT, WEATHER_CLOUDY,
     WEATHER_FOG, WEATHER_HAIL, WEATHER_LIGHTNING, WEATHER_LIGHTNING_RAINY, WEATHER_OVERCAST,
     WEATHER_PARTLYCLOUDY, WEATHER_POURING, WEATHER_RAINY, WEATHER_RECORD_LEN, WEATHER_SNOWY,
-    WEATHER_SNOWY_RAINY, WEATHER_WINDY, WEATHER_WINDY_VARIANT,
+    WEATHER_SNOWY_RAINY, WEATHER_WINDY, WEATHER_WINDY_VARIANT, WIFI_DEVICE_UID,
+    WIFI_SCAN_RECORD_LEN, WIFI_STATUS_RECORD_LEN,
 };
 use ha_domain::{DomainHandle, Fact, FactKind, Value};
 
@@ -597,19 +599,13 @@ static MENU_CARD: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static MENU_BACKDROP: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static MENU_VISIBLE: AtomicBool = AtomicBool::new(false);
 static PRESS_Y: AtomicI32 = AtomicI32::new(0);
-static WIFI_SCAN: Mutex<Vec<(String, i8)>> = Mutex::new(Vec::new());
-static WIFI_SCAN_RUN: AtomicBool = AtomicBool::new(false);
-static WIFI_SCANNING: AtomicBool = AtomicBool::new(false);
+
 static WIFI_DIALOG: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static WIFI_KEYBOARD: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static WIFI_BACKDROP: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static WIFI_TEXTAREA: AtomicPtr<lv_obj_t> = AtomicPtr::new(null_mut());
 static DIALOG_SSID: Mutex<Option<String>> = Mutex::new(None);
 static CLOCK_LAST: Mutex<(u8, u8)> = Mutex::new((0, 0));
-
-extern "C" {
-    fn ha_wifi_status(ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
-}
 
 fn c_string(bytes: &[u8]) -> String {
     let end = bytes
@@ -1926,7 +1922,7 @@ unsafe fn open_wifi_dialog(ssid: &str) {
     WIFI_KEYBOARD.store(keyboard, Ordering::Relaxed);
 }
 
-unsafe fn build_wifi(_domain: &DomainHandle) -> Page {
+unsafe fn build_wifi(domain: &DomainHandle) -> Page {
     close_wifi_dialog();
     let screen = lv_obj_create(null_mut());
     lv_obj_set_style_bg_color(screen, color(COL_BG), 0);
@@ -1940,17 +1936,18 @@ unsafe fn build_wifi(_domain: &DomainHandle) -> Page {
     let title = label(screen, "Wi-Fi", font_32(), COL_TEXT);
     lv_obj_align(title, lv_align_t_LV_ALIGN_TOP_MID, 0, STATUSBAR_H + 10);
 
-    let mut ssid = [0 as c_char; 33];
-    let mut rssi = 0i32;
-    let connected = ha_wifi_status(ssid.as_mut_ptr(), ssid.len(), &mut rssi) != 0;
-    let status_text = if connected {
-        format!(
-            "{}  {} dBm",
-            CStr::from_ptr(ssid.as_ptr()).to_string_lossy(),
-            rssi
-        )
-    } else {
-        "не подключено".to_string()
+    let key = WIFI_DEVICE_UID.to_le_bytes();
+    let mut status_bytes = [0u8; WIFI_STATUS_RECORD_LEN];
+    let status_record = domain
+        .entity_get(ENTITY_WIFI_STATUS, &key, &mut status_bytes)
+        .ok()
+        .and_then(|_| WifiStatusRecord::decode(&status_bytes));
+    let connected = matches!(status_record, Some(record) if record.connected != 0);
+    let status_text = match status_record {
+        Some(record) if record.connected != 0 => {
+            format!("{}  {} dBm", c_string(&record.ssid), record.rssi)
+        }
+        _ => "не подключено".to_string(),
     };
     let status = label(
         screen,
@@ -1982,16 +1979,22 @@ unsafe fn build_wifi(_domain: &DomainHandle) -> Page {
         lv_flex_align_t_LV_FLEX_ALIGN_START,
     );
 
-    let networks = WIFI_SCAN.lock().unwrap().clone();
+    let mut scan_bytes = [0u8; WIFI_SCAN_RECORD_LEN];
+    let networks: Vec<(String, i8)> = domain
+        .entity_get(ENTITY_WIFI_SCAN, &key, &mut scan_bytes)
+        .ok()
+        .and_then(|_| WifiScanRecord::decode(&scan_bytes))
+        .map(|record| {
+            let count = usize::from(record.count).min(record.aps.len());
+            record.aps[..count]
+                .iter()
+                .filter(|ap| ap.ssid[0] != 0)
+                .map(|ap| (c_string(&ap.ssid), ap.rssi))
+                .collect()
+        })
+        .unwrap_or_default();
     if networks.is_empty() {
-        let hint = if WIFI_SCANNING.load(Ordering::Relaxed) {
-            "Сканирование…"
-        } else if WIFI_SCAN_RUN.load(Ordering::Relaxed) {
-            "Сети не найдены"
-        } else {
-            "Нажмите «Сканировать»"
-        };
-        label(list, hint, font_20(), COL_MUTED);
+        label(list, "Нажмите «Сканировать»", font_20(), COL_MUTED);
     } else {
         for (ssid, rssi) in networks {
             let button = lv_button_create(list);
@@ -2026,32 +2029,7 @@ unsafe fn build_wifi(_domain: &DomainHandle) -> Page {
     }
 }
 
-pub fn wifi_scan_done(domain: &DomainHandle, results: Vec<(String, i8)>) {
-    *WIFI_SCAN.lock().unwrap() = results;
-    WIFI_SCAN_RUN.store(true, Ordering::Relaxed);
-    WIFI_SCANNING.store(false, Ordering::Relaxed);
-    if VIEW.load(Ordering::Relaxed) != View::Wifi as u8 {
-        return;
-    }
-    if !lock() {
-        return;
-    }
-    unsafe {
-        let page = build_wifi(domain);
-        replace_page(page);
-    }
-    unlock();
-}
-
-/// Seed the Wi-Fi screen with the last cached scan (no rebuild).
-pub fn set_wifi_scan(results: Vec<(String, i8)>) {
-    *WIFI_SCAN.lock().unwrap() = results;
-    WIFI_SCAN_RUN.store(true, Ordering::Relaxed);
-}
-
-/// Mark a scan as in flight and refresh the Wi-Fi screen hint.
-pub fn wifi_scan_requested(domain: &DomainHandle) {
-    WIFI_SCANNING.store(true, Ordering::Relaxed);
+fn refresh_wifi(domain: &DomainHandle) {
     if VIEW.load(Ordering::Relaxed) != View::Wifi as u8 {
         return;
     }
@@ -2148,6 +2126,7 @@ pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
                 | ENTITY_GROUP_ITEM
                 | ENTITY_GROUP_AUTOMATION
                 | ENTITY_AUTOMATION => rebuild_needed = true,
+                ENTITY_WIFI_SCAN | ENTITY_WIFI_STATUS => refresh_wifi(domain),
                 _ => {}
             },
             _ => {}

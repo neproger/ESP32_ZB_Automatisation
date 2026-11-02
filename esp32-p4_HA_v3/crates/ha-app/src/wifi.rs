@@ -2,10 +2,9 @@
 //!
 //! Commands arrive through Domain.post or the display navigation queue; the
 //! service task talks to the C radio, publishes canonical WIFI_STATUS/SCAN
-//! records and keeps the last scan for the Display client.
+//! records for Display/Web consumers.
 
 use std::ffi::{c_char, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -15,7 +14,7 @@ use ha_domain::canonical::{
     ENTITY_WIFI_STATUS, SOURCE_WIFI, WIFI_DEVICE_UID, WIFI_KNOWN_MAX, WIFI_PASSWORD_MAX,
     WIFI_SCAN_MAX, WIFI_SSID_MAX,
 };
-use ha_domain::{DomainHandle, FactMeta, Value};
+use ha_domain::{DomainHandle, Fact, FactMeta, Filter, Value};
 
 enum Command {
     Scan,
@@ -23,13 +22,10 @@ enum Command {
 }
 
 static COMMANDS: Mutex<Option<SyncSender<Command>>> = Mutex::new(None);
-static SCAN_READY: AtomicBool = AtomicBool::new(false);
-static SCAN: Mutex<Vec<(String, i8)>> = Mutex::new(Vec::new());
 
 extern "C" {
     fn ha_wifi_start() -> i32;
     fn ha_wifi_ip(out: *mut c_char, len: usize) -> i32;
-    fn ha_wifi_rssi(rssi: *mut i32) -> i32;
     fn ha_wifi_scan_start() -> i32;
     fn ha_wifi_scan_ready() -> i32;
     fn ha_wifi_scan_clear();
@@ -38,6 +34,7 @@ extern "C" {
     fn ha_wifi_status(ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
     fn ha_wifi_connect_ssid(ssid: *const c_char, password: *const c_char) -> i32;
     fn ha_wifi_known_add(ssid: *const c_char, password: *const c_char) -> i32;
+    fn ha_wifi_known_remove(ssid: *const c_char) -> i32;
     fn ha_wifi_known_count() -> i32;
     fn ha_wifi_known_get(
         index: i32,
@@ -51,11 +48,16 @@ extern "C" {
 
 pub fn start(domain: DomainHandle) {
     let (tx, rx) = sync_channel(4);
+    let (known_tx, known_rx) = sync_channel(64);
+    if let Err(error) = domain.subscribe_channel(Filter::entity(ENTITY_WIFI_KNOWN), known_tx) {
+        log::error!("wifi: known subscription failed: {error:?}");
+        return;
+    }
     *COMMANDS.lock().unwrap() = Some(tx);
     std::thread::Builder::new()
         .name("wifi".into())
         .stack_size(8192)
-        .spawn(move || run(domain, rx))
+        .spawn(move || run(domain, rx, known_rx))
         .expect("wifi thread");
 }
 
@@ -111,22 +113,8 @@ pub fn connect_from_args(args: &[u8]) -> Result<(), ha_domain::Error> {
     request_connect(ssid, password)
 }
 
-pub fn take_scan() -> Option<Vec<(String, i8)>> {
-    if !SCAN_READY.swap(false, Ordering::Relaxed) {
-        return None;
-    }
-    Some(SCAN.lock().unwrap().clone())
-}
-
-pub fn rssi() -> Option<i16> {
-    let mut rssi = 0i32;
-    (unsafe { ha_wifi_rssi(&mut rssi) } != 0).then_some(rssi as i16)
-}
-
-fn known_records(domain: &DomainHandle) -> Vec<(u32, WifiKnownRecord)> {
-    let Ok(snapshot) = domain.entity_snapshot(ENTITY_WIFI_KNOWN) else {
-        return Vec::new();
-    };
+fn known_records(domain: &DomainHandle) -> Result<Vec<(u32, WifiKnownRecord)>, ha_domain::Error> {
+    let snapshot = domain.entity_snapshot(ENTITY_WIFI_KNOWN)?;
     let mut records = Vec::new();
     for index in 0..snapshot.len() {
         let Some(key) = snapshot.key(index) else {
@@ -142,7 +130,7 @@ fn known_records(domain: &DomainHandle) -> Vec<(u32, WifiKnownRecord)> {
             }
         }
     }
-    records
+    Ok(records)
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -161,7 +149,13 @@ fn add_radio_known(ssid: &str, password: &str) {
 }
 
 fn remember_known(domain: &DomainHandle, ssid: &str, password: &str) {
-    let records = known_records(domain);
+    let records = match known_records(domain) {
+        Ok(records) => records,
+        Err(error) => {
+            log::error!("wifi: known snapshot failed: {error:?}");
+            return;
+        }
+    };
     let existing = records
         .iter()
         .position(|(_, record)| text(&record.ssid) == ssid);
@@ -190,51 +184,73 @@ fn remember_known(domain: &DomainHandle, ssid: &str, password: &str) {
         source: SOURCE_WIFI as u8,
         value: Value::NONE,
     };
-    let _ = domain.entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta);
+    if let Err(error) = domain.entity_put(ENTITY_WIFI_KNOWN, &key, &encoded, meta) {
+        log::error!("wifi: known save failed for \"{ssid}\": {error:?}");
+        return;
+    }
     add_radio_known(ssid, password);
 }
 
 fn load_domain_known(domain: &DomainHandle) {
-    for (_, record) in known_records(domain) {
+    let records = match known_records(domain) {
+        Ok(records) => records,
+        Err(error) => {
+            log::error!("wifi: known snapshot failed: {error:?}");
+            return;
+        }
+    };
+    for (_, record) in records {
         add_radio_known(&text(&record.ssid), &text(&record.password));
     }
 }
 
-fn import_known(domain: &DomainHandle) {
+fn resync_known(domain: &DomainHandle) {
+    let records = match known_records(domain) {
+        Ok(records) => records,
+        Err(error) => {
+            log::error!("wifi: known resync snapshot failed: {error:?}");
+            return;
+        }
+    };
+
     let count = unsafe { ha_wifi_known_count() };
-    for index in 0..count {
+    for index in (0..count).rev() {
         let mut ssid = [0 as c_char; 33];
-        let mut password = [0 as c_char; 65];
         if unsafe {
             ha_wifi_known_get(
                 index,
                 ssid.as_mut_ptr(),
                 ssid.len(),
-                password.as_mut_ptr(),
-                password.len(),
+                std::ptr::null_mut(),
+                0,
             )
-        } == 0
+        } != 0
         {
-            continue;
+            unsafe { ha_wifi_known_remove(ssid.as_ptr()) };
         }
-        let ssid = unsafe { CStr::from_ptr(ssid.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        let password = unsafe { CStr::from_ptr(password.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        remember_known(domain, &ssid, &password);
+    }
+    for (_, record) in records {
+        add_radio_known(&text(&record.ssid), &text(&record.password));
     }
 }
 
-fn run(domain: DomainHandle, commands: Receiver<Command>) {
+fn drain_known(domain: &DomainHandle, events: &Receiver<Fact>) {
+    let mut changed = false;
+    while events.try_recv().is_ok() {
+        changed = true;
+    }
+    if changed {
+        resync_known(domain);
+    }
+}
+
+fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver<Fact>) {
     load_domain_known(&domain);
     let err = unsafe { ha_wifi_start() };
     if err != 0 {
         log::error!("wifi start failed: {err}");
         return;
     }
-    import_known(&domain);
     let mut last_ip: Option<String> = None;
     let mut last_poll = 0u64;
     let mut last_scan_poll = 0u64;
@@ -262,6 +278,7 @@ fn run(domain: DomainHandle, commands: Receiver<Command>) {
             Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
         }
+        drain_known(&domain, &known_events);
 
         let now = now_ms();
         if now.saturating_sub(last_poll) >= 1000 {
@@ -286,8 +303,6 @@ fn run(domain: DomainHandle, commands: Receiver<Command>) {
             if unsafe { ha_wifi_scan_ready() } != 0 {
                 let results = collect_scan();
                 log::info!("wifi: scan result {} networks", results.len());
-                *SCAN.lock().unwrap() = results.clone();
-                SCAN_READY.store(true, Ordering::Relaxed);
                 publish_scan(&domain, &results);
                 unsafe { ha_wifi_scan_clear() };
             }
@@ -335,7 +350,16 @@ fn publish_status(domain: &DomainHandle) {
         value: Value::NONE,
     };
     let key = WIFI_DEVICE_UID.to_le_bytes();
-    let _ = domain.entity_put(ENTITY_WIFI_STATUS, &key, &record, meta);
+    match domain.entity_put(ENTITY_WIFI_STATUS, &key, &record, meta) {
+        Ok(true) => log::info!(
+            "wifi: status state={} connected={} rssi={}",
+            record[0],
+            record[1],
+            record[2] as i8
+        ),
+        Ok(false) => {}
+        Err(error) => log::error!("wifi: status write failed: {error:?}"),
+    }
 }
 
 fn publish_scan(domain: &DomainHandle, results: &[(String, i8)]) {
@@ -352,7 +376,9 @@ fn publish_scan(domain: &DomainHandle, results: &[(String, i8)]) {
         value: Value::NONE,
     };
     let key = WIFI_DEVICE_UID.to_le_bytes();
-    let _ = domain.entity_put(ENTITY_WIFI_SCAN, &key, &record.encode(), meta);
+    if let Err(error) = domain.entity_put(ENTITY_WIFI_SCAN, &key, &record.encode(), meta) {
+        log::error!("wifi: scan write failed: {error:?}");
+    }
 }
 
 fn now_ms() -> u64 {

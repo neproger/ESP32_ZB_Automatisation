@@ -186,7 +186,6 @@ fn main() {
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
     let mut last_minute: Option<(u16, u8)> = None;
-    let mut last_wifi_poll = 0u64;
     let mut last_weather: Option<u8> = None;
     let mut last_subscriber_drops = 0u64;
     loop {
@@ -196,25 +195,17 @@ fn main() {
         while let Some(nav) = display::take_nav() {
             match nav {
                 display::Nav::WifiScan => {
-                    if let Err(error) = wifi::request_scan() {
+                    let meta = FactMeta {
+                        source: SOURCE_UI as u8,
+                        value: ha_domain::Value::NONE,
+                    };
+                    if let Err(error) = domain.post(COMMAND_WIFI_SCAN, &[], None, meta) {
                         log::warn!("wifi: scan request rejected ({error:?})");
-                    } else {
-                        log::info!("wifi: scan requested");
-                        display::wifi_scan_requested(&domain);
                     }
                 }
-                display::Nav::OpenWifi => {
-                    if let Some(results) = wifi::take_scan() {
-                        display::set_wifi_scan(results);
-                    }
-                    display::navigate(&domain, display::Nav::OpenWifi);
-                }
+                display::Nav::OpenWifi => display::navigate(&domain, display::Nav::OpenWifi),
                 _ => display::navigate(&domain, nav),
             }
-        }
-        if let Some(results) = wifi::take_scan() {
-            log::info!("wifi: scan result {} networks", results.len());
-            display::wifi_scan_done(&domain, results);
         }
         while let Some(update) = system::take() {
             match update {
@@ -259,11 +250,6 @@ fn main() {
                     },
                 );
             }
-        }
-        let now = now_ms();
-        if now.saturating_sub(last_wifi_poll) >= 2000 {
-            last_wifi_poll = now;
-            display::set_wifi(wifi::rssi());
         }
         let subscriber_drops = domain.subscriber_drops().unwrap_or(0);
         if subscriber_drops != last_subscriber_drops {

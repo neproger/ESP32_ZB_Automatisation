@@ -23,12 +23,20 @@ pub mod entity {
     pub const GROUP: u8 = 7;
     pub const GROUP_ITEM: u8 = 8;
     pub const WEATHER: u8 = 9;
+    pub const WIFI_SCAN: u8 = 10;
+    pub const WIFI_KNOWN: u8 = 11;
+    pub const WIFI_STATUS: u8 = 12;
     pub const SETTINGS: u8 = 13;
     pub const ENTITY: u8 = 14;
     pub const PROPERTY_STATE: u8 = 15;
     pub const CAPABILITIES: u8 = 16;
     pub const LOGICAL_DEVICE: u8 = 17;
     pub const GROUP_AUTOMATION: u8 = 18;
+}
+
+/// Credentials are device-internal. Web never receives WIFI_KNOWN records.
+pub fn is_web_visible(entity: u8) -> bool {
+    entity != entity::WIFI_KNOWN
 }
 
 /// Browser -> device command ids implemented by the firmware.
@@ -214,6 +222,13 @@ mod tests {
         assert_eq!(&record[8..21], b"TS0041 button");
         assert_eq!(record.len(), 40);
         assert_eq!(entity_key(1), [1, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn wifi_known_is_not_web_visible() {
+        assert!(!is_web_visible(entity::WIFI_KNOWN));
+        assert!(is_web_visible(entity::WIFI_STATUS));
+        assert!(is_web_visible(entity::GROUP));
     }
 
     #[test]

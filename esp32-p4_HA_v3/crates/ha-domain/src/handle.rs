@@ -171,6 +171,15 @@ impl DomainHandle {
         Ok(self.lock_checked()?.dispatch_once())
     }
 
+    pub fn subscribe_channel(
+        &self,
+        filter: Filter,
+        sender: std::sync::mpsc::SyncSender<Fact>,
+    ) -> Result<()> {
+        self.lock_checked()?.subscribe_channel(filter, sender);
+        Ok(())
+    }
+
     pub fn dispatch_handle(&self) -> Result<DispatchHandle> {
         Ok(self.lock_checked()?.dispatch_handle())
     }

@@ -46,6 +46,8 @@ Zigbee-слоя».
   результаты аппаратной проверки Stage 1.
 - [audits/DOMAIN_API_AUDIT.md](audits/DOMAIN_API_AUDIT.md) — соответствие
   Domain API V2 и текущие переходные элементы.
+- [audits/WIFI_LAYER_AUDIT.md](audits/WIFI_LAYER_AUDIT.md) — контракт
+  Wi-Fi V2, текущее состояние Rust и scope следующего этапа.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 
