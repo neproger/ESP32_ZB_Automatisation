@@ -282,7 +282,23 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
         }
         intake::Request::RenameEntity { entity, name } => {
             if let Err(error) = domain.transaction(|transaction| {
-                ha_device::rename_entity(transaction, SOURCE_UI as u8, entity, &name).map(|_| ())
+                let key = entity.to_le_bytes();
+                let mut current = [0u8; ha_domain::canonical::ENTITY_RECORD_LEN];
+                transaction.entity_get(ENTITY_ENTITY, &key, &mut current)?;
+                let device =
+                    u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
+                let encoded = ha_domain::canonical::EntityRecord::new(device, &name).encode();
+                transaction
+                    .entity_put(
+                        ENTITY_ENTITY,
+                        &key,
+                        &encoded,
+                        FactMeta {
+                            source: SOURCE_UI as u8,
+                            value: ha_domain::Value::NONE,
+                        },
+                    )
+                    .map(|_| ())
             }) {
                 log::warn!("domain: entity rename failed: {error:?}");
             }

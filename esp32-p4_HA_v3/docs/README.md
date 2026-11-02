@@ -48,6 +48,8 @@ Zigbee-слоя».
   Domain API V2 и текущие переходные элементы.
 - [audits/WIFI_LAYER_AUDIT.md](audits/WIFI_LAYER_AUDIT.md) — контракт
   Wi-Fi V2, текущее состояние Rust и scope следующего этапа.
+- [audits/DEVICE_LAYER_AUDIT.md](audits/DEVICE_LAYER_AUDIT.md) — Device
+  service V2 → Rust: ownership, lifecycle и removal.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 

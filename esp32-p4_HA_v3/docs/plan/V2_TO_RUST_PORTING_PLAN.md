@@ -418,27 +418,31 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Stage 1 реализован; следующая задача — Stage 2 (Device service).**
+**Текущая задача: Stage 2 Device Service — host-верификация завершена.**
 
-Технический аудит: [DOMAIN_PERSISTENCE_AUDIT.md](../audits/DOMAIN_PERSISTENCE_AUDIT.md).
-Диагностика раздела:
-[DOMAIN_PARTITION_DIAGNOSTIC.md](../audits/DOMAIN_PARTITION_DIAGNOSTIC.md).
-Явный сброс после решения оператора:
-[DOMAIN_RESET_PROCEDURE.md](../audits/DOMAIN_RESET_PROCEDURE.md).
+Аудит: [DEVICE_LAYER_AUDIT.md](../audits/DEVICE_LAYER_AUDIT.md).
+P0-решения зафиксированы в
+[STAGE_2_ARCHITECTURE_DECISIONS.md](STAGE_2_ARCHITECTURE_DECISIONS.md):
+`ensure_entity`/`set_capabilities` — Device service adaptations;
+`rename_entity` удалена из Device service, Entity rename остаётся
+app-level V2 command path; Zigbee adapter пишет только `PROPERTY_STATE`;
+removal остаётся `prepare_remove` → `invoke_remover` → `remove_canonical`.
 
-Решение: содержимое `domain` можно потерять; migration не выполняется.
-Сброс остаётся отдельной явной операцией, не автоматическим поведением.
+Проверки Stage 2: `cargo test --workspace`, `check-domain-api.ps1` и
+`build-ha-app.ps1` зелёные. P4 для Stage 2 не требуется.
 
-Перед первым запуском Stage 1 на устройстве всё ещё нужны:
-
-1. read-only dump `domain` и SHA256;
-2. фиксация решения оператора;
-3. явный erase только `domain` в одном окне с прошивкой Stage 1.
+Stage 1 hardware gate остаётся открытым: уникальная persistence-запись
+через UI/Web и reboot ещё не проверены. Wi-Fi заморожен; Display, System,
+Automation и остальные слои пока не трогаются.
 
 Domain API parity закрыт: [DOMAIN_API_AUDIT.md](../audits/DOMAIN_API_AUDIT.md)
 фиксирует исправленные ERROR-факты, выровненный payload contract, удалённый
-production `with_mut` и документированные адаптации. Stage 2 остаётся после
-финальной аппаратной проверки Stage 1 (уникальная persistence-запись).
+production `with_mut` и документированные адаптации.
+
+Старые Stage 1 материалы сохранены для истории:
+[DOMAIN_PERSISTENCE_AUDIT.md](../audits/DOMAIN_PERSISTENCE_AUDIT.md),
+[DOMAIN_PARTITION_DIAGNOSTIC.md](../audits/DOMAIN_PARTITION_DIAGNOSTIC.md),
+[DOMAIN_RESET_PROCEDURE.md](../audits/DOMAIN_RESET_PROCEDURE.md).
 
 ## 7. Критерии завершения всего портирования
 

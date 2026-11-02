@@ -1,11 +1,92 @@
-# Stage 2 — архитектурное решение (предложение)
+# Stage 2 — архитектурное решение
 
-> Статус: **историческая запись реализованных решений Stage 2**.
-> Не активный план. Активный план:
-> [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
+> Статус: **историческая запись Stage 2 + утверждённые P0-решения**.
+> Активный план: [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 >
 > Основание: `STAGE_1D_ARCHITECTURE_DECISIONS.md`, `V3_LAYERS.md` и фактический
 > код `zigbee-devices`, `ha-device`, `ha-app`, `ha-domain`.
+
+## 0. Утверждённые P0-решения Stage 2
+
+Дата: 2026-11-02. Эти решения обязательны для 2.1–2.5.
+
+### 0.1. Ownership дополнительных операций
+
+| Операция | Решение | Статус |
+|---|---|---|
+| `ensure_entity` | Device service | Rust/Z2M adaptation, не V2 parity |
+| `set_capabilities` | Device service | Rust/Z2M adaptation, не V2 parity |
+| `rename_entity` | Не входит в Device service | V2 `HA_CMD_ENTITY_RENAME` остаётся app-level command path |
+
+`ensure_entity` — lifecycle Device service: создать canonical Entity и
+обеспечить её существование. `set_capabilities` — Device service: adapter
+передаёт данные, service управляет canonical записью. Обе операции должны
+быть явно описаны как adaptations, а не как V2 API.
+
+`rename_entity` не является частью `device_service.h` и не должен
+находиться в `ha-device`. V2 подтверждает отдельный `HA_CMD_ENTITY_RENAME`
+executor на уровне приложения; этот путь не является Device lifecycle.
+Не добавлять новый контракт без отдельного решения.
+
+### 0.2. Граница Zigbee adapter / Device service
+
+Zigbee adapter:
+
+- определяет Zigbee identity: EUI64, endpoint;
+- обрабатывает ZCL, interview, profile, bindings;
+- формирует canonical Entity ID и данные Capabilities;
+- передаёт их в Device service;
+- публикует `PROPERTY_STATE` только через явный `DomainHandle` projection API;
+- регистрирует Zigbee remover.
+
+Device service:
+
+- `register`;
+- `ensure_entity`;
+- `bind_entity`;
+- `set_capabilities`;
+- `rename` Logical Device;
+- `remove`;
+- ownership и remover registry.
+
+Domain:
+
+- canonical state;
+- сериализация изменений;
+- persistence policy.
+
+Adapter не создаёт, не удаляет и не меняет canonical Logical Device,
+Entity и Capabilities напрямую. Чтение canonical record для идемпотентности
+допустимо, но запись — только через Device service.
+
+### 0.3. Removal
+
+| Вопрос | Решение |
+|---|---|
+| `prepare_remove` → `invoke_remover` → `remove_canonical` | Оставить |
+| Remover под Domain mutex | Запрещён |
+| Stale `RemovalPlan` | Отклонять |
+| `RemovalTicket`/progress | Не сохранять без реального потребителя |
+| V2-shaped wrapper | Пока не добавлять |
+| `NotFound` | Сохранить поведение V2 после проверки контракта |
+| `SOURCE_UI` | Проверить по V2 call path; не подменять origin автоматически |
+
+Разделённый removal — адаптация границы Domain lock, не повод добавлять
+фоновые задачи, persistence прогресса или rollback.
+
+### 0.4. Порядок работ
+
+1. **2.1 Device service contracts** — убрать legacy `Sink`/`NoSink`,
+   закрепить `ensure_entity`/`set_capabilities`, убрать `rename_entity`,
+   тесты lifecycle и частичных ошибок.
+2. **2.2 Zigbee projection** — только `write_state`/`read_state`, без
+   canonical lifecycle и generic CRUD.
+3. **2.3 Call-site migration** — Zigbee service на Device service; entity
+   rename остаётся app-level command path.
+4. **2.4 Cleanup** — удалить legacy traits/обходные пути, обновить static
+   checks.
+5. **2.5 Verification** — workspace tests, `ha-app` build, ownership и
+   remover-outside-lock checks.
 
 ## 1. Цель Stage 2
 
@@ -29,7 +110,10 @@ Logical Device/Entity, не должен регистрировать Domain-т�
 - Изменение canonical ABI, раскладки разделов, Zigbee protocol или UI/Web.
 - Удаление `with_mut` из `main`/zigbee ingest без отдельного transaction API.
 
-## 3. Фактическое состояние
+## 3. Фактическое состояние (снимок до реализации)
+
+> Актуальные границы и результат — в разделе 0. Ниже сохранён исходный
+> анализ, который обосновал Stage 2.
 
 ### 3.1. `DomainAdapter`
 
@@ -472,9 +556,13 @@ canonical cleanup не вызывает remover повторно; progress об�
 
 - `zigbee-devices` не содержит `RecordSink`, `StoreSink`, generic
   `put_record`/`remove_group`/`remove_automation`, table registration.
-- `ha-device` не содержит `Sink`/`NoSink` и persistence callbacks.
+- `ha-device` не содержит `Sink`/`NoSink`, persistence callbacks и
+  `rename_entity`.
 - Zigbee adapter не создаёт/не удаляет Logical Device/Entity.
-- Device service владеет register/ensure/bind/rename/remove и capabilities.
+- Device service владеет `register`/`ensure_entity`/`bind_entity`/
+  `set_capabilities`/`rename` Logical Device/`remove`.
+- Entity rename остаётся app-level V2 command path (`HA_CMD_ENTITY_RENAME`),
+  не Device service.
 - `PROPERTY_STATE` пишет только projection path через `DomainHandle`.
 - Никакой adapter/device path не вызывает `store::save_domain`/`remove_domain`.
 - Zigbee remover не вызывается внутри `with_mut`/Domain mutex.

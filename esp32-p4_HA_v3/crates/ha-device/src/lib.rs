@@ -2,6 +2,10 @@
 //!
 //! It knows only opaque source/native ids and canonical records; the adapter owns
 //! the physical representation and registers a remover for its source.
+//!
+//! `ensure_entity` and `set_capabilities` are Rust/Z2M adaptations: V2 creates
+//! Entity/capabilities in the adapter, while here the Device service owns the
+//! canonical write. They are not V2 Device service endpoints.
 
 use std::sync::Mutex;
 
@@ -201,7 +205,11 @@ fn decode_device(bytes: &[u8; DEVICE_RECORD_LEN]) -> LogicalDeviceRecord {
     }
 }
 
-pub fn register<S: CanonicalStore>(domain: &mut S, origin: u8, desc: &DeviceDesc<'_>) -> Result<DeviceId, Error> {
+pub fn register<S: CanonicalStore>(
+    domain: &mut S,
+    origin: u8,
+    desc: &DeviceDesc<'_>,
+) -> Result<DeviceId, Error> {
     if desc.source == 0 || desc.native_id.is_empty() {
         return Err(Error::InvalidArg);
     }
@@ -312,24 +320,6 @@ pub fn bind_entity<S: CanonicalStore>(
     }
     record[..8].copy_from_slice(&device.to_le_bytes());
     domain.entity_put(ENTITY_ENTITY, &key, &record, meta(origin))
-}
-
-pub fn rename_entity<S: CanonicalStore>(
-    domain: &mut S,
-    origin: u8,
-    entity: EntityId,
-    name: &str,
-) -> Result<bool, Error> {
-    if entity == 0 {
-        return Err(Error::InvalidArg);
-    }
-    let key = entity.to_le_bytes();
-    let mut current = [0u8; ENTITY_RECORD_LEN];
-    domain.entity_get(ENTITY_ENTITY, &key, &mut current)?;
-    let device = u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
-    let record = EntityRecord::new(device, name);
-    let encoded = record.encode();
-    domain.entity_put(ENTITY_ENTITY, &key, &encoded, meta(origin))
 }
 
 pub fn rename<S: CanonicalStore>(
@@ -640,6 +630,10 @@ mod tests {
         Ok(NativeRemoval::AlreadyAbsent)
     }
 
+    fn failing_remover(_native: &[u8]) -> Result<NativeRemoval, Error> {
+        Err(Error::InvalidState)
+    }
+
     fn handle(domain: Domain) -> DomainHandle {
         DomainHandle::new(domain)
     }
@@ -811,6 +805,79 @@ mod tests {
                 &mut [0u8; ha_domain::canonical::CAPABILITIES_LEN]
             )
             .is_ok());
+    }
+
+    #[test]
+    fn ensure_entity_rejects_foreign_owner_without_mutation() {
+        let mut domain = domain();
+        let owner = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "owner",
+                parent_native_id: None,
+                name: "",
+            },
+        )
+        .unwrap();
+        let other = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 1,
+                native_id: "other",
+                parent_native_id: None,
+                name: "",
+            },
+        )
+        .unwrap();
+        let entity: u64 = 7;
+        let mut record = [0u8; ENTITY_RECORD_LEN];
+        record[..8].copy_from_slice(&owner.to_le_bytes());
+        domain
+            .entity_put(ENTITY_ENTITY, &entity.to_le_bytes(), &record, meta(2))
+            .unwrap();
+
+        assert_eq!(
+            ensure_entity(&mut domain, 2, other, entity, "replacement"),
+            Err(Error::InvalidState)
+        );
+        let mut current = [0u8; ENTITY_RECORD_LEN];
+        domain
+            .entity_get(ENTITY_ENTITY, &entity.to_le_bytes(), &mut current)
+            .unwrap();
+        assert_eq!(
+            u64::from_le_bytes(current[..8].try_into().expect("entity owner")),
+            owner
+        );
+        assert_eq!(&current[8..], &record[8..]);
+    }
+
+    #[test]
+    fn set_capabilities_requires_an_existing_owned_entity() {
+        let mut domain = domain();
+        let caps = CapabilitiesRecord::default();
+
+        assert_eq!(
+            set_capabilities(&mut domain, 2, 7, &caps),
+            Err(Error::NotFound)
+        );
+
+        let mut record = [0u8; ENTITY_RECORD_LEN];
+        domain
+            .entity_put(ENTITY_ENTITY, &7u64.to_le_bytes(), &record, meta(2))
+            .unwrap();
+        assert_eq!(
+            set_capabilities(&mut domain, 2, 7, &caps),
+            Err(Error::InvalidState)
+        );
+
+        record[..8].copy_from_slice(&9u64.to_le_bytes());
+        domain
+            .entity_put(ENTITY_ENTITY, &7u64.to_le_bytes(), &record, meta(2))
+            .unwrap();
+        assert!(set_capabilities(&mut domain, 2, 7, &caps).unwrap());
     }
 
     #[test]
@@ -1109,6 +1176,45 @@ mod tests {
             .is_ok());
         assert!(domain
             .entity_get(ENTITY_ENTITY, &[0u8; 8], &mut [0u8; ENTITY_RECORD_LEN])
+            .is_ok());
+    }
+
+    #[test]
+    fn failed_remover_leaves_canonical_state_untouched() {
+        let mut domain = domain();
+        register_remover(3, failing_remover).unwrap();
+        let id = register(
+            &mut domain,
+            2,
+            &DeviceDesc {
+                source: 3,
+                native_id: "failing-remover",
+                parent_native_id: None,
+                name: "lamp",
+            },
+        )
+        .unwrap();
+        add_entity(&mut domain, id, 7);
+        let domain = handle(domain);
+        let plan = prepare_remove(&domain, id).unwrap();
+
+        assert_eq!(
+            invoke_remover(plan),
+            Err(RemovalError::Remover(Error::InvalidState))
+        );
+        assert!(domain
+            .entity_get(
+                ENTITY_LOGICAL_DEVICE,
+                &id.to_le_bytes(),
+                &mut [0u8; DEVICE_RECORD_LEN]
+            )
+            .is_ok());
+        assert!(domain
+            .entity_get(
+                ENTITY_ENTITY,
+                &7u64.to_le_bytes(),
+                &mut [0u8; ENTITY_RECORD_LEN]
+            )
             .is_ok());
     }
 

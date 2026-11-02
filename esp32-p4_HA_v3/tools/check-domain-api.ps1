@@ -378,14 +378,29 @@ function Check-Stage2Boundary {
                 Add-Violation "${adapterRelative}: $name must take &DomainHandle"
             }
         }
+        foreach ($pattern in @('ENTITY_LOGICAL_DEVICE', 'ENTITY_ENTITY', 'ENTITY_CAPABILITIES')) {
+            if ($adapter -match [regex]::Escape($pattern)) {
+                Add-Violation "${adapterRelative}: canonical lifecycle constant '$pattern' is forbidden"
+            }
+        }
     }
 
     $deviceRelative = 'crates/ha-device/src/lib.rs'
     $device = Get-Source $deviceRelative
     if ($null -ne $device) {
-        foreach ($pattern in @('RecordSink', 'StoreSink', 'save_domain', 'remove_domain')) {
+        foreach ($pattern in @('RecordSink', 'StoreSink', 'NoSink', 'Sink', 'rename_entity', 'save_domain', 'remove_domain')) {
             if ($device -match [regex]::Escape($pattern)) {
                 Add-Violation "${deviceRelative}: Device service still contains '$pattern'"
+            }
+        }
+    }
+
+    $zigbeeRelative = 'crates/ha-app/src/zigbee_service.rs'
+    $zigbee = Get-Source $zigbeeRelative
+    if ($null -ne $zigbee) {
+        foreach ($pattern in @('entity_put(', 'entity_remove(')) {
+            if ($zigbee -match [regex]::Escape($pattern)) {
+                Add-Violation "${zigbeeRelative}: Zigbee adapter must not write canonical lifecycle directly"
             }
         }
     }
