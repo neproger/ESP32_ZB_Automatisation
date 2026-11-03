@@ -1,8 +1,8 @@
 # Stage 3 — Hardware Validation
 
-> Статус: **Hardware Blocked / Host Verified**. Заблокировано на этапе загрузки приложения.
+> Статус: **P4 boot resolved; Stage 3 hardware scenarios pending**.
 > Плата: ESP32-P4, COM11, MAC `80:f1:b2:d1:18:77`.
-> Дата: 2026-11-02.
+> Дата: 2026-11-02; boot resolved 2026-11-03.
 
 ## Что проверено
 
@@ -14,16 +14,21 @@
   повторно. Data-разделы `mstore`/`domain` не стирались.
 - Ошибка `partition ... exceeds flash chip size` больше не появляется.
 
-## Текущий блокер
+## Boot blocker resolved
 
-После исправления flash config приложение доходит до:
+Причина зависания: был прошит промежуточный CMake-образ
+`out/build/libespidf.bin` с пустым `app_main` (`ret`), а не финальный
+Cargo/ESP-IDF образ `debug/ha-app`. После прошивки правильного образа
+P4 стартует:
 
-```text
-eh_auto_init: auto_init: initialising 'wifi' (priority 150)
-```
+- `ha_app::store: registry ready`;
+- `ha_app::web: web server on :80 (/ws)`;
+- `zb_poc: stack started`;
+- `ha_app::display: display started`;
+- `ha_app ready`;
+- Wi-Fi подключён, IP `192.168.1.100`.
 
-и дальше не выдаёт `ha-app` логов; сеть `192.168.1.100` недоступна.
-Это происходит до `main`/Stage 3 кода, поэтому P4-сценарии не выполнены.
+C3 ESP-Hosted при этом исправен; повторная прошивка C3 не требуется.
 
 ## Что не проверено
 
@@ -36,7 +41,5 @@ eh_auto_init: auto_init: initialising 'wifi' (priority 150)
 
 ## Следующее действие
 
-Отдельной задачей исправить platform build config (16MB flash и custom
-partition table), пересобрать firmware и повторить загрузку. После
-успешного старта приложения выполнить P4 checklist из
-`STAGE_3_IMPLEMENTATION_SPEC.md`.
+Приложение на P4 запускается. Выполнить P4 checklist из
+`STAGE_3_IMPLEMENTATION_SPEC.md` на реальных устройствах.

@@ -1,11 +1,10 @@
 # Stage 3 — Technical Specification: Zigbee Adapter
 
-> Статус: **Host Verified / Hardware Blocked**.
+> Статус: **Host Verified / P4 boot verified; hardware scenarios pending**.
 > Реализация 3.1–3.5 и host-интеграция 3.6 выполнены; queue unit test
-> проходит через `cargo test --workspace`. P4 hardware validation
-> заблокирована загрузкой ESP32-P4: flash config исправлен на 16MB,
-> partition table и firmware прошиты; приложение всё ещё останавливается
-> на `esp-hosted` WiFi init. Полная приёмка Stage 3 открыта.
+> проходит через `cargo test --workspace`. P4 boot blocker resolved:
+> прошит финальный `debug/ha-app`; приложение стартует, Wi-Fi получает
+> `192.168.1.100`. Полная приёмка Stage 3 открыта до hardware scenarios.
 > Основание: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
 > План: [V2_TO_RUST_PORTING_PLAN.md](V2_TO_RUST_PORTING_PLAN.md).
 > Принципы: [V2_TO_RUST_PORTING_PRINCIPLES.md](V2_TO_RUST_PORTING_PRINCIPLES.md).
@@ -331,8 +330,8 @@ git diff --check
 | `build-ha-app.ps1` | Пройдено |
 | Binding/remover/reconciliation/ZCL/queue implementation | Выполнено |
 | Queue unit test | **Пройден** через `crates/zigbee-devices/tests/removal_queue.rs` (host module include) |
-| P4 hardware validation | **Заблокирована**: COM11 boot stalls at `esp-hosted` WiFi init; build/device flash-size mismatch investigated |
-| Stage 3 acceptance | **Не закрыт по P4** |
+| P4 hardware validation | **Boot resolved**: flashed `debug/ha-app` (not `libespidf.bin`); app starts and Wi-Fi connects. Scenarios pending |
+| Stage 3 acceptance | **Не закрыт**: hardware scenarios pending |
 
 ## 10. Acceptance criteria
 
@@ -350,7 +349,7 @@ git diff --check
 
 ## 11. P4-проверки после реализации
 
-Текущий boot blocker: [STAGE3_HARDWARE_VALIDATION.md](../audits/STAGE3_HARDWARE_VALIDATION.md).
+Boot resolved: см. [STAGE3_HARDWARE_VALIDATION.md](../audits/STAGE3_HARDWARE_VALIDATION.md).
 
 - configure → binding confirm → immediate command;
 - restart known device → configure → command;

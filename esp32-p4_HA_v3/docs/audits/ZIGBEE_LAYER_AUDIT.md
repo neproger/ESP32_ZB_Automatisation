@@ -1,9 +1,9 @@
 # Аудит Zigbee Adapter: V2 + Z2M → Rust
 
-> Статус: **Stage 3 — Host Verified / Hardware Blocked**.
+> Статус: **Stage 3 — Host Verified / P4 boot verified; hardware scenarios pending**.
 > Реализация 3.1–3.5 и host-интеграция пройдены; queue test проходит.
-> P4 validation заблокирована загрузкой ESP32-P4: flash config исправлен,
-> firmware прошит, но приложение стоит на `esp-hosted` WiFi init.
+> P4 boot blocker resolved: прошит финальный `debug/ha-app`, приложение
+> стартует и подключается к Wi-Fi; остались hardware scenarios.
 > V2: `esp32-p4_HA_v2/zigbee/`, `docs/services/ZIGBEE.md`,
 > `docs/services/ZIGBEE_CAPABILITIES.md`.
 > Rust: `crates/zigbee-devices`, `crates/z2m-rs`, `crates/zigbee-exec`,

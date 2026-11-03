@@ -427,18 +427,18 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 3 Zigbee adapter — Host Verified / Hardware Blocked.**
+**Текущая задача: Stage 4 Automation — аудит перед реализацией.**
 
-Текущий слой — Zigbee adapter (V2+Z2M exception); Stage 4 не начат.
-Аудит: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
+Stage 3: **P4 boot verified / hardware scenarios pending**; Stage 4 не начат
+как реализация — сначала аудит Automation.
+Аудит Stage 4: [AUTOMATION_LAYER_AUDIT.md](../audits/AUTOMATION_LAYER_AUDIT.md).
+Аудит Stage 3: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
 ТЗ: [STAGE_3_IMPLEMENTATION_SPEC.md](STAGE_3_IMPLEMENTATION_SPEC.md).
 Реализованы 3.1–3.5; workspace tests, static checks и firmware build прошли.
 Queue unit test перенесён в host-run интеграционный тест и проходит.
-P4 hardware validation заблокирована загрузкой ESP32-P4: flash config
-исправлен на 16MB, partition table и firmware прошиты, но приложение
-останавливается на `esp-hosted` WiFi init и не доходит до `ha-app`. Это
-отдельная платформенная задача, не изменение Stage 3 Zigbee. Stage 4 не
-начинать до восстановления запуска приложения.
+P4 boot resolved: был прошит промежуточный `libespidf.bin` с пустым
+`app_main`; после прошивки финального `debug/ha-app` приложение стартует,
+Wi-Fi получает `192.168.1.100`. Stage 3 hardware scenarios ещё не выполнены.
 
 Зависимости готовы: Stage 1 Domain persistence/restore и Stage 2 Device
 service закрыты на host-уровне. Stage 1 hardware unique persistence test и
