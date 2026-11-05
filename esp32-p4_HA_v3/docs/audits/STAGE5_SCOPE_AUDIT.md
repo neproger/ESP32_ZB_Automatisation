@@ -1,6 +1,6 @@
 # Stage 5 — Scope and Dependencies: Wi-Fi + System
 
-> Статус: **implementation complete; clean build и initial P4 smoke passed; acceptance scenarios pending**.
+> Статус: **implementation complete; clean build, initial P4 smoke, WEATHER_CHANGED и autoconnect passed; reconnect/backoff pending**.
 > Основание: [V2_TO_RUST_PORTING_PLAN.md](../plan/V2_TO_RUST_PORTING_PLAN.md),
 > V2 `docs/services/WIFI.md`, `docs/services/SYSTEM.md`,
 > `docs/architecture/V3_LAYERS.md`.

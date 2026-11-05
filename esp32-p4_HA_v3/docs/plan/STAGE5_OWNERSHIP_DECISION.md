@@ -1,6 +1,6 @@
 # Stage 5 — Ownership Decision: Wi-Fi + System
 
-> Статус: **approved; implementation complete; clean build + initial P4 smoke passed; acceptance pending**.
+> Статус: **approved; implementation/build/initial smoke passed; WEATHER_CHANGED и autoconnect passed; reconnect/backoff pending**.
 > Scope: [STAGE5_SCOPE_AUDIT.md](../audits/STAGE5_SCOPE_AUDIT.md).
 
 ## 1. Decision

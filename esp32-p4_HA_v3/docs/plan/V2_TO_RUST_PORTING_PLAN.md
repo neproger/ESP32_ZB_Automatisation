@@ -261,8 +261,8 @@ inbox loss, command path.
 > Implementation: `ha-wifi` и `ha-system` перенесены, `main` очищен.
 > Build: clean firmware build через `build-ha-app.ps1` проходит.
 > P4 smoke: Wi-Fi connect, SNTP, GeoIP, Weather и local clock подтверждены.
-> Acceptance: `WEATHER_CHANGED`, autoconnect после reboot, reconnect/backoff и
-> финальная приёмка Stage 5 остаются открытыми.
+> Acceptance: `WEATHER_CHANGED` и autoconnect после reboot подтверждены;
+> reconnect/backoff и финальная приёмка Stage 5 остаются открытыми.
 
 **Исходные слои V2:** `wifi`, `system`.
 
@@ -441,12 +441,14 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 5 — implementation complete; build и initial P4 smoke passed; acceptance scenarios pending.**
+**Текущая задача: Stage 5 — implementation/build/smoke passed; WEATHER_CHANGED и autoconnect passed; reconnect/backoff pending.**
 
 Stage 3: **Host Verified / Hardware Acceptance Pending**.
 Stage 4 complete; Stage 5: implementation complete, clean build и initial P4 smoke прошли;
-финальная приёмка ещё открыта.
-Аудит Stage 5: [STAGE5_SCOPE_AUDIT.md](../audits/STAGE5_SCOPE_AUDIT.md).
+WEATHER_CHANGED и autoconnect после reboot подтверждены; reconnect/backoff открыт.
+P4 evidence: после reboot autoconnect к `ITPod` → IP `192.168.1.100`;
+WebSocket EVENT id=8 (`WEATHER_CHANGED`) получен при смене локации и не получен
+при повторном weather-запросе с тем же condition.Аудит Stage 5: [STAGE5_SCOPE_AUDIT.md](../audits/STAGE5_SCOPE_AUDIT.md).
 Ownership: [STAGE5_OWNERSHIP_DECISION.md](STAGE5_OWNERSHIP_DECISION.md).
 Аудит Stage 4: [AUTOMATION_LAYER_AUDIT.md](../audits/AUTOMATION_LAYER_AUDIT.md).
 ТЗ Stage 4: [STAGE_4_IMPLEMENTATION_SPEC.md](STAGE_4_IMPLEMENTATION_SPEC.md).
