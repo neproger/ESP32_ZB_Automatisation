@@ -10,6 +10,8 @@ Home Assistant V2 на Rust**, сохраняя поведение и подкл
   — главный принцип: V2 является эталоном, Rust — реализацией.
 - [plan/V2_TO_RUST_PORTING_PLAN.md](plan/V2_TO_RUST_PORTING_PLAN.md)
   — единственный активный план и порядок этапов.
+- [plan/STAGE_4_IMPLEMENTATION_SPEC.md](plan/STAGE_4_IMPLEMENTATION_SPEC.md)
+  — текущий Stage 4 Automation spec; реализация ещё не начата.
 - [architecture/V3_LAYERS.md](architecture/V3_LAYERS.md) — контракт слоёв,
   владения и runtime.
 - [architecture/TARGET_ARCHITECTURE.md](architecture/TARGET_ARCHITECTURE.md) —
@@ -54,8 +56,14 @@ Zigbee-слоя».
   adapter V2+Z2M: binding, command reconciliation и ZCL bridge.
 - [audits/AUTOMATION_LAYER_AUDIT.md](audits/AUTOMATION_LAYER_AUDIT.md) — Stage 4
   Automation: ABI, task/inbox, command metadata.
+- [audits/STAGE4_PARITY_AUDIT.md](audits/STAGE4_PARITY_AUDIT.md) — итоговая
+  V2 parity проверка Stage 4 и P4 smoke.
+- [audits/STAGE5_SCOPE_AUDIT.md](audits/STAGE5_SCOPE_AUDIT.md) — Stage 5
+  Wi-Fi + System: границы, зависимости и открытые gaps.
+- [plan/STAGE5_OWNERSHIP_DECISION.md](plan/STAGE5_OWNERSHIP_DECISION.md) — Stage 5
+  ownership decision: `ha-wifi`, `ha-system`, `ha-app` composition root.
 - [audits/STAGE3_HARDWARE_VALIDATION.md](audits/STAGE3_HARDWARE_VALIDATION.md) — P4
-  boot resolved; hardware scenarios pending.
+  boot resolved; Stage 3 hardware acceptance pending.
 - [archive/DOMAIN_V2_MAPPING.md](archive/DOMAIN_V2_MAPPING.md) — исторический
   журнал переноса Domain ↔ z2m-rs.
 

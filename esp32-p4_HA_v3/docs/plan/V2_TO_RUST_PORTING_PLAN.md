@@ -63,10 +63,11 @@ main       composition root
   commands, restore/maintenance API;
 - `crates/ha-device` — lifecycle/ownership API;
 - `crates/ha-automation` — rule engine;
+- `crates/ha-wifi` — Wi-Fi service;
 - `crates/ha-web` — canonical wire framing;
 - `crates/zigbee-devices`, `crates/z2m-rs`, `crates/zigbee-exec`,
   `crates/zigbee-frames` — Zigbee adapter;
-- `crates/ha-app` — composition root, C bridges и текущие сервисные задачи.
+- `crates/ha-app` — composition root, C bridges и запуск сервисов.
 
 ### 2.3. Фактическое состояние портирования
 
@@ -77,12 +78,12 @@ main       composition root
 | `domain` | `ha-domain` | core + Domain-owned persistence/restore готовы; hardware unique gate открыт |
 | `device` | `ha-device` + `zigbee_service` | Stage 2 закрыт: lifecycle в `ha-device`, adapter — только projection |
 | `zigbee` | `zigbee-*` + `ha-app` | особый слой V2 + Z2M; текущая архитектура сохраняется; закрываются gaps относительно собственной цели |
-| `automation` | `ha-automation` + `automation_task` | engine есть; task/inbox и ABI-парсинг требуют доводки |
+| `automation` | `ha-automation` + `automation_task` | Stage 4 complete; task/inbox/ABI parity закрыт |
 | `web` | `ha-web` + `ha-app/web.rs` | protocol готов; service использует кэш и не имеет V2 snapshot semantics |
-| `display` | `ha-app/display.rs` | subscriber есть; Wi-Fi читается через Domain после cleanup; остальная V2-сверка — Stage 6 |
-| `system` | `ha-app/system.rs` + `main.rs` | fetch есть; публикация/события частично в main |
+| `display` | `ha-app/display.rs` | полная миграция не выполнена; только Wi-Fi cleanup через Domain; остальное — Stage 6 |
+| `system` | `ha-system` | Stage 5: SNTP/time/ticks/GeoIP/location/weather done; validation pending |
 | `wifi` | `ha-app/wifi.rs` + `native_net` | status/scan/known cleanup запушен; reconnect/backoff и System gates открыты |
-| `main` | `ha-app/main.rs` | остаётся оркестратором, а не только composition root |
+| `main` | `ha-app/main.rs` | Stage 5: only composition root, no Wi-Fi/System publication |
 
 ### 2.4. Известные расхождения, которые нельзя закреплять как новую архитектуру
 
@@ -185,6 +186,8 @@ RAM/flash policy, NoSpace/ошибки storage, host-тесты на SimFlash.
 
 **Зависимости:** Domain, `ha-model`.
 
+**ТЗ:** [STAGE_4_IMPLEMENTATION_SPEC.md](STAGE_4_IMPLEMENTATION_SPEC.md).
+
 **Что сделать:**
 
 - перенести register/bind/rename/remove и создание Entity/Capabilities из
@@ -200,8 +203,9 @@ adapter remover failure, host tests.
 
 ### Этап 3 — Zigbee adapter
 
-> Статус: **следующий слой; реализация не начата**. Сначала — сверка/аудит
-> текущих Zigbee gaps против V2+Z2M, затем решения и только потом код.
+> Статус: **Host Verified / Hardware Acceptance Pending**.
+> Реализация: завершена. Host tests: passed. Static checks: passed.
+> Hardware acceptance: pending; P4 boot resolved, Zigbee-сценарии не выполнены.
 > Зависимости Stage 1/2 закрыты на host-уровне; hardware unique persistence
 > test Stage 1 и P4 scenarios остаются отдельными gates.
 
@@ -237,6 +241,8 @@ interview, remove/leave; затем P4 scenarios.
 
 **Зависимости:** Domain, `ha-model`.
 
+**ТЗ:** [STAGE_4_IMPLEMENTATION_SPEC.md](STAGE_4_IMPLEMENTATION_SPEC.md).
+
 **Что сделать:**
 
 - использовать canonical `ha_rule_t`/record layout, убрать ручные offsets;
@@ -249,6 +255,14 @@ inbox loss, command path.
 **Критерий завершения:** automation behavior и ownership совпадают с V2.
 
 ### Этап 5 — Wi-Fi и System
+
+> Статус: **Implementation complete / Build + initial P4 smoke passed /
+> Acceptance scenarios pending**.
+> Implementation: `ha-wifi` и `ha-system` перенесены, `main` очищен.
+> Build: clean firmware build через `build-ha-app.ps1` проходит.
+> P4 smoke: Wi-Fi connect, SNTP, GeoIP, Weather и local clock подтверждены.
+> Acceptance: `WEATHER_CHANGED`, autoconnect после reboot, reconnect/backoff и
+> финальная приёмка Stage 5 остаются открытыми.
 
 **Исходные слои V2:** `wifi`, `system`.
 
@@ -427,11 +441,15 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 4 Automation — аудит перед реализацией.**
+**Текущая задача: Stage 5 — implementation complete; build и initial P4 smoke passed; acceptance scenarios pending.**
 
-Stage 3: **P4 boot verified / hardware scenarios pending**; Stage 4 не начат
-как реализация — сначала аудит Automation.
+Stage 3: **Host Verified / Hardware Acceptance Pending**.
+Stage 4 complete; Stage 5: implementation complete, clean build и initial P4 smoke прошли;
+финальная приёмка ещё открыта.
+Аудит Stage 5: [STAGE5_SCOPE_AUDIT.md](../audits/STAGE5_SCOPE_AUDIT.md).
+Ownership: [STAGE5_OWNERSHIP_DECISION.md](STAGE5_OWNERSHIP_DECISION.md).
 Аудит Stage 4: [AUTOMATION_LAYER_AUDIT.md](../audits/AUTOMATION_LAYER_AUDIT.md).
+ТЗ Stage 4: [STAGE_4_IMPLEMENTATION_SPEC.md](STAGE_4_IMPLEMENTATION_SPEC.md).
 Аудит Stage 3: [ZIGBEE_LAYER_AUDIT.md](../audits/ZIGBEE_LAYER_AUDIT.md).
 ТЗ: [STAGE_3_IMPLEMENTATION_SPEC.md](STAGE_3_IMPLEMENTATION_SPEC.md).
 Реализованы 3.1–3.5; workspace tests, static checks и firmware build прошли.
@@ -457,8 +475,8 @@ rename остаётся app-level V2 command path; Zigbee adapter пишет т�
 `remove_canonical`.
 
 Stage 1 hardware gate открыт: уникальная persistence-запись через UI/Web и
-reboot ещё не проверены. Wi-Fi заморожен; Display, System, Automation и
-остальные слои пока не трогаются.
+reboot ещё не проверены. Wi-Fi/System port реализован; Display и Web остаются
+Stage 6, остальные слои не переоткрываются.
 
 Domain API parity закрыт: [DOMAIN_API_AUDIT.md](../audits/DOMAIN_API_AUDIT.md)
 фиксирует исправленные ERROR-факты, выровненный payload contract, удалённый

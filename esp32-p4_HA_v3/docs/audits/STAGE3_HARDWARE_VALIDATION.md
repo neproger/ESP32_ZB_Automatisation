@@ -1,6 +1,6 @@
 # Stage 3 — Hardware Validation
 
-> Статус: **P4 boot resolved; Stage 3 hardware scenarios pending**.
+> Статус: **Host Verified / Hardware Blocked (acceptance; P4 boot resolved)**.
 > Плата: ESP32-P4, COM11, MAC `80:f1:b2:d1:18:77`.
 > Дата: 2026-11-02; boot resolved 2026-11-03.
 

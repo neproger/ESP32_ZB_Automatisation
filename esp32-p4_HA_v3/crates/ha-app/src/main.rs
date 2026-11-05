@@ -13,18 +13,12 @@ use std::sync::mpsc::sync_channel;
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    CanonicalCommand, EventId, LocationRecord, SettingsRecord, StateKey, StateRecord,
-    WeatherRecord, COMMAND_PROPERTY, COMMAND_WIFI_CONNECT, COMMAND_WIFI_SCAN, ENTITY_ENTITY,
-    ENTITY_LOCATION, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER,
-    EVENT_MINUTE_TICK, EVENT_WEATHER_CHANGED, LOCATION_RECORD_LEN, PROPERTY_SYSTEM_HOUR,
-    PROPERTY_SYSTEM_MINUTE, PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_TIME_STATUS,
-    PROPERTY_SYSTEM_TIME_UTC, PROPERTY_SYSTEM_TZ_OFFSET, PROPERTY_SYSTEM_WEEKDAY,
-    PROPERTY_SYSTEM_WEEKDAY_MASK, SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_UI,
-    SOURCE_ZIGBEE, SYSTEM_DEVICE_UID, WEATHER_DEVICE_UID,
+    CanonicalCommand, LocationRecord, SettingsRecord, COMMAND_PROPERTY, COMMAND_WIFI_CONNECT,
+    COMMAND_WIFI_SCAN, ENTITY_ENTITY, ENTITY_LOCATION, ENTITY_SETTINGS, LOCATION_RECORD_LEN,
+    SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_UI, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
 };
-use ha_domain::{Domain, DomainHandle, DomainTransaction, FactMeta, FactTarget, Filter};
+use ha_domain::{Domain, DomainHandle, DomainTransaction, FactMeta, Filter};
 
-mod automation_task;
 mod capabilities;
 mod config;
 mod configure;
@@ -38,16 +32,8 @@ mod interview;
 mod p4_probe;
 mod removal_queue;
 mod store;
-mod system;
 mod web;
-mod wifi;
 mod zigbee_service;
-
-#[derive(Clone, Copy)]
-struct CanonicalEvent {
-    entity: u64,
-    event: EventId,
-}
 
 extern "C" {
     fn zb_poc_start() -> i32;
@@ -85,10 +71,8 @@ fn main() {
 
     let (display_tx, display_rx) = sync_channel(64);
     let (web_tx, web_rx) = sync_channel(64);
-    let (automation_tx, automation_rx) = sync_channel(64);
     domain.subscribe_channel(Filter::all(), display_tx);
     domain.subscribe_channel(Filter::all(), web_tx);
-    domain.subscribe_channel(Filter::all(), automation_tx);
 
     unsafe {
         esp_idf_svc::sys::esp_netif_init();
@@ -123,24 +107,29 @@ fn main() {
         }) {
             log::error!("domain: command executor registration failed: {error:?}");
         }
-        if let Err(error) = domain.register_command(COMMAND_WIFI_SCAN, |_args| wifi::request_scan())
+        if let Err(error) =
+            domain.register_command(COMMAND_WIFI_SCAN, |_args| ha_wifi::request_scan())
         {
             log::error!("domain: wifi scan executor registration failed: {error:?}");
         }
-        if let Err(error) = domain.register_command(COMMAND_WIFI_CONNECT, wifi::connect_from_args) {
+        if let Err(error) =
+            domain.register_command(COMMAND_WIFI_CONNECT, ha_wifi::connect_from_args)
+        {
             log::error!("domain: wifi connect executor registration failed: {error:?}");
         }
     }
     if display::start() {
         display::rebuild(&domain);
     }
-    system::start(read_location(&domain).unwrap_or_default());
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
         .stack_size(8192)
         .spawn(|| unsafe { zb_poc_run() })
         .expect("zigbee mainloop thread");
-    wifi::start(domain.clone());
+    if let Err(error) = ha_system::start(domain.clone()) {
+        log::error!("system: start failed: {error}");
+    }
+    ha_wifi::start(domain.clone());
     let dispatcher_domain = domain.clone();
     let dispatch = domain.dispatch_handle().expect("domain dispatch handle");
     std::thread::Builder::new()
@@ -181,13 +170,13 @@ fn main() {
             web::flush();
         })
         .expect("web drain thread");
-    automation_task::spawn(domain.clone(), automation_rx);
+    if let Err(error) = ha_automation::start(domain.clone()) {
+        log::error!("automation: start failed: {error}");
+    }
     #[cfg(feature = "p4-lock-metrics")]
     p4_probe::start(domain.clone());
     log::info!("ha-app ready: device table + journal, waiting for button events");
 
-    let mut last_minute: Option<(u16, u8)> = None;
-    let mut last_weather: Option<u8> = None;
     let mut last_subscriber_drops = 0u64;
     loop {
         while let Some(request) = intake::take() {
@@ -208,48 +197,12 @@ fn main() {
                 _ => display::navigate(&domain, nav),
             }
         }
-        while let Some(update) = system::take() {
-            match update {
-                system::Update::Location(location) => {
-                    apply_system_location(&domain, location);
-                }
-                system::Update::Weather(weather) => {
-                    let changed = last_weather != Some(weather.condition);
-                    last_weather = Some(weather.condition);
-                    apply_weather(&domain, weather);
-                    if changed {
-                        publish_event(
-                            &domain,
-                            CanonicalEvent {
-                                entity: ENTITY_SYSTEM,
-                                event: EVENT_WEATHER_CHANGED,
-                            },
-                        );
-                    }
-                }
-            }
-        }
+
         while let Some((entity, capabilities)) = capabilities::take_capabilities() {
             if let Err(error) = domain.transaction(|transaction| {
                 apply_capabilities(transaction, entity, capabilities).map(|_| ())
             }) {
                 log::warn!("domain: capabilities update failed: {error:?}");
-            }
-        }
-        if let Some((minutes, weekday)) = local_minute(&domain) {
-            if last_minute != Some((minutes, weekday)) {
-                if last_minute.is_none() {
-                    log::info!("time: local clock ready (time rules use Location tz)");
-                }
-                last_minute = Some((minutes, weekday));
-                publish_system_time(&domain, minutes, weekday);
-                publish_event(
-                    &domain,
-                    CanonicalEvent {
-                        entity: ENTITY_SYSTEM,
-                        event: EVENT_MINUTE_TICK,
-                    },
-                );
             }
         }
         let subscriber_drops = domain.subscriber_drops().unwrap_or(0);
@@ -328,7 +281,13 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
                 log::warn!("display: automation {id:016x} not found");
                 return;
             }
-            record[384] = u8::from(enabled);
+            let record = match ha_automation::set_enabled(&record, enabled) {
+                Ok(record) => record,
+                Err(error) => {
+                    log::warn!("display: automation {id:016x} invalid record: {error:?}");
+                    return;
+                }
+            };
             match config::put_record(
                 domain,
                 ha_domain::canonical::ENTITY_AUTOMATION,
@@ -350,7 +309,7 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             }
         }
         intake::Request::WifiConnect { ssid, password } => {
-            let args = wifi::encode_connect(&ssid, &password);
+            let args = ha_wifi::encode_connect(&ssid, &password);
             let meta = FactMeta {
                 source: SOURCE_UI as u8,
                 value: ha_domain::Value::NONE,
@@ -364,14 +323,17 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
             key,
             record,
         } => {
-            let is_location = entity == ha_domain::canonical::ENTITY_LOCATION;
-            if let Err(error) = config::put_record(domain, entity, &key, &record) {
+            let result = if entity == ENTITY_LOCATION {
+                let meta = FactMeta {
+                    source: SOURCE_UI as u8,
+                    value: ha_domain::Value::NONE,
+                };
+                domain.entity_put(entity, &key, &record, meta).map(|_| ())
+            } else {
+                config::put_record(domain, entity, &key, &record).map(|_| ())
+            };
+            if let Err(error) = result {
                 log::warn!("domain: upsert entity={entity} failed: {error:?}");
-            }
-            if is_location {
-                if let Some(location) = read_location(domain) {
-                    system::set_location(location);
-                }
             }
         }
         intake::Request::Remove { entity, key } => {
@@ -412,30 +374,6 @@ fn apply_capabilities(
     ha_device::set_capabilities(domain, SOURCE_ZIGBEE as u8, entity, &capabilities)
 }
 
-fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
-    let key = event.entity.to_le_bytes();
-    let payload = event.event.to_le_bytes();
-    match domain.payload_put(
-        Some(FactTarget {
-            entity: ENTITY_ENTITY,
-            key: &key,
-        }),
-        FactMeta {
-            source: SOURCE_ZIGBEE as u8,
-            value: ha_domain::Value::u32(event.event),
-        },
-        &payload,
-    ) {
-        Ok(reference) => {
-            log::info!(
-                "domain: event entity={:016x} id={} payload={reference}",
-                event.entity,
-                event.event
-            );
-        }
-        Err(error) => log::error!("domain: event write failed: {error:?}"),
-    }
-}
 fn post_command(
     domain: &DomainHandle,
     command: CanonicalCommand,
@@ -448,7 +386,6 @@ fn post_command(
     };
     domain.post(COMMAND_PROPERTY, &args, None, meta)
 }
-
 fn ensure_system_location(domain: &DomainHandle) {
     let key = SYSTEM_DEVICE_UID.to_le_bytes();
     let mut current = [0u8; LOCATION_RECORD_LEN];
@@ -459,7 +396,11 @@ fn ensure_system_location(domain: &DomainHandle) {
         return;
     }
     let record = LocationRecord::default().encode();
-    match config::put_record(domain, ENTITY_LOCATION, &key, &record) {
+    let meta = FactMeta {
+        source: SOURCE_SYSTEM as u8,
+        value: ha_domain::Value::NONE,
+    };
+    match domain.entity_put(ENTITY_LOCATION, &key, &record, meta) {
         Ok(_) => log::info!("domain: location seeded"),
         Err(error) => log::warn!("domain: location seed failed: {error:?}"),
     }
@@ -486,117 +427,6 @@ fn read_settings(domain: &DomainHandle) -> SettingsRecord {
         .ok()
         .and_then(|()| SettingsRecord::decode(&bytes))
         .unwrap_or_default()
-}
-
-fn read_location(domain: &DomainHandle) -> Option<LocationRecord> {
-    let mut bytes = [0u8; LOCATION_RECORD_LEN];
-    domain
-        .entity_get(
-            ENTITY_LOCATION,
-            &SYSTEM_DEVICE_UID.to_le_bytes(),
-            &mut bytes,
-        )
-        .ok()?;
-    LocationRecord::decode(&bytes)
-}
-
-fn apply_system_location(domain: &DomainHandle, location: LocationRecord) {
-    let key = SYSTEM_DEVICE_UID.to_le_bytes();
-    let record = location.encode();
-    if let Err(error) = config::put_record(domain, ENTITY_LOCATION, &key, &record) {
-        log::warn!("system: location write failed: {error:?}");
-    }
-    system::set_location(location);
-}
-
-fn apply_weather(domain: &DomainHandle, weather: WeatherRecord) {
-    let key = WEATHER_DEVICE_UID.to_le_bytes();
-    let record = weather.encode();
-    let meta = FactMeta {
-        source: SOURCE_SYSTEM as u8,
-        value: ha_domain::Value::NONE,
-    };
-    if let Err(error) = domain.entity_put(ENTITY_WEATHER, &key, &record, meta) {
-        log::warn!("system: weather write failed: {error:?}");
-    }
-}
-
-/// Publish the V2 system time properties (RAM only, no flash writes every minute).
-fn publish_system_time(domain: &DomainHandle, minutes: u16, weekday: u8) {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs() as u32);
-    let offset = read_location(domain)
-        .map(|location| i32::from(location.effective_tz_offset_min()))
-        .unwrap_or(0);
-    let entries = [
-        (PROPERTY_SYSTEM_TIME_UTC, ha_domain::Value::u32(seconds)),
-        (PROPERTY_SYSTEM_TIME_STATUS, ha_domain::Value::u32(2)),
-        (
-            PROPERTY_SYSTEM_HOUR,
-            ha_domain::Value::u32(u32::from(minutes / 60)),
-        ),
-        (
-            PROPERTY_SYSTEM_MINUTE,
-            ha_domain::Value::u32(u32::from(minutes % 60)),
-        ),
-        (
-            PROPERTY_SYSTEM_WEEKDAY,
-            ha_domain::Value::u32(u32::from(weekday)),
-        ),
-        (
-            PROPERTY_SYSTEM_WEEKDAY_MASK,
-            ha_domain::Value::u32(1u32 << weekday),
-        ),
-        (
-            PROPERTY_SYSTEM_MINUTES_OF_DAY,
-            ha_domain::Value::u32(u32::from(minutes)),
-        ),
-        (PROPERTY_SYSTEM_TZ_OFFSET, ha_domain::Value::i32(offset)),
-    ];
-    let meta = FactMeta {
-        source: SOURCE_SYSTEM as u8,
-        value: ha_domain::Value::NONE,
-    };
-    for (property, value) in entries {
-        let key = StateKey {
-            entity: ENTITY_SYSTEM,
-            property,
-        }
-        .to_bytes();
-        let record = StateRecord { value }.encode();
-        let _ = domain.entity_put(ENTITY_PROPERTY_STATE, &key, &record, meta);
-    }
-}
-
-fn local_minute(domain: &DomainHandle) -> Option<(u16, u8)> {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    // Before SNTP the clock is at 1970; do not fire time rules at 00:00.
-    if seconds < 1_600_000_000 {
-        return None;
-    }
-    let mut bytes = [0u8; LOCATION_RECORD_LEN];
-    let offset = domain
-        .entity_get(
-            ENTITY_LOCATION,
-            &SYSTEM_DEVICE_UID.to_le_bytes(),
-            &mut bytes,
-        )
-        .ok()
-        .and_then(|()| LocationRecord::decode(&bytes))
-        .map(|location| location.effective_tz_offset_min())
-        .unwrap_or(0);
-    let local = i64::try_from(seconds).ok()? + i64::from(offset) * 60;
-    if local < 0 {
-        return None;
-    }
-    let local = local as u64;
-    let weekday = ((local / 86_400 + 3) % 7) as u8;
-    let minutes = ((local % 86_400) / 60) as u16;
-    Some((minutes, weekday))
 }
 
 fn now_ms() -> u64 {

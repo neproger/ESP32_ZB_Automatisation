@@ -5,15 +5,19 @@
 //! Rule layout is the V2 `ha_rule_t` POD (456 bytes, little-endian, explicit
 //! offsets from `ha_model/ha_rule.h`).
 
+mod task;
+
+pub use task::start;
+
 use ha_domain::canonical::{
-    CanonicalCommand, CommandValue, EntityId, PropertyId, ENTITY_ID_SOURCE,
+    AbiResult, CanonicalCommand, CommandValue, EntityId, PropertyId, RuleCommandValue, RuleRecord,
+    ENTITY_ID_SOURCE, RULE_ACTIONS_OFFSET, RULE_ACTION_COUNT_OFFSET, RULE_ACTION_LEN,
+    RULE_CONDITIONS_COUNT_OFFSET, RULE_CONDITIONS_OFFSET, RULE_CONDITION_LEN, RULE_RECORD_LEN,
+    RULE_TRIGGERS_OFFSET, RULE_TRIGGER_COUNT_OFFSET, RULE_TRIGGER_LEN,
 };
 use ha_domain::Value;
 
-pub const RULE_RECORD_LEN: usize = 456;
-pub const MAX_RULES: usize = 16;
 pub const MAX_INDEX: usize = 256;
-pub const MAX_ACTIONS: usize = 16;
 const CACHE_MAX: usize = 64;
 const EPS: f64 = 1e-6;
 
@@ -73,7 +77,7 @@ struct Rule {
 
 #[derive(Clone, Copy)]
 struct IndexEntry {
-    rule: u8,
+    rule: u16,
     trigger: u8,
     kind: u8,
     entity: u64,
@@ -99,52 +103,8 @@ struct Cached {
     value: f64,
 }
 
-/// Bounded command batch produced by one fact.
-pub struct Actions {
-    items: [Option<CanonicalCommand>; MAX_ACTIONS],
-    len: usize,
-}
-
-impl Default for Actions {
-    fn default() -> Self {
-        Self {
-            items: [None; MAX_ACTIONS],
-            len: 0,
-        }
-    }
-}
-
-impl Actions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn clear(&mut self) {
-        self.len = 0;
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &CanonicalCommand> {
-        self.items[..self.len].iter().flatten()
-    }
-
-    fn push(&mut self, command: CanonicalCommand) {
-        if self.len < MAX_ACTIONS {
-            self.items[self.len] = Some(command);
-            self.len += 1;
-        }
-    }
-}
-
 pub struct RuleEngine {
-    rules: [Option<Rule>; MAX_RULES],
+    rules: Vec<Rule>,
     index: [IndexEntry; MAX_INDEX],
     index_count: usize,
     cache: [Option<Cached>; CACHE_MAX],
@@ -159,7 +119,7 @@ impl Default for RuleEngine {
 impl RuleEngine {
     pub fn new() -> Self {
         Self {
-            rules: [None; MAX_RULES],
+            rules: Vec::new(),
             index: [IndexEntry::EMPTY; MAX_INDEX],
             index_count: 0,
             cache: [None; CACHE_MAX],
@@ -172,7 +132,7 @@ impl RuleEngine {
         let mut boxed = Box::<Self>::new_uninit();
         let ptr = boxed.as_mut_ptr();
         unsafe {
-            std::ptr::addr_of_mut!((*ptr).rules).write([None; MAX_RULES]);
+            std::ptr::addr_of_mut!((*ptr).rules).write(Vec::new());
             std::ptr::addr_of_mut!((*ptr).index).write([IndexEntry::EMPTY; MAX_INDEX]);
             std::ptr::addr_of_mut!((*ptr).index_count).write(0);
             std::ptr::addr_of_mut!((*ptr).cache).write([None; CACHE_MAX]);
@@ -181,27 +141,20 @@ impl RuleEngine {
     }
 
     pub fn clear(&mut self) {
-        self.rules = [None; MAX_RULES];
+        self.rules.clear();
         self.index_count = 0;
         self.cache = [None; CACHE_MAX];
     }
 
     /// Adds a decoded rule; call `build_index` after the last add.
-    pub fn add_rule(&mut self, id: u64, record: &[u8]) {
-        let Some(rule) = Rule::decode(id, record) else {
-            return;
-        };
-        if let Some(slot) = self.rules.iter().position(Option::is_none) {
-            self.rules[slot] = Some(rule);
-        }
+    pub fn add_rule(&mut self, id: u64, record: &[u8]) -> AbiResult<()> {
+        self.rules.push(Rule::decode(id, record)?);
+        Ok(())
     }
 
     pub fn build_index(&mut self) {
         self.index_count = 0;
         for (slot, rule) in self.rules.iter().enumerate() {
-            let Some(rule) = rule else {
-                continue;
-            };
             if !rule.enabled {
                 continue;
             }
@@ -210,10 +163,11 @@ impl RuleEngine {
                     continue;
                 };
                 if self.index_count == MAX_INDEX {
+                    log::warn!("automation: index full ({MAX_INDEX}); extra triggers not indexed");
                     return;
                 }
                 self.index[self.index_count] = IndexEntry {
-                    rule: slot as u8,
+                    rule: slot as u16,
                     trigger: index as u8,
                     kind: trigger.kind,
                     entity: trigger.entity,
@@ -226,7 +180,7 @@ impl RuleEngine {
     }
 
     pub fn rule_count(&self) -> usize {
-        self.rules.iter().flatten().count()
+        self.rules.len()
     }
 
     pub fn index_count(&self) -> usize {
@@ -238,8 +192,11 @@ impl RuleEngine {
         source: EntityId,
         event: u32,
         state: &dyn StateSource,
-        out: &mut Actions,
+        emit: &mut dyn FnMut(CanonicalCommand),
     ) {
+        if source == 0 {
+            return;
+        }
         for entry in self.index[..self.index_count].iter().copied() {
             if entry.kind != TRIGGER_EVENT || entry.event_id != event {
                 continue;
@@ -247,7 +204,7 @@ impl RuleEngine {
             if entry.entity != ENTITY_ID_SOURCE && entry.entity != source {
                 continue;
             }
-            self.fire(&entry, source, state, out);
+            self.fire(&entry, source, state, emit);
         }
     }
 
@@ -257,8 +214,11 @@ impl RuleEngine {
         property: PropertyId,
         value: f64,
         state: &dyn StateSource,
-        out: &mut Actions,
+        emit: &mut dyn FnMut(CanonicalCommand),
     ) {
+        if entity == 0 {
+            return;
+        }
         let (known, previous) = self.cache_previous(entity, property);
         self.cache_put(entity, property, value);
         for entry in self.index[..self.index_count].iter().copied() {
@@ -268,38 +228,40 @@ impl RuleEngine {
             if entry.entity != ENTITY_ID_SOURCE && entry.entity != entity {
                 continue;
             }
-            let Some(rule) = self.rules[usize::from(entry.rule)] else {
+            let Some(rule) = self.rules.get(usize::from(entry.rule)) else {
                 continue;
             };
             let Some(trigger) = rule.triggers[usize::from(entry.trigger)] else {
                 continue;
             };
             if state_matches(&trigger, entity, property, value, known, previous) {
-                self.fire(&entry, entity, state, out);
+                self.fire(&entry, entity, state, emit);
             }
         }
     }
 
     /// Minute tick from the time service (V2 `HA_EVENT_MINUTE_TICK` semantics).
+    /// `source` is the entity that emitted the minute event, usually System.
     pub fn on_minute(
         &self,
+        source: EntityId,
         minutes: u16,
         weekday_mask: u8,
         state: &dyn StateSource,
-        out: &mut Actions,
+        emit: &mut dyn FnMut(CanonicalCommand),
     ) {
         for entry in self.index[..self.index_count].iter().copied() {
             if entry.kind != TRIGGER_TIME {
                 continue;
             }
-            let Some(rule) = self.rules[usize::from(entry.rule)] else {
+            let Some(rule) = self.rules.get(usize::from(entry.rule)) else {
                 continue;
             };
             let Some(trigger) = rule.triggers[usize::from(entry.trigger)] else {
                 continue;
             };
             if trigger.minutes == minutes && (trigger.weekday & weekday_mask) != 0 {
-                self.fire(&entry, 0, state, out);
+                self.fire(&entry, source, state, emit);
             }
         }
     }
@@ -309,12 +271,12 @@ impl RuleEngine {
         entry: &IndexEntry,
         source: EntityId,
         state: &dyn StateSource,
-        out: &mut Actions,
+        emit: &mut dyn FnMut(CanonicalCommand),
     ) {
-        let Some(rule) = self.rules[usize::from(entry.rule)] else {
+        let Some(rule) = self.rules.get(usize::from(entry.rule)) else {
             return;
         };
-        if !conditions_pass(&rule, source, state) {
+        if !conditions_pass(rule, source, state) {
             return;
         }
         let Some(trigger) = rule.triggers[usize::from(entry.trigger)] else {
@@ -336,7 +298,7 @@ impl RuleEngine {
                     continue;
                 }
             }
-            out.push(CanonicalCommand {
+            emit(CanonicalCommand {
                 entity: target,
                 property: action.property,
                 action: action.action,
@@ -344,7 +306,6 @@ impl RuleEngine {
             });
         }
     }
-
     fn cache_previous(&self, entity: EntityId, property: PropertyId) -> (bool, f64) {
         for slot in self.cache.iter().flatten() {
             if slot.entity == entity && slot.property == property {
@@ -382,71 +343,107 @@ impl RuleEngine {
 }
 
 impl Rule {
-    fn decode(_id: u64, record: &[u8]) -> Option<Self> {
-        if record.len() != RULE_RECORD_LEN {
-            return None;
-        }
-        let trigger_count = usize::from(record[385]).min(4);
-        let action_count = usize::from(record[386]).min(4);
-        let condition_count = usize::from(record[387]).min(4);
+    fn decode(_id: u64, record: &[u8]) -> AbiResult<Self> {
+        let record = decode_rule(record)?;
+        Ok(Self::from_record(&record))
+    }
+
+    fn from_record(record: &RuleRecord) -> Self {
+        let trigger_count = usize::from(record.trigger_count);
+        let action_count = usize::from(record.action_count);
+        let condition_count = usize::from(record.conditions_count);
         let mut triggers = [None; 4];
-        for (index, slot) in triggers.iter_mut().enumerate() {
-            if index >= trigger_count {
-                break;
-            }
-            let base = index * 32;
+        for (index, slot) in triggers.iter_mut().take(trigger_count).enumerate() {
+            let trigger = record.triggers[index];
             *slot = Some(Trigger {
-                entity: u64_at(record, base),
-                event_id: u32_at(record, base + 8),
-                property: u32_at(record, base + 12),
-                value: f32_at(record, base + 16),
-                value2: f32_at(record, base + 20),
-                minutes: u16_at(record, base + 24),
-                kind: record[base + 26],
-                op: record[base + 27],
-                edge: record[base + 28],
-                weekday: record[base + 29],
+                entity: trigger.entity,
+                event_id: trigger.event_id,
+                property: trigger.property,
+                value: trigger.value,
+                value2: trigger.value2,
+                minutes: trigger.minutes_of_day,
+                kind: trigger.kind,
+                op: trigger.op,
+                edge: trigger.edge,
+                weekday: trigger.weekday_mask,
             });
         }
         let mut actions = [None; 4];
-        for (index, slot) in actions.iter_mut().enumerate() {
-            if index >= action_count {
-                break;
-            }
-            let base = 128 + index * 32;
+        for (index, slot) in actions.iter_mut().take(action_count).enumerate() {
+            let action = record.actions[index];
             *slot = Some(Action {
-                entity: u64_at(record, base),
-                property: u32_at(record, base + 8),
-                action: u32::from(record[base + 28]),
-                value: command_value(&record[base + 16..base + 28]),
+                entity: action.reference.entity,
+                property: action.reference.property,
+                action: u32::from(action.action),
+                value: command_value(action.value),
             });
         }
         let mut conditions = [None; 4];
-        for (index, slot) in conditions.iter_mut().enumerate() {
-            if index >= condition_count {
-                break;
-            }
-            let base = 256 + index * 32;
+        for (index, slot) in conditions.iter_mut().take(condition_count).enumerate() {
+            let condition = record.conditions[index];
             *slot = Some(Condition {
-                entity: u64_at(record, base),
-                property: u32_at(record, base + 8),
-                op: record[base + 16],
-                value: f32_at(record, base + 20),
-                value2: f32_at(record, base + 24),
+                entity: condition.reference.entity,
+                property: condition.reference.property,
+                op: condition.compare.op,
+                value: condition.compare.value,
+                value2: condition.compare.value2,
             });
         }
-        Some(Self {
-            enabled: record[384] != 0,
+        Self {
+            enabled: record.enabled != 0,
             triggers,
             actions,
             conditions,
             trigger_count,
             action_count,
             condition_count,
-        })
+        }
     }
 }
 
+/// Decode a canonical rule with V2 normalization.
+///
+/// V2 clamps the three counters to the array limit and ignores inactive slots.
+/// Active entries still go through the strict canonical decoder; a malformed
+/// active entry rejects only this rule.
+pub fn decode_rule(record: &[u8]) -> AbiResult<RuleRecord> {
+    if record.len() != RULE_RECORD_LEN {
+        return Err(ha_domain::canonical::AbiError::InvalidSize);
+    }
+
+    let mut normalized = [0u8; RULE_RECORD_LEN];
+    normalized.copy_from_slice(record);
+
+    let trigger_count = normalized[RULE_TRIGGER_COUNT_OFFSET].min(4);
+    let action_count = normalized[RULE_ACTION_COUNT_OFFSET].min(4);
+    let condition_count = normalized[RULE_CONDITIONS_COUNT_OFFSET].min(4);
+    normalized[RULE_TRIGGER_COUNT_OFFSET] = trigger_count;
+    normalized[RULE_ACTION_COUNT_OFFSET] = action_count;
+    normalized[RULE_CONDITIONS_COUNT_OFFSET] = condition_count;
+
+    for index in usize::from(trigger_count)..4 {
+        let start = RULE_TRIGGERS_OFFSET + index * RULE_TRIGGER_LEN;
+        normalized[start..start + RULE_TRIGGER_LEN].fill(0);
+    }
+    for index in usize::from(action_count)..4 {
+        let start = RULE_ACTIONS_OFFSET + index * RULE_ACTION_LEN;
+        normalized[start..start + RULE_ACTION_LEN].fill(0);
+    }
+    for index in usize::from(condition_count)..4 {
+        let start = RULE_CONDITIONS_OFFSET + index * RULE_CONDITION_LEN;
+        normalized[start..start + RULE_CONDITION_LEN].fill(0);
+    }
+
+    RuleRecord::decode(&normalized)
+}
+
+/// V2 `SetAutomationEnabled`: decode the canonical rule, change only `enabled`,
+/// then encode it again. The same V2 normalization/malformed policy applies.
+pub fn set_enabled(record: &[u8], enabled: bool) -> AbiResult<[u8; RULE_RECORD_LEN]> {
+    let mut rule = decode_rule(record)?;
+    rule.enabled = u8::from(enabled);
+    rule.encode()
+}
 fn conditions_pass(rule: &Rule, source: EntityId, state: &dyn StateSource) -> bool {
     for condition in rule.conditions[..rule.condition_count].iter().flatten() {
         let entity = resolve(condition.entity, source);
@@ -518,27 +515,11 @@ fn resolve(reference: EntityId, source: EntityId) -> EntityId {
     }
 }
 
-fn command_value(bytes: &[u8]) -> CommandValue {
-    match i32_at(bytes, 0) {
-        0 => CommandValue::None,
-        1 => {
-            let kind = i32_at(bytes, 4);
-            let bits = u32_at(bytes, 8);
-            let value = match kind {
-                1 => Value::bool(bits != 0),
-                2 => Value::i32(bits as i32),
-                3 => Value::u32(bits),
-                4 => Value::f32(f32::from_bits(bits)),
-                5 => Value::enum_(bits),
-                _ => return CommandValue::None,
-            };
-            CommandValue::Scalar(value)
-        }
-        2 => CommandValue::Xy {
-            x: f32_at(bytes, 4),
-            y: f32_at(bytes, 8),
-        },
-        _ => CommandValue::None,
+fn command_value(value: RuleCommandValue) -> CommandValue {
+    match value {
+        RuleCommandValue::None => CommandValue::None,
+        RuleCommandValue::Scalar(value) => CommandValue::Scalar(value),
+        RuleCommandValue::Xy { x, y } => CommandValue::Xy { x, y },
     }
 }
 
@@ -555,45 +536,180 @@ pub fn value_to_f64(value: &Value) -> Option<f64> {
     value.as_u32().map(f64::from)
 }
 
-fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-}
-
-fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-    ])
-}
-
-fn i32_at(bytes: &[u8], offset: usize) -> i32 {
-    u32_at(bytes, offset) as i32
-}
-
-fn u64_at(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes([
-        bytes[offset],
-        bytes[offset + 1],
-        bytes[offset + 2],
-        bytes[offset + 3],
-        bytes[offset + 4],
-        bytes[offset + 5],
-        bytes[offset + 6],
-        bytes[offset + 7],
-    ])
-}
-
-fn f32_at(bytes: &[u8], offset: usize) -> f32 {
-    f32::from_bits(u32_at(bytes, offset))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ha_domain::canonical::{ACTION_ON, PROPERTY_BRIGHTNESS, PROPERTY_POWER};
+    use ha_domain::canonical::{
+        AbiError, RuleAction, RuleCommandValue, RuleCompare, RuleCondition, RuleRef, RuleTrigger,
+        ACTION_ON, PROPERTY_BRIGHTNESS, PROPERTY_POWER, RULE_ACTION_RESERVED_OFFSET,
+        RULE_ACTION_VALUE_OFFSET, RULE_COMMAND_KIND_OFFSET, RULE_CONDITION_RESERVED_OFFSET,
+        RULE_ENABLED_OFFSET, RULE_RESERVED_OFFSET, RULE_TRIGGER_EDGE_OFFSET,
+        RULE_TRIGGER_RESERVED_OFFSET,
+    };
     use std::collections::HashMap;
+
+    fn canonical_record() -> RuleRecord {
+        let trigger = RuleTrigger {
+            entity: 50,
+            event_id: 1,
+            property: 0,
+            value: 0.0,
+            value2: 0.0,
+            minutes_of_day: 0,
+            kind: TRIGGER_EVENT,
+            op: 0,
+            edge: 0,
+            weekday_mask: 0,
+        };
+        let action = RuleAction {
+            reference: RuleRef {
+                entity: 100,
+                property: PROPERTY_POWER,
+            },
+            value: RuleCommandValue::Scalar(Value::u32(70)),
+            action: ACTION_ON as u8,
+        };
+        let condition = RuleCondition {
+            reference: RuleRef {
+                entity: 50,
+                property: PROPERTY_BRIGHTNESS,
+            },
+            compare: RuleCompare {
+                op: 3,
+                value: 40.0,
+                value2: 0.0,
+            },
+        };
+        RuleRecord {
+            triggers: [trigger; 4],
+            actions: [action; 4],
+            conditions: [condition; 4],
+            enabled: 1,
+            trigger_count: 1,
+            action_count: 1,
+            conditions_count: 1,
+            name: [0u8; 64],
+        }
+    }
+
+    #[test]
+    fn canonical_rule_roundtrip() {
+        let mut record = canonical_record();
+        record.trigger_count = 4;
+        record.action_count = 4;
+        record.conditions_count = 4;
+        let bytes = record.encode().unwrap();
+        let decoded = decode_rule(&bytes).unwrap();
+        assert_eq!(decoded, record);
+    }
+
+    #[test]
+    fn set_enabled_preserves_the_rule() {
+        let mut record = canonical_record();
+        record.trigger_count = 4;
+        record.action_count = 4;
+        record.conditions_count = 4;
+        let bytes = record.encode().unwrap();
+        let disabled = set_enabled(&bytes, false).unwrap();
+        let decoded = decode_rule(&disabled).unwrap();
+        assert_eq!(decoded.enabled, 0);
+        assert_eq!(decoded.triggers[0], record.triggers[0]);
+        assert_eq!(decoded.actions[0], record.actions[0]);
+        assert_eq!(decoded.conditions[0], record.conditions[0]);
+        assert_eq!(set_enabled(&bytes, true).unwrap(), bytes);
+    }
+
+    #[test]
+    fn set_enabled_rejects_malformed_rule() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_RESERVED_OFFSET] = 1;
+        assert_eq!(set_enabled(&bytes, true), Err(AbiError::NonZeroReserved));
+    }
+    #[test]
+    fn counts_above_max_are_clamped() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_TRIGGER_COUNT_OFFSET] = 5;
+        bytes[RULE_ACTION_COUNT_OFFSET] = 6;
+        bytes[RULE_CONDITIONS_COUNT_OFFSET] = 7;
+        let decoded = decode_rule(&bytes).unwrap();
+        assert_eq!(decoded.trigger_count, 4);
+        assert_eq!(decoded.action_count, 4);
+        assert_eq!(decoded.conditions_count, 4);
+    }
+
+    #[test]
+    fn inactive_slots_are_ignored() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        for index in 1..4 {
+            let trigger = RULE_TRIGGERS_OFFSET + index * RULE_TRIGGER_LEN;
+            bytes[trigger..trigger + RULE_TRIGGER_LEN].fill(0xFF);
+            let action = RULE_ACTIONS_OFFSET + index * RULE_ACTION_LEN;
+            bytes[action..action + RULE_ACTION_LEN].fill(0xFF);
+            let condition = RULE_CONDITIONS_OFFSET + index * RULE_CONDITION_LEN;
+            bytes[condition..condition + RULE_CONDITION_LEN].fill(0xFF);
+        }
+        assert!(decode_rule(&bytes).is_ok());
+    }
+
+    #[test]
+    fn active_reserved_bytes_are_malformed() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_TRIGGER_RESERVED_OFFSET] = 1;
+        assert_eq!(decode_rule(&bytes), Err(AbiError::NonZeroReserved));
+    }
+
+    #[test]
+    fn action_and_condition_reserved_bytes_are_malformed() {
+        let record = canonical_record();
+        for offset in [
+            RULE_ACTIONS_OFFSET + RULE_ACTION_RESERVED_OFFSET,
+            RULE_CONDITIONS_OFFSET + RULE_CONDITION_RESERVED_OFFSET,
+        ] {
+            let mut bytes = record.encode().unwrap();
+            bytes[offset] = 1;
+            assert_eq!(decode_rule(&bytes), Err(AbiError::NonZeroReserved));
+        }
+    }
+
+    #[test]
+    fn wrong_record_length_is_malformed() {
+        assert_eq!(
+            decode_rule(&[0u8; RULE_RECORD_LEN - 1]),
+            Err(AbiError::InvalidSize)
+        );
+    }
+
+    #[test]
+    fn record_reserved_bytes_are_malformed() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_RESERVED_OFFSET] = 1;
+        assert_eq!(decode_rule(&bytes), Err(AbiError::NonZeroReserved));
+    }
+
+    #[test]
+    fn invalid_active_command_value_is_malformed() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_ACTIONS_OFFSET + RULE_ACTION_VALUE_OFFSET + RULE_COMMAND_KIND_OFFSET] = 9;
+        assert_eq!(decode_rule(&bytes), Err(AbiError::InvalidKind));
+    }
+
+    #[test]
+    fn enabled_nonzero_and_unknown_edge_follow_v2() {
+        let record = canonical_record();
+        let mut bytes = record.encode().unwrap();
+        bytes[RULE_ENABLED_OFFSET] = 2;
+        bytes[RULE_TRIGGER_EDGE_OFFSET] = 99;
+        let decoded = decode_rule(&bytes).unwrap();
+        assert_eq!(decoded.enabled, 2);
+        assert_eq!(decoded.triggers[0].edge, 99);
+        assert!(Rule::decode(1, &bytes).unwrap().enabled);
+    }
 
     #[derive(Default)]
     struct Values(HashMap<(u64, u32), f64>);
@@ -681,7 +797,7 @@ mod tests {
 
     fn engine(rule: &[u8; RULE_RECORD_LEN]) -> RuleEngine {
         let mut engine = RuleEngine::new();
-        engine.add_rule(1, rule);
+        engine.add_rule(1, rule).unwrap();
         engine.build_index();
         engine
     }
@@ -693,8 +809,10 @@ mod tests {
             .action(100, PROPERTY_POWER, ACTION_ON)
             .build();
         let engine = engine(&rule);
-        let mut actions = Actions::new();
-        engine.on_event(50, 1, &Values::default(), &mut actions);
+        let mut actions = Vec::new();
+        engine.on_event(50, 1, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
         let action = actions.iter().next().copied().unwrap();
         assert_eq!(action.entity, 100);
         assert_eq!(action.action, ACTION_ON);
@@ -718,14 +836,22 @@ mod tests {
             .build();
         let mut engine = engine(&rule);
         let state = Values::default();
-        let mut actions = Actions::new();
-        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut actions);
+        let mut actions = Vec::new();
+        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut |command| {
+            actions.push(command)
+        });
         assert_eq!(actions.len(), 1);
         actions.clear();
-        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut actions);
+        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut |command| {
+            actions.push(command)
+        });
         assert!(actions.is_empty());
-        engine.on_state(50, PROPERTY_POWER, 0.0, &state, &mut actions);
-        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut actions);
+        engine.on_state(50, PROPERTY_POWER, 0.0, &state, &mut |command| {
+            actions.push(command)
+        });
+        engine.on_state(50, PROPERTY_POWER, 1.0, &state, &mut |command| {
+            actions.push(command)
+        });
         assert_eq!(actions.len(), 1);
     }
 
@@ -738,12 +864,12 @@ mod tests {
             .build();
         let engine = engine(&rule);
         let mut values = Values::default();
-        let mut actions = Actions::new();
+        let mut actions = Vec::new();
         values.0.insert((50, PROPERTY_BRIGHTNESS), 40.0);
-        engine.on_event(50, 1, &values, &mut actions);
+        engine.on_event(50, 1, &values, &mut |command| actions.push(command));
         assert!(actions.is_empty());
         values.0.insert((50, PROPERTY_BRIGHTNESS), 80.0);
-        engine.on_event(50, 1, &values, &mut actions);
+        engine.on_event(50, 1, &values, &mut |command| actions.push(command));
         assert_eq!(actions.len(), 1);
     }
 
@@ -754,15 +880,82 @@ mod tests {
             .action(100, PROPERTY_POWER, ACTION_ON)
             .build();
         let engine = engine(&rule);
-        let mut actions = Actions::new();
-        engine.on_minute(420, 0b0000001, &Values::default(), &mut actions);
+        let mut actions = Vec::new();
+        engine.on_minute(50, 420, 0b0000001, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
         assert!(actions.is_empty());
-        engine.on_minute(421, 0b0000010, &Values::default(), &mut actions);
+        engine.on_minute(50, 421, 0b0000010, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
         assert!(actions.is_empty());
-        engine.on_minute(420, 0b0000010, &Values::default(), &mut actions);
+        engine.on_minute(50, 420, 0b0000010, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
         assert_eq!(actions.len(), 1);
     }
 
+    #[test]
+    fn time_trigger_source_resolves_to_minute_source() {
+        let rule = RuleBuilder::new()
+            .trigger(TRIGGER_TIME, 0, 0, 0, 0, 0, 0.0, 420, 0b0000001)
+            .action(ENTITY_ID_SOURCE, PROPERTY_POWER, ACTION_ON)
+            .build();
+        let engine = engine(&rule);
+        let mut actions = Vec::new();
+        engine.on_minute(50, 420, 0b0000001, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].entity, 50);
+    }
+
+    #[test]
+    fn multiple_conditions_are_anded() {
+        let rule = RuleBuilder::new()
+            .trigger(TRIGGER_EVENT, ENTITY_ID_SOURCE, 1, 0, 0, 0, 0.0, 0, 0)
+            .condition(50, PROPERTY_POWER, 1, 1.0)
+            .condition(50, PROPERTY_BRIGHTNESS, 3, 50.0)
+            .action(100, PROPERTY_POWER, ACTION_ON)
+            .build();
+        let engine = engine(&rule);
+        let mut values = Values::default();
+        values.0.insert((50, PROPERTY_POWER), 1.0);
+        values.0.insert((50, PROPERTY_BRIGHTNESS), 40.0);
+        let mut actions = Vec::new();
+        engine.on_event(50, 1, &values, &mut |command| actions.push(command));
+        assert!(actions.is_empty());
+        values.0.insert((50, PROPERTY_BRIGHTNESS), 80.0);
+        engine.on_event(50, 1, &values, &mut |command| actions.push(command));
+        assert_eq!(actions.len(), 1);
+    }
+
+    #[test]
+    fn more_than_sixteen_rules_and_actions_are_not_dropped() {
+        let mut engine = RuleEngine::new();
+        for rule_index in 0..20 {
+            let mut builder =
+                RuleBuilder::new().trigger(TRIGGER_EVENT, ENTITY_ID_SOURCE, 1, 0, 0, 0, 0.0, 0, 0);
+            for action_index in 0..4 {
+                builder = builder.action(
+                    1_000 + rule_index * 4 + action_index,
+                    PROPERTY_POWER,
+                    ACTION_ON,
+                );
+            }
+            engine
+                .add_rule(rule_index as u64, &builder.build())
+                .unwrap();
+        }
+        engine.build_index();
+        assert_eq!(engine.rule_count(), 20);
+        assert_eq!(engine.index_count(), 20);
+        let mut actions = Vec::new();
+        engine.on_event(50, 1, &Values::default(), &mut |command| {
+            actions.push(command)
+        });
+        assert_eq!(actions.len(), 80);
+    }
     #[test]
     fn state_action_on_its_own_property_is_skipped() {
         let rule = RuleBuilder::new()
@@ -780,8 +973,14 @@ mod tests {
             .action(ENTITY_ID_SOURCE, PROPERTY_POWER, ACTION_ON)
             .build();
         let mut engine = engine(&rule);
-        let mut actions = Actions::new();
-        engine.on_state(50, PROPERTY_POWER, 1.0, &Values::default(), &mut actions);
+        let mut actions = Vec::new();
+        engine.on_state(
+            50,
+            PROPERTY_POWER,
+            1.0,
+            &Values::default(),
+            &mut |command| actions.push(command),
+        );
         assert!(actions.is_empty());
     }
 }

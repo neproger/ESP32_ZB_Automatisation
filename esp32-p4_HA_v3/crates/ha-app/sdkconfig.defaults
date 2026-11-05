@@ -86,3 +86,8 @@ CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
 # P4 board has 16 MB flash; the app partition table is the HA V3 8M layout.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+# ESP-Hosted optional USB transports are disabled; define their manifest gates
+# for clean component-manager runs.
+CONFIG_ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST=n
+CONFIG_ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST=n
+CONFIG_ESP_HOSTED_HOST_USB_RNDIS_MANIFEST=n

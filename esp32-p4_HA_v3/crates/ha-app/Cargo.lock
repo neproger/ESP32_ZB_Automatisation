@@ -793,14 +793,15 @@ version = "0.1.0"
 dependencies = [
  "bindgen 0.71.1",
  "embassy-time",
- "embedded-svc",
  "embuild",
  "esp-idf-svc",
  "ha-automation",
  "ha-device",
  "ha-domain",
  "ha-model",
+ "ha-system",
  "ha-web",
+ "ha-wifi",
  "log",
  "micro-db",
  "z2m-rs",
@@ -814,6 +815,7 @@ name = "ha-automation"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+ "log",
 ]
 
 [[package]]
@@ -836,10 +838,28 @@ name = "ha-model"
 version = "0.1.0"
 
 [[package]]
+name = "ha-system"
+version = "0.1.0"
+dependencies = [
+ "embedded-svc",
+ "esp-idf-svc",
+ "ha-domain",
+ "log",
+]
+
+[[package]]
 name = "ha-web"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+]
+
+[[package]]
+name = "ha-wifi"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+ "log",
 ]
 
 [[package]]

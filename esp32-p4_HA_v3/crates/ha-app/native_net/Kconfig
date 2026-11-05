@@ -1,0 +1,13 @@
+# Compatibility symbols for optional USB-host dependencies referenced by
+# ESP-Hosted manifests. These transports are disabled on this board.
+config ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST
+    bool "ESP-Hosted USB CDC ACM manifest"
+    default n
+
+config ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST
+    bool "ESP-Hosted USB CherryUSB manifest"
+    default n
+
+config ESP_HOSTED_HOST_USB_RNDIS_MANIFEST
+    bool "ESP-Hosted USB RNDIS manifest"
+    default n

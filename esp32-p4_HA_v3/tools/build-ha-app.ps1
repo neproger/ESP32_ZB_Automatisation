@@ -29,7 +29,10 @@ $env:EXTRA_COMPONENT_DIRS = @(
     (Join-Path $app 'native_net')
 ) -join ';'
 $env:EXTRA_COMPONENT_DIRS = $env:EXTRA_COMPONENT_DIRS.Replace('\', '/')
-# CMake re-run in the cached esp-idf-sys dir needs the target to match.
+# idf-component-manager 3.1.2 tries to parse newer registry manifests whose
+# optional-dependency rules use "== 1" for bool Kconfigs. This is an optional
+# update check, not a build/Kconfig validation; skip it so clean builds work.
+$env:IDF_COMPONENT_CHECK_NEW_VERSION = '0'# CMake re-run in the cached esp-idf-sys dir needs the target to match.
 $env:IDF_TARGET = 'esp32p4'
 Remove-Item Env:ESP_IDF_TOOLS_INSTALL_DIR -ErrorAction SilentlyContinue
 $env:LIBCLANG_PATH = 'C:\Users\ASUS\AppData\Local\Programs\Python\Python310\lib\site-packages\clang\native'

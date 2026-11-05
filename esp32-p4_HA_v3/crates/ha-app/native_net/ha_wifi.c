@@ -15,7 +15,6 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_sntp.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -690,28 +689,5 @@ int ha_wifi_status(char *ssid, size_t len, int *rssi)
     if (rssi != NULL) {
         *rssi = ap.rssi;
     }
-    return 1;
-}
-
-/* Start SNTP once the STA has an address. V3 is local-first; UTC is the base
- * until a location/timezone service exists. */
-void ha_time_start(void)
-{
-    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_init();
-}
-
-int ha_wifi_ip(char *out, size_t len)
-{
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) {
-        return 0;
-    }
-    esp_netif_ip_info_t info;
-    if (esp_netif_get_ip_info(netif, &info) != ESP_OK || info.ip.addr == 0) {
-        return 0;
-    }
-    snprintf(out, len, IPSTR, IP2STR(&info.ip));
     return 1;
 }

@@ -1,12 +1,10 @@
 //! Time and weather service (port of V2 `system`).
 //!
 //! A blocking worker thread waits for SNTP, resolves the location (GeoIP / Open-Meteo
-//! geocoding), fetches Open-Meteo current weather every 15 minutes and posts canonical
-//! records to the main loop. Domain/store/display writes stay in the main thread.
+//! geocoding), fetches Open-Meteo current weather every 15 minutes and publishes
+//! canonical records/events directly to Domain with `SOURCE_SYSTEM`.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::mpsc::SyncSender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use embedded_svc::http::client::Client;
@@ -14,11 +12,14 @@ use embedded_svc::http::Method;
 use embedded_svc::utils::io;
 use esp_idf_svc::http::client::EspHttpConnection;
 use ha_domain::canonical::{
-    LocationRecord, WeatherRecord, LOCATION_NAME_MAX, WEATHER_CLEAR, WEATHER_CLEAR_NIGHT,
-    WEATHER_CLOUDY, WEATHER_FOG, WEATHER_HAIL, WEATHER_LIGHTNING, WEATHER_LIGHTNING_RAINY,
-    WEATHER_OVERCAST, WEATHER_PARTLYCLOUDY, WEATHER_POURING, WEATHER_RAINY, WEATHER_SNOWY,
-    WEATHER_SNOWY_RAINY, WEATHER_UNKNOWN,
+    LocationRecord, WeatherRecord, ENTITY_ENTITY, ENTITY_LOCATION, ENTITY_SYSTEM, ENTITY_WEATHER,
+    EVENT_WEATHER_CHANGED, LOCATION_NAME_MAX, LOCATION_RECORD_LEN, SOURCE_SYSTEM,
+    SYSTEM_DEVICE_UID, WEATHER_CLEAR, WEATHER_CLEAR_NIGHT, WEATHER_CLOUDY, WEATHER_DEVICE_UID,
+    WEATHER_FOG, WEATHER_HAIL, WEATHER_LIGHTNING, WEATHER_LIGHTNING_RAINY, WEATHER_OVERCAST,
+    WEATHER_PARTLYCLOUDY, WEATHER_POURING, WEATHER_RAINY, WEATHER_SNOWY, WEATHER_SNOWY_RAINY,
+    WEATHER_UNKNOWN,
 };
+use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 
 const GEOIP_URL: &str =
     "http://ip-api.com/json/?fields=status,message,city,regionName,lat,lon,timezone,offset";
@@ -28,84 +29,108 @@ const HTTP_BUF: usize = 4096;
 const WEATHER_PERIOD: Duration = Duration::from_secs(15 * 60);
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 
-pub enum Update {
-    Location(LocationRecord),
-    Weather(WeatherRecord),
-}
-
-static STARTED: AtomicBool = AtomicBool::new(false);
-static LOCATION: Mutex<Option<LocationRecord>> = Mutex::new(None);
-static UPDATES: Mutex<VecDeque<Update>> = Mutex::new(VecDeque::new());
-
-pub fn take() -> Option<Update> {
-    UPDATES.lock().unwrap().pop_front()
-}
-
-/// Current location snapshot (also updated after every service resolve).
-pub fn set_location(location: LocationRecord) {
-    *LOCATION.lock().unwrap() = Some(location);
-}
-
-fn snapshot() -> Option<LocationRecord> {
-    *LOCATION.lock().unwrap()
-}
-
-fn post(update: Update) {
-    let mut queue = UPDATES.lock().unwrap();
-    if queue.len() >= 8 {
-        queue.pop_front();
-    }
-    queue.push_back(update);
-}
-
-/// Start the worker once. Safe to call before the network/SNTP are ready.
-pub fn start(initial: LocationRecord) {
-    if STARTED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    set_location(initial);
-    log::info!("system: service started (waiting for SNTP)");
+pub fn start(domain: DomainHandle, ready: SyncSender<()>) {
+    log::info!("system: GeoIP/weather started (waiting for SNTP)");
     let _ = std::thread::Builder::new()
-        .name("system".into())
+        .name("system-geo".into())
         .stack_size(8192)
-        .spawn(system_task);
+        .spawn(move || system_task(domain, ready));
 }
 
-fn system_task() {
+fn system_task(domain: DomainHandle, ready: SyncSender<()>) {
     wait_clock();
-    let mut handled = snapshot().unwrap_or_default();
+    let mut handled = read_location(&domain).unwrap_or_default();
     let mut first = true;
+    let mut weather_valid = false;
+    let mut weather_condition = 0u8;
     loop {
-        let current = snapshot().unwrap_or(handled);
+        let current = read_location(&domain).unwrap_or(handled);
         if first || current != handled {
             handled = current;
             if let Some(resolved) = resolve_location(current) {
                 handled = resolved;
-                set_location(resolved);
-                post(Update::Location(resolved));
+                publish_location(&domain, resolved);
             }
         }
         first = false;
 
-        let location = snapshot().unwrap_or(handled);
-        if location.latitude.abs() > 1e-4 || location.longitude.abs() > 1e-4 {
-            if let Some(weather) = fetch_weather(location.latitude, location.longitude) {
-                post(Update::Weather(weather));
+        let location = read_location(&domain).unwrap_or(handled);
+        if let Some(weather) = fetch_weather(location.latitude, location.longitude) {
+            let changed = weather_valid && weather.condition != weather_condition;
+            weather_valid = true;
+            weather_condition = weather.condition;
+            publish_weather(&domain, weather);
+            if changed {
+                publish_event(&domain, EVENT_WEATHER_CHANGED);
             }
         }
+        let _ = ready.send(());
 
         /* Sleep up to the next weather refresh; a manual location edit wakes us early. */
         let mut elapsed = Duration::ZERO;
         while elapsed < WEATHER_PERIOD {
-            std::thread::sleep(Duration::from_secs(20));
-            elapsed += Duration::from_secs(20);
-            if snapshot().unwrap_or(handled) != handled {
+            std::thread::sleep(Duration::from_secs(5));
+            elapsed += Duration::from_secs(5);
+            if read_location(&domain).unwrap_or(handled) != handled {
                 break;
             }
         }
     }
 }
 
+fn read_location(domain: &DomainHandle) -> Option<LocationRecord> {
+    let mut bytes = [0u8; LOCATION_RECORD_LEN];
+    domain
+        .entity_get(
+            ENTITY_LOCATION,
+            &SYSTEM_DEVICE_UID.to_le_bytes(),
+            &mut bytes,
+        )
+        .ok()?;
+    LocationRecord::decode(&bytes)
+}
+
+fn publish_location(domain: &DomainHandle, location: LocationRecord) {
+    let key = SYSTEM_DEVICE_UID.to_le_bytes();
+    let record = location.encode();
+    let meta = FactMeta {
+        source: SOURCE_SYSTEM as u8,
+        value: Value::NONE,
+    };
+    if let Err(error) = domain.entity_put(ENTITY_LOCATION, &key, &record, meta) {
+        log::warn!("system: location write failed: {error:?}");
+    }
+}
+
+fn publish_weather(domain: &DomainHandle, weather: WeatherRecord) {
+    let key = WEATHER_DEVICE_UID.to_le_bytes();
+    let record = weather.encode();
+    let meta = FactMeta {
+        source: SOURCE_SYSTEM as u8,
+        value: Value::NONE,
+    };
+    if let Err(error) = domain.entity_put(ENTITY_WEATHER, &key, &record, meta) {
+        log::warn!("system: weather write failed: {error:?}");
+    }
+}
+
+fn publish_event(domain: &DomainHandle, event: u32) {
+    let key = ENTITY_SYSTEM.to_le_bytes();
+    let payload = event.to_le_bytes();
+    if let Err(error) = domain.payload_put(
+        Some(FactTarget {
+            entity: ENTITY_ENTITY,
+            key: &key,
+        }),
+        FactMeta {
+            source: SOURCE_SYSTEM as u8,
+            value: Value::u32(event),
+        },
+        &payload,
+    ) {
+        log::error!("system: event {event} failed: {error:?}");
+    }
+}
 fn wait_clock() {
     loop {
         let ready = SystemTime::now()
@@ -126,12 +151,12 @@ fn resolve_location(location: LocationRecord) -> Option<LocationRecord> {
         let mut resolved = location;
         if resolved.latitude.abs() < 1e-4 && resolved.longitude.abs() < 1e-4 {
             let name = resolved.name_string();
-            let Some((lat, lon)) = geocode_city(&name) else {
+            if let Some((lat, lon)) = geocode_city(&name) {
+                resolved.latitude = lat;
+                resolved.longitude = lon;
+            } else {
                 log::warn!("system: geocode \"{name}\" failed");
-                return None;
-            };
-            resolved.latitude = lat;
-            resolved.longitude = lon;
+            }
         }
         if resolved.tz_auto {
             if let Some(geo) = fetch_geoip() {
@@ -148,8 +173,17 @@ fn resolve_location(location: LocationRecord) -> Option<LocationRecord> {
         return Some(resolved);
     }
 
-    let geo = fetch_geoip()?;
-    let (city, region, lat, lon, offset_sec) = geo;
+    let Some((city, region, lat, lon, offset_sec)) = fetch_geoip() else {
+        let mut unknown = location;
+        unknown.set_name("Unknown");
+        unknown.latitude = 0.0;
+        unknown.longitude = 0.0;
+        unknown.tz_offset_min = 0;
+        unknown.pos_auto = true;
+        unknown.tz_auto = true;
+        log::warn!("system: geoip unavailable; keeping UTC");
+        return Some(unknown);
+    };
     let mut resolved = location;
     let label = match (city.is_empty(), region.is_empty()) {
         (false, false) => format!("{city}, {region}"),
@@ -175,7 +209,7 @@ fn resolve_location(location: LocationRecord) -> Option<LocationRecord> {
 }
 
 fn fetch_geoip() -> Option<(String, String, f32, f32, i64)> {
-    for attempt in 0..3 {
+    for attempt in 0..5 {
         if attempt > 0 {
             std::thread::sleep(RETRY_DELAY);
         }

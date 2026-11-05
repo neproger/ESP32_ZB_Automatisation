@@ -1,6 +1,6 @@
 # Stage 3 — Technical Specification: Zigbee Adapter
 
-> Статус: **Host Verified / P4 boot verified; hardware scenarios pending**.
+> Статус: **Host Verified / Hardware Blocked (acceptance; P4 boot resolved)**.
 > Реализация 3.1–3.5 и host-интеграция 3.6 выполнены; queue unit test
 > проходит через `cargo test --workspace`. P4 boot blocker resolved:
 > прошит финальный `debug/ha-app`; приложение стартует, Wi-Fi получает

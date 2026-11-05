@@ -100,6 +100,15 @@ espflash flash --port COM11 --baud 921600 `
 Значит, окружение перебило `.cargo/config`. Проверь, что запускаешь из
 `crates/ha-app`/через скрипт, и не выставляй `IDF_PATH` в терминале.
 
+**Clean build: `ESP_HOSTED_HOST_USB_*_MANIFEST`**
+
+`native_net/Kconfig` объявляет отключённые USB-транспорты ESP-Hosted, а
+`sdkconfig.defaults` явно ставит их в `n`. Скрипт также выставляет
+`IDF_COMPONENT_CHECK_NEW_VERSION=0`: component-manager 3.1.2 не разбирает
+bool-правила `== 1` в новых registry-манифестах. Это отключает только
+необязательную проверку новых версий, не Kconfig/сборочные проверки.
+Если ошибка вернётся — проверь эти три места, не отключай проверки Kconfig.
+
 **Не пересобирается C-мост после правки `.c`**
 
 Cargo не видит C-изменения. Скрипт явно вызывает CMake; вручную:

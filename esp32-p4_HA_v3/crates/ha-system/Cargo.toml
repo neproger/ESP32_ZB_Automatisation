@@ -1,0 +1,11 @@
+[package]
+name = "ha-system"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ha-domain = { path = "../ha-domain" }
+log = "0.4"
+[target.'cfg(target_os = "espidf")'.dependencies]
+embedded-svc = "0.29"
+esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }

@@ -1,6 +1,6 @@
 # Аудит Zigbee Adapter: V2 + Z2M → Rust
 
-> Статус: **Stage 3 — Host Verified / P4 boot verified; hardware scenarios pending**.
+> Статус: **Stage 3 — Host Verified / Hardware Blocked (acceptance; P4 boot resolved)**.
 > Реализация 3.1–3.5 и host-интеграция пройдены; queue test проходит.
 > P4 boot blocker resolved: прошит финальный `debug/ha-app`, приложение
 > стартует и подключается к Wi-Fi; остались hardware scenarios.

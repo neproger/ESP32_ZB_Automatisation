@@ -1,0 +1,8 @@
+[package]
+name = "ha-wifi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ha-domain = { path = "../ha-domain" }
+log = "0.4"
