@@ -80,7 +80,7 @@ main       composition root
 | `zigbee` | `zigbee-*` + `ha-app` | особый слой V2 + Z2M; текущая архитектура сохраняется; закрываются gaps относительно собственной цели |
 | `automation` | `ha-automation` + `automation_task` | Stage 4 complete; task/inbox/ABI parity закрыт |
 | `web` | `ha-web` + `ha-app/web.rs` | protocol готов; service использует кэш и не имеет V2 snapshot semantics |
-| `display` | `ha-app/display.rs` | полная миграция не выполнена; только Wi-Fi cleanup через Domain; остальное — Stage 6 |
+| `display` | `ha-app/display.rs` | Stage 6.0 audit/decisions done; implementation pending |
 | `system` | `ha-system` | Stage 5: SNTP/time/ticks/GeoIP/location/weather done; validation pending |
 | `wifi` | `ha-app/wifi.rs` + `native_net` | status/scan/known cleanup запушен; reconnect/backoff и System gates открыты |
 | `main` | `ha-app/main.rs` | Stage 5: only composition root, no Wi-Fi/System publication |
@@ -285,6 +285,10 @@ metadata, Display/System без direct C radio calls.
 
 ### Этап 6 — Web и Display
 
+> Статус: **Stage 6.0 audit/decisions complete; implementation не начат**.
+> Аудит и gaps: [STAGE6_WEB_DISPLAY_AUDIT.md](../audits/STAGE6_WEB_DISPLAY_AUDIT.md).
+> Решения и Web SCHEMA: [STAGE6_ARCHITECTURE_DECISIONS.md](STAGE6_ARCHITECTURE_DECISIONS.md).
+
 **Исходные слои V2:** `web`, `display`.
 
 **Назначение:** transport/client над canonical Domain.
@@ -441,7 +445,7 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 5 — implementation/build/smoke passed; WEATHER_CHANGED и autoconnect passed; reconnect/backoff pending.**
+**Текущая задача: Stage 5 acceptance pending; Stage 6.0 Web/Display audit и architecture decisions готовы, implementation не начат.**
 
 Stage 3: **Host Verified / Hardware Acceptance Pending**.
 Stage 4 complete; Stage 5: implementation complete, clean build и initial P4 smoke прошли;
