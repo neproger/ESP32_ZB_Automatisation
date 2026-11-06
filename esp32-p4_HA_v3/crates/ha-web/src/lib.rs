@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Binary web protocol, v3 canonical frames (V2 `WEB_PROTOCOL.md`).
 //!
 //! The transport only frames bytes: `ver/type/len/seq/flags` plus a canonical

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! HA Zigbee Layer: canonical device record and the persistent registry.
 //!
 //! Device semantics (fingerprints, converters, configure plans) live in
@@ -15,6 +17,7 @@ mod ownership;
 mod profile;
 mod projection;
 mod registry;
+mod removal_queue;
 mod zcl;
 
 pub use command::{status_from_exec, update_binding_short, Binding, CommandRouter, ZigbeeSink};
@@ -40,6 +43,7 @@ pub use projection::{
     zigbee_device_id, zigbee_entity_id, StateUpdate,
 };
 pub use registry::{RecordSlot, Registry};
+pub use removal_queue::{RemovalQueue, REMOVAL_QUEUE_CAPACITY};
 pub mod standard {
     pub use crate::profile::{
         capabilities_confirmed, capability_allows, decode_standard, update_capability,

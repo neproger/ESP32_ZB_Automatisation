@@ -1,0 +1,16 @@
+﻿[package]
+name = "ha-zigbee-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+ha-domain = { path = "../ha-domain" }
+ha-model = { path = "../ha-model" }
+ha-device = { path = "../ha-device" }
+micro-db = { path = "../micro-db" }
+zigbee-devices = { path = "../zigbee-devices" }
+z2m-rs = { path = "../z2m-rs" }
+zigbee-exec = { path = "../zigbee-exec" }
+zigbee-frames = { path = "../zigbee-frames" }
+esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }

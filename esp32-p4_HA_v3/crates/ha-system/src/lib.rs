@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 //! System service: SNTP, time properties, MINUTE/HALF_HOUR/HOUR/DAY ticks,
 //! GeoIP/location and weather. Network readiness comes only from the canonical
 //! `WIFI_STATUS` Domain entity; this crate never calls Wi-Fi APIs.
@@ -22,8 +24,8 @@ const TICK_PERIOD: Duration = Duration::from_secs(1);
 #[cfg(target_os = "espidf")]
 mod geo;
 #[cfg(target_os = "espidf")]
-const SNTP_SERVER: &str = "pool.ntp.org";
-
+#[allow(unsafe_code)]
+mod sntp;
 fn wifi_connected(domain: &DomainHandle) -> bool {
     let key = WIFI_DEVICE_UID.to_le_bytes();
     let mut bytes = [0u8; WIFI_STATUS_RECORD_LEN];
@@ -36,21 +38,7 @@ fn wifi_connected(domain: &DomainHandle) -> bool {
 
 #[cfg(target_os = "espidf")]
 fn start_sntp() {
-    use std::ffi::{c_char, CString};
-
-    unsafe extern "C" {
-        fn esp_sntp_setoperatingmode(mode: i32);
-        fn esp_sntp_setservername(idx: u8, server: *const c_char);
-        fn esp_sntp_init();
-    }
-
-    let server = CString::new(SNTP_SERVER).expect("SNTP server");
-    unsafe {
-        esp_sntp_setoperatingmode(0);
-        esp_sntp_setservername(0, server.as_ptr());
-        esp_sntp_init();
-    }
-    log::info!("system: SNTP started (UTC)");
+    sntp::start();
 }
 
 #[cfg(not(target_os = "espidf"))]

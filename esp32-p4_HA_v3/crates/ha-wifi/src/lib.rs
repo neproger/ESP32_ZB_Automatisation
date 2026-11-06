@@ -1,10 +1,12 @@
+#![deny(unsafe_code)]
+
 //! Wi-Fi service: the only owner of radio calls.
 //!
 //! Commands arrive through Domain.post or the display navigation queue; the
 //! service task talks to the C radio, publishes canonical WIFI_STATUS/SCAN
 //! records for Display/Web consumers.
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::CStr;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -16,40 +18,15 @@ use ha_domain::canonical::{
 };
 use ha_domain::{DomainHandle, Fact, FactMeta, Filter, Value};
 
+#[allow(unsafe_code)]
+mod ffi;
+
 enum Command {
     Scan,
     Connect { ssid: String, password: String },
 }
 
 static COMMANDS: Mutex<Option<SyncSender<Command>>> = Mutex::new(None);
-
-extern "C" {
-    fn ha_wifi_start() -> i32;
-    fn ha_wifi_scan_start() -> i32;
-    fn ha_wifi_scan_ready() -> i32;
-    fn ha_wifi_scan_clear();
-    fn ha_wifi_scan_count() -> i32;
-    fn ha_wifi_scan_get(
-        index: i32,
-        ssid: *mut c_char,
-        len: usize,
-        rssi: *mut i32,
-        auth: *mut i32,
-        channel: *mut i32,
-    ) -> i32;
-    fn ha_wifi_status(ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
-    fn ha_wifi_connect_ssid(ssid: *const c_char, password: *const c_char) -> i32;
-    fn ha_wifi_known_add(ssid: *const c_char, password: *const c_char) -> i32;
-    fn ha_wifi_known_remove(ssid: *const c_char) -> i32;
-    fn ha_wifi_known_count() -> i32;
-    fn ha_wifi_known_get(
-        index: i32,
-        ssid: *mut c_char,
-        len: usize,
-        password: *mut c_char,
-        password_len: usize,
-    ) -> i32;
-}
 
 pub fn start(domain: DomainHandle) {
     let (tx, rx) = sync_channel(4);
@@ -147,10 +124,7 @@ fn text(bytes: &[u8]) -> String {
 }
 
 fn add_radio_known(ssid: &str, password: &str) {
-    let (Ok(ssid), Ok(password)) = (CString::new(ssid), CString::new(password)) else {
-        return;
-    };
-    unsafe { ha_wifi_known_add(ssid.as_ptr(), password.as_ptr()) };
+    ffi::known_add(ssid, password);
 }
 
 fn next_known_id(records: &[(u32, WifiKnownRecord)]) -> Option<u32> {
@@ -222,20 +196,10 @@ fn resync_known(domain: &DomainHandle) {
         }
     };
 
-    let count = unsafe { ha_wifi_known_count() };
+    let count = ffi::known_count();
     for index in (0..count).rev() {
-        let mut ssid = [0 as c_char; 33];
-        if unsafe {
-            ha_wifi_known_get(
-                index,
-                ssid.as_mut_ptr(),
-                ssid.len(),
-                std::ptr::null_mut(),
-                0,
-            )
-        } != 0
-        {
-            unsafe { ha_wifi_known_remove(ssid.as_ptr()) };
+        if let Some(ssid) = ffi::known_ssid(index) {
+            ffi::known_remove(&ssid);
         }
     }
     for (_, record) in records {
@@ -255,7 +219,7 @@ fn drain_known(domain: &DomainHandle, events: &Receiver<Fact>) {
 
 fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver<Fact>) {
     load_domain_known(&domain);
-    let err = unsafe { ha_wifi_start() };
+    let err = ffi::start();
     if err != 0 {
         log::error!("wifi start failed: {err}");
         return;
@@ -270,19 +234,14 @@ fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver
             Ok(Command::Scan) => {
                 state = 1;
                 let connected = publish_status(&domain, state);
-                if unsafe { ha_wifi_scan_start() } != 0 {
+                if ffi::scan_start() != 0 {
                     log::warn!("wifi: scan request rejected");
                     state = if connected { 3 } else { 0 };
                     publish_status(&domain, state);
                 }
             }
             Ok(Command::Connect { ssid, password }) => {
-                let (Ok(ssid_c), Ok(password_c)) =
-                    (CString::new(ssid.as_str()), CString::new(password.as_str()))
-                else {
-                    continue;
-                };
-                let rc = unsafe { ha_wifi_connect_ssid(ssid_c.as_ptr(), password_c.as_ptr()) };
+                let rc = ffi::connect(&ssid, &password);
                 if rc != 0 {
                     log::warn!("wifi: connect request rejected ({rc})");
                     state = 4;
@@ -316,11 +275,11 @@ fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver
 
         if last_scan_poll.elapsed() >= Duration::from_millis(500) {
             last_scan_poll = Instant::now();
-            if unsafe { ha_wifi_scan_ready() } != 0 {
+            if ffi::scan_ready() {
                 let results = collect_scan();
                 log::info!("wifi: scan result {} networks", results.len());
                 publish_scan(&domain, &results);
-                unsafe { ha_wifi_scan_clear() };
+                ffi::scan_clear();
                 let connected = publish_status(&domain, 3);
                 state = if connected { 3 } else { 0 };
             }
@@ -335,34 +294,11 @@ struct ScanAp {
 }
 
 fn collect_scan() -> Vec<ScanAp> {
-    let count = unsafe { ha_wifi_scan_count() };
+    let count = ffi::scan_count();
     let mut results = Vec::new();
     for index in 0..count {
-        let mut ssid = [0 as c_char; 33];
-        let mut rssi = 0i32;
-        let mut auth = 0i32;
-        let mut channel = 0i32;
-        if unsafe {
-            ha_wifi_scan_get(
-                index,
-                ssid.as_mut_ptr(),
-                ssid.len(),
-                &mut rssi,
-                &mut auth,
-                &mut channel,
-            )
-        } != 0
-        {
-            let ssid = unsafe { CStr::from_ptr(ssid.as_ptr()) }
-                .to_string_lossy()
-                .into_owned();
-            if !ssid.is_empty() {
-                results.push(ScanAp {
-                    ssid,
-                    rssi: rssi as i8,
-                    auth: auth.clamp(0, 4) as u8,
-                });
-            }
+        if let Some((ssid, rssi, auth)) = ffi::scan_ap(index) {
+            results.push(ScanAp { ssid, rssi, auth });
         }
     }
     results
@@ -388,12 +324,10 @@ fn next_status_state(state: u8, connected: bool, connect_timed_out: bool) -> u8 
     }
 }
 fn publish_status(domain: &DomainHandle, state: u8) -> bool {
-    let mut ssid = [0 as c_char; 33];
-    let mut rssi = 0i32;
-    let connected = unsafe { ha_wifi_status(ssid.as_mut_ptr(), ssid.len(), &mut rssi) } != 0;
+    let (connected, ssid_text, rssi) = ffi::status();
     let mut name = [0u8; WIFI_SSID_MAX];
     if connected {
-        let bytes = unsafe { CStr::from_ptr(ssid.as_ptr()) }.to_bytes();
+        let bytes = ssid_text.as_bytes();
         name[..bytes.len().min(WIFI_SSID_MAX)]
             .copy_from_slice(&bytes[..bytes.len().min(WIFI_SSID_MAX)]);
     }
@@ -407,7 +341,7 @@ fn publish_status(domain: &DomainHandle, state: u8) -> bool {
     let record = WifiStatusRecord {
         state,
         connected: connected as u8,
-        rssi: rssi as i8,
+        rssi,
         ssid: name,
     }
     .encode();

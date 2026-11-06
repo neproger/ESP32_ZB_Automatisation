@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Neutral Device service: canonical Logical Device lifecycle and ownership.
 //!
 //! It knows only opaque source/native ids and canonical records; the adapter owns

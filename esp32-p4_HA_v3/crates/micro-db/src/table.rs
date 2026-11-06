@@ -205,8 +205,7 @@ impl<S: Storage> Table<S> {
 
     pub fn read(&self, slot: u32, key_out: &mut [u8], payload_out: &mut [u8]) -> Result<Meta> {
         self.check_slot(slot)?;
-        if key_out.len() < self.geometry.key_size
-            || payload_out.len() < self.geometry.payload_size
+        if key_out.len() < self.geometry.key_size || payload_out.len() < self.geometry.payload_size
         {
             return Err(Error::InvalidSize);
         }
@@ -515,11 +514,12 @@ mod tests {
     #[test]
     fn table_allocate_update_free() {
         let mut table = byte_table();
-        let handle = table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        let handle = table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         assert_eq!(table.find(&byte_key(1)), Ok(handle.slot));
-        assert_eq!(table.meta(handle.slot).unwrap().generation, handle.generation);
+        assert_eq!(
+            table.meta(handle.slot).unwrap().generation,
+            handle.generation
+        );
         assert!(!table.update(handle, &byte_payload(1)).unwrap());
         assert!(table.update(handle, &byte_payload(2)).unwrap());
 
@@ -608,10 +608,7 @@ mod tests {
         let mut table = Table::open(geometry, storage).unwrap();
         let handle = table.allocate(&byte_key(1), &[]).unwrap();
         assert_eq!(handle.slot, 1);
-        assert_eq!(
-            table.allocate(&byte_key(2), &[]),
-            Err(Error::Overflow)
-        );
+        assert_eq!(table.allocate(&byte_key(2), &[]), Err(Error::Overflow));
     }
 
     #[test]
@@ -629,18 +626,12 @@ mod tests {
         storage
             .write_slot(1, meta, &byte_key(1), &byte_payload(1))
             .unwrap();
-        assert_eq!(
-            Table::open(geometry, storage).err(),
-            Some(Error::Corrupt)
-        );
+        assert_eq!(Table::open(geometry, storage).err(), Some(Error::Corrupt));
     }
 
     #[test]
     fn index_buckets_rejects_overflow() {
-        assert_eq!(
-            index_buckets(usize::MAX / 2 + 1),
-            Err(Error::InvalidSize)
-        );
+        assert_eq!(index_buckets(usize::MAX / 2 + 1), Err(Error::InvalidSize));
     }
 
     #[test]
@@ -650,8 +641,7 @@ mod tests {
             key_size: 8,
             payload_size: 0,
         };
-        let mut table =
-            Table::open(geometry, RamStorage::new(geometry).unwrap()).unwrap();
+        let mut table = Table::open(geometry, RamStorage::new(geometry).unwrap()).unwrap();
         let first = table.allocate(&byte_key(1), &[]).unwrap();
         assert_eq!(first.generation, 1);
         table.clear().unwrap();
@@ -740,8 +730,7 @@ mod tests {
             key_size: 8,
             payload_size: 4,
         };
-        let mut table =
-            Table::open(geometry, RamStorage::new(geometry).unwrap()).unwrap();
+        let mut table = Table::open(geometry, RamStorage::new(geometry).unwrap()).unwrap();
         let handle = table.allocate(&byte_key(1), &[1; 4]).unwrap();
         assert_eq!(table.check(handle), Ok(HandleStatus::Unchanged));
 
@@ -780,9 +769,7 @@ mod tests {
         storage.fail_read_key = true;
         storage.fail_read_slot = true;
         let mut table = Table::open(geometry, storage).unwrap();
-        let handle = table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        let handle = table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         assert_eq!(table.check(handle), Ok(HandleStatus::Unchanged));
     }
 
@@ -792,9 +779,7 @@ mod tests {
         let mut storage = FaultyStorage::healthy(RamStorage::new(geometry).unwrap(), geometry);
         storage.fail_read_slot = true;
         let mut table = Table::open(geometry, storage).unwrap();
-        table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         let mut seen = 0;
         let result = table.iter(|_, _, _, _| seen += 1);
         assert_eq!(result, Err(Error::Io));
@@ -892,9 +877,7 @@ mod tests {
         let mut storage = FaultyStorage::healthy(RamStorage::new(geometry).unwrap(), geometry);
         storage.fail_read_slot = true;
         let mut table = Table::open(geometry, storage).unwrap();
-        table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         table.clear().unwrap();
         assert_eq!(table.len(), 0);
         assert_eq!(table.find(&byte_key(1)), Err(Error::NotFound));
@@ -973,11 +956,7 @@ mod tests {
             self.inner.read(offset, out)
         }
 
-        fn write(
-            &mut self,
-            offset: usize,
-            data: &[u8],
-        ) -> core::result::Result<(), FlashError> {
+        fn write(&mut self, offset: usize, data: &[u8]) -> core::result::Result<(), FlashError> {
             if self.flags.fail_write.get() {
                 return Err(FlashError::Io);
             }
@@ -1030,9 +1009,7 @@ mod tests {
         let flash = FailingFlash::new(&flags);
         let storage = RamFlashStorage::format(flash, geometry, "ram_flash").unwrap();
         let mut table = Table::open(geometry, storage).unwrap();
-        let handle = table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        let handle = table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         let before = table.len();
 
         flags.fail_write.set(true);
@@ -1057,10 +1034,7 @@ mod tests {
         flags.fail_write.set(false);
         table.allocate(&byte_key(2), &byte_payload(2)).unwrap();
         assert!(table.update(handle, &byte_payload(3)).unwrap());
-        assert!(matches!(
-            table.check(handle),
-            Ok(HandleStatus::Changed(_))
-        ));
+        assert!(matches!(table.check(handle), Ok(HandleStatus::Changed(_))));
     }
 
     #[test]
@@ -1069,12 +1043,8 @@ mod tests {
         let storage =
             RamFlashStorage::format(SimFlash::new(8192, 4096), geometry, "ram_flash").unwrap();
         let mut table = Table::open(geometry, storage).unwrap();
-        let handle = table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
-        table
-            .allocate(&byte_key(2), &byte_payload(2))
-            .unwrap();
+        let handle = table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
+        table.allocate(&byte_key(2), &byte_payload(2)).unwrap();
 
         let len = table.len();
         table.compact().unwrap();
@@ -1098,14 +1068,10 @@ mod tests {
         let flash = FailingFlash::new(&flags);
         let storage = RamFlashStorage::format(flash, geometry, "ram_flash").unwrap();
         let mut table = Table::open(geometry, storage).unwrap();
-        table
-            .allocate(&byte_key(1), &byte_payload(1))
-            .unwrap();
+        table.allocate(&byte_key(1), &byte_payload(1)).unwrap();
         let flash = table.into_storage().into_flash();
 
-        flags
-            .fail_read_at
-            .set(Some(flags.reads.get() + 4));
+        flags.fail_read_at.set(Some(flags.reads.get() + 4));
         assert!(RamFlashStorage::open(flash, geometry, "ram_flash").is_err());
     }
 }

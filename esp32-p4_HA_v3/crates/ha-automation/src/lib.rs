@@ -131,6 +131,7 @@ impl RuleEngine {
     pub fn boxed() -> Box<Self> {
         let mut boxed = Box::<Self>::new_uninit();
         let ptr = boxed.as_mut_ptr();
+        // SAFETY: every field is initialized exactly once before `assume_init`.
         unsafe {
             std::ptr::addr_of_mut!((*ptr).rules).write(Vec::new());
             std::ptr::addr_of_mut!((*ptr).index).write([IndexEntry::EMPTY; MAX_INDEX]);

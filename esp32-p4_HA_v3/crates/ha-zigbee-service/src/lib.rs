@@ -15,7 +15,14 @@ use ha_domain::canonical::{
 use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 use zigbee_devices::{CommandCore, CommandRouter, DomainAdapter};
 
-use crate::{configure, exec, frames, interview, removal_queue::RemovalQueue, store};
+mod capabilities;
+mod configure;
+mod exec;
+mod frames;
+mod interview;
+pub mod store;
+
+use zigbee_devices::RemovalQueue;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -131,6 +138,14 @@ impl Handle {
 }
 
 static REMOVALS: Mutex<RemovalQueue> = Mutex::new(RemovalQueue::new());
+
+pub fn install() {
+    frames::install();
+    exec::install();
+    interview::install();
+}
+
+pub use capabilities::take_capabilities;
 
 pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
     let (tx, rx) = sync_channel(8);

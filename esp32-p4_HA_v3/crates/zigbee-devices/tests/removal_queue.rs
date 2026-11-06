@@ -1,12 +1,6 @@
-//! Host-run coverage for the ha-app bounded removal queue.
-//!
-//! `ha-app` is outside the workspace, so include the dependency-free queue
-//! module directly instead of duplicating its implementation.
+//! Host-run coverage for the bounded removal queue.
 
-#[path = "../../ha-app/src/removal_queue.rs"]
-mod removal_queue;
-
-use removal_queue::{RemovalQueue, REMOVAL_QUEUE_CAPACITY};
+use zigbee_devices::{RemovalQueue, REMOVAL_QUEUE_CAPACITY};
 
 #[test]
 fn removal_queue_is_bounded_and_does_not_drop_requests() {

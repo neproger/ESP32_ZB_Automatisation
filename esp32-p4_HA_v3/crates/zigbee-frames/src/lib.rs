@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Fixed frame for the C -> Rust boundary and ZCL attribute frame access.
 //!
 //! One bounded copy happens in the C callback into a slot; from then on the

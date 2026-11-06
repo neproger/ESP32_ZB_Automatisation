@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Fixed-capacity storage primitives, host-verifiable.
 //!
 //! Contracts follow V2 `mstore` (`docs/storage/MSTORE.md`, C `mstore` component):
@@ -15,11 +17,13 @@
 //! Backends (`RAM`, `Flash`, `RAM + Flash`) keep canonical slot bytes and do not
 //! know what keys or generations mean.
 
+mod checksum;
 mod flash;
 mod region;
 mod ring;
 mod storage;
 mod table;
+pub use checksum::{crc32, persist_id_bytes};
 pub use flash::sim::SimFlash;
 pub use flash::{FlashError, FlashMeta, FlashTable, Geometry, NorFlash};
 pub use region::{region_size, RegionLocation, RegionManager, RegionView, MAX_ENTRIES};

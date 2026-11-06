@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Domain core: entity storage, journal of facts, fan-out to subscribers.
 //!
 //! Semantics follow V2 `domain`: the core stores facts and delivers them, it does

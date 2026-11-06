@@ -1,21 +1,23 @@
+#![forbid(unsafe_code)]
+
 //! Bounded deferred-leave queue for the Zigbee adapter service.
 
-pub(crate) const REMOVAL_QUEUE_CAPACITY: usize = 8;
+pub const REMOVAL_QUEUE_CAPACITY: usize = 8;
 
-pub(crate) struct RemovalQueue {
+pub struct RemovalQueue {
     items: [u64; REMOVAL_QUEUE_CAPACITY],
     len: usize,
 }
 
 impl RemovalQueue {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             items: [0; REMOVAL_QUEUE_CAPACITY],
             len: 0,
         }
     }
 
-    pub(crate) fn try_push(&mut self, eui: u64) -> Result<(), ha_domain::Error> {
+    pub fn try_push(&mut self, eui: u64) -> Result<(), ha_domain::Error> {
         if self.len == REMOVAL_QUEUE_CAPACITY {
             return Err(ha_domain::Error::NoSpace);
         }
@@ -24,7 +26,7 @@ impl RemovalQueue {
         Ok(())
     }
 
-    pub(crate) fn take_all(&mut self) -> ([u64; REMOVAL_QUEUE_CAPACITY], usize) {
+    pub fn take_all(&mut self) -> ([u64; REMOVAL_QUEUE_CAPACITY], usize) {
         let mut out = [0u64; REMOVAL_QUEUE_CAPACITY];
         out[..self.len].copy_from_slice(&self.items[..self.len]);
         let len = self.len;

@@ -759,6 +759,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-config"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+]
+
+[[package]]
 name = "ha-device"
 version = "0.1.0"
 dependencies = [

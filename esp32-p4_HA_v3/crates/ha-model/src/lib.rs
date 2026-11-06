@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Canonical HA model and record ABI, independent from Domain storage.
 
 pub mod canonical;

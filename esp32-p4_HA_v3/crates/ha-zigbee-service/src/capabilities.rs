@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Capability hand-off from the configure runner to the Domain adapter.
 //!
 //! State and events do not pass through this module: they are decoded and

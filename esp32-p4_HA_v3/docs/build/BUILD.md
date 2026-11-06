@@ -2,7 +2,7 @@
 
 Три независимых контура:
 
-- **host workspace** — `crates/` без `ha-app`;
+- **host workspace** — `crates/` без ESP-крейтов `ha-app`, `ha-web-service`, `ha-display`, `ha-zigbee-service`;
 - **ESP32-P4 приложение** — `crates/ha-app` с ESP-IDF и C-мостом;
 - **C3 Wi-Fi CP** — `tools/esp_hosted_c3_cp` (ESP-Hosted-сопроцессор для Wi-Fi).
 

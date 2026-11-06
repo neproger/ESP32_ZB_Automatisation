@@ -11,6 +11,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
 use esp_idf_svc::sys::*;
+use ha_domain::canonical::{ActionId, CommandValue, EntityId, PropertyId};
 use ha_domain::{DomainHandle, Fact, FactKind};
 
 mod session;
@@ -41,12 +42,32 @@ static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
 static MODEL_BLOB: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 static MODEL_DIRTY: AtomicBool = AtomicBool::new(true);
+static ACTIONS: Mutex<Option<&'static dyn Actions>> = Mutex::new(None);
 
-extern "C" {
-    fn zb_poc_open_network(seconds: u8) -> i32;
+/// Application callbacks the transport delegates to. Web never mutates Domain
+/// directly; the owner handles commands through its service queue.
+pub trait Actions: Send + Sync {
+    fn command(
+        &self,
+        entity: EntityId,
+        property: PropertyId,
+        action: ActionId,
+        value: CommandValue,
+    ) -> Result<(), ha_domain::Error>;
+    fn upsert(&self, entity: u32, key: Vec<u8>, record: Vec<u8>) -> Result<(), ha_domain::Error>;
+    fn remove(&self, entity: u32, key: Vec<u8>) -> Result<(), ha_domain::Error>;
+    fn rename_entity(&self, entity: EntityId, name: String) -> Result<(), ha_domain::Error>;
+    fn rename_device(&self, device: u64, name: String) -> Result<(), ha_domain::Error>;
+    fn remove_device(&self, device: u64) -> Result<(), ha_domain::Error>;
+    fn open_network(&self, seconds: u8) -> i32;
 }
 
-pub fn start(domain: DomainHandle) -> bool {
+fn actions() -> Option<&'static dyn Actions> {
+    *ACTIONS.lock().unwrap()
+}
+
+pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
+    *ACTIONS.lock().unwrap() = Some(actions);
     let mut config: httpd_config_t = unsafe { std::mem::zeroed() };
     config.server_port = 80;
     config.ctrl_port = 32768;
@@ -351,7 +372,7 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
         command::DISCOVERY => {
             if len == 10 {
                 let seconds = buf[9];
-                let result = zb_poc_open_network(seconds);
+                let result = actions().map_or(-1, |actions| actions.open_network(seconds));
                 if result != 0 {
                     log::warn!("ws: open network failed ({result})");
                 } else {
@@ -370,13 +391,15 @@ fn property_command(payload: &[u8]) {
     let Some(command) = ha_web::parse_property_command(payload) else {
         return;
     };
-    if let Err(error) = crate::intake::command(
-        command.entity,
-        command.property,
-        u32::from(command.action),
-        command.value,
-    ) {
-        log::warn!("command intake full, rejected: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.command(
+            command.entity,
+            command.property,
+            u32::from(command.action),
+            command.value,
+        ) {
+            log::warn!("command intake full, rejected: {error:?}");
+        }
     }
 }
 
@@ -390,8 +413,10 @@ fn handle_upsert(entity: u8, key_len: usize, payload: &[u8]) {
     if record.len() != schema.record_size {
         return;
     }
-    if let Err(error) = crate::intake::upsert(u32::from(entity), key, record) {
-        log::warn!("upsert intake full, entity={entity}: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.upsert(u32::from(entity), key, record) {
+            log::warn!("upsert intake full, entity={entity}: {error:?}");
+        }
     }
 }
 
@@ -399,8 +424,10 @@ fn handle_remove(entity: u8, key_len: usize, payload: &[u8]) {
     let Some(key) = ha_web::parse_key(payload, key_len) else {
         return;
     };
-    if let Err(error) = crate::intake::remove(u32::from(entity), key) {
-        log::warn!("remove intake full, entity={entity}: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.remove(u32::from(entity), key) {
+            log::warn!("remove intake full, entity={entity}: {error:?}");
+        }
     }
 }
 
@@ -408,8 +435,10 @@ fn handle_entity_rename(payload: &[u8]) {
     let Some((entity, name)) = ha_web::parse_rename(payload) else {
         return;
     };
-    if let Err(error) = crate::intake::rename_entity(entity, name) {
-        log::warn!("rename entity intake full: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.rename_entity(entity, name) {
+            log::warn!("rename entity intake full: {error:?}");
+        }
     }
 }
 
@@ -417,8 +446,10 @@ fn handle_device_rename(payload: &[u8]) {
     let Some((device, name)) = ha_web::parse_rename(payload) else {
         return;
     };
-    if let Err(error) = crate::intake::rename_device(device, name) {
-        log::warn!("rename device intake full: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.rename_device(device, name) {
+            log::warn!("rename device intake full: {error:?}");
+        }
     }
 }
 
@@ -426,8 +457,10 @@ fn handle_device_remove(payload: &[u8]) {
     let Some(device) = ha_web::parse_device_id(payload) else {
         return;
     };
-    if let Err(error) = crate::intake::remove_device(device) {
-        log::warn!("remove device intake full: {error:?}");
+    if let Some(actions) = actions() {
+        if let Err(error) = actions.remove_device(device) {
+            log::warn!("remove device intake full: {error:?}");
+        }
     }
 }
 

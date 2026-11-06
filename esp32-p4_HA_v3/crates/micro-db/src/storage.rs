@@ -296,9 +296,8 @@ impl Storage for RamStorage {
             key[..self.geometry.key_size]
                 .copy_from_slice(&bytes[RAM_META_LEN..RAM_META_LEN + self.geometry.key_size]);
             let payload_at = RAM_META_LEN + self.geometry.key_size;
-            payload[..self.geometry.payload_size].copy_from_slice(
-                &bytes[payload_at..payload_at + self.geometry.payload_size],
-            );
+            payload[..self.geometry.payload_size]
+                .copy_from_slice(&bytes[payload_at..payload_at + self.geometry.payload_size]);
         } else {
             key[..self.geometry.key_size].fill(0);
             payload[..self.geometry.payload_size].fill(0);
@@ -515,19 +514,21 @@ mod tests {
             generation: 3,
             version: 2,
         };
-        storage
-            .write_slot(0, meta, &key(1), &payload(7))
-            .unwrap();
+        storage.write_slot(0, meta, &key(1), &payload(7)).unwrap();
 
         let mut read_key = [0u8; 8];
         let mut read_payload = [0u8; 12];
-        let read_meta = storage.read_slot(0, &mut read_key, &mut read_payload).unwrap();
+        let read_meta = storage
+            .read_slot(0, &mut read_key, &mut read_payload)
+            .unwrap();
         assert_eq!(read_meta, meta);
         assert_eq!(read_key, key(1));
         assert_eq!(read_payload, payload(7));
         assert_eq!(meta_via_shared(&storage, 0).unwrap(), meta);
 
-        let missing = storage.read_slot(2, &mut read_key, &mut read_payload).unwrap();
+        let missing = storage
+            .read_slot(2, &mut read_key, &mut read_payload)
+            .unwrap();
         assert_eq!(missing, Meta::default());
         assert_eq!(read_key, [0u8; 8]);
         assert_eq!(read_payload, [0u8; 12]);
@@ -567,7 +568,9 @@ mod tests {
 
         let mut read_key = [0u8; 8];
         let mut read_payload = [0u8; 12];
-        let meta = storage.read_slot(1, &mut read_key, &mut read_payload).unwrap();
+        let meta = storage
+            .read_slot(1, &mut read_key, &mut read_payload)
+            .unwrap();
         assert_eq!(meta.version, 9);
         assert_eq!(read_key, key(4));
         assert_eq!(read_payload, payload(5));
@@ -591,7 +594,9 @@ mod tests {
 
         let mut read_key = [0u8; 8];
         let mut read_payload = [0u8; 12];
-        storage.read_slot(0, &mut read_key, &mut read_payload).unwrap();
+        storage
+            .read_slot(0, &mut read_key, &mut read_payload)
+            .unwrap();
         assert_eq!(read_key, [0u8; 8]);
         assert_eq!(read_payload, [0u8; 12]);
     }
@@ -605,9 +610,7 @@ mod tests {
             generation: 2,
             version: 5,
         };
-        storage
-            .write_slot(1, meta, &key(3), &payload(9))
-            .unwrap();
+        storage.write_slot(1, meta, &key(3), &payload(9)).unwrap();
 
         let flash = storage.into_flash();
         assert_eq!(
@@ -625,9 +628,7 @@ mod tests {
             generation: 2,
             version: 5,
         };
-        storage
-            .write_slot(1, meta, &key(3), &payload(9))
-            .unwrap();
+        storage.write_slot(1, meta, &key(3), &payload(9)).unwrap();
         let flash = storage.into_flash();
 
         let storage = FlashStorage::open(flash, geometry(), "devices").unwrap();
@@ -647,10 +648,7 @@ mod tests {
         assert_eq!(read_key, [0u8; 8]);
         assert_eq!(read_payload, [0u8; 12]);
         assert_eq!(storage.read_meta(3).unwrap(), Meta::default());
-        assert_eq!(
-            storage.read_meta(4),
-            Err(Error::InvalidArg)
-        );
+        assert_eq!(storage.read_meta(4), Err(Error::InvalidArg));
     }
 
     #[test]
@@ -687,7 +685,9 @@ mod tests {
 
         let mut read_key = [0u8; 8];
         let mut read_payload = [0u8; 12];
-        storage.read_slot(0, &mut read_key, &mut read_payload).unwrap();
+        storage
+            .read_slot(0, &mut read_key, &mut read_payload)
+            .unwrap();
         assert_eq!(read_key, [0u8; 8]);
         assert_eq!(read_payload, [0u8; 12]);
     }
@@ -894,8 +894,7 @@ mod tests {
 
     #[test]
     fn flash_storage_open_initializes_erased_partition() {
-        let storage =
-            FlashStorage::open(SimFlash::new(8192, 1024), geometry(), "devices").unwrap();
+        let storage = FlashStorage::open(SimFlash::new(8192, 1024), geometry(), "devices").unwrap();
         assert_eq!(storage.read_meta(0).unwrap(), Meta::default());
     }
 
@@ -906,8 +905,7 @@ mod tests {
             key_size: 8,
             payload_size: 0,
         };
-        let mut storage =
-            FlashStorage::format(SimFlash::new(8192, 1024), zero, "zero").unwrap();
+        let mut storage = FlashStorage::format(SimFlash::new(8192, 1024), zero, "zero").unwrap();
         storage
             .write_slot(
                 0,

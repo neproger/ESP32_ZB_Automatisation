@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Request Executor: reliable delivery of Zigbee operations.
 //!
 //! Ported model of `zigbee-herdsman` request handling: per device/endpoint

@@ -17,7 +17,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::flash::{crc32, persist_id_bytes, FlashError, NorFlash};
+use crate::checksum::{crc32, persist_id_bytes};
+use crate::flash::{FlashError, NorFlash};
 use crate::{Error, Result};
 
 const DIRECTORY_MAGIC: u32 = 0x4D53_4447; // MSDG

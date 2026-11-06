@@ -1,6 +1,6 @@
 # Stage 6 — Architecture Decisions: Web + Display
 
-> Статус: **approved decisions; Stage 6.1–6.4 implemented; 6.5 integration in progress**.
+> Статус: **Stage 6.1–6.5 implemented; physical touch callback deferred**.
 > Audit: [STAGE6_WEB_DISPLAY_AUDIT.md](../audits/STAGE6_WEB_DISPLAY_AUDIT.md).
 > Source of truth: V2 `WEB.md`, `WEB_PROTOCOL.md`, `web/src/*`, `display/src/*`.
 > Цель: V2 behavioural parity; V3 protocol number не является основанием менять семантику.
@@ -93,54 +93,12 @@ SNAPSHOT_STATE:
 - `EVENT` — canonical 24-byte `ha_event_t`, читается из Domain payload и отдаётся
   verbatim; не синтезируется из полей `Fact`.
 - Команды проверяют точные V2-размеры args; PUT дополнительно проверяет record по SCHEMA.
-- P4 shortcut: Web drain выполняется в main loop; отдельный web-drain thread
-  останавливался после snapshot. Вернуться к отдельной задаче после диагностики.
+- Web/Display drains выполняются в `clients` task (`ha-app/runtime.rs`), не в main.
+- Web transport вынесен в `ha-web-service`, Display — в `ha-display`.
 
-### 2.1. Web code structure after revision\n\n- `ha-app/src/web.rs` — HTTP/WS lifecycle, Domain drain, canonical projection facade.\n- `web/session.rs` — per-client bounded queue, `seq`, broadcast/flush and slow-client close.\n- `web/snapshot.rs` — full/state snapshots and `/model.bin` blob.\n- `web.rs` public API narrowed to `start`, `drain`, `flush`; projection helpers are private.\n- No dead private code found; no V2 DTO/cache leftovers.\n- P4 smoke after revision: `/model.bin` 3061 bytes, snapshot 39 records, LOCATION delta delivered.\n\n## 3. Display
+### Web code structure
 
-- `display::start(domain)` (или эквивалент) сам выполняет initial Domain read:
-  подписка → чтение settings/status → начальная сборка. `main` не обязан вызывать
-  скрытый `rebuild` после `start`.
-- Сохранить task/inbox: Display не блокирует Domain и не владеет canonical state.
-- Команды Display идут через согласованный Domain/Device path, как V2:
-  `PROPERTY_COMMAND` → Domain; automation enable → canonical rule update source UI;
-  Wi-Fi scan/connect → Domain commands. `intake` не должен быть скрытым обязательным
-  посредником для Display business path.
-- Ручные offsets (`bytes[0]`, `4 + 24*i`, `8..40` и т.п.) заменить декодерами
-  `ha_model` (`CapabilitiesRecord`, `EntityRecord`, `LocationRecord`, `WeatherRecord`,
-  `SettingsRecord`, `WifiStatusRecord`, `WifiScanRecord`).
-- Targeted updates по V2:
-  - property state — только соответствующий widget;
-  - `AUTOMATION`/`GROUP_AUTOMATION` — switch/плитка без полного rebuild;
-  - `WIFI_SCAN`/`WIFI_STATUS` — status/list без пересборки всей Wi-Fi страницы.
-- Rebuild только для состава/имени/capabilities, как V2.
-- Удалить `#![allow(warnings, clippy::all)]` после исправления конкретных warnings;
-  не маскировать диагностику.
-- Wi-Fi данные остаются только через Domain; прямые C radio calls запрещены.
-
-### 3.1. Display code structure after revision\n\n- `ha-app/src/display.rs` — public service facade, LVGL screens/widgets, event callbacks,\n  status bar, page/nav lifecycle.\n- `display/model.rs` — Domain snapshot reads, canonical decoders, formatting and\n  group/page composition; no LVGL calls.\n- `display/color.rs` — RGB/HSV/XY conversion only; no UI state.\n- `display/settings.rs` — Settings page and brightness command path.\n- `display/wifi.rs` — Wi-Fi page, scan list, connect dialog and targeted refresh.\n- Public Display API narrowed to `start`, `take_nav`, `navigate`, `request_wifi_scan`,\n  `drain`, `tick`; internal setters/rebuild are private.\n- Display/Web drains run in the main loop; dedicated P4 drain threads stalled after\n  snapshot. Upgrade path: return each drain to a dedicated task after root cause is\n  proven on hardware.\n\n## 4. Parity tests before implementation
-
-- initial full snapshot содержит только записи 12 разрешённых SCHEMA-типов;
-- `WIFI_SCAN` и `WIFI_KNOWN` отсутствуют в Web snapshot;
-- `SNAPSHOT_STATE` не возвращает model-типы;
-- `/model.bin`: magic `HASM`, ver 1, count, records только model-типов;
-- model rebuild после изменения model-записи;
-- `REMOVE` уходит при факте удаления без Web cache;
-- slow client: 64 frames И 16 KB, закрытие сессии;
-- `seq` независим для двух клиентов;
-- send не удерживает mutex во время `httpd_ws_send_frame_async`;
-- Display initial read не требует скрытого `main::rebuild`;
-- Display property/automation/Wi-Fi targeted update не делает полный rebuild;
-- Display decoders используют `ha_model`, не raw offsets.
-
-## 5. Implementation order
-
-1. **6.1 Web snapshot/schema/model-state** — SCHEMA, Domain snapshot, model.bin,
-   SNAPSHOT_STATE.
-2. **6.2 Web delivery** — per-client seq, 64/16KB queue, REMOVE, send outside mutex.
-3. **6.3 Display lifecycle** — start(domain), initial read, command path.
-4. **6.4 Display decoding/updates** — ha_model decoders, targeted updates, warnings cleanup.
-5. **6.5 Integration/P4** — Web+Display+Domain, slow-client/reconnect, P4 acceptance.
-
-Никаких новых механизмов вне V2 не добавлять. Если позже понадобится V3 full-snapshot,
-оформить отдельное документированное расширение протокола.
+- `ha-web-service/src/lib.rs` ? HTTP/WS lifecycle and canonical projection facade.
+- `ha-web-service/src/session.rs` ? per-client bounded queue, `seq`, broadcast/flush.
+- `ha-web-service/src/snapshot.rs` ? full/state snapshots and `/model.bin`.
+- `ha-app/src/web_actions.rs` ? bridge from Web commands to app intake.

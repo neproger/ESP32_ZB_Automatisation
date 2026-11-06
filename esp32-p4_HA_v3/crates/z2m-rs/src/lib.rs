@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Portable port of Zigbee2MQTT's compatibility system.
 //!
 //! This crate knows Zigbee and its own vocabulary only: devices, profiles, ZCL

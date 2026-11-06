@@ -20,6 +20,7 @@ opt-level = "s"
 [dependencies]
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
+ha-config = { path = "../ha-config" }
 ha-model = { path = "../ha-model" }
 ha-device = { path = "../ha-device" }
 ha-automation = { path = "../ha-automation" }
@@ -27,6 +28,9 @@ ha-wifi = { path = "../ha-wifi" }
 ha-system = { path = "../ha-system" }
 micro-db = { path = "../micro-db" }
 ha-web = { path = "../ha-web" }
+ha-web-service = { path = "../ha-web-service" }
+ha-display = { path = "../ha-display" }
+ha-zigbee-service = { path = "../ha-zigbee-service" }
 zigbee-devices = { path = "../zigbee-devices" }
 z2m-rs = { path = "../z2m-rs" }
 zigbee-exec = { path = "../zigbee-exec" }
@@ -36,7 +40,6 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 
 [build-dependencies]
 embuild = "0.33.5"
-bindgen = "0.71"
 
 # C-мост к esp-zigbee-lib (бывший PoC-крейт zigbee-esp).
 [[package.metadata.esp-idf-sys.extra_components]]

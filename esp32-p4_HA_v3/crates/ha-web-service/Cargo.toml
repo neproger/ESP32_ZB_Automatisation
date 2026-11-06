@@ -1,0 +1,10 @@
+﻿[package]
+name = "ha-web-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+ha-domain = { path = "../ha-domain" }
+ha-web = { path = "../ha-web" }
+esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }

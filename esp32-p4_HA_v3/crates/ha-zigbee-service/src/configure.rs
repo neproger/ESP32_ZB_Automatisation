@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Configure lifecycle adapter: one plan at a time, pending devices queued.
 //!
 //! `zigbee_devices::ConfigRun` owns step/timeout/retry logic; this module only

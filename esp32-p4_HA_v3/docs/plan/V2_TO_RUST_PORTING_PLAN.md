@@ -79,8 +79,8 @@ main       composition root
 | `device` | `ha-device` + `zigbee_service` | Stage 2 закрыт: lifecycle в `ha-device`, adapter — только projection |
 | `zigbee` | `zigbee-*` + `ha-app` | особый слой V2 + Z2M; текущая архитектура сохраняется; закрываются gaps относительно собственной цели |
 | `automation` | `ha-automation` + `automation_task` | Stage 4 complete; task/inbox/ABI parity закрыт |
-| `web` | `ha-web` + `ha-app/web.rs` | protocol готов; service использует кэш и не имеет V2 snapshot semantics |
-| `display` | `ha-app/display.rs` | Stage 6.0 audit/decisions done; implementation pending |
+| `web` | `ha-web` + `ha-web-service` | protocol + V2 snapshot/delta/service готовы |
+| `display` | `ha-display` | Stage 6 complete; physical touch deferred |
 | `system` | `ha-system` | Stage 5: SNTP/time/ticks/GeoIP/location/weather done; validation pending |
 | `wifi` | `ha-app/wifi.rs` + `native_net` | status/scan/known cleanup запушен; reconnect/backoff и System gates открыты |
 | `main` | `ha-app/main.rs` | Stage 5: only composition root, no Wi-Fi/System publication |
@@ -124,11 +124,11 @@ recovery state machine или новые гарантии в Domain.
 | `device` | Logical Device/Entity lifecycle | `ha-device` | частично | перенести lifecycle из adapter |
 | `zigbee` | transport, private registry, ZCL bridge | `zigbee-*`, `ha-app` | **особый слой V2+Z2M** | сохранить текущую архитектуру; закрыть functional gaps без приведения к V2 |
 | `automation` | rules subscriber → commands | `ha-automation`, task | частично | убрать дубли ABI и довести task |
-| `web` | canonical snapshot/delta transport | `ha-web`, `ha-app/web.rs` | protocol готов | привести service к V2 |
-| `display` | LVGL client | `ha-app/display.rs` | частично | убрать обход Domain |
-| `system` | SNTP/GeoIP/weather | `ha-app/system.rs` | частично | публиковать из сервиса |
+| `web` | canonical snapshot/delta transport | `ha-web`, `ha-web-service` | V2 service готов | — |
+| `display` | LVGL client | `ha-display` | готов | — |
+| `system` | SNTP/GeoIP/weather | `ha-system` | готов | — |
 | `wifi` | radio owner + Domain entities | `ha-app/wifi.rs`, C bridge | частично | Display/System только через Domain |
-| `main` | composition root | `ha-app/main.rs` | частично | убрать бизнес-логику и polling |
+| `main` | composition root | `ha-app/main.rs` | готов | — |
 
 ## 4. Последовательность портирования
 
@@ -139,11 +139,12 @@ Domain.
 
 ### Этап 1 — Domain: persistence и restore
 
-> Статус: **реализовано, запушено, проверено на P4 частично**.
+> Статус: **hardware gate принят оператором; проблемы — вернуться при необходимости**.
 > Коммиты: `e98d6b4`, `0fef57f`. Workspace tests, `build-ha-app` и
 > `check-domain-api` зелёные; hardware validation:
 > [STAGE1_HARDWARE_VALIDATION.md](../audits/STAGE1_HARDWARE_VALIDATION.md).
-> Уникальный persistence test через UI/Web и reboot ещё не выполнен.
+> Оператор закрыл уникальный persistence/reboot gate; domain после stress-теста
+> очищался и Wi-Fi был подключён заново.
 
 **Исходный слой V2:** `domain` + регистрация таблиц в `main/app_main.c`.
 
@@ -203,11 +204,11 @@ adapter remover failure, host tests.
 
 ### Этап 3 — Zigbee adapter
 
-> Статус: **Host Verified / Hardware Acceptance Pending**.
+> Статус: **Host Verified; hardware acceptance принят оператором**.
 > Реализация: завершена. Host tests: passed. Static checks: passed.
-> Hardware acceptance: pending; P4 boot resolved, Zigbee-сценарии не выполнены.
-> Зависимости Stage 1/2 закрыты на host-уровне; hardware unique persistence
-> test Stage 1 и P4 scenarios остаются отдельными gates.
+> Hardware acceptance закрыт оператором; Zigbee-сценарии P4 отложены до появления проблем.
+> Зависимости Stage 1/2 закрыты; hardware unique persistence gate и P4 Zigbee
+> scenarios закрыты решением оператора.
 
 **Исходная база:** текущий Zigbee-слой на основе V2 + Z2M.
 Это единственное предусмотренное архитектурное исключение.
@@ -256,13 +257,12 @@ inbox loss, command path.
 
 ### Этап 5 — Wi-Fi и System
 
-> Статус: **Implementation complete / Build + initial P4 smoke passed /
-> Acceptance scenarios pending**.
+> Статус: **Implementation complete; acceptance принят оператором**.
 > Implementation: `ha-wifi` и `ha-system` перенесены, `main` очищен.
 > Build: clean firmware build через `build-ha-app.ps1` проходит.
 > P4 smoke: Wi-Fi connect, SNTP, GeoIP, Weather и local clock подтверждены.
 > Acceptance: `WEATHER_CHANGED` и autoconnect после reboot подтверждены;
-> reconnect/backoff и финальная приёмка Stage 5 остаются открытыми.
+> reconnect/backoff закрыт решением оператора.
 
 **Исходные слои V2:** `wifi`, `system`.
 
@@ -285,7 +285,7 @@ metadata, Display/System без direct C radio calls.
 
 ### Этап 6 — Web и Display
 
-> Статус: **Stage 6.1–6.4 implemented; 6.5 P4 integration in progress**.
+> Статус: **Stage 6.1–6.5 implemented; physical touch callback отложен**.
 > Аудит и gaps: [STAGE6_WEB_DISPLAY_AUDIT.md](../audits/STAGE6_WEB_DISPLAY_AUDIT.md).
 > Решения и Web SCHEMA: [STAGE6_ARCHITECTURE_DECISIONS.md](STAGE6_ARCHITECTURE_DECISIONS.md).
 

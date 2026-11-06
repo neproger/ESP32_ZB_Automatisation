@@ -205,11 +205,7 @@ impl<F: NorFlash> Registry<F> {
         Ok(record.definition_id == definition_id && record.configured_version >= version)
     }
 
-    pub fn set_configured(
-        &mut self,
-        ieee: u64,
-        version: u16,
-    ) -> Result<(), Error> {
+    pub fn set_configured(&mut self, ieee: u64, version: u16) -> Result<(), Error> {
         let slot = self.slot(ieee)?;
         let record = slot.record()?;
         let updated = DeviceRecord {
@@ -302,12 +298,13 @@ mod tests {
         assert_eq!(slot.record().unwrap().manufacturer, "_TZ3000_b4awzgct");
 
         let mut seen = 0;
-        restarted.for_each(|slot| {
-            if slot.record().is_ok() {
-                seen += 1;
-            }
-        })
-        .unwrap();
+        restarted
+            .for_each(|slot| {
+                if slot.record().is_ok() {
+                    seen += 1;
+                }
+            })
+            .unwrap();
         assert_eq!(seen, 1);
     }
 

@@ -791,17 +791,20 @@ dependencies = [
 name = "ha-app"
 version = "0.1.0"
 dependencies = [
- "bindgen 0.71.1",
  "embassy-time",
  "embuild",
  "esp-idf-svc",
  "ha-automation",
+ "ha-config",
  "ha-device",
+ "ha-display",
  "ha-domain",
  "ha-model",
  "ha-system",
  "ha-web",
+ "ha-web-service",
  "ha-wifi",
+ "ha-zigbee-service",
  "log",
  "micro-db",
  "z2m-rs",
@@ -819,10 +822,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-config"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+]
+
+[[package]]
 name = "ha-device"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+]
+
+[[package]]
+name = "ha-display"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.71.1",
+ "embuild",
+ "esp-idf-svc",
+ "ha-automation",
+ "ha-domain",
+ "ha-model",
+ "ha-wifi",
+ "log",
 ]
 
 [[package]]
@@ -855,11 +879,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "ha-web-service"
+version = "0.1.0"
+dependencies = [
+ "esp-idf-svc",
+ "ha-domain",
+ "ha-web",
+ "log",
+]
+
+[[package]]
 name = "ha-wifi"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
  "log",
+]
+
+[[package]]
+name = "ha-zigbee-service"
+version = "0.1.0"
+dependencies = [
+ "esp-idf-svc",
+ "ha-device",
+ "ha-domain",
+ "ha-model",
+ "log",
+ "micro-db",
+ "z2m-rs",
+ "zigbee-devices",
+ "zigbee-exec",
+ "zigbee-frames",
 ]
 
 [[package]]

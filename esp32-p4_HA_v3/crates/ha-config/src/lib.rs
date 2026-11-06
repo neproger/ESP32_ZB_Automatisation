@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use ha_domain::canonical::{
     ENTITY_AUTOMATION, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
     GROUP_ITEM_KEY_LEN, SOURCE_ZIGBEE,
