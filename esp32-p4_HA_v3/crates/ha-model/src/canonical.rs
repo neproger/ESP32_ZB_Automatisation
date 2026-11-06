@@ -430,6 +430,18 @@ pub struct EntityRecord {
 }
 
 impl EntityRecord {
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < ENTITY_RECORD_LEN {
+            return None;
+        }
+        let mut name = [0u8; ENTITY_NAME_MAX];
+        name.copy_from_slice(&bytes[8..ENTITY_RECORD_LEN]);
+        Some(Self {
+            device: u64::from_le_bytes(bytes[..8].try_into().ok()?),
+            name,
+        })
+    }
+
     pub fn new(device: DeviceId, name: &str) -> Self {
         let mut out = [0u8; ENTITY_NAME_MAX];
         let bytes = name.as_bytes();
@@ -487,6 +499,16 @@ pub struct StateKey {
 }
 
 impl StateKey {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < STATE_KEY_LEN {
+            return None;
+        }
+        Some(Self {
+            entity: u64::from_le_bytes(bytes[..8].try_into().ok()?),
+            property: u32::from_le_bytes(bytes[8..12].try_into().ok()?),
+        })
+    }
+
     pub fn to_bytes(self) -> [u8; STATE_KEY_LEN] {
         let mut out = [0u8; STATE_KEY_LEN];
         out[..8].copy_from_slice(&self.entity.to_le_bytes());
@@ -578,6 +600,33 @@ impl CapabilitiesRecord {
         self.events[usize::from(self.event_count)] = event;
         self.event_count += 1;
         true
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < CAPABILITIES_LEN {
+            return None;
+        }
+        let mut record = Self::default();
+        record.property_count = bytes[0].min(CAPABILITIES_MAX as u8);
+        for index in 0..usize::from(record.property_count) {
+            let at = 4 + index * CAPABILITY_LEN;
+            let mut capability =
+                Capability::read(u32::from_le_bytes(bytes[at..at + 4].try_into().ok()?));
+            capability.action_count = bytes[at + 4].min(CAPABILITY_ACTIONS_MAX as u8);
+            for action in 0..usize::from(capability.action_count) {
+                let offset = at + 8 + action * 4;
+                capability.actions[action] =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?);
+            }
+            record.properties[index] = capability;
+        }
+        let events = 4 + CAPABILITIES_MAX * CAPABILITY_LEN;
+        record.event_count = bytes[events].min(CAPABILITY_EVENTS_MAX as u8);
+        for index in 0..usize::from(record.event_count) {
+            let offset = events + 4 + index * 4;
+            record.events[index] = u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?);
+        }
+        Some(record)
     }
 
     pub fn encode(self) -> [u8; CAPABILITIES_LEN] {
@@ -1591,6 +1640,23 @@ mod tests {
         assert_eq!(caps.encode().len(), CAPABILITIES_LEN);
     }
 
+    #[test]
+    fn display_decoders_roundtrip() {
+        let entity = EntityRecord::new(7, "lamp");
+        assert_eq!(EntityRecord::decode(&entity.encode()).unwrap(), entity);
+        let key = StateKey {
+            entity: 7,
+            property: 1,
+        };
+        assert_eq!(StateKey::from_bytes(&key.to_bytes()).unwrap(), key);
+        let group = GroupRecord {
+            title: [b'G'; GROUP_TITLE_MAX],
+        };
+        assert_eq!(GroupRecord::decode(&group.encode()).unwrap(), group);
+        let mut caps = CapabilitiesRecord::default();
+        caps.push(Capability::with_actions(1, &[1, 2]));
+        assert_eq!(CapabilitiesRecord::decode(&caps.encode()).unwrap(), caps);
+    }
     #[test]
     fn location_layout_and_flags_match_v2() {
         let mut name = [0u8; LOCATION_NAME_MAX];

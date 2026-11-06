@@ -629,7 +629,9 @@ fn apply_state(
 
 fn publish_event(domain: &DomainHandle, event: CanonicalEvent) {
     let key = event.entity.to_le_bytes();
-    let payload = event.event.to_le_bytes();
+    let mut payload = [0u8; 24];
+    payload[0..4].copy_from_slice(&event.event.to_le_bytes());
+    payload[8..16].copy_from_slice(&key);
     match domain.payload_put(
         Some(FactTarget {
             entity: ENTITY_ENTITY,

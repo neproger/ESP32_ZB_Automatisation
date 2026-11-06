@@ -285,9 +285,25 @@ metadata, Display/System без direct C radio calls.
 
 ### Этап 6 — Web и Display
 
-> Статус: **Stage 6.0 audit/decisions complete; implementation не начат**.
+> Статус: **Stage 6.1–6.4 implemented; 6.5 P4 integration in progress**.
 > Аудит и gaps: [STAGE6_WEB_DISPLAY_AUDIT.md](../audits/STAGE6_WEB_DISPLAY_AUDIT.md).
 > Решения и Web SCHEMA: [STAGE6_ARCHITECTURE_DECISIONS.md](STAGE6_ARCHITECTURE_DECISIONS.md).
+
+6.1 P4 smoke: `/model.bin` — `application/octet-stream`, `no-store`, magic `HASM`,
+только model-типы; full snapshot — только SCHEMA (без `WIFI_SCAN`/`WIFI_KNOWN`);
+`SNAPSHOT_STATE` — только `WEATHER`/`WIFI_STATUS`/`PROPERTY_STATE`, counts 0/0.
+6.2 P4 smoke: два клиента получили независимые `seq` 0..N; `MAX_CLIENTS=8`
+поднят вместе с `CONFIG_LWIP_MAX_SOCKETS=12`; send вынесен из mutex.
+6.3: `display::start(domain)` делает initial Domain read/rebuild; команды идут
+Domain/Device path; `main` больше не вызывает скрытый `rebuild`.
+6.4: Display использует `ha_model` decoders; automation и Wi-Fi обновляются
+точечно; глобальный `allow(warnings, clippy::all)` заменён локальным для bindings.
+6.5 P4 smoke: LOCATION delta проходит; slow client закрыт после переполнения
+bounded queue; reconnect получил свежий snapshot (34 записи); EVENT идёт
+canonical `ha_event_t`; navigation OpenSettings/Back/OpenWifi/Delta выполнена
+без panic. Физический touch callback отдельно не проверялся.
+Операционное: domain был очищен после stress-теста, Wi-Fi credentials потеряны;
+P4 нужно снова подключить к сети через Display.
 
 **Исходные слои V2:** `web`, `display`.
 
@@ -445,7 +461,9 @@ V2+Z2M; полезные существующие Rust-улучшения сох
 
 ## 6. Текущая задача
 
-**Текущая задача: Stage 5 acceptance pending; Stage 6.0 Web/Display audit и architecture decisions готовы, implementation не начат.**
+**Текущая задача: Stage 6.5 P4 smoke pass; Display и Web ревизованы: вынесены
+модули, public API сужен; Web snapshot/model.bin/LOCATION delta перепроверены.
+Физический touch callback отдельно не проверялся.**
 
 Stage 3: **Host Verified / Hardware Acceptance Pending**.
 Stage 4 complete; Stage 5: implementation complete, clean build и initial P4 smoke прошли;
@@ -482,7 +500,7 @@ rename остаётся app-level V2 command path; Zigbee adapter пишет т�
 
 Stage 1 hardware gate открыт: уникальная persistence-запись через UI/Web и
 reboot ещё не проверены. Wi-Fi/System port реализован; Display и Web остаются
-Stage 6, остальные слои не переоткрываются.
+Stage 6; остальные слои не переоткрываются.
 
 Domain API parity закрыт: [DOMAIN_API_AUDIT.md](../audits/DOMAIN_API_AUDIT.md)
 фиксирует исправленные ERROR-факты, выровненный payload contract, удалённый

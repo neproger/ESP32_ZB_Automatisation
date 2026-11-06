@@ -116,7 +116,9 @@ fn publish_weather(domain: &DomainHandle, weather: WeatherRecord) {
 
 fn publish_event(domain: &DomainHandle, event: u32) {
     let key = ENTITY_SYSTEM.to_le_bytes();
-    let payload = event.to_le_bytes();
+    let mut payload = [0u8; 24];
+    payload[0..4].copy_from_slice(&event.to_le_bytes());
+    payload[8..16].copy_from_slice(&key);
     if let Err(error) = domain.payload_put(
         Some(FactTarget {
             entity: ENTITY_ENTITY,

@@ -1,53 +1,52 @@
 //! HTTP + binary WebSocket for the UI.
 //!
 //! The wire is V2 canonical: 8-byte header, entity frames carry `key + record`
-//! verbatim, `EVENT` carries `ha_event_t`. The main loop mirrors canonical
-//! records into a bounded model cache; `/ws` sends a snapshot on connect and
-//! every change afterwards. `/model.bin` stays 404 on purpose: the UI falls back
-//! to a full WS snapshot.
+//! verbatim, `EVENT` carries `ha_event_t`. Snapshots are read directly from
+//! Domain; `/model.bin` is the V2 static model blob built from the same SCHEMA.
 
 use std::collections::VecDeque;
 use std::ffi::c_char;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
 use esp_idf_svc::sys::*;
 use ha_domain::{DomainHandle, Fact, FactKind};
+
+mod session;
+mod snapshot;
 use ha_web::{command, control, write_frame};
+pub use session::flush;
+use session::{broadcast_one, close_client, enqueue_locked};
+use snapshot::*;
 
 const INDEX: &[u8] = include_bytes!("../../../web/ui/index.html.gz");
 const APP_JS: &[u8] = include_bytes!("../../../web/ui/app.js.gz");
 const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
-const MAX_CLIENTS: usize = 4;
+const MAX_CLIENTS: usize = 8;
 const CLIENT_QUEUE: usize = 64;
-// Full 32-device config: devices/entities/caps, 256 states, groups, rules.
-const MAX_MODEL: usize = 768;
-
-struct ModelEntry {
-    frame_type: u8,
-    key: Vec<u8>,
-    payload: Vec<u8>,
-}
+const CLIENT_BYTES: usize = 16 * 1024;
 
 struct Client {
     fd: i32,
     queue: VecDeque<Vec<u8>>,
+    bytes: usize,
+    seq: u16,
 }
 
-static MODEL: Mutex<Vec<ModelEntry>> = Mutex::new(Vec::new());
+static DOMAIN: Mutex<Option<DomainHandle>> = Mutex::new(None);
 static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
-static SEQ: AtomicU16 = AtomicU16::new(0);
-static MODEL_EVICTED: AtomicBool = AtomicBool::new(false);
+static MODEL_BLOB: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+static MODEL_DIRTY: AtomicBool = AtomicBool::new(true);
 
 extern "C" {
     fn zb_poc_open_network(seconds: u8) -> i32;
 }
 
-pub fn start() -> bool {
+pub fn start(domain: DomainHandle) -> bool {
     let mut config: httpd_config_t = unsafe { std::mem::zeroed() };
     config.server_port = 80;
     config.ctrl_port = 32768;
@@ -69,6 +68,7 @@ pub fn start() -> bool {
         log::error!("httpd_start failed: {err}");
         return false;
     }
+    *DOMAIN.lock().unwrap() = Some(domain);
     *SERVER.lock().unwrap() = Some(handle as usize);
 
     let ok = register(handle, "/", GET_METHOD, index_handler)
@@ -115,14 +115,14 @@ pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
                 }
             }
             FactKind::Event => {
-                let key = fact.key();
-                if key.len() < 8 {
+                if fact.payload_size != 24 {
                     continue;
                 }
-                let entity = u64::from_le_bytes(key[..8].try_into().expect("event entity"));
-                if let Some(event) = fact.value.as_u32() {
-                    publish_event(entity, event);
+                let mut payload = [0u8; 24];
+                if domain.payload_get(fact.payload_ref, &mut payload).is_err() {
+                    continue;
                 }
+                broadcast_one(control::EVENT, &payload);
             }
             _ => {}
         }
@@ -133,165 +133,44 @@ fn web_visible(entity: u32) -> bool {
     u8::try_from(entity).is_ok_and(ha_web::is_web_visible)
 }
 
-/// Mirrors one canonical record; an unchanged record is not broadcast again.
-pub fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
-    if !ha_web::is_web_visible(frame_type) {
+/// Broadcasts one canonical record. Domain already filters unchanged writes;
+/// Web keeps no canonical record cache.
+fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
+    let Some(schema) = ha_web::schema(frame_type) else {
         return;
+    };
+    if key.len() != schema.key_size || record.len() != schema.record_size {
+        log::warn!(
+            "web: bad record type={frame_type} key={} record={}",
+            key.len(),
+            record.len()
+        );
+        return;
+    }
+    if schema.model {
+        MODEL_DIRTY.store(true, Ordering::Relaxed);
     }
     let mut payload = Vec::with_capacity(key.len() + record.len());
     payload.extend_from_slice(key);
     payload.extend_from_slice(record);
-    let changed = {
-        let mut model = MODEL.lock().unwrap();
-        match model
-            .iter_mut()
-            .find(|entry| entry.frame_type == frame_type && entry.key.as_slice() == key)
-        {
-            Some(entry) if entry.payload == payload => false,
-            Some(entry) => {
-                entry.payload = payload.clone();
-                true
-            }
-            None => {
-                if model.len() == MAX_MODEL {
-                    if !MODEL_EVICTED.swap(true, Ordering::Relaxed) {
-                        log::warn!("web: model full, evicting oldest records");
-                    }
-                    model.remove(0);
-                }
-                model.push(ModelEntry {
-                    frame_type,
-                    key: key.to_vec(),
-                    payload: payload.clone(),
-                });
-                true
-            }
-        }
-    };
-    if changed {
-        broadcast_one(frame_type, &payload);
-    }
+    broadcast_one(frame_type, &payload);
 }
 
-/// Drops one cached record and tells clients to remove it too.
-pub fn remove(frame_type: u8, key: &[u8]) {
-    if !ha_web::is_web_visible(frame_type) {
+/// Domain removal is authoritative; it does not depend on a Web cache entry.
+fn remove(frame_type: u8, key: &[u8]) {
+    let Some(schema) = ha_web::schema(frame_type) else {
+        return;
+    };
+    if key.len() != schema.key_size {
         return;
     }
-    let changed = {
-        let mut model = MODEL.lock().unwrap();
-        match model
-            .iter()
-            .position(|entry| entry.frame_type == frame_type && entry.key.as_slice() == key)
-        {
-            Some(index) => {
-                model.remove(index);
-                true
-            }
-            None => false,
-        }
-    };
-    if !changed {
-        return;
+    if schema.model {
+        MODEL_DIRTY.store(true, Ordering::Relaxed);
     }
     let mut payload = Vec::with_capacity(1 + key.len());
     payload.push(frame_type);
     payload.extend_from_slice(key);
     broadcast_one(control::REMOVE, &payload);
-}
-
-pub fn publish_event(entity_id: u64, event_id: u32) {
-    // ha_event_t: id u32, padding, source_entity u64, ha_value_t NONE.
-    let mut payload = [0u8; 24];
-    payload[0..4].copy_from_slice(&event_id.to_le_bytes());
-    payload[8..16].copy_from_slice(&entity_id.to_le_bytes());
-    broadcast_one(control::EVENT, &payload);
-}
-
-fn next_seq() -> u16 {
-    SEQ.fetch_add(1, Ordering::Relaxed)
-}
-
-fn broadcast_one(frame_type: u8, payload: &[u8]) {
-    let Some(handle) = *SERVER.lock().unwrap() else {
-        return;
-    };
-    let mut frame = Vec::new();
-    write_frame(&mut frame, next_seq(), frame_type, payload);
-    let mut clients = CLIENTS.lock().unwrap();
-    let mut slow = Vec::new();
-    for client in clients.iter_mut() {
-        if client.queue.len() >= CLIENT_QUEUE {
-            slow.push(client.fd);
-        } else {
-            client.queue.push_back(frame.clone());
-        }
-    }
-    if slow.is_empty() {
-        return;
-    }
-    clients.retain(|client| !slow.contains(&client.fd));
-    for fd in slow {
-        log::warn!("ws: slow client {fd}, closing");
-        unsafe { httpd_sess_trigger_close(handle as httpd_handle_t, fd) };
-    }
-}
-
-/// Send queued frames from the Web task. The realtime path only enqueues, so a
-/// slow client can never block Domain, Dispatcher or Zigbee.
-pub fn flush() {
-    let Some(handle) = *SERVER.lock().unwrap() else {
-        return;
-    };
-    let mut clients = CLIENTS.lock().unwrap();
-    let mut dead = Vec::new();
-    for client in clients.iter_mut() {
-        while let Some(bytes) = client.queue.pop_front() {
-            let mut frame = ws_frame(&bytes);
-            if unsafe { httpd_ws_send_frame_async(handle as httpd_handle_t, client.fd, &mut frame) }
-                != ESP_OK
-            {
-                dead.push(client.fd);
-                break;
-            }
-        }
-    }
-    clients.retain(|client| !dead.contains(&client.fd));
-}
-
-fn snapshot_frames() -> Vec<Vec<u8>> {
-    let entries: Vec<(u8, Vec<u8>)> = {
-        let model = MODEL.lock().unwrap();
-        model
-            .iter()
-            .filter(|entry| ha_web::is_web_visible(entry.frame_type))
-            .map(|entry| (entry.frame_type, entry.payload.clone()))
-            .collect()
-    };
-    let count = entries.len() as u32;
-    let mut frames = Vec::with_capacity(entries.len() + 2);
-    let mut begin = Vec::new();
-    write_frame(
-        &mut begin,
-        next_seq(),
-        control::SYNC_BEGIN,
-        &count.to_le_bytes(),
-    );
-    frames.push(begin);
-    for (frame_type, payload) in entries {
-        let mut frame = Vec::new();
-        write_frame(&mut frame, next_seq(), frame_type, &payload);
-        frames.push(frame);
-    }
-    let mut end = Vec::new();
-    write_frame(
-        &mut end,
-        next_seq(),
-        control::SYNC_END,
-        &count.to_le_bytes(),
-    );
-    frames.push(end);
-    frames
 }
 
 fn register(
@@ -348,10 +227,35 @@ unsafe extern "C" fn css_handler(req: *mut httpd_req_t) -> esp_err_t {
 }
 
 unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
-    // No model file: the UI falls back to a full WS snapshot.
-    httpd_resp_set_status(req, b"404 Not Found\0".as_ptr() as *const c_char);
-    httpd_resp_send(req, b"\0".as_ptr() as *const c_char, 0);
-    ESP_OK
+    let Some(domain) = DOMAIN.lock().unwrap().clone() else {
+        httpd_resp_send_err(req, 0, b"Internal Server Error\0".as_ptr() as *const c_char);
+        return ESP_FAIL;
+    };
+    let blob = {
+        let mut cached = MODEL_BLOB.lock().unwrap();
+        if MODEL_DIRTY.swap(false, Ordering::Relaxed) || cached.is_none() {
+            match build_model_blob(&domain) {
+                Ok(blob) => *cached = Some(blob),
+                Err(()) => {
+                    MODEL_DIRTY.store(true, Ordering::Relaxed);
+                    httpd_resp_send_err(
+                        req,
+                        0,
+                        b"Internal Server Error\0".as_ptr() as *const c_char,
+                    );
+                    return ESP_FAIL;
+                }
+            }
+        }
+        cached.clone().unwrap_or_default()
+    };
+    httpd_resp_set_type(req, b"application/octet-stream\0".as_ptr() as *const c_char);
+    httpd_resp_set_hdr(
+        req,
+        b"Cache-Control\0".as_ptr() as *const c_char,
+        b"no-store\0".as_ptr() as *const c_char,
+    );
+    httpd_resp_send(req, blob.as_ptr() as *const c_char, blob.len() as isize)
 }
 
 unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
@@ -378,18 +282,21 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
                         clients.push(Client {
                             fd,
                             queue: VecDeque::new(),
+                            bytes: 0,
+                            seq: 0,
                         });
                     } else {
                         log::warn!("ws: client limit reached, {fd} ignored");
                     }
                 }
             }
-            for bytes in snapshot_frames() {
-                let mut frame = ws_frame(&bytes);
-                if httpd_ws_send_frame(req, &mut frame) != ESP_OK {
-                    log::warn!("ws snapshot send failed");
-                    break;
-                }
+            let Some(domain) = DOMAIN.lock().unwrap().clone() else {
+                return ESP_OK;
+            };
+            let state_only = buf[8] == command::SNAPSHOT_STATE;
+            if !enqueue_snapshot(fd, &domain, state_only) {
+                log::warn!("ws snapshot enqueue failed, closing {fd}");
+                close_client(fd);
             }
         }
         command::PROPERTY_COMMAND => property_command(&buf[9..len]),
@@ -442,7 +349,7 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
         command::DEVICE_RENAME => handle_device_rename(&buf[9..len]),
         command::LOGICAL_DEVICE_REMOVE => handle_device_remove(&buf[9..len]),
         command::DISCOVERY => {
-            if len >= 10 {
+            if len == 10 {
                 let seconds = buf[9];
                 let result = zb_poc_open_network(seconds);
                 if result != 0 {
@@ -477,6 +384,12 @@ fn handle_upsert(entity: u8, key_len: usize, payload: &[u8]) {
     let Some((key, record)) = ha_web::parse_key_record(payload, key_len) else {
         return;
     };
+    let Some(schema) = ha_web::schema(entity) else {
+        return;
+    };
+    if record.len() != schema.record_size {
+        return;
+    }
     if let Err(error) = crate::intake::upsert(u32::from(entity), key, record) {
         log::warn!("upsert intake full, entity={entity}: {error:?}");
     }

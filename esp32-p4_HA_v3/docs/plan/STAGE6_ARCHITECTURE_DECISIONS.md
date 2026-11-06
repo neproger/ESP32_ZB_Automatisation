@@ -1,6 +1,6 @@
 # Stage 6 — Architecture Decisions: Web + Display
 
-> Статус: **approved decisions; production code не изменён**.
+> Статус: **approved decisions; Stage 6.1–6.4 implemented; 6.5 integration in progress**.
 > Audit: [STAGE6_WEB_DISPLAY_AUDIT.md](../audits/STAGE6_WEB_DISPLAY_AUDIT.md).
 > Source of truth: V2 `WEB.md`, `WEB_PROTOCOL.md`, `web/src/*`, `display/src/*`.
 > Цель: V2 behavioural parity; V3 protocol number не является основанием менять семантику.
@@ -89,8 +89,14 @@ SNAPSHOT_STATE:
 - WebSocket send выполняется вне внутреннего mutex; очередь защищается mutex,
   `httpd_ws_send_frame_async` — нет.
 - Медленный клиент закрывается; после reconnect получает свежий snapshot.
+- Domain subscription Web использует V2-маску `ENTITY_UPSERTED | ENTITY_REMOVED | EVENT`.
+- `EVENT` — canonical 24-byte `ha_event_t`, читается из Domain payload и отдаётся
+  verbatim; не синтезируется из полей `Fact`.
+- Команды проверяют точные V2-размеры args; PUT дополнительно проверяет record по SCHEMA.
+- P4 shortcut: Web drain выполняется в main loop; отдельный web-drain thread
+  останавливался после snapshot. Вернуться к отдельной задаче после диагностики.
 
-## 3. Display
+### 2.1. Web code structure after revision\n\n- `ha-app/src/web.rs` — HTTP/WS lifecycle, Domain drain, canonical projection facade.\n- `web/session.rs` — per-client bounded queue, `seq`, broadcast/flush and slow-client close.\n- `web/snapshot.rs` — full/state snapshots and `/model.bin` blob.\n- `web.rs` public API narrowed to `start`, `drain`, `flush`; projection helpers are private.\n- No dead private code found; no V2 DTO/cache leftovers.\n- P4 smoke after revision: `/model.bin` 3061 bytes, snapshot 39 records, LOCATION delta delivered.\n\n## 3. Display
 
 - `display::start(domain)` (или эквивалент) сам выполняет initial Domain read:
   подписка → чтение settings/status → начальная сборка. `main` не обязан вызывать
@@ -112,7 +118,7 @@ SNAPSHOT_STATE:
   не маскировать диагностику.
 - Wi-Fi данные остаются только через Domain; прямые C radio calls запрещены.
 
-## 4. Parity tests before implementation
+### 3.1. Display code structure after revision\n\n- `ha-app/src/display.rs` — public service facade, LVGL screens/widgets, event callbacks,\n  status bar, page/nav lifecycle.\n- `display/model.rs` — Domain snapshot reads, canonical decoders, formatting and\n  group/page composition; no LVGL calls.\n- `display/color.rs` — RGB/HSV/XY conversion only; no UI state.\n- `display/settings.rs` — Settings page and brightness command path.\n- `display/wifi.rs` — Wi-Fi page, scan list, connect dialog and targeted refresh.\n- Public Display API narrowed to `start`, `take_nav`, `navigate`, `request_wifi_scan`,\n  `drain`, `tick`; internal setters/rebuild are private.\n- Display/Web drains run in the main loop; dedicated P4 drain threads stalled after\n  snapshot. Upgrade path: return each drain to a dedicated task after root cause is\n  proven on hardware.\n\n## 4. Parity tests before implementation
 
 - initial full snapshot содержит только записи 12 разрешённых SCHEMA-типов;
 - `WIFI_SCAN` и `WIFI_KNOWN` отсутствуют в Web snapshot;

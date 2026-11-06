@@ -34,9 +34,98 @@ pub mod entity {
     pub const GROUP_AUTOMATION: u8 = 18;
 }
 
-/// Credentials are device-internal. Web never receives WIFI_KNOWN records.
+/// V2 `web/src/web_projection.c` SCHEMA: only these types are exposed to Web.
+/// `WIFI_SCAN` and `WIFI_KNOWN` stay device-internal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchemaEntry {
+    pub entity: u8,
+    pub key_size: usize,
+    pub record_size: usize,
+    pub model: bool,
+}
+
+pub const SCHEMA: &[SchemaEntry] = &[
+    SchemaEntry {
+        entity: entity::AUTOMATION,
+        key_size: 8,
+        record_size: ha_domain::canonical::AUTOMATION_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::LOCATION,
+        key_size: ha_domain::canonical::LOCATION_KEY_LEN,
+        record_size: ha_domain::canonical::LOCATION_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::GROUP,
+        key_size: ha_domain::canonical::GROUP_KEY_LEN,
+        record_size: ha_domain::canonical::GROUP_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::GROUP_ITEM,
+        key_size: ha_domain::canonical::GROUP_ITEM_KEY_LEN,
+        record_size: ha_domain::canonical::GROUP_ITEM_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::WEATHER,
+        key_size: 8,
+        record_size: ha_domain::canonical::WEATHER_RECORD_LEN,
+        model: false,
+    },
+    SchemaEntry {
+        entity: entity::WIFI_STATUS,
+        key_size: 8,
+        record_size: ha_domain::canonical::WIFI_STATUS_RECORD_LEN,
+        model: false,
+    },
+    SchemaEntry {
+        entity: entity::SETTINGS,
+        key_size: ha_domain::canonical::SETTINGS_KEY_LEN,
+        record_size: ha_domain::canonical::SETTINGS_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::ENTITY,
+        key_size: 8,
+        record_size: ha_domain::canonical::ENTITY_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::PROPERTY_STATE,
+        key_size: ha_domain::canonical::STATE_KEY_LEN,
+        record_size: ha_domain::canonical::STATE_RECORD_LEN,
+        model: false,
+    },
+    SchemaEntry {
+        entity: entity::CAPABILITIES,
+        key_size: 8,
+        record_size: ha_domain::canonical::CAPABILITIES_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::LOGICAL_DEVICE,
+        key_size: 8,
+        record_size: ha_domain::canonical::DEVICE_RECORD_LEN,
+        model: true,
+    },
+    SchemaEntry {
+        entity: entity::GROUP_AUTOMATION,
+        key_size: ha_domain::canonical::GROUP_AUTOMATION_KEY_LEN,
+        record_size: ha_domain::canonical::GROUP_ITEM_RECORD_LEN,
+        model: true,
+    },
+];
+
+pub fn schema(entity: u8) -> Option<&'static SchemaEntry> {
+    SCHEMA.iter().find(|entry| entry.entity == entity)
+}
+
+/// Credentials are device-internal and types outside V2 SCHEMA are not public.
 pub fn is_web_visible(entity: u8) -> bool {
-    entity != entity::WIFI_KNOWN
+    schema(entity).is_some()
 }
 
 /// Browser -> device command ids implemented by the firmware.
@@ -76,7 +165,7 @@ pub fn parse_property_command(payload: &[u8]) -> Option<PropertyCommand> {
     use ha_domain::canonical::CommandValue;
     use ha_domain::Value;
 
-    if payload.len() < 32 {
+    if payload.len() != 32 {
         return None;
     }
     let entity = u64::from_le_bytes(payload[0..8].try_into().ok()?);
@@ -113,7 +202,7 @@ pub fn parse_property_command(payload: &[u8]) -> Option<PropertyCommand> {
 
 /// `ha_entity_rename_t` / `ha_device_rename_t`: id u64@0, name[32]@8.
 pub fn parse_rename(payload: &[u8]) -> Option<(u64, String)> {
-    if payload.len() < 40 {
+    if payload.len() != 40 {
         return None;
     }
     let id = u64::from_le_bytes(payload[0..8].try_into().ok()?);
@@ -127,7 +216,7 @@ pub fn parse_rename(payload: &[u8]) -> Option<(u64, String)> {
 
 /// `ha_device_id_t` (8 bytes) used by LOGICAL_DEVICE_REMOVE.
 pub fn parse_device_id(payload: &[u8]) -> Option<u64> {
-    if payload.len() < 8 {
+    if payload.len() != 8 {
         return None;
     }
     Some(u64::from_le_bytes(payload[0..8].try_into().ok()?))
@@ -247,6 +336,60 @@ mod tests {
         out
     }
 
+    #[test]
+    fn web_schema_matches_v2_sizes_and_exclusions() {
+        use ha_domain::canonical::*;
+        assert_eq!(SCHEMA.len(), 12);
+        assert_eq!(SCHEMA.iter().filter(|entry| entry.model).count(), 9);
+        assert_eq!(SCHEMA.iter().filter(|entry| !entry.model).count(), 3);
+        assert!(schema(entity::WIFI_SCAN).is_none());
+        assert!(schema(entity::WIFI_KNOWN).is_none());
+        assert_eq!(
+            schema(entity::AUTOMATION).unwrap().record_size,
+            AUTOMATION_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::LOCATION).unwrap().record_size,
+            LOCATION_RECORD_LEN
+        );
+        assert_eq!(schema(entity::GROUP).unwrap().record_size, GROUP_RECORD_LEN);
+        assert_eq!(
+            schema(entity::GROUP_ITEM).unwrap().record_size,
+            GROUP_ITEM_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::WEATHER).unwrap().record_size,
+            WEATHER_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::WIFI_STATUS).unwrap().record_size,
+            WIFI_STATUS_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::SETTINGS).unwrap().record_size,
+            SETTINGS_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::ENTITY).unwrap().record_size,
+            ENTITY_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::PROPERTY_STATE).unwrap().record_size,
+            STATE_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::CAPABILITIES).unwrap().record_size,
+            CAPABILITIES_LEN
+        );
+        assert_eq!(
+            schema(entity::LOGICAL_DEVICE).unwrap().record_size,
+            DEVICE_RECORD_LEN
+        );
+        assert_eq!(
+            schema(entity::GROUP_AUTOMATION).unwrap().record_size,
+            GROUP_ITEM_RECORD_LEN
+        );
+    }
     #[test]
     fn property_command_reads_power_value_and_color() {
         use ha_domain::canonical::CommandValue;

@@ -17,7 +17,7 @@ use ha_domain::canonical::{
     COMMAND_WIFI_SCAN, ENTITY_ENTITY, ENTITY_LOCATION, ENTITY_SETTINGS, LOCATION_RECORD_LEN,
     SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_UI, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
 };
-use ha_domain::{Domain, DomainHandle, DomainTransaction, FactMeta, Filter};
+use ha_domain::{Domain, DomainHandle, DomainTransaction, FactKind, FactMeta, Filter};
 
 mod capabilities;
 mod config;
@@ -72,14 +72,17 @@ fn main() {
     let (display_tx, display_rx) = sync_channel(64);
     let (web_tx, web_rx) = sync_channel(64);
     domain.subscribe_channel(Filter::all(), display_tx);
-    domain.subscribe_channel(Filter::all(), web_tx);
+    let web_filter = Filter {
+        kind_mask: FactKind::EntityUpserted.bit()
+            | FactKind::EntityRemoved.bit()
+            | FactKind::Event.bit(),
+        ..Filter::all()
+    };
+    domain.subscribe_channel(web_filter, web_tx);
 
     unsafe {
         esp_idf_svc::sys::esp_netif_init();
         esp_idf_svc::sys::esp_event_loop_create_default();
-    }
-    if !web::start() {
-        log::error!("web server not started");
     }
 
     let started = unsafe { zb_poc_start() };
@@ -96,6 +99,9 @@ fn main() {
         }
     }
     let domain = DomainHandle::new(domain);
+    if !web::start(domain.clone()) {
+        log::error!("web server not started");
+    }
     ensure_system_location(&domain);
     ensure_settings(&domain);
     let (zigbee, zigbee_state) = zigbee_service::start(domain.clone());
@@ -118,8 +124,8 @@ fn main() {
             log::error!("domain: wifi connect executor registration failed: {error:?}");
         }
     }
-    if display::start() {
-        display::rebuild(&domain);
+    if !display::start(&domain) {
+        log::error!("display not started");
     }
     std::thread::Builder::new()
         .name("zigbee-mainloop".into())
@@ -144,32 +150,6 @@ fn main() {
         .expect("dispatcher thread");
     // shortcut: display/web drain loops use a 20 ms timeout to keep LVGL ticks
     // alive; the fact inbox itself remains bounded and non-blocking.
-    let display_domain = domain.clone();
-    std::thread::Builder::new()
-        .name("display-drain".into())
-        .stack_size(8192)
-        .spawn(move || loop {
-            match display_rx.recv_timeout(Duration::from_millis(20)) {
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {}
-            }
-            display::drain(&display_domain, &display_rx);
-            display::tick();
-        })
-        .expect("display drain thread");
-    let web_domain = domain.clone();
-    std::thread::Builder::new()
-        .name("web-drain".into())
-        .stack_size(8192)
-        .spawn(move || loop {
-            match web_rx.recv_timeout(Duration::from_millis(20)) {
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {}
-            }
-            web::drain(&web_domain, &web_rx);
-            web::flush();
-        })
-        .expect("web drain thread");
     if let Err(error) = ha_automation::start(domain.clone()) {
         log::error!("automation: start failed: {error}");
     }
@@ -185,11 +165,7 @@ fn main() {
         while let Some(nav) = display::take_nav() {
             match nav {
                 display::Nav::WifiScan => {
-                    let meta = FactMeta {
-                        source: SOURCE_UI as u8,
-                        value: ha_domain::Value::NONE,
-                    };
-                    if let Err(error) = domain.post(COMMAND_WIFI_SCAN, &[], None, meta) {
+                    if let Err(error) = display::request_wifi_scan() {
                         log::warn!("wifi: scan request rejected ({error:?})");
                     }
                 }
@@ -205,6 +181,11 @@ fn main() {
                 log::warn!("domain: capabilities update failed: {error:?}");
             }
         }
+        // shortcut: Web/Display drains run on the main loop; dedicated P4 drain threads stalled.
+        display::drain(&domain, &display_rx);
+        display::tick();
+        web::drain(&domain, &web_rx);
+        web::flush();
         let subscriber_drops = domain.subscriber_drops().unwrap_or(0);
         if subscriber_drops != last_subscriber_drops {
             log::warn!("domain: subscriber drops={subscriber_drops}");
@@ -266,56 +247,6 @@ fn handle_intake(domain: &DomainHandle, zigbee: &zigbee_service::Handle, request
         intake::Request::RemoveDevice { device } => {
             if let Err(error) = zigbee.remove_device(device) {
                 log::warn!("device: remove {device:016x} rejected: {error:?}");
-            }
-        }
-        intake::Request::SetAutomationEnabled {
-            automation: id,
-            enabled,
-        } => {
-            let key = id.to_le_bytes();
-            let mut record = [0u8; ha_domain::canonical::AUTOMATION_RECORD_LEN];
-            if domain
-                .entity_get(ha_domain::canonical::ENTITY_AUTOMATION, &key, &mut record)
-                .is_err()
-            {
-                log::warn!("display: automation {id:016x} not found");
-                return;
-            }
-            let record = match ha_automation::set_enabled(&record, enabled) {
-                Ok(record) => record,
-                Err(error) => {
-                    log::warn!("display: automation {id:016x} invalid record: {error:?}");
-                    return;
-                }
-            };
-            match config::put_record(
-                domain,
-                ha_domain::canonical::ENTITY_AUTOMATION,
-                &key,
-                &record,
-            ) {
-                Ok(_) => {}
-                Err(error) => log::warn!("display: automation {id:016x} write failed: {error:?}"),
-            }
-        }
-        intake::Request::SetSettings { brightness } => {
-            let key = [SETTINGS_ID];
-            let mut settings = read_settings(domain);
-            settings.brightness_pct = brightness;
-            let record = settings.encode();
-            match config::put_record(domain, ENTITY_SETTINGS, &key, &record) {
-                Ok(_) => {}
-                Err(error) => log::warn!("display: settings write failed: {error:?}"),
-            }
-        }
-        intake::Request::WifiConnect { ssid, password } => {
-            let args = ha_wifi::encode_connect(&ssid, &password);
-            let meta = FactMeta {
-                source: SOURCE_UI as u8,
-                value: ha_domain::Value::NONE,
-            };
-            if let Err(error) = domain.post(COMMAND_WIFI_CONNECT, &args, None, meta) {
-                log::warn!("wifi: connect rejected: {error:?}");
             }
         }
         intake::Request::Upsert {
@@ -417,16 +348,6 @@ fn ensure_settings(domain: &DomainHandle) {
         Ok(_) => log::info!("domain: settings seeded"),
         Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
     }
-}
-
-fn read_settings(domain: &DomainHandle) -> SettingsRecord {
-    let key = [SETTINGS_ID];
-    let mut bytes = [0u8; SETTINGS_RECORD_LEN];
-    domain
-        .entity_get(ENTITY_SETTINGS, &key, &mut bytes)
-        .ok()
-        .and_then(|()| SettingsRecord::decode(&bytes))
-        .unwrap_or_default()
 }
 
 fn now_ms() -> u64 {
