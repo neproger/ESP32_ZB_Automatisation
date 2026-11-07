@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
-ha-model = { path = "../ha-model" }
 ha-device = { path = "../ha-device" }
 micro-db = { path = "../micro-db" }
 zigbee-devices = { path = "../zigbee-devices" }

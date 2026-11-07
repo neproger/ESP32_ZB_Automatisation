@@ -199,6 +199,11 @@ pub enum Converter {
         command: u8,
         actions: &'static [(u8, Action)],
     },
+    /// Cluster-specific command id selects the action (no payload byte).
+    CommandId {
+        cluster: u16,
+        actions: &'static [(u8, Action)],
+    },
     /// Non-standard payload framing inside a normal cluster (Tuya DP, Xiaomi
     /// special, ...). The codec itself is a portable function, not a subsystem.
     Codec {
@@ -474,6 +479,16 @@ pub fn decode(profile: &Profile, event: &RawZcl<'_>) -> Option<Decoded> {
                     let first = event.payload.first().copied();
                     if let Some(&(_, action)) =
                         actions.iter().find(|&&(byte, _)| Some(byte) == first)
+                    {
+                        decoded.push(Update::Action(action));
+                    }
+                }
+            }
+            Converter::CommandId { cluster, actions } => {
+                if event.cluster == *cluster {
+                    if let Some(&(_, action)) = actions
+                        .iter()
+                        .find(|&&(command, _)| command == event.command)
                     {
                         decoded.push(Update::Action(action));
                     }
@@ -1060,6 +1075,19 @@ mod tests {
         }
         assert!(!decoded.push(Update::Action(Action::Single)));
         assert_eq!(decoded.len(), MAX_UPDATES);
+    }
+
+    #[test]
+    fn snzb_01p_ewelink_commands_decode_actions() {
+        for (command, action) in [
+            (0x02, Action::Single),
+            (0x01, Action::Double),
+            (0x00, Action::Hold),
+        ] {
+            let decoded = decode(&SNZB_01P, &event(0x0006, command, &[])).expect("action");
+            assert_eq!(decoded.updates().next(), Some(&Update::Action(action)));
+        }
+        assert!(decode(&SNZB_01P, &event(0x0006, 0x03, &[])).is_none());
     }
 
     #[test]

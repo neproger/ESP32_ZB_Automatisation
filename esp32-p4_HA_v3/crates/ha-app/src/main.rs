@@ -15,12 +15,6 @@ use ha_zigbee_service::store;
 
 use ha_domain::{Domain, DomainHandle};
 
-mod domain_tables;
-#[cfg(feature = "p4-lock-metrics")]
-mod p4_probe;
-mod platform;
-mod web_actions;
-
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -34,14 +28,14 @@ fn main() {
             return;
         }
     };
-    let mut domain = match Domain::new_with_storage(64, 8, 64, now_ms, storage) {
+    let mut domain = match Domain::new_with_storage(64, 8, 64, ha_platform::now_ms, storage) {
         Ok(domain) => domain,
         Err(error) => {
             log::error!("domain: init failed: {error:?}");
             return;
         }
     };
-    if let Err(error) = domain_tables::register(&mut domain) {
+    if let Err(error) = ha_schema::register(&mut domain) {
         log::error!("domain: table init failed: {error:?}");
         return;
     }
@@ -50,34 +44,23 @@ fn main() {
         return;
     }
 
-    platform::init_netif();
+    ha_platform::init_netif();
 
-    let started = platform::zigbee_start();
-    if started != 0 {
-        log::error!("zb_poc_start failed: {started}");
-        panic!("zigbee stack did not start");
-    }
-    zigbee_service::install();
     if let Some(count) = option_env!("HA_FORCE_COMPACT") {
         for _ in 0..count.parse::<u32>().unwrap_or(0) {
             store::compact_for_test();
         }
     }
     let domain = DomainHandle::new(domain);
-    let zigbee = zigbee_service::start(domain.clone());
+    zigbee_service::start(domain.clone());
     ha_wifi::start(domain.clone());
-    web_actions::init(domain.clone(), zigbee);
-    if !ha_web_service::start(domain.clone(), &web_actions::WEB_ACTIONS) {
+    let actions = ha_web_actions::WebActions::new(domain.clone());
+    if !ha_web_service::start(domain.clone(), actions) {
         log::error!("web server not started");
     }
     if !display::start(&domain) {
         log::error!("display not started");
     }
-    std::thread::Builder::new()
-        .name("zigbee-mainloop".into())
-        .stack_size(8192)
-        .spawn(platform::zigbee_run)
-        .expect("zigbee mainloop thread");
     if let Err(error) = ha_system::start(domain.clone()) {
         log::error!("system: start failed: {error}");
     }
@@ -97,14 +80,10 @@ fn main() {
         log::error!("automation: start failed: {error}");
     }
     #[cfg(feature = "p4-lock-metrics")]
-    p4_probe::start(domain.clone());
+    ha_platform::p4_probe::start(domain.clone());
     log::info!("ha-app ready: device table + journal, waiting for button events");
     ha_config::seed_defaults(&domain);
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }
-}
-
-fn now_ms() -> u64 {
-    platform::now_ms()
 }

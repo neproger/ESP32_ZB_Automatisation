@@ -86,6 +86,17 @@ impl From<Error> for RemovalError {
     }
 }
 
+impl From<RemovalError> for Error {
+    fn from(error: RemovalError) -> Self {
+        match error {
+            RemovalError::Remover(error)
+            | RemovalError::Canonical(error)
+            | RemovalError::Progress(error) => error,
+            RemovalError::StalePlan => Error::InvalidState,
+        }
+    }
+}
+
 pub type Operation = fn(&[u8]) -> Result<NativeRemoval, Error>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -624,6 +635,17 @@ pub fn remove_canonical(
         }
         Ok(removed)
     })
+}
+
+/// Device-service removal: adapter remover + canonical cascade.
+pub fn remove(
+    domain: &DomainHandle,
+    origin: u8,
+    device: DeviceId,
+) -> Result<usize, Error> {
+    let plan = prepare_remove(domain, device)?;
+    let mut ticket = invoke_remover(plan)?;
+    Ok(remove_canonical(domain, origin, &mut ticket)?)
 }
 
 impl RemovalTicket {

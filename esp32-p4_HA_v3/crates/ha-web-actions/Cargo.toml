@@ -1,0 +1,11 @@
+[package]
+name = "ha-web-actions"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+ha-domain = { path = "../ha-domain" }
+ha-config = { path = "../ha-config" }
+ha-device = { path = "../ha-device" }
+ha-web-service = { path = "../ha-web-service" }

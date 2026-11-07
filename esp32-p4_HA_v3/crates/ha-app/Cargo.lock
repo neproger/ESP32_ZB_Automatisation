@@ -796,21 +796,16 @@ dependencies = [
  "esp-idf-svc",
  "ha-automation",
  "ha-config",
- "ha-device",
  "ha-display",
  "ha-domain",
- "ha-model",
+ "ha-platform",
+ "ha-schema",
  "ha-system",
- "ha-web",
+ "ha-web-actions",
  "ha-web-service",
  "ha-wifi",
  "ha-zigbee-service",
  "log",
- "micro-db",
- "z2m-rs",
- "zigbee-devices",
- "zigbee-exec",
- "zigbee-frames",
 ]
 
 [[package]]
@@ -845,7 +840,6 @@ dependencies = [
  "esp-idf-svc",
  "ha-automation",
  "ha-domain",
- "ha-model",
  "ha-wifi",
  "log",
 ]
@@ -863,6 +857,22 @@ name = "ha-model"
 version = "0.1.0"
 
 [[package]]
+name = "ha-platform"
+version = "0.1.0"
+dependencies = [
+ "esp-idf-svc",
+ "ha-domain",
+ "log",
+]
+
+[[package]]
+name = "ha-schema"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+]
+
+[[package]]
 name = "ha-system"
 version = "0.1.0"
 dependencies = [
@@ -877,6 +887,17 @@ name = "ha-web"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+]
+
+[[package]]
+name = "ha-web-actions"
+version = "0.1.0"
+dependencies = [
+ "ha-config",
+ "ha-device",
+ "ha-domain",
+ "ha-web-service",
+ "log",
 ]
 
 [[package]]
@@ -904,7 +925,6 @@ dependencies = [
  "esp-idf-svc",
  "ha-device",
  "ha-domain",
- "ha-model",
  "log",
  "micro-db",
  "z2m-rs",

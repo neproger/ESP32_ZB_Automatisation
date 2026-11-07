@@ -85,9 +85,16 @@ fn battery_exposes_and_configure_are_declared() {
     let plan = SNZB_01P.configure.expect("configure plan");
     assert_eq!(plan.timeout_ms, 5000);
     assert_eq!(plan.retries, 2);
-    assert_eq!(plan.version, 1);
+    assert_eq!(plan.version, 2);
     assert!(matches!(
         plan.steps[0],
+        ConfigureStep::Bind {
+            cluster: 0x0006,
+            endpoint: ConfigureEndpoint::Id(1),
+        }
+    ));
+    assert!(matches!(
+        plan.steps[1],
         ConfigureStep::Report {
             cluster: 0x0001,
             attribute: 0x0021,
@@ -99,7 +106,7 @@ fn battery_exposes_and_configure_are_declared() {
         }
     ));
     assert!(matches!(
-        plan.steps[1],
+        plan.steps[2],
         ConfigureStep::Report {
             attribute: 0x0020,
             ..

@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
-ha-model = { path = "../ha-model" }
 ha-automation = { path = "../ha-automation" }
 ha-wifi = { path = "../ha-wifi" }
 esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }

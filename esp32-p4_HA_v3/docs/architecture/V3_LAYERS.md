@@ -72,16 +72,19 @@ app_main ──────────── собирает всё
 | Слой | Ответственность | Владеет | Не знает |
 |---|---|---|---|
 | `ha-model` | canonical-словарь и ABI | формы `Entity/Device/Property/Event/Action/Capability`, id, чистые функции | Domain, runtime, transport, UI |
+| `ha-schema` | схема Domain | descriptors, capacity, backing/persist policy, регистрация таблиц | бизнес-логику, transport |
 | `micro-db` | storage primitives | Table/Ring, slot/generation/version, RAM/flash | Domain, Zigbee, UI |
 | `Domain` | ядро фактов | Entity Store, Journal, Transient Payload, Dispatcher, command routing | Zigbee, UI, Wi-Fi, business-логику |
 | `Device service` | canonical lifecycle | Logical Device/Entity/ownership, register/bind/rename/remove, remover registry | transport |
 | `Zigbee adapter` | физический протокол | EUI64, endpoints, clusters, interview, bindings, ZCL, radio, private registry, commands, capability drain | Web, Display, Automation, Domain semantics |
 | `Automation` | сервис правил | правила, RAM-индекс, задача/inbox | Zigbee, Web, Display |
 | `Web` | транспорт canonical-модели | HTTP/WS, snapshot/delta, per-client delivery, своя задача/inbox | state ownership, Zigbee |
+| `ha-web-actions` | inbound web adapter | `Actions` → Domain/config/Device; discovery через Domain | Zigbee/radio, transport assertions |
 | `Display` | LVGL client | экраны, виджеты, Domain subscription, LVGL-таймер 20 мс (как V2), без отдельного потока | mstore, Zigbee |
 | `System` | системный сервис | SNTP, GeoIP, погода; canonical state/event | Zigbee, Web, Display |
 | `Wi-Fi` | владелец радио | scan/connect, Wi-Fi Domain-сущности, регистрирует свои команды | Zigbee, Web, Display |
-| `app_main` | composition root | регистрация таблиц/ёмкостей, запуск сервисов, C-мосты | бизнес-логику, projections, правила, runtime/intake |
+| `ha-platform` | ESP bootstrap | netif/event loop, monotonic clock, P4 lock probe | Domain semantics, бизнес-логику |
+| `app_main` | composition root | `ha-schema::register`, Domain init/restore, запуск сервисов, `WebActions` | бизнес-логику, projections, правила, runtime/intake, C-обвязку |
 
 `Device service` — отдельный нейтральный слой V2, не часть Zigbee adapter. Он не знает
 EUI64/ZCL; adapter регистрирует в нём remover для своего source. Если в V3 сначала
@@ -93,13 +96,14 @@ EUI64/ZCL; adapter регистрирует в нём remover для своег�
 - `ha-display` сам подписывается на Domain и ставит LVGL-таймер; отдельной
   display-задачи нет.
 - `ha-web-service` сам подписывается и держит `web-client`; `drain`/`flush`
-  приватны.
-- `ha-zigbee-service` держит interviewer/commands/capabilities; `State`
-  приватный, наружу только `Handle`.
+  приватны; `ha-web-actions` реализует `Actions`.
+- `ha-zigbee-service` держит interviewer/commands/capabilities, C radio
+  start/run; `State` приватный.
 - `ha-wifi` держит Wi-Fi task и регистрирует `COMMAND_WIFI_*`.
-- `ha-config`/`ha-device` владеют seed/CRUD/rename.
-- `ha-app/src/main.rs` не содержит `runtime`/`intake`, каналов и
-  бизнес-логики.
+- `ha-config`/`ha-device` владеют seed/CRUD/rename/removal.
+- `ha-schema` владеет Domain-таблицами, `ha-platform` — ESP bootstrap.
+- `ha-app/src` содержит только `main.rs`; `runtime`/`intake`/`web_actions`/
+  `platform`/`domain_tables` удалены или вынесены.
 
 ## 3. Разрешённые зависимости
 

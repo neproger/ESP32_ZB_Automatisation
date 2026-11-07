@@ -92,9 +92,13 @@ V2-эталон: `main/app_main.c` делает только descriptors + dispa
       discovery в UI ещё не нажимали.
 - [x] **8. Lean/cleanup.** `ha-web` test-only helpers под `#[cfg(test)]`;
       `docs/architecture/V3_LAYERS.md` обновлён под фактическое владение.
-      `DomainHandle::with_mut` оставлен: он используется тестами. Неиспользуемые
-      deps не вычищались.
-      Проверка: `cargo test --workspace` — все host-тесты passed; build ok.
+      `DomainHandle::with_mut` оставлен: он используется тестами.
+      Убраны неиспользуемые direct deps: `ha-app` — `ha-model`, `ha-web`,
+      `zigbee-devices`, `z2m-rs`, `zigbee-exec`, `zigbee-frames`;
+      `ha-display`/`ha-zigbee-service` — `ha-model`. Оставлены `embassy-time`
+      (link feature `esp-idf-svc`) и `esp-idf-svc` в display (build order
+      `esp-idf-sys`).
+      Проверка: `cargo test --workspace` — host-тесты passed; build/flash ok.
 - [x] **9. Короткая приёмка.** `cargo test --workspace`, debug build, прошивка,
       60 s soak (6 кругов): `/`+`/app.js`+`/model.bin` — 200 каждый круг,
       ping true. 24-часовой soak, release и ручной discovery/toggle — отдельно.
@@ -107,6 +111,20 @@ V2-эталон: `main/app_main.c` делает только descriptors + dispa
       и таймаут connect; только ставит scan/connect в очередь и публикует
       Domain status/scan. Добавлен `ha_wifi_state()` FFI.
       Проверка: сборка/прошивка, web 200, GROUP_PUT, ping 10 мс.
+- [x] **11. Второй заход: убрать последние межсервисные ручки.**
+      `web_actions` больше не держит глобальный `Context` и Zigbee `Handle`:
+      `WebActions` владеет только `DomainHandle`, создаётся app-lifetime
+      `Box::leak`. Device removal перенесён в `ha-device::remove` (prepare →
+      remover → canonical cascade); Zigbee-сервис больше не имеет `Handle`,
+      а `REMOVALS` из remover'а вычитывает его run-loop и ставит leave.
+      Проверка: `ha-device` 15 tests passed, firmware build/flash, web 200,
+      GROUP_PUT, ping 13 мс.
+- [x] **12. Третий заход: разложить остатки `ha-app`.**
+      `web_actions` → отдельный адаптер `ha-web-actions`; `domain_tables` →
+      `ha-schema` (workspace crate); `platform`/`p4_probe` → `ha-platform`;
+      C `zb_poc_start`/`zb_poc_run` перенесены в `ha-zigbee-service::start`.
+      В `ha-app` остался только `main.rs` — bootstrap без модулей.
+      Проверка: `ha-schema` 3 tests, build/flash, web 200, ping 13 мс.
 
 ## Правила
 
@@ -187,6 +205,28 @@ V2-эталон: `main/app_main.c` делает только descriptors + dispa
   обновляет статус-бар (как V2 `ui_status_bar_apply`) — не зависит от
   потерянного/позднего fact. Проверено логом `display: clock 23:15` и
   визуально: время и погода на экране.
+- 2026-11-07: второй архитектурный заход. Убраны `web_actions` global
+  `Context`/Zigbee `Handle`; `ha-zigbee-service` больше не отдаёт `Handle`.
+  Device removal теперь `ha_device::remove`; Zigbee run-loop вычитывает
+  `REMOVALS` и ставит leave. Web Actions владеет только Domain. Проверка:
+  build/flash, `/`+`/app.js`+`/model.bin` 200, GROUP_PUT, ping 13 мс.
+- 2026-11-07: чистка direct deps. Убраны 6 лишних из `ha-app` (`ha-model`,
+  `ha-web`, `zigbee-devices`, `z2m-rs`, `zigbee-exec`, `zigbee-frames`) и
+  `ha-model` из `ha-display`/`ha-zigbee-service`. `embassy-time` и
+  `esp-idf-svc` в display оставлены: нужны линковке/build-order.
+  Полная сборка прошла; прошивка: `/` 200, `/app.js` 200, `/model.bin` 200,
+  ping 9 мс.
+- 2026-11-07: третий заход. `web_actions` вынесен в `ha-web-actions`;
+  `domain_tables` — в `ha-schema`; `platform`/`p4_probe` — в `ha-platform`;
+  Zigbee C start/run — в `ha-zigbee-service::start`. В `ha-app/src` остался
+  только `main.rs`. `ha-schema` 3 tests passed; build/flash; web 200, ping 13 мс.
+- 2026-11-07: SNZB-01P клики. Причина: сгенерированный профиль
+  `sonoff.snzb01p` содержал только battery, без `ewelinkAction` (genOnOff
+  commandToggle/On/Off). Добавлены `Converter::CommandId`, expose
+  single/double/hold, genOnOff bind и version=2 конфига. Boot:
+  `restored profile=sonoff.snzb01p`, `configure: step=0 op=1` (bind
+  Expired — sleepy device, retry on wake). Тест
+  `snzb_01p_ewelink_commands_decode_actions` passed.
 
 ## V2 → V3
 

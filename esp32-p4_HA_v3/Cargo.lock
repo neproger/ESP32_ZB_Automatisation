@@ -786,6 +786,14 @@ name = "ha-model"
 version = "0.1.0"
 
 [[package]]
+name = "ha-schema"
+version = "0.1.0"
+dependencies = [
+ "ha-domain",
+ "micro-db",
+]
+
+[[package]]
 name = "ha-system"
 version = "0.1.0"
 dependencies = [

@@ -5,13 +5,13 @@
 //! `State::submit` synchronously, so `COMMAND_SENT` is written only after
 //! validation and adapter queue acceptance.
 
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ha_domain::canonical::{
     CanonicalCommand, COMMAND_DISCOVERY, COMMAND_PROPERTY, ENTITY_CAPABILITIES, ENTITY_ENTITY,
-    SOURCE_UI, SOURCE_ZIGBEE,
+    SOURCE_ZIGBEE,
 };
 use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 use zigbee_devices::{CommandCore, CommandRouter, DomainAdapter};
@@ -80,6 +80,8 @@ impl frames::IngestSink for Ingest<'_> {
 }
 
 extern "C" {
+    fn zb_poc_start() -> i32;
+    fn zb_poc_run();
     fn zb_poc_poll(event: *mut PocEvent) -> i32;
     fn zb_poc_open_network(seconds: u8) -> i32;
 }
@@ -123,32 +125,25 @@ impl State {
     }
 }
 
-pub struct Handle {
-    requests: SyncSender<Request>,
-}
-
-enum Request {
-    RemoveDevice(u64),
-}
-
-impl Handle {
-    pub fn remove_device(&self, device: u64) -> Result<(), ha_domain::Error> {
-        self.requests
-            .try_send(Request::RemoveDevice(device))
-            .map_err(|_| ha_domain::Error::NoSpace)
-    }
-}
-
 static REMOVALS: Mutex<RemovalQueue> = Mutex::new(RemovalQueue::new());
 
-pub fn install() {
+fn install() {
     frames::install();
     exec::install();
     interview::install();
 }
 
-pub fn start(domain: DomainHandle) -> Handle {
-    let (tx, rx) = sync_channel(8);
+pub fn start(domain: DomainHandle) {
+    install();
+    let started = unsafe { zb_poc_start() };
+    if started != 0 {
+        panic!("zigbee stack did not start: {started}");
+    }
+    std::thread::Builder::new()
+        .name("zigbee-mainloop".into())
+        .stack_size(8192)
+        .spawn(|| unsafe { zb_poc_run() })
+        .expect("zigbee mainloop thread");
     let (state_tx, state_rx) = sync_channel(1);
     let command_domain = domain.clone();
     std::thread::Builder::new()
@@ -161,7 +156,7 @@ pub fn start(domain: DomainHandle) -> Handle {
             state_tx
                 .send(Arc::clone(&state))
                 .expect("publish zigbee state");
-            run(domain, state, rx);
+            run(domain, state);
         })
         .expect("zigbee service thread");
     let state = state_rx.recv().expect("zigbee state");
@@ -186,7 +181,6 @@ pub fn start(domain: DomainHandle) -> Handle {
     }) {
         log::error!("domain: discovery executor registration failed: {error:?}");
     }
-    Handle { requests: tx }
 }
 
 fn zigbee_remover(native: &[u8]) -> Result<ha_device::NativeRemoval, ha_domain::Error> {
@@ -199,12 +193,10 @@ fn zigbee_remover(native: &[u8]) -> Result<ha_device::NativeRemoval, ha_domain::
     Ok(ha_device::NativeRemoval::Removed)
 }
 
-fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Request>) {
+fn run(domain: DomainHandle, state: Arc<Mutex<State>>) {
     let mut transport = exec::EspTransport;
     loop {
-        while let Ok(Request::RemoveDevice(device)) = requests.try_recv() {
-            remove_device(&domain, &state, device);
-        }
+        drain_removals(&state);
         while let Some((entity, capabilities)) = capabilities::take_capabilities() {
             apply_capabilities(&domain, entity, capabilities);
         }
@@ -503,28 +495,7 @@ fn request_leave(state: &Arc<Mutex<State>>, eui: u64, short: u16, now: u64) -> b
     }
 }
 
-fn remove_device(domain: &DomainHandle, state: &Arc<Mutex<State>>, device: u64) {
-    let plan = match ha_device::prepare_remove(domain, device) {
-        Ok(plan) => plan,
-        Err(error) => {
-            log::warn!("device: prepare removal device={device:016x} failed: {error:?}");
-            return;
-        }
-    };
-    let mut ticket = match ha_device::invoke_remover(plan) {
-        Ok(ticket) => ticket,
-        Err(error) => {
-            log::warn!("device: remover device={device:016x} failed: {error:?}");
-            return;
-        }
-    };
-    match ha_device::remove_canonical(domain, SOURCE_UI as u8, &mut ticket) {
-        Ok(count) => log::info!("device: removed device={device:016x} records={count}"),
-        Err(error) => {
-            log::warn!("device: canonical removal device={device:016x} failed: {error:?}");
-            return;
-        }
-    }
+fn drain_removals(state: &Arc<Mutex<State>>) {
     let (removed, count) = REMOVALS.lock().unwrap().take_all();
     for eui in removed[..count].iter().copied() {
         let short = {

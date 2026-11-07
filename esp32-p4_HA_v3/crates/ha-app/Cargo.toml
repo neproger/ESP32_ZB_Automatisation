@@ -8,7 +8,7 @@ name = "ha-app"
 harness = false
 
 [features]
-p4-lock-metrics = ["ha-domain/p4-lock-metrics"]
+p4-lock-metrics = ["ha-domain/p4-lock-metrics", "ha-platform/p4-lock-metrics"]
 
 [profile.dev]
 debug = true
@@ -21,20 +21,15 @@ opt-level = "s"
 log = "0.4"
 ha-domain = { path = "../ha-domain" }
 ha-config = { path = "../ha-config" }
-ha-model = { path = "../ha-model" }
-ha-device = { path = "../ha-device" }
 ha-automation = { path = "../ha-automation" }
 ha-wifi = { path = "../ha-wifi" }
 ha-system = { path = "../ha-system" }
-micro-db = { path = "../micro-db" }
-ha-web = { path = "../ha-web" }
+ha-schema = { path = "../ha-schema" }
+ha-platform = { path = "../ha-platform" }
 ha-web-service = { path = "../ha-web-service" }
+ha-web-actions = { path = "../ha-web-actions" }
 ha-display = { path = "../ha-display" }
 ha-zigbee-service = { path = "../ha-zigbee-service" }
-zigbee-devices = { path = "../zigbee-devices" }
-z2m-rs = { path = "../z2m-rs" }
-zigbee-exec = { path = "../zigbee-exec" }
-zigbee-frames = { path = "../zigbee-frames" }
 esp-idf-svc = { version = "0.53", features = ["alloc", "critical-section", "embassy-time-driver", "embassy-sync"] }
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 

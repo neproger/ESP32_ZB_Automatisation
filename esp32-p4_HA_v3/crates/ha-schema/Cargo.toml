@@ -1,0 +1,10 @@
+[package]
+name = "ha-schema"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ha-domain = { path = "../ha-domain" }
+
+[dev-dependencies]
+micro-db = { path = "../micro-db" }
