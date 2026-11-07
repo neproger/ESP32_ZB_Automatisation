@@ -11,7 +11,9 @@ use zigbee_devices::{ConfigRun, RunOptions};
 use zigbee_exec::Executor;
 
 const FIRST_APP_ENDPOINT: u8 = 1;
-const STANDARD_CONFIG_VERSION: u16 = 4;
+// 5: force bind/report again after a device lost its reporting configuration
+// (reflash/rejoin) while the gateway still had it marked as configured.
+const STANDARD_CONFIG_VERSION: u16 = 5;
 const COOLDOWN_MS: u64 = 30_000;
 const COOLDOWN_SLOTS: usize = crate::store::MAX_DEVICES;
 const REFRESH_SLOTS: usize = crate::store::MAX_DEVICES;
@@ -340,6 +342,7 @@ fn queue_standard(eui: u64, short: u16, now: u64) {
     if steps.is_empty() {
         return;
     }
+    log::info!("configure: standard eui={eui:016x} full={}", !configured);
     queue(Pending {
         eui,
         short,

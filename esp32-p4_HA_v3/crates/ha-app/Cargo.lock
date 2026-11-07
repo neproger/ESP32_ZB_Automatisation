@@ -826,6 +826,7 @@ name = "ha-config"
 version = "0.1.0"
 dependencies = [
  "ha-domain",
+ "log",
 ]
 
 [[package]]

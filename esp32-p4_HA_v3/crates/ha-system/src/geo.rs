@@ -5,7 +5,7 @@
 //! canonical records/events directly to Domain with `SOURCE_SYSTEM`.
 
 use std::sync::mpsc::SyncSender;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
@@ -134,6 +134,7 @@ fn publish_event(domain: &DomainHandle, event: u32) {
     }
 }
 fn wait_clock() {
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let ready = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -141,6 +142,10 @@ fn wait_clock() {
             .unwrap_or(false);
         if ready {
             log::info!("system: clock ready");
+            return;
+        }
+        if Instant::now() >= deadline {
+            log::warn!("system: clock not ready after SNTP; continuing");
             return;
         }
         std::thread::sleep(Duration::from_secs(2));

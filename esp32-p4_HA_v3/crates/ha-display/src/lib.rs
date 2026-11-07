@@ -16,7 +16,7 @@ use std::ptr::{addr_of, null_mut};
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU8, AtomicUsize, Ordering,
 };
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -39,7 +39,7 @@ use ha_domain::canonical::{
     WEATHER_SNOWY_RAINY, WEATHER_WINDY, WEATHER_WINDY_VARIANT, WIFI_DEVICE_UID,
     WIFI_SCAN_RECORD_LEN, WIFI_STATUS_RECORD_LEN,
 };
-use ha_domain::{DomainHandle, Fact, FactKind, FactMeta, Value};
+use ha_domain::{DomainHandle, Fact, FactKind, FactMeta, Filter, Value};
 
 mod color;
 mod model;
@@ -287,6 +287,8 @@ unsafe impl Send for Ui {}
 
 static UI: Mutex<Option<Ui>> = Mutex::new(None);
 static DOMAIN: Mutex<Option<DomainHandle>> = Mutex::new(None);
+static DISPLAY_RX: Mutex<Option<Receiver<Fact>>> = Mutex::new(None);
+static LAST_CLOCK_POLL: Mutex<Option<Instant>> = Mutex::new(None);
 fn domain() -> Result<DomainHandle, ha_domain::Error> {
     DOMAIN
         .lock()
@@ -523,8 +525,76 @@ pub fn start(domain: &DomainHandle) -> bool {
     STARTED.store(true, Ordering::Relaxed);
     initial_read(domain);
     rebuild(domain);
+    let (tx, rx) = sync_channel(64);
+    if let Err(error) = domain.subscribe_channel(Filter::all(), tx) {
+        log::error!("display: subscribe failed: {error:?}");
+        return false;
+    }
+    *DISPLAY_RX.lock().unwrap() = Some(rx);
+    let timer = unsafe { lv_timer_create(Some(display_timer), 20, null_mut()) };
+    if timer.is_null() {
+        log::error!("display: timer create failed");
+        return false;
+    }
     log::info!("display: port ready");
     true
+}
+
+unsafe extern "C" fn display_timer(_timer: *mut lv_timer_t) {
+    let Ok(domain) = domain() else {
+        return;
+    };
+    while let Some(nav) = take_nav() {
+        match nav {
+            Nav::WifiScan => {
+                if let Err(error) = request_wifi_scan() {
+                    log::warn!("wifi: scan request rejected ({error:?})");
+                }
+            }
+            _ => navigate(&domain, nav),
+        }
+    }
+    if let Some(receiver) = DISPLAY_RX.lock().unwrap().as_ref() {
+        drain(&domain, receiver);
+    }
+    let poll = {
+        let mut last = LAST_CLOCK_POLL.lock().unwrap();
+        let due = last
+            .map(|at| at.elapsed() >= Duration::from_millis(500))
+            .unwrap_or(true);
+        if due {
+            *last = Some(Instant::now());
+        }
+        due
+    };
+    if poll {
+        sync_clock(&domain);
+    }
+    tick();
+}
+
+/// Status bar must converge even if a time fact is dropped or arrives late.
+fn sync_clock(domain: &DomainHandle) {
+    let Some(hour) = read_state(domain, ENTITY_SYSTEM, PROPERTY_SYSTEM_HOUR).and_then(|v| numeric(&v))
+    else {
+        return;
+    };
+    let Some(minute) = read_state(domain, ENTITY_SYSTEM, PROPERTY_SYSTEM_MINUTE).and_then(|v| numeric(&v))
+    else {
+        return;
+    };
+    let clock = (
+        hour.round().clamp(0.0, 23.0) as u8,
+        minute.round().clamp(0.0, 59.0) as u8,
+    );
+    let mut last = CLOCK_LAST.lock().unwrap();
+    if *last == clock {
+        return;
+    }
+    *last = clock;
+    drop(last);
+    log::info!("display: clock {:02}:{:02}", clock.0, clock.1);
+    set_clock(clock.0, clock.1);
 }
 
 fn initial_read(domain: &DomainHandle) {

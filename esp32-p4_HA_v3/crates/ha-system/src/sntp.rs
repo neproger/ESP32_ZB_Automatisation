@@ -1,7 +1,8 @@
 ﻿//! ESP-IDF SNTP boundary.
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 
-const SNTP_SERVER: &str = "pool.ntp.org";
+/// SNTP keeps this pointer after init, so it must live for the whole program.
+const SNTP_SERVER: &[u8] = b"pool.ntp.org\0";
 
 unsafe extern "C" {
     fn esp_sntp_setoperatingmode(mode: i32);
@@ -10,12 +11,11 @@ unsafe extern "C" {
 }
 
 pub(super) fn start() {
-    let server = CString::new(SNTP_SERVER).expect("SNTP server");
-    // SAFETY: C API copies the server name and initializes the global SNTP client;
-    // the pointer stays valid for the duration of the calls.
+    // SAFETY: the server name is a static NUL-terminated string lifetime; the
+    // SNTP client stores the pointer and copies nothing.
     unsafe {
         esp_sntp_setoperatingmode(0);
-        esp_sntp_setservername(0, server.as_ptr());
+        esp_sntp_setservername(0, SNTP_SERVER.as_ptr() as *const c_char);
         esp_sntp_init();
     }
     log::info!("system: SNTP started (UTC)");

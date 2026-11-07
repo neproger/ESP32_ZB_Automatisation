@@ -342,6 +342,23 @@ pub fn rename<S: CanonicalStore>(
     domain.entity_put(ENTITY_LOGICAL_DEVICE, &key, &encoded, meta(origin))
 }
 
+pub fn rename_entity<S: CanonicalStore>(
+    domain: &mut S,
+    origin: u8,
+    entity: EntityId,
+    name: &str,
+) -> Result<bool, Error> {
+    if entity == 0 {
+        return Err(Error::InvalidArg);
+    }
+    let key = entity.to_le_bytes();
+    let mut current = [0u8; ENTITY_RECORD_LEN];
+    domain.entity_get(ENTITY_ENTITY, &key, &mut current)?;
+    let device = u64::from_le_bytes(current[..8].try_into().expect("entity owner"));
+    let record = EntityRecord::new(device, name).encode();
+    domain.entity_put(ENTITY_ENTITY, &key, &record, meta(origin))
+}
+
 fn push_record(
     transaction: &mut DomainTransaction<'_>,
     entity: u32,

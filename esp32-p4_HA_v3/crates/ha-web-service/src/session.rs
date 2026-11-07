@@ -43,7 +43,7 @@ pub(super) fn broadcast_one(frame_type: u8, payload: &[u8]) {
 
 /// Send queued frames from the Web task. Queue is touched under mutex; the
 /// WebSocket send runs outside it.
-pub fn flush() {
+pub(super) fn flush() {
     let Some(handle) = *SERVER.lock().unwrap() else {
         return;
     };

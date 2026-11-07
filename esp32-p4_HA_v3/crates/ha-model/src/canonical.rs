@@ -75,6 +75,7 @@ pub const ACTION_OFF: ActionId = 2;
 pub const ACTION_TOGGLE: ActionId = 3;
 pub const ACTION_SET: ActionId = 4;
 
+pub const COMMAND_DISCOVERY: u32 = 3;
 pub const COMMAND_PROPERTY: u32 = 6;
 pub const COMMAND_WIFI_SCAN: u32 = 4;
 pub const COMMAND_WIFI_CONNECT: u32 = 5;

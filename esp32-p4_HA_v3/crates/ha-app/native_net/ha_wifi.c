@@ -5,7 +5,8 @@
  * exponential backoff and a link watchdog. Radio calls never run in an event
  * or timer callback, so a stuck connect cannot block the reconnect path.
  *
- * Provisioning is done from the display; known APs are kept in NVS.
+ * Provisioning is done from the display; the persistent known-AP records live
+ * in Domain (`WIFI_KNOWN`), this file keeps only the RAM copy used by the radio.
  */
 #include <stdio.h>
 #include <string.h>
@@ -46,6 +47,7 @@ typedef struct {
     int8_t rssi;
     uint8_t bssid[6];
     uint8_t channel;
+    uint8_t auth;
 } wifi_scan_ap_t;
 
 typedef enum {
@@ -68,8 +70,18 @@ static size_t s_scan_count;
 static bool s_scan_ready;
 static wifi_known_t s_known[WIFI_KNOWN_MAX];
 static size_t s_known_count;
+/* Known APs are read by the Wi-Fi task and written by the Rust Wi-Fi task. */
+static portMUX_TYPE s_known_mux = portMUX_INITIALIZER_UNLOCKED;
+/* Status cache filled on connect/scan. No periodic Req_WifiStaGetApInfo:
+ * esp_hosted 3.0.10 on this C3 fails that RPC (msg_id 294) and kills the SPI
+ * transport. */
+static char s_status_ssid[WIFI_SSID_MAX + 1];
+static int8_t s_status_rssi;
+static bool s_status_valid;
 /* Link is up (GOT_IP): the watchdog distinguishes "connecting" from "no link". */
 static volatile bool s_connected;
+/* V2 status: 0 idle, 1 scanning, 2 connecting, 3 connected, 4 failed. */
+static volatile uint8_t s_state;
 /* Reconnect already requested: do not queue a duplicate per DISCONNECTED. */
 static volatile bool s_reconnect_pending;
 /* Consecutive failed attempts; drives the 1..16 s backoff. */
@@ -81,8 +93,8 @@ static void store_scan_results(const wifi_scan_ap_t *aps, size_t count);
 
 static bool link_up(void)
 {
-    wifi_ap_record_t ap;
-    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    /* Event state only: ap_info costs a hosted RPC that breaks the C3 here. */
+    return s_connected;
 }
 
 static void schedule_reconnect(void)
@@ -110,22 +122,31 @@ static bool known_add_raw(const char *ssid, const char *password)
         return false;
     }
     const char *pass = password != NULL ? password : "";
+    bool full = false;
+    taskENTER_CRITICAL(&s_known_mux);
     for (size_t i = 0; i < s_known_count; ++i) {
         if (ssid_equals(s_known[i].ssid, ssid)) {
             if (strncmp(s_known[i].password, pass, WIFI_PASSWORD_MAX) == 0) {
+                taskEXIT_CRITICAL(&s_known_mux);
                 return false;
             }
             strlcpy(s_known[i].password, pass, sizeof(s_known[i].password));
+            taskEXIT_CRITICAL(&s_known_mux);
             return true;
         }
     }
     if (s_known_count >= WIFI_KNOWN_MAX) {
+        full = true;
+    } else {
+        strlcpy(s_known[s_known_count].ssid, ssid, sizeof(s_known[0].ssid));
+        strlcpy(s_known[s_known_count].password, pass, sizeof(s_known[0].password));
+        s_known_count++;
+    }
+    taskEXIT_CRITICAL(&s_known_mux);
+    if (full) {
         ESP_LOGW(TAG, "known list full, \"%s\" not saved", ssid);
         return false;
     }
-    strlcpy(s_known[s_known_count].ssid, ssid, sizeof(s_known[0].ssid));
-    strlcpy(s_known[s_known_count].password, pass, sizeof(s_known[0].password));
-    s_known_count++;
     return true;
 }
 
@@ -142,19 +163,27 @@ int ha_wifi_known_add(const char *ssid, const char *password)
 
 int ha_wifi_known_count(void)
 {
-    return (int)s_known_count;
+    taskENTER_CRITICAL(&s_known_mux);
+    const int count = (int)s_known_count;
+    taskEXIT_CRITICAL(&s_known_mux);
+    return count;
 }
 
 int ha_wifi_known_get(int index, char *ssid, size_t len, char *password, size_t password_len)
 {
-    if (index < 0 || (size_t)index >= s_known_count || ssid == NULL) {
+    if (index < 0 || ssid == NULL) {
         return 0;
     }
-    strlcpy(ssid, s_known[index].ssid, len);
-    if (password != NULL) {
-        strlcpy(password, s_known[index].password, password_len);
+    taskENTER_CRITICAL(&s_known_mux);
+    const bool found = (size_t)index < s_known_count;
+    if (found) {
+        strlcpy(ssid, s_known[index].ssid, len);
+        if (password != NULL) {
+            strlcpy(password, s_known[index].password, password_len);
+        }
     }
-    return 1;
+    taskEXIT_CRITICAL(&s_known_mux);
+    return found ? 1 : 0;
 }
 
 int ha_wifi_known_remove(const char *ssid)
@@ -162,6 +191,8 @@ int ha_wifi_known_remove(const char *ssid)
     if (ssid == NULL) {
         return 0;
     }
+    int removed = 0;
+    taskENTER_CRITICAL(&s_known_mux);
     for (size_t i = 0; i < s_known_count; ++i) {
         if (!ssid_equals(s_known[i].ssid, ssid)) {
             continue;
@@ -172,9 +203,11 @@ int ha_wifi_known_remove(const char *ssid)
         }
         s_known_count--;
         memset(&s_known[s_known_count], 0, sizeof(s_known[0]));
-        return 1;
+        removed = 1;
+        break;
     }
-    return 0;
+    taskEXIT_CRITICAL(&s_known_mux);
+    return removed;
 }
 
 /* --- Radio --------------------------------------------------------------- */
@@ -206,6 +239,7 @@ static bool scan_now(wifi_scan_ap_t *aps, size_t *count)
         aps[i].rssi = records[i].rssi;
         memcpy(aps[i].bssid, records[i].bssid, sizeof(aps[i].bssid));
         aps[i].channel = records[i].primary;
+        aps[i].auth = (uint8_t)records[i].authmode;
         ESP_LOGI(TAG, "scan: \"%s\" %d dBm ch=%u auth=%d", aps[i].ssid, (int)aps[i].rssi,
                  (unsigned)aps[i].channel, (int)records[i].authmode);
     }
@@ -221,6 +255,7 @@ static bool select_known(const wifi_scan_ap_t *aps, size_t count, size_t *out_in
     int8_t best_rssi = 0;
     size_t best_index = 0;
     size_t best_ap = 0;
+    taskENTER_CRITICAL(&s_known_mux);
     for (size_t i = 0; i < count; ++i) {
         for (size_t k = 0; k < s_known_count; ++k) {
             if (!ssid_equals(aps[i].ssid, s_known[k].ssid)) {
@@ -235,6 +270,7 @@ static bool select_known(const wifi_scan_ap_t *aps, size_t count, size_t *out_in
             break;
         }
     }
+    taskEXIT_CRITICAL(&s_known_mux);
     if (!found) {
         return false;
     }
@@ -247,6 +283,11 @@ static bool select_known(const wifi_scan_ap_t *aps, size_t count, size_t *out_in
 /* bssid/channel pin the connect to the exact AP just seen in the scan. */
 static void do_connect_ap(const char *ssid, const char *password, const wifi_scan_ap_t *ap)
 {
+    taskENTER_CRITICAL(&s_known_mux);
+    strlcpy(s_status_ssid, ssid, sizeof(s_status_ssid));
+    s_status_rssi = ap != NULL ? ap->rssi : 0;
+    s_status_valid = true;
+    taskEXIT_CRITICAL(&s_known_mux);
     wifi_config_t config = {0};
     strlcpy((char *)config.sta.ssid, ssid, sizeof(config.sta.ssid));
     strlcpy((char *)config.sta.password, password, sizeof(config.sta.password));
@@ -268,6 +309,7 @@ static void do_connect_ap(const char *ssid, const char *password, const wifi_sca
     config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     s_connected = false;
+    s_state = 2; /* connecting */
     s_last_connect_at = xTaskGetTickCount();
     /* Clear a half-association, then let the driver leave the old state before
      * issuing a new connect (an immediate connect returns ESP_ERR_WIFI_STATE). */
@@ -276,6 +318,7 @@ static void do_connect_ap(const char *ssid, const char *password, const wifi_sca
     }
     if (esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK) {
         ESP_LOGW(TAG, "set_config failed for \"%s\"", ssid);
+        s_state = 4; /* failed */
         schedule_reconnect();
         return;
     }
@@ -292,6 +335,7 @@ static void do_connect_ap(const char *ssid, const char *password, const wifi_sca
         vTaskDelay(pdMS_TO_TICKS(200));
         err = esp_wifi_connect();
         if (err != ESP_OK) {
+            s_state = 4; /* failed */
             schedule_reconnect(); /* no DISCONNECTED event will follow */
         }
     }
@@ -306,16 +350,23 @@ static void do_connect(const char *ssid, const char *password)
 static void autoconnect(void)
 {
     if (link_up()) {
+        s_state = 3; /* connected */
         return;
     }
-    if (s_known_count == 0) {
+    taskENTER_CRITICAL(&s_known_mux);
+    const size_t known_count = s_known_count;
+    taskEXIT_CRITICAL(&s_known_mux);
+    if (known_count == 0) {
+        s_state = 0; /* idle */
         ESP_LOGW(TAG, "no known networks; nothing to connect to");
         return;
     }
 
+    s_state = 1; /* scanning */
     wifi_scan_ap_t aps[WIFI_SCAN_MAX] = {0};
     size_t count = 0;
     if (!scan_now(aps, &count)) {
+        s_state = 4; /* failed */
         schedule_reconnect();
         return;
     }
@@ -325,12 +376,26 @@ static void autoconnect(void)
     size_t ap_index = 0;
     int8_t rssi = 0;
     if (!select_known(aps, count, &index, &rssi, &ap_index)) {
+        s_state = 0; /* idle */
         ESP_LOGI(TAG, "no known network in range; will rescan");
         schedule_reconnect();
         return;
     }
-    ESP_LOGI(TAG, "autoconnect to \"%s\" (%d dBm)", s_known[index].ssid, (int)rssi);
-    do_connect_ap(s_known[index].ssid, s_known[index].password, &aps[ap_index]);
+    char ssid[WIFI_SSID_MAX];
+    char password[WIFI_PASSWORD_MAX];
+    taskENTER_CRITICAL(&s_known_mux);
+    const bool still_there = index < s_known_count;
+    if (still_there) {
+        strlcpy(ssid, s_known[index].ssid, sizeof(ssid));
+        strlcpy(password, s_known[index].password, sizeof(password));
+    }
+    taskEXIT_CRITICAL(&s_known_mux);
+    if (!still_there) {
+        schedule_reconnect();
+        return;
+    }
+    ESP_LOGI(TAG, "autoconnect to \"%s\" (%d dBm)", ssid, (int)rssi);
+    do_connect_ap(ssid, password, &aps[ap_index]);
 }
 
 static void do_reconnect(void)
@@ -345,43 +410,34 @@ static void do_reconnect(void)
 
     s_reconnect_pending = false;
     if (link_up()) {
+        /* An AP-info miss or a lost DISCONNECTED event can leave the flag false
+         * while the link is actually up. The radio is authoritative here. */
+        s_connected = true;
+        s_state = 3; /* connected */
+        s_fail_count = 0;
         return;
     }
     autoconnect();
 }
 
-/* DISCONNECTED can be lost (stuck stack, lost hosted RPC), so check the AP every
- * 5 s: two misses in a row mean the link is gone. While connect/DHCP is in
- * progress (15 s after the request) the watchdog stays out. */
+/* DISCONNECTED can be lost, so every 5 s check the event-driven link flag and
+ * retry after the grace period. Do not call Req_WifiStaGetApInfo here: it is
+ * RPC 294, and on this C3/esp_hosted 3.0.10 that RPC kills the SPI transport. */
 static void wifi_watchdog(void)
 {
-    static uint8_t misses;
-
-    if (s_known_count == 0) {
+    taskENTER_CRITICAL(&s_known_mux);
+    const size_t known_count = s_known_count;
+    taskEXIT_CRITICAL(&s_known_mux);
+    if (known_count == 0 || s_connected) {
         return;
     }
-    if (s_connected) {
-        wifi_ap_record_t ap = {0};
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            misses = 0;
-            return;
-        }
-        if (++misses < 2) {
-            return;
-        }
-        misses = 0;
-        ESP_LOGW(TAG, "watchdog: AP info lost; reconnect");
-        s_connected = false;
-        schedule_reconnect();
-        return;
-    }
-    misses = 0;
     if (s_reconnect_pending) {
         return;
     }
     if ((xTaskGetTickCount() - s_last_connect_at) < pdMS_TO_TICKS(WIFI_RECONNECT_GRACE_MS)) {
         return;
     }
+    s_state = 4; /* failed */
     ESP_LOGW(TAG, "watchdog: not connected; reconnect");
     schedule_reconnect();
 }
@@ -435,11 +491,13 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
                  event ? (int)event->reason : -1,
                  event ? reason_name((int)event->reason) : "?", event ? (int)event->rssi : 0);
         s_connected = false;
+        s_state = 4; /* failed */
         schedule_reconnect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
         s_connected = true;
+        s_state = 3; /* connected */
         s_reconnect_pending = false;
         s_fail_count = 0; /* link is up: reset the backoff */
     }
@@ -463,6 +521,7 @@ static void store_scan_results(const wifi_scan_ap_t *aps, size_t count)
 static void scan_and_store(void)
 {
     /* A scan in the middle of auth/assoc returns no APs; idle the radio first. */
+    s_state = 1; /* scanning */
     if (!link_up()) {
         (void)esp_wifi_disconnect();
         vTaskDelay(pdMS_TO_TICKS(150));
@@ -482,6 +541,7 @@ static void scan_and_store(void)
     if (s_scan_mutex != NULL) {
         xSemaphoreGive(s_scan_mutex);
     }
+    s_state = s_connected ? 3 : (s_reconnect_pending ? 2 : 0);
     ESP_LOGI(TAG, "scan done: %u networks (ok=%d)", (unsigned)visible, (int)ok);
 }
 
@@ -603,7 +663,11 @@ int ha_wifi_scan_start(void)
         xSemaphoreGive(s_scan_mutex);
     }
     const wifi_req_t request = {.kind = WIFI_REQ_SCAN};
-    return xQueueSend(s_queue, &request, 0) == pdTRUE ? 0 : -1;
+    if (xQueueSend(s_queue, &request, 0) != pdTRUE) {
+        return -1;
+    }
+    s_state = 1; /* scanning */
+    return 0;
 }
 
 int ha_wifi_scan_ready(void)
@@ -643,7 +707,7 @@ int ha_wifi_scan_count(void)
     return count;
 }
 
-int ha_wifi_scan_get(int index, char *ssid, size_t len, int *rssi)
+int ha_wifi_scan_get(int index, char *ssid, size_t len, int *rssi, int *auth)
 {
     int ok = 0;
     if (index < 0 || ssid == NULL) {
@@ -656,6 +720,9 @@ int ha_wifi_scan_get(int index, char *ssid, size_t len, int *rssi)
         strlcpy(ssid, s_scan_results[index].ssid, len);
         if (rssi != NULL) {
             *rssi = s_scan_results[index].rssi;
+        }
+        if (auth != NULL) {
+            *auth = s_scan_results[index].auth;
         }
         ok = 1;
     }
@@ -673,21 +740,31 @@ int ha_wifi_connect_ssid(const char *ssid, const char *password)
     wifi_req_t request = {.kind = WIFI_REQ_CONNECT};
     strlcpy(request.ssid, ssid, sizeof(request.ssid));
     strlcpy(request.password, password != NULL ? password : "", sizeof(request.password));
-    return xQueueSend(s_queue, &request, 0) == pdTRUE ? 0 : -1;
+    if (xQueueSend(s_queue, &request, 0) != pdTRUE) {
+        return -1;
+    }
+    s_state = 2; /* connecting */
+    return 0;
 }
 
-/* 1 — associated; ssid/rssi filled. */
+int ha_wifi_state(void)
+{
+    return (int)s_state;
+}
+
+/* 1 — associated; cached ssid/rssi filled. No hosted RPC here. */
 int ha_wifi_status(char *ssid, size_t len, int *rssi)
 {
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+    if (!s_connected) {
         return 0;
     }
+    taskENTER_CRITICAL(&s_known_mux);
     if (ssid != NULL) {
-        strlcpy(ssid, (const char *)ap.ssid, len);
+        strlcpy(ssid, s_status_valid ? s_status_ssid : "", len);
     }
     if (rssi != NULL) {
-        *rssi = ap.rssi;
+        *rssi = s_status_valid ? s_status_rssi : 0;
     }
+    taskEXIT_CRITICAL(&s_known_mux);
     return 1;
 }

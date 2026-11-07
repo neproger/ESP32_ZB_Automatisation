@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    CanonicalCommand, ENTITY_CAPABILITIES, ENTITY_ENTITY, SOURCE_UI, SOURCE_ZIGBEE,
+    CanonicalCommand, COMMAND_DISCOVERY, COMMAND_PROPERTY, ENTITY_CAPABILITIES, ENTITY_ENTITY,
+    SOURCE_UI, SOURCE_ZIGBEE,
 };
 use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
 use zigbee_devices::{CommandCore, CommandRouter, DomainAdapter};
@@ -80,16 +81,17 @@ impl frames::IngestSink for Ingest<'_> {
 
 extern "C" {
     fn zb_poc_poll(event: *mut PocEvent) -> i32;
+    fn zb_poc_open_network(seconds: u8) -> i32;
 }
 
-pub struct State {
+struct State {
     executor: zigbee_exec::Executor,
     command_core: CommandCore,
     bindings: Vec<zigbee_devices::Binding>,
 }
 
 impl State {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             executor: zigbee_exec::Executor::new(),
             command_core: CommandCore::new(),
@@ -97,7 +99,7 @@ impl State {
         }
     }
 
-    pub fn confirm_binding(&mut self, eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
+    fn confirm_binding(&mut self, eui: u64, endpoint: u8, cluster: u16, attribute: u16) {
         for binding in self
             .bindings
             .iter_mut()
@@ -107,7 +109,7 @@ impl State {
         }
     }
 
-    pub fn submit(&mut self, command: CanonicalCommand) -> Result<(), ha_domain::Error> {
+    fn submit(&mut self, command: CanonicalCommand) -> Result<(), ha_domain::Error> {
         CommandRouter::new(&mut self.executor, &self.bindings)
             .submit(
                 &mut self.command_core,
@@ -145,11 +147,10 @@ pub fn install() {
     interview::install();
 }
 
-pub use capabilities::take_capabilities;
-
-pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
+pub fn start(domain: DomainHandle) -> Handle {
     let (tx, rx) = sync_channel(8);
     let (state_tx, state_rx) = sync_channel(1);
+    let command_domain = domain.clone();
     std::thread::Builder::new()
         .name("zigbee-service".into())
         .stack_size(65536)
@@ -164,7 +165,28 @@ pub fn start(domain: DomainHandle) -> (Handle, Arc<Mutex<State>>) {
         })
         .expect("zigbee service thread");
     let state = state_rx.recv().expect("zigbee state");
-    (Handle { requests: tx }, state)
+    let command_state = Arc::clone(&state);
+    if let Err(error) = command_domain.register_command(COMMAND_PROPERTY, move |args| {
+        let command = CanonicalCommand::decode(args).ok_or(ha_domain::Error::InvalidSize)?;
+        command_state.lock().unwrap().submit(command)
+    }) {
+        log::error!("domain: command executor registration failed: {error:?}");
+    }
+    if let Err(error) = command_domain.register_command(COMMAND_DISCOVERY, |args| {
+        if args.len() != 1 {
+            return Err(ha_domain::Error::InvalidSize);
+        }
+        let result = unsafe { zb_poc_open_network(args[0]) };
+        if result == 0 {
+            Ok(())
+        } else {
+            log::warn!("zigbee: open network failed ({result})");
+            Err(ha_domain::Error::InvalidState)
+        }
+    }) {
+        log::error!("domain: discovery executor registration failed: {error:?}");
+    }
+    Handle { requests: tx }
 }
 
 fn zigbee_remover(native: &[u8]) -> Result<ha_device::NativeRemoval, ha_domain::Error> {
@@ -182,6 +204,9 @@ fn run(domain: DomainHandle, state: Arc<Mutex<State>>, requests: Receiver<Reques
     loop {
         while let Ok(Request::RemoveDevice(device)) = requests.try_recv() {
             remove_device(&domain, &state, device);
+        }
+        while let Some((entity, capabilities)) = capabilities::take_capabilities() {
+            apply_capabilities(&domain, entity, capabilities);
         }
 
         let mut event = PocEvent::default();

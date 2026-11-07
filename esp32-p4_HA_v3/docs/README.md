@@ -12,6 +12,8 @@ Home Assistant V2 на Rust**, сохраняя поведение и подкл
   — единственный активный план и порядок этапов.
 - [plan/STAGE_4_IMPLEMENTATION_SPEC.md](plan/STAGE_4_IMPLEMENTATION_SPEC.md)
   — текущий Stage 4 Automation spec; реализация ещё не начата.
+- [plan/V3_SERVICE_SPLIT_PLAN.md](plan/V3_SERVICE_SPLIT_PLAN.md)
+  — поэтапное разделение крейтов V3: владение задачами, команды, bootstrap.
 - [architecture/V3_LAYERS.md](architecture/V3_LAYERS.md) — контракт слоёв,
   владения и runtime.
 - [architecture/TARGET_ARCHITECTURE.md](architecture/TARGET_ARCHITECTURE.md) —

@@ -1,10 +1,10 @@
 #![deny(unsafe_code)]
 
-//! Wi-Fi service: the only owner of radio calls.
+//! Wi-Fi service: Domain-facing owner.
 //!
-//! Commands arrive through Domain.post or the display navigation queue; the
-//! service task talks to the C radio, publishes canonical WIFI_STATUS/SCAN
-//! records for Display/Web consumers.
+//! The C `wifi_task` owns the radio, autoconnect and reconnect/backoff; this
+//! service only enqueues scan/connect intents and publishes canonical
+//! WIFI_STATUS/SCAN records for Display/Web consumers.
 
 use std::ffi::CStr;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
@@ -12,9 +12,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use ha_domain::canonical::{
-    WifiKnownRecord, WifiScanRecord, WifiStatusRecord, ENTITY_WIFI_KNOWN, ENTITY_WIFI_SCAN,
-    ENTITY_WIFI_STATUS, SOURCE_WIFI, WIFI_DEVICE_UID, WIFI_KNOWN_MAX, WIFI_PASSWORD_MAX,
-    WIFI_SCAN_MAX, WIFI_SSID_MAX,
+    WifiKnownRecord, WifiScanRecord, WifiStatusRecord, COMMAND_WIFI_CONNECT, COMMAND_WIFI_SCAN,
+    ENTITY_WIFI_KNOWN, ENTITY_WIFI_SCAN, ENTITY_WIFI_STATUS, SOURCE_WIFI, WIFI_DEVICE_UID,
+    WIFI_KNOWN_MAX, WIFI_PASSWORD_MAX, WIFI_SCAN_MAX, WIFI_SSID_MAX,
 };
 use ha_domain::{DomainHandle, Fact, FactMeta, Filter, Value};
 
@@ -36,6 +36,22 @@ pub fn start(domain: DomainHandle) {
         return;
     }
     *COMMANDS.lock().unwrap() = Some(tx);
+    load_domain_known(&domain);
+    let err = ffi::start();
+    if err != 0 {
+        log::error!("wifi start failed: {err}");
+        return;
+    }
+    if let Err(error) =
+        domain.register_command(COMMAND_WIFI_SCAN, |_args| request_scan())
+    {
+        log::error!("domain: wifi scan executor registration failed: {error:?}");
+    }
+    if let Err(error) =
+        domain.register_command(COMMAND_WIFI_CONNECT, connect_from_args)
+    {
+        log::error!("domain: wifi connect executor registration failed: {error:?}");
+    }
     std::thread::Builder::new()
         .name("wifi".into())
         .stack_size(8192)
@@ -218,41 +234,26 @@ fn drain_known(domain: &DomainHandle, events: &Receiver<Fact>) {
 }
 
 fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver<Fact>) {
-    load_domain_known(&domain);
-    let err = ffi::start();
-    if err != 0 {
-        log::error!("wifi start failed: {err}");
-        return;
-    }
     let mut last_poll = Instant::now();
     let mut last_scan_poll = last_poll;
-    let mut state = 0u8;
-    let mut last_connect = Instant::now();
     let mut was_connected = false;
     loop {
         match commands.recv_timeout(Duration::from_millis(500)) {
             Ok(Command::Scan) => {
-                state = 1;
-                let connected = publish_status(&domain, state);
                 if ffi::scan_start() != 0 {
                     log::warn!("wifi: scan request rejected");
-                    state = if connected { 3 } else { 0 };
-                    publish_status(&domain, state);
                 }
+                publish_status(&domain);
             }
             Ok(Command::Connect { ssid, password }) => {
                 let rc = ffi::connect(&ssid, &password);
                 if rc != 0 {
                     log::warn!("wifi: connect request rejected ({rc})");
-                    state = 4;
-                    publish_status(&domain, state);
                 } else {
                     log::info!("wifi: connect requested");
-                    state = 2;
-                    last_connect = Instant::now();
-                    publish_status(&domain, state);
                     remember_known(&domain, &ssid, &password);
                 }
+                publish_status(&domain);
             }
             Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}
@@ -261,16 +262,11 @@ fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver
 
         if last_poll.elapsed() >= Duration::from_secs(1) {
             last_poll = Instant::now();
-            let connected = publish_status(&domain, state);
+            let connected = publish_status(&domain);
             if connected && !was_connected {
                 clear_scan(&domain);
             }
             was_connected = connected;
-            state = next_status_state(
-                state,
-                connected,
-                last_connect.elapsed() > Duration::from_secs(15),
-            );
         }
 
         if last_scan_poll.elapsed() >= Duration::from_millis(500) {
@@ -280,8 +276,7 @@ fn run(domain: DomainHandle, commands: Receiver<Command>, known_events: Receiver
                 log::info!("wifi: scan result {} networks", results.len());
                 publish_scan(&domain, &results);
                 ffi::scan_clear();
-                let connected = publish_status(&domain, 3);
-                state = if connected { 3 } else { 0 };
+                publish_status(&domain);
             }
         }
     }
@@ -304,40 +299,15 @@ fn collect_scan() -> Vec<ScanAp> {
     results
 }
 
-fn next_status_state(state: u8, connected: bool, connect_timed_out: bool) -> u8 {
-    if connected {
-        if state == 1 {
-            1
-        } else {
-            3
-        }
-    } else if state == 2 {
-        if connect_timed_out {
-            4
-        } else {
-            2
-        }
-    } else if state == 1 {
-        1
-    } else {
-        0
-    }
-}
-fn publish_status(domain: &DomainHandle, state: u8) -> bool {
+fn publish_status(domain: &DomainHandle) -> bool {
     let (connected, ssid_text, rssi) = ffi::status();
+    let state = ffi::state();
     let mut name = [0u8; WIFI_SSID_MAX];
     if connected {
         let bytes = ssid_text.as_bytes();
         name[..bytes.len().min(WIFI_SSID_MAX)]
             .copy_from_slice(&bytes[..bytes.len().min(WIFI_SSID_MAX)]);
     }
-    let state = if connected && state == 2 {
-        3
-    } else if !connected && state == 3 {
-        0
-    } else {
-        state
-    };
     let record = WifiStatusRecord {
         state,
         connected: connected as u8,
@@ -405,19 +375,6 @@ mod tests {
 
     fn known(id: u32) -> (u32, WifiKnownRecord) {
         (id, WifiKnownRecord::default())
-    }
-
-    #[test]
-    fn status_state_follows_v2_states() {
-        assert_eq!(next_status_state(0, false, false), 0);
-        assert_eq!(next_status_state(0, true, false), 3);
-        assert_eq!(next_status_state(1, false, false), 1);
-        assert_eq!(next_status_state(1, true, false), 1);
-        assert_eq!(next_status_state(2, true, false), 3);
-        assert_eq!(next_status_state(2, false, false), 2);
-        assert_eq!(next_status_state(2, false, true), 4);
-        assert_eq!(next_status_state(3, false, false), 0);
-        assert_eq!(next_status_state(4, true, false), 3);
     }
 
     #[test]

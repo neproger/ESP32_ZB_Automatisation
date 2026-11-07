@@ -75,18 +75,31 @@ app_main ──────────── собирает всё
 | `micro-db` | storage primitives | Table/Ring, slot/generation/version, RAM/flash | Domain, Zigbee, UI |
 | `Domain` | ядро фактов | Entity Store, Journal, Transient Payload, Dispatcher, command routing | Zigbee, UI, Wi-Fi, business-логику |
 | `Device service` | canonical lifecycle | Logical Device/Entity/ownership, register/bind/rename/remove, remover registry | transport |
-| `Zigbee adapter` | физический протокол | EUI64, endpoints, clusters, interview, bindings, ZCL, radio, private registry | Web, Display, Automation, Domain semantics |
+| `Zigbee adapter` | физический протокол | EUI64, endpoints, clusters, interview, bindings, ZCL, radio, private registry, commands, capability drain | Web, Display, Automation, Domain semantics |
 | `Automation` | сервис правил | правила, RAM-индекс, задача/inbox | Zigbee, Web, Display |
-| `Web` | транспорт canonical-модели | HTTP/WS, snapshot/delta, per-client delivery | state ownership, Zigbee |
-| `Display` | LVGL client | экраны, виджеты, задача/inbox | mstore, Zigbee |
+| `Web` | транспорт canonical-модели | HTTP/WS, snapshot/delta, per-client delivery, своя задача/inbox | state ownership, Zigbee |
+| `Display` | LVGL client | экраны, виджеты, Domain subscription, LVGL-таймер 20 мс (как V2), без отдельного потока | mstore, Zigbee |
 | `System` | системный сервис | SNTP, GeoIP, погода; canonical state/event | Zigbee, Web, Display |
-| `Wi-Fi` | владелец радио | scan/connect, Wi-Fi Domain-сущности | Zigbee, Web, Display |
-| `app_main` | composition root | регистрация таблиц/ёмкостей, запуск задач, C-мосты | бизнес-логику, projections, правила |
+| `Wi-Fi` | владелец радио | scan/connect, Wi-Fi Domain-сущности, регистрирует свои команды | Zigbee, Web, Display |
+| `app_main` | composition root | регистрация таблиц/ёмкостей, запуск сервисов, C-мосты | бизнес-логику, projections, правила, runtime/intake |
 
 `Device service` — отдельный нейтральный слой V2, не часть Zigbee adapter. Он не знает
 EUI64/ZCL; adapter регистрирует в нём remover для своего source. Если в V3 сначала
 поддерживается только Zigbee, это не отменяет границу: lifecycle/ownership не должны
 растворяться в adapter.
+
+Текущее runtime-владение V3:
+
+- `ha-display` сам подписывается на Domain и ставит LVGL-таймер; отдельной
+  display-задачи нет.
+- `ha-web-service` сам подписывается и держит `web-client`; `drain`/`flush`
+  приватны.
+- `ha-zigbee-service` держит interviewer/commands/capabilities; `State`
+  приватный, наружу только `Handle`.
+- `ha-wifi` держит Wi-Fi task и регистрирует `COMMAND_WIFI_*`.
+- `ha-config`/`ha-device` владеют seed/CRUD/rename.
+- `ha-app/src/main.rs` не содержит `runtime`/`intake`, каналов и
+  бизнес-логики.
 
 ## 3. Разрешённые зависимости
 
@@ -172,6 +185,8 @@ subscriber task:
 
 `app_main` не является dispatcher'ом и не вызывает subscriber drain-функции.
 Он только собирает систему, запускает задачи и завершает bootstrap.
+В V3 `main.rs` также не регистрирует команды: это делают Zigbee/Wi-Fi
+сервисы; web Actions ходят в Domain/config/Device напрямую.
 
 ## 5. Domain API
 

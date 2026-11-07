@@ -249,11 +249,13 @@ pub fn write_frame(out: &mut Vec<u8>, seq: u16, frame_type: u8, payload: &[u8]) 
 }
 
 /// `u32 count` payload of SYNC_BEGIN / SYNC_END.
+#[cfg(test)]
 pub fn sync_payload(count: u32) -> [u8; 4] {
     count.to_le_bytes()
 }
 
 /// Logical device record (80 bytes): parent u64, source u32, native_id[32], name[32], reserved[4].
+#[cfg(test)]
 pub fn logical_device(parent: u64, source: u32, native_id: &str, name: &str) -> [u8; 80] {
     let mut record = [0u8; 80];
     record[0..8].copy_from_slice(&parent.to_le_bytes());
@@ -264,6 +266,7 @@ pub fn logical_device(parent: u64, source: u32, native_id: &str, name: &str) -> 
 }
 
 /// Entity record (40 bytes): device_id u64, name[32].
+#[cfg(test)]
 pub fn entity(device_id: u64, name: &str) -> [u8; 40] {
     let mut record = [0u8; 40];
     record[0..8].copy_from_slice(&device_id.to_le_bytes());
@@ -272,10 +275,12 @@ pub fn entity(device_id: u64, name: &str) -> [u8; 40] {
 }
 
 /// Entity key: 8-byte device id.
+#[cfg(test)]
 pub fn entity_key(id: u64) -> [u8; 8] {
     id.to_le_bytes()
 }
 
+#[cfg(test)]
 fn copy_str(target: &mut [u8], value: &str) {
     let bytes = value.as_bytes();
     let len = bytes.len().min(target.len() - 1); // keep it NUL-terminated

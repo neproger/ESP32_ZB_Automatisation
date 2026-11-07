@@ -1,4 +1,4 @@
-﻿//! Raw ESP-Hosted Wi-Fi boundary. All pointers/lifetimes are contained here.
+//! Raw ESP-Hosted Wi-Fi boundary. All pointers/lifetimes are contained here.
 use std::ffi::{c_char, CStr, CString};
 
 extern "C" {
@@ -13,8 +13,8 @@ extern "C" {
         len: usize,
         rssi: *mut i32,
         auth: *mut i32,
-        channel: *mut i32,
     ) -> i32;
+    fn ha_wifi_state() -> i32;
     fn ha_wifi_status(ssid: *mut c_char, len: usize, rssi: *mut i32) -> i32;
     fn ha_wifi_connect_ssid(ssid: *const c_char, password: *const c_char) -> i32;
     fn ha_wifi_known_add(ssid: *const c_char, password: *const c_char) -> i32;
@@ -58,18 +58,8 @@ pub(super) fn scan_ap(index: i32) -> Option<(String, i8, u8)> {
     let mut ssid = [0 as c_char; 33];
     let mut rssi = 0i32;
     let mut auth = 0i32;
-    let mut channel = 0i32;
     // SAFETY: buffers are valid for the duration of the call; C writes NUL-terminated SSID.
-    if unsafe {
-        ha_wifi_scan_get(
-            index,
-            ssid.as_mut_ptr(),
-            ssid.len(),
-            &mut rssi,
-            &mut auth,
-            &mut channel,
-        )
-    } == 0
+    if unsafe { ha_wifi_scan_get(index, ssid.as_mut_ptr(), ssid.len(), &mut rssi, &mut auth) } == 0
     {
         return None;
     }
@@ -78,6 +68,11 @@ pub(super) fn scan_ap(index: i32) -> Option<(String, i8, u8)> {
         .to_string_lossy()
         .into_owned();
     (!ssid.is_empty()).then_some((ssid, rssi as i8, auth.clamp(0, 4) as u8))
+}
+
+pub(super) fn state() -> u8 {
+    // SAFETY: C API takes no pointers; the value is a small V2 state code.
+    unsafe { ha_wifi_state().clamp(0, 4) as u8 }
 }
 
 pub(super) fn status() -> (bool, String, i8) {

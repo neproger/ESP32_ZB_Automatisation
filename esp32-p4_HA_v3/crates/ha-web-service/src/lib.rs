@@ -7,17 +7,17 @@
 use std::collections::VecDeque;
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use esp_idf_svc::sys::*;
 use ha_domain::canonical::{ActionId, CommandValue, EntityId, PropertyId};
-use ha_domain::{DomainHandle, Fact, FactKind};
+use ha_domain::{DomainHandle, Fact, FactKind, Filter};
 
 mod session;
 mod snapshot;
 use ha_web::{command, control, write_frame};
-pub use session::flush;
 use session::{broadcast_one, close_client, enqueue_locked};
 use snapshot::*;
 
@@ -78,10 +78,12 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
-    config.stack_size = 8192;
+    config.stack_size = 16384;
     config.task_priority = 5;
     config.core_id = 0x7fff_ffff; // tskNO_AFFINITY
-    config.task_caps = MALLOC_CAP_DEFAULT;
+    // Flash writes from Web Actions run on the httpd task; its stack must stay
+    // in internal RAM while the flash cache is disabled.
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
     let mut handle: httpd_handle_t = std::ptr::null_mut();
     let err = unsafe { httpd_start(&mut handle, &config) };
@@ -89,8 +91,24 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
         log::error!("httpd_start failed: {err}");
         return false;
     }
-    *DOMAIN.lock().unwrap() = Some(domain);
+    *DOMAIN.lock().unwrap() = Some(domain.clone());
     *SERVER.lock().unwrap() = Some(handle as usize);
+
+    let filter = Filter {
+        kind_mask: FactKind::EntityUpserted.bit()
+            | FactKind::EntityRemoved.bit()
+            | FactKind::Event.bit(),
+        ..Filter::all()
+    };
+    let (tx, rx) = sync_channel(64);
+    if let Err(error) = domain.subscribe_channel(filter, tx) {
+        log::error!("web: subscribe failed: {error:?}");
+    }
+    std::thread::Builder::new()
+        .name("web-client".into())
+        .stack_size(16384)
+        .spawn(move || web_client(domain, rx))
+        .expect("web client thread");
 
     let ok = register(handle, "/", GET_METHOD, index_handler)
         && register(handle, "/app.js", GET_METHOD, js_handler)
@@ -104,9 +122,17 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     ok
 }
 
+fn web_client(domain: DomainHandle, receiver: Receiver<Fact>) -> ! {
+    loop {
+        drain(&domain, &receiver);
+        session::flush();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Drain the Web inbox. Domain facts are copied into the existing bounded
 /// model; WebSocket sends happen here, never under Domain lock.
-pub fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
+fn drain(domain: &DomainHandle, receiver: &Receiver<Fact>) {
     while let Ok(fact) = receiver.try_recv() {
         match fact.kind {
             FactKind::EntityUpserted => {

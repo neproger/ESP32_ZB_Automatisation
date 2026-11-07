@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use ha_domain::canonical::{
-    ENTITY_AUTOMATION, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM,
-    GROUP_ITEM_KEY_LEN, SOURCE_ZIGBEE,
+    LocationRecord, SettingsRecord, ENTITY_AUTOMATION, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION,
+    ENTITY_GROUP_ITEM, ENTITY_LOCATION, ENTITY_SETTINGS, GROUP_ITEM_KEY_LEN, LOCATION_RECORD_LEN,
+    SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
 };
 use ha_domain::{DomainHandle, DomainTransaction, FactMeta, Value};
 
@@ -15,13 +16,56 @@ fn meta() -> FactMeta {
 
 pub fn put_record(
     domain: &DomainHandle,
+    origin: u8,
     entity: u32,
     key: &[u8],
     record: &[u8],
 ) -> Result<bool, ha_domain::Error> {
+    let meta = FactMeta {
+        source: origin,
+        value: Value::NONE,
+    };
     domain.transaction::<bool, ha_domain::Error>(|transaction| {
-        transaction.entity_put(entity, key, record, meta())
+        transaction.entity_put(entity, key, record, meta)
     })
+}
+
+pub fn seed_defaults(domain: &DomainHandle) {
+    let key = SYSTEM_DEVICE_UID.to_le_bytes();
+    let mut current = [0u8; LOCATION_RECORD_LEN];
+    if domain
+        .entity_get(ENTITY_LOCATION, &key, &mut current)
+        .is_err()
+    {
+        let record = LocationRecord::default().encode();
+        let meta = FactMeta {
+            source: SOURCE_SYSTEM as u8,
+            value: Value::NONE,
+        };
+        match domain.entity_put(ENTITY_LOCATION, &key, &record, meta) {
+            Ok(_) => log::info!("domain: location seeded"),
+            Err(error) => log::warn!("domain: location seed failed: {error:?}"),
+        }
+    }
+
+    let key = [SETTINGS_ID];
+    let mut current = [0u8; SETTINGS_RECORD_LEN];
+    if domain
+        .entity_get(ENTITY_SETTINGS, &key, &mut current)
+        .is_err()
+    {
+        let record = SettingsRecord::default().encode();
+        match put_record(
+            domain,
+            SOURCE_SYSTEM as u8,
+            ENTITY_SETTINGS,
+            &key,
+            &record,
+        ) {
+            Ok(_) => log::info!("domain: settings seeded"),
+            Err(error) => log::warn!("domain: settings seed failed: {error:?}"),
+        }
+    }
 }
 
 pub fn remove_record(
@@ -36,6 +80,26 @@ pub fn remove_record(
             Err(error) => Err(error),
         }
     })
+}
+
+pub fn remove(
+    domain: &DomainHandle,
+    entity: u32,
+    key: &[u8],
+) -> Result<(), ha_domain::Error> {
+    let id = || {
+        key.get(..8)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u64::from_le_bytes)
+            .ok_or(ha_domain::Error::InvalidSize)
+    };
+    match entity {
+        ENTITY_GROUP => id().and_then(|id| remove_group(domain, id)).map(|_| ()),
+        ENTITY_AUTOMATION => id()
+            .and_then(|id| remove_automation(domain, id))
+            .map(|_| ()),
+        _ => remove_record(domain, entity, key).map(|_| ()),
+    }
 }
 
 fn remove_record_cascade(
