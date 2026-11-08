@@ -82,6 +82,19 @@ espflash flash --port COM11 --baud 921600 `
 - C3 Wi-Fi CP: COM12 (`esp32c3`), не прошивать P4 через этот порт;
 - C6 RCP: внутренний UART1 (GPIO14/15), не через COM12.
 
+### Web/TCP (V2 parity)
+
+- `CONFIG_LWIP_MAX_SOCKETS=12`, `httpd max_open_sockets=9` = 3 internal + 6
+  web-клиентов; остаётся 3 сокета под DNS/weather.
+- `CONFIG_LWIP_TCP_RECVMBOX_SIZE=16` обязателен. При `6` большие ответы
+  (`app.js` 24.9 КБ) отдают заголовки, но тело встаёт; httpd-задача залипает.
+- static/model отдаются чанками по 4 КБ: `MEMP_NUM_TCP_SEG=16`, один
+  `httpd_resp_send` на 24 КБ блокирует TCP-очередь.
+- HTTP-сервер стартует после `IP_EVENT_STA_GOT_IP`. Слушатель, созданный до
+  выдачи IP, соединения не принимает.
+- `httpd` stack — 16 КБ в internal RAM. При 32 КБ `httpd_start` возвращает
+  `ESP_ERR_HTTPD_TASK` (`45064`).
+
 ### Типовые ошибки
 
 **`extension 'xesppie' ... unsupported` / линковка `libespidf.elf`**
@@ -108,6 +121,13 @@ espflash flash --port COM11 --baud 921600 `
 bool-правила `== 1` в новых registry-манифестах. Это отключает только
 необязательную проверку новых версий, не Kconfig/сборочные проверки.
 Если ошибка вернётся — проверь эти три места, не отключай проверки Kconfig.
+
+**C3: `ESP_ERR_WIFI_STATE` / `12289`**
+
+Не сбрасывай и не открывай C3 на COM12 (`espflash monitor`/`board-info`),
+пока P4 работает: C3 теряет Wi-Fi init, и P4 начинает получать `12289` на
+`scan`. C3 читается только raw serial на `921600`, без DTR/RTS. После сбоя —
+полный power-cycle P4+C3 (выдернуть питание на 5 секунд), не reset-кнопка.
 
 **Не пересобирается C-мост после правки `.c`**
 

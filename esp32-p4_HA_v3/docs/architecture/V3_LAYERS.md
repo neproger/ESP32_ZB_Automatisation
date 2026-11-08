@@ -95,8 +95,11 @@ EUI64/ZCL; adapter регистрирует в нём remover для своег�
 
 - `ha-display` сам подписывается на Domain и ставит LVGL-таймер; отдельной
   display-задачи нет.
-- `ha-web-service` сам подписывается и держит `web-client`; `drain`/`flush`
-  приватны; `ha-web-actions` реализует `Actions`.
+- `ha-web-service` сам подписывается и держит `web-client`/`web-actions`;
+  HTTP/WS handlers только парсят и кладут запросы в bounded-очереди,
+  `/model.bin` отдаётся из кэша, а строится в `web-client`; `drain`/`flush`
+  приватны. Сервер стартует после Wi-Fi IP. `ha-web-actions` реализует
+  `Actions`.
 - `ha-zigbee-service` держит interviewer/commands/capabilities, C radio
   start/run; `State` приватный.
 - `ha-wifi` держит Wi-Fi task и регистрирует `COMMAND_WIFI_*`.

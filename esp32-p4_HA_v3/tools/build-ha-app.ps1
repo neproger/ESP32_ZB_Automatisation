@@ -69,8 +69,13 @@ function Run-Cargo {
             $cargoArgs += '--features'
             $cargoArgs += $Features
         }
-        & cargo @cargoArgs | Out-Host
-        return $LASTEXITCODE
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        $script:cargoOutput = & cargo @cargoArgs 2>&1
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $previous
+        $script:cargoOutput | Out-Host
+        return $code
     } finally {
         Pop-Location
     }
@@ -81,9 +86,21 @@ foreach ($build in $sysBuilds) { Build-Sys $build.FullName }
 
 if ((Run-Cargo) -eq 0) { exit 0 }
 
+$cargoText = $script:cargoOutput -join "`n"
+if ($cargoText -match 'error\[E\d+\]') {
+    Write-Warning 'Cargo failed in Rust code; keeping the C cache.'
+    exit 1
+}
+
 Write-Warning 'Build failed; dropping stale esp-idf-sys CMake cache and retrying.'
 foreach ($build in $sysBuilds) { Remove-Item -Recurse -Force $build.FullName -ErrorAction SilentlyContinue }
 if ((Run-Cargo) -eq 0) { exit 0 }
+
+$cargoText = $script:cargoOutput -join "`n"
+if ($cargoText -match 'error\[E\d+\]') {
+    Write-Warning 'Retry failed in Rust code; keeping the C cache.'
+    exit 1
+}
 
 Write-Warning 'Retry failed; dropping the whole target cache once more.'
 Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue

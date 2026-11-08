@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
 use embedded_svc::utils::io;
-use esp_idf_svc::http::client::EspHttpConnection;
+use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use ha_domain::canonical::{
     LocationRecord, WeatherRecord, ENTITY_ENTITY, ENTITY_LOCATION, ENTITY_SYSTEM, ENTITY_WEATHER,
     EVENT_WEATHER_CHANGED, LOCATION_NAME_MAX, LOCATION_RECORD_LEN, SOURCE_SYSTEM,
@@ -55,7 +55,8 @@ fn system_task(domain: DomainHandle, ready: SyncSender<()>) {
         first = false;
 
         let location = read_location(&domain).unwrap_or(handled);
-        if let Some(weather) = fetch_weather(location.latitude, location.longitude) {
+        let fetched = fetch_weather(location.latitude, location.longitude);
+        if let Some(weather) = fetched {
             let changed = weather_valid && weather.condition != weather_condition;
             weather_valid = true;
             weather_condition = weather.condition;
@@ -66,9 +67,14 @@ fn system_task(domain: DomainHandle, ready: SyncSender<()>) {
         }
         let _ = ready.send(());
 
-        /* Sleep up to the next weather refresh; a manual location edit wakes us early. */
+        /* Retry soon after boot/network failures; a manual location edit wakes us early. */
+        let period = if fetched.is_some() {
+            WEATHER_PERIOD
+        } else {
+            RETRY_DELAY
+        };
         let mut elapsed = Duration::ZERO;
-        while elapsed < WEATHER_PERIOD {
+        while elapsed < period {
             std::thread::sleep(Duration::from_secs(5));
             elapsed += Duration::from_secs(5);
             if read_location(&domain).unwrap_or(handled) != handled {
@@ -317,7 +323,11 @@ fn fetch_weather(lat: f32, lon: f32) -> Option<WeatherRecord> {
 }
 
 fn http_get(url: &str) -> Result<String, String> {
-    let mut client = Client::wrap(EspHttpConnection::new(&Default::default()).map_err(esp)?);
+    let config = Configuration {
+        timeout: Some(Duration::from_secs(10)),
+        ..Default::default()
+    };
+    let mut client = Client::wrap(EspHttpConnection::new(&config).map_err(esp)?);
     let request = client
         .request(Method::Get, url, &[("accept", "application/json")])
         .map_err(esp)?;

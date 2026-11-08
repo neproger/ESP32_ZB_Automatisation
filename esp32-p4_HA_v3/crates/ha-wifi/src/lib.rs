@@ -28,6 +28,22 @@ enum Command {
 
 static COMMANDS: Mutex<Option<SyncSender<Command>>> = Mutex::new(None);
 
+/// Wait until the C Wi-Fi task has an IP. The HTTP listener must start on a
+/// live netif; starting it before `esp_netif_create_default_wifi_sta` leaves it
+/// unable to accept connections.
+pub fn wait_connected(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if ffi::state() == 3 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub fn start(domain: DomainHandle) {
     let (tx, rx) = sync_channel(4);
     let (known_tx, known_rx) = sync_channel(64);

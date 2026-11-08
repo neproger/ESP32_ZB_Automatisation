@@ -227,6 +227,17 @@ V2-эталон: `main/app_main.c` делает только descriptors + dispa
   `restored profile=sonoff.snzb01p`, `configure: step=0 op=1` (bind
   Expired — sleepy device, retry on wake). Тест
   `snzb_01p_ewelink_commands_decode_actions` passed.
+- 2026-11-08: web transport isolation. HTTP/WS handlers больше не вызывают
+  `Actions`/Domain: команды, rename/CRUD и discovery идут в bounded-очередь
+  `web-actions`; snapshots — в очередь `web-client`; `/model.bin` строится
+  в `web-client` и отдаётся из `Arc`-кэша. Web стартует после Wi-Fi IP.
+  Network tuning: `LWIP_MAX_SOCKETS=12`, `TCP_RECVMBOX_SIZE=16`,
+  `httpd max_open_sockets=9` (3 internal + 6 clients), TCP buffers как V2.
+  `httpd` stack 16 КБ; static/model — чанки 4 КБ. Weather: timeout 10 с и
+  retry после сетевой ошибки, а не ожидание 15 минут. Проверка: сборка,
+  `/` + `/app.js` + `/model.bin` 200; на стабильном прогоне 6/6 кругов;
+  weather `cond=2`. После серии reset'ов без power-cycle C3 иногда теряет
+  TX-поток (вплоть до 1/6) — лечится только полным power-cycle P4+C3.
 
 ## V2 → V3
 

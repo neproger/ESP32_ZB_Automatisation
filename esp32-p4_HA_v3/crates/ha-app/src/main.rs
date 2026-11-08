@@ -54,10 +54,20 @@ fn main() {
     let domain = DomainHandle::new(domain);
     zigbee_service::start(domain.clone());
     ha_wifi::start(domain.clone());
-    let actions = ha_web_actions::WebActions::new(domain.clone());
-    if !ha_web_service::start(domain.clone(), actions) {
-        log::error!("web server not started");
-    }
+    let web_domain = domain.clone();
+    std::thread::Builder::new()
+        .name("web-start".into())
+        .stack_size(16384)
+        .spawn(move || {
+            if !ha_wifi::wait_connected(std::time::Duration::from_secs(60)) {
+                log::warn!("web: Wi-Fi not connected; starting anyway");
+            }
+            let actions = ha_web_actions::WebActions::new(web_domain.clone());
+            if !ha_web_service::start(web_domain, actions) {
+                log::error!("web server not started");
+            }
+        })
+        .expect("web start thread");
     if !display::start(&domain) {
         log::error!("display not started");
     }

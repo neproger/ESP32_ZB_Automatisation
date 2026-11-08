@@ -7,8 +7,8 @@
 use std::collections::VecDeque;
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver};
-use std::sync::Mutex;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use esp_idf_svc::sys::*;
@@ -26,7 +26,7 @@ const APP_JS: &[u8] = include_bytes!("../../../web/ui/app.js.gz");
 const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
-const MAX_CLIENTS: usize = 8;
+const MAX_CLIENTS: usize = 6;
 const CLIENT_QUEUE: usize = 64;
 const CLIENT_BYTES: usize = 16 * 1024;
 
@@ -37,12 +37,48 @@ struct Client {
     seq: u16,
 }
 
-static DOMAIN: Mutex<Option<DomainHandle>> = Mutex::new(None);
 static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
-static MODEL_BLOB: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+static MODEL_BLOB: Mutex<Option<Arc<Vec<u8>>>> = Mutex::new(None);
 static MODEL_DIRTY: AtomicBool = AtomicBool::new(true);
 static ACTIONS: Mutex<Option<&'static dyn Actions>> = Mutex::new(None);
+static ACTION_TX: Mutex<Option<SyncSender<ActionRequest>>> = Mutex::new(None);
+static SNAPSHOT_TX: Mutex<Option<SyncSender<SnapshotRequest>>> = Mutex::new(None);
+
+enum ActionRequest {
+    Command {
+        entity: EntityId,
+        property: PropertyId,
+        action: ActionId,
+        value: CommandValue,
+    },
+    Upsert {
+        entity: u32,
+        key: Vec<u8>,
+        record: Vec<u8>,
+    },
+    Remove {
+        entity: u32,
+        key: Vec<u8>,
+    },
+    RenameEntity {
+        entity: EntityId,
+        name: String,
+    },
+    RenameDevice {
+        device: u64,
+        name: String,
+    },
+    RemoveDevice {
+        device: u64,
+    },
+    OpenNetwork(u8),
+}
+
+struct SnapshotRequest {
+    fd: i32,
+    state_only: bool,
+}
 
 /// Application callbacks the transport delegates to. Web never mutates Domain
 /// directly; the owner handles commands through its service queue.
@@ -68,10 +104,25 @@ fn actions() -> Option<&'static dyn Actions> {
 
 pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     *ACTIONS.lock().unwrap() = Some(actions);
+    match build_model_blob(&domain) {
+        Ok(blob) => {
+            *MODEL_BLOB.lock().unwrap() = Some(Arc::new(blob));
+            MODEL_DIRTY.store(false, Ordering::Relaxed);
+        }
+        Err(()) => MODEL_DIRTY.store(true, Ordering::Relaxed),
+    }
+    let (action_tx, action_rx) = sync_channel(16);
+    *ACTION_TX.lock().unwrap() = Some(action_tx);
+    std::thread::Builder::new()
+        .name("web-actions".into())
+        .stack_size(16384)
+        .spawn(move || action_worker(action_rx))
+        .expect("web action worker");
     let mut config: httpd_config_t = unsafe { std::mem::zeroed() };
     config.server_port = 80;
     config.ctrl_port = 32768;
-    config.max_open_sockets = MAX_CLIENTS as u16 + 1;
+    // 3 internal httpd sockets + 6 clients; 3 of LWIP's 12 remain for DNS/weather.
+    config.max_open_sockets = MAX_CLIENTS as u16 + 3;
     config.max_uri_handlers = 8;
     config.max_resp_headers = 8;
     config.backlog_conn = 5;
@@ -81,8 +132,8 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     config.stack_size = 16384;
     config.task_priority = 5;
     config.core_id = 0x7fff_ffff; // tskNO_AFFINITY
-    // Flash writes from Web Actions run on the httpd task; its stack must stay
-    // in internal RAM while the flash cache is disabled.
+    // Keep the network task in internal RAM so it does not depend on PSRAM
+    // while the flash cache is disabled.
     config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
     let mut handle: httpd_handle_t = std::ptr::null_mut();
@@ -91,7 +142,6 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
         log::error!("httpd_start failed: {err}");
         return false;
     }
-    *DOMAIN.lock().unwrap() = Some(domain.clone());
     *SERVER.lock().unwrap() = Some(handle as usize);
 
     let filter = Filter {
@@ -104,10 +154,12 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     if let Err(error) = domain.subscribe_channel(filter, tx) {
         log::error!("web: subscribe failed: {error:?}");
     }
+    let (snapshot_tx, snapshot_rx) = sync_channel(8);
+    *SNAPSHOT_TX.lock().unwrap() = Some(snapshot_tx);
     std::thread::Builder::new()
         .name("web-client".into())
         .stack_size(16384)
-        .spawn(move || web_client(domain, rx))
+        .spawn(move || web_client(domain, rx, snapshot_rx))
         .expect("web client thread");
 
     let ok = register(handle, "/", GET_METHOD, index_handler)
@@ -122,9 +174,104 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     ok
 }
 
-fn web_client(domain: DomainHandle, receiver: Receiver<Fact>) -> ! {
+fn action_worker(receiver: Receiver<ActionRequest>) {
     loop {
+        let Ok(request) = receiver.recv() else {
+            return;
+        };
+        let Some(actions) = actions() else {
+            continue;
+        };
+        match request {
+            ActionRequest::Command {
+                entity,
+                property,
+                action,
+                value,
+            } => {
+                if let Err(error) = actions.command(entity, property, action, value) {
+                    log::warn!("web action command failed: {error:?}");
+                }
+            }
+            ActionRequest::Upsert {
+                entity,
+                key,
+                record,
+            } => {
+                if let Err(error) = actions.upsert(entity, key, record) {
+                    log::warn!("web action upsert failed: {error:?}");
+                }
+            }
+            ActionRequest::Remove { entity, key } => {
+                if let Err(error) = actions.remove(entity, key) {
+                    log::warn!("web action remove failed: {error:?}");
+                }
+            }
+            ActionRequest::RenameEntity { entity, name } => {
+                if let Err(error) = actions.rename_entity(entity, name) {
+                    log::warn!("web action entity rename failed: {error:?}");
+                }
+            }
+            ActionRequest::RenameDevice { device, name } => {
+                if let Err(error) = actions.rename_device(device, name) {
+                    log::warn!("web action device rename failed: {error:?}");
+                }
+            }
+            ActionRequest::RemoveDevice { device } => {
+                if let Err(error) = actions.remove_device(device) {
+                    log::warn!("web action device remove failed: {error:?}");
+                }
+            }
+            ActionRequest::OpenNetwork(seconds) => {
+                let result = actions.open_network(seconds);
+                if result != 0 {
+                    log::warn!("web action open network failed ({result})");
+                }
+            }
+        }
+    }
+}
+
+fn enqueue_action(request: ActionRequest) {
+    let guard = ACTION_TX.lock().unwrap();
+    let Some(sender) = guard.as_ref() else {
+        log::warn!("web action queue unavailable");
+        return;
+    };
+    if sender.try_send(request).is_err() {
+        log::warn!("web action queue full");
+    }
+}
+
+fn request_snapshot(fd: i32, state_only: bool) -> bool {
+    let guard = SNAPSHOT_TX.lock().unwrap();
+    let Some(sender) = guard.as_ref() else {
+        return false;
+    };
+    sender
+        .try_send(SnapshotRequest { fd, state_only })
+        .is_ok()
+}
+
+fn web_client(
+    domain: DomainHandle,
+    receiver: Receiver<Fact>,
+    snapshots: Receiver<SnapshotRequest>,
+) -> ! {
+    loop {
+        while let Ok(request) = snapshots.try_recv() {
+            if !enqueue_snapshot(request.fd, &domain, request.state_only) {
+                log::warn!("ws snapshot enqueue failed, closing {}", request.fd);
+                close_client(request.fd);
+            }
+        }
         drain(&domain, &receiver);
+        if MODEL_DIRTY.swap(false, Ordering::Relaxed) {
+            match build_model_blob(&domain) {
+                Ok(blob) => *MODEL_BLOB.lock().unwrap() = Some(Arc::new(blob)),
+                Err(()) => MODEL_DIRTY.store(true, Ordering::Relaxed),
+            }
+        }
         session::flush();
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -274,27 +421,11 @@ unsafe extern "C" fn css_handler(req: *mut httpd_req_t) -> esp_err_t {
 }
 
 unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
-    let Some(domain) = DOMAIN.lock().unwrap().clone() else {
-        httpd_resp_send_err(req, 0, b"Internal Server Error\0".as_ptr() as *const c_char);
+    let blob = MODEL_BLOB.lock().unwrap().clone();
+    let Some(blob) = blob else {
+        // Built off the HTTP task; retry after the web task rebuilds it.
+        httpd_resp_send_err(req, 0, b"Service Unavailable\0".as_ptr() as *const c_char);
         return ESP_FAIL;
-    };
-    let blob = {
-        let mut cached = MODEL_BLOB.lock().unwrap();
-        if MODEL_DIRTY.swap(false, Ordering::Relaxed) || cached.is_none() {
-            match build_model_blob(&domain) {
-                Ok(blob) => *cached = Some(blob),
-                Err(()) => {
-                    MODEL_DIRTY.store(true, Ordering::Relaxed);
-                    httpd_resp_send_err(
-                        req,
-                        0,
-                        b"Internal Server Error\0".as_ptr() as *const c_char,
-                    );
-                    return ESP_FAIL;
-                }
-            }
-        }
-        cached.clone().unwrap_or_default()
     };
     httpd_resp_set_type(req, b"application/octet-stream\0".as_ptr() as *const c_char);
     httpd_resp_set_hdr(
@@ -302,7 +433,12 @@ unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
         b"Cache-Control\0".as_ptr() as *const c_char,
         b"no-store\0".as_ptr() as *const c_char,
     );
-    httpd_resp_send(req, blob.as_ptr() as *const c_char, blob.len() as isize)
+    httpd_resp_set_hdr(
+        req,
+        b"Connection\0".as_ptr() as *const c_char,
+        b"close\0".as_ptr() as *const c_char,
+    );
+    send_body(req, &blob)
 }
 
 unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
@@ -337,12 +473,9 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
                     }
                 }
             }
-            let Some(domain) = DOMAIN.lock().unwrap().clone() else {
-                return ESP_OK;
-            };
             let state_only = buf[8] == command::SNAPSHOT_STATE;
-            if !enqueue_snapshot(fd, &domain, state_only) {
-                log::warn!("ws snapshot enqueue failed, closing {fd}");
+            if !request_snapshot(fd, state_only) {
+                log::warn!("ws snapshot queue full, closing {fd}");
                 close_client(fd);
             }
         }
@@ -398,12 +531,8 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
         command::DISCOVERY => {
             if len == 10 {
                 let seconds = buf[9];
-                let result = actions().map_or(-1, |actions| actions.open_network(seconds));
-                if result != 0 {
-                    log::warn!("ws: open network failed ({result})");
-                } else {
-                    log::info!("ws: network open for {seconds}s");
-                }
+                enqueue_action(ActionRequest::OpenNetwork(seconds));
+                log::info!("ws: network open for {seconds}s queued");
             }
         }
         _ => {}
@@ -417,16 +546,12 @@ fn property_command(payload: &[u8]) {
     let Some(command) = ha_web::parse_property_command(payload) else {
         return;
     };
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.command(
-            command.entity,
-            command.property,
-            u32::from(command.action),
-            command.value,
-        ) {
-            log::warn!("command intake full, rejected: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::Command {
+        entity: command.entity,
+        property: command.property,
+        action: u32::from(command.action),
+        value: command.value,
+    });
 }
 
 fn handle_upsert(entity: u8, key_len: usize, payload: &[u8]) {
@@ -439,55 +564,42 @@ fn handle_upsert(entity: u8, key_len: usize, payload: &[u8]) {
     if record.len() != schema.record_size {
         return;
     }
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.upsert(u32::from(entity), key, record) {
-            log::warn!("upsert intake full, entity={entity}: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::Upsert {
+        entity: u32::from(entity),
+        key,
+        record,
+    });
 }
 
 fn handle_remove(entity: u8, key_len: usize, payload: &[u8]) {
     let Some(key) = ha_web::parse_key(payload, key_len) else {
         return;
     };
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.remove(u32::from(entity), key) {
-            log::warn!("remove intake full, entity={entity}: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::Remove {
+        entity: u32::from(entity),
+        key,
+    });
 }
 
 fn handle_entity_rename(payload: &[u8]) {
     let Some((entity, name)) = ha_web::parse_rename(payload) else {
         return;
     };
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.rename_entity(entity, name) {
-            log::warn!("rename entity intake full: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::RenameEntity { entity, name });
 }
 
 fn handle_device_rename(payload: &[u8]) {
     let Some((device, name)) = ha_web::parse_rename(payload) else {
         return;
     };
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.rename_device(device, name) {
-            log::warn!("rename device intake full: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::RenameDevice { device, name });
 }
 
 fn handle_device_remove(payload: &[u8]) {
     let Some(device) = ha_web::parse_device_id(payload) else {
         return;
     };
-    if let Some(actions) = actions() {
-        if let Err(error) = actions.remove_device(device) {
-            log::warn!("remove device intake full: {error:?}");
-        }
-    }
+    enqueue_action(ActionRequest::RemoveDevice { device });
 }
 
 fn ws_frame(bytes: &[u8]) -> httpd_ws_frame_t {
@@ -511,7 +623,32 @@ unsafe fn serve(req: *mut httpd_req_t, content_type: &str, body: &'static [u8]) 
         b"Cache-Control\0".as_ptr() as *const c_char,
         b"no-store\0".as_ptr() as *const c_char,
     );
-    let err = httpd_resp_send(req, body.as_ptr() as *const c_char, body.len() as isize);
+    httpd_resp_set_hdr(
+        req,
+        b"Connection\0".as_ptr() as *const c_char,
+        b"close\0".as_ptr() as *const c_char,
+    );
+    let err = send_body(req, body);
     drop(ct);
     err
+}
+
+/// httpd_resp_send blocks when one call queues more than lwIP's 16 TCP segments.
+/// Send bounded chunks so the stack drains between writes.
+unsafe fn send_body(req: *mut httpd_req_t, body: &[u8]) -> esp_err_t {
+    const CHUNK: usize = 4096;
+    let mut offset = 0;
+    while offset < body.len() {
+        let end = (offset + CHUNK).min(body.len());
+        let err = httpd_resp_send_chunk(
+            req,
+            body[offset..end].as_ptr() as *const c_char,
+            (end - offset) as isize,
+        );
+        if err != ESP_OK {
+            return err;
+        }
+        offset = end;
+    }
+    httpd_resp_send_chunk(req, std::ptr::null(), 0)
 }
