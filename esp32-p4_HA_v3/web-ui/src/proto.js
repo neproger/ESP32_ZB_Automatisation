@@ -369,7 +369,7 @@ function encodeRule(dv, base, rule) {
   new Uint8Array(dv.buffer, dv.byteOffset + base + RULE_OFF_NAME, name.length).set(name)
 }
 
-// AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+388).
+// AUTOMATION_PUT: ha_automation_key_t + ha_rule_t (8+456).
 export function automationPut(id, rule) {
   const out = new Uint8Array(8 + RULE_SIZE)
   const dv = new DataView(out.buffer)

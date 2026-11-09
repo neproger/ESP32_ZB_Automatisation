@@ -93,8 +93,8 @@ CONFIG_ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST=n
 CONFIG_ESP_HOSTED_HOST_USB_RNDIS_MANIFEST=n
 
 # Web supports 6 clients plus HTTP server, DNS and weather-client sockets.
-# V2 tuning: large TCP buffers prevent httpd send EAGAIN on app.js/model.bin.
-CONFIG_LWIP_MAX_SOCKETS=12
+# Values match the working V2 board config (HTTPD_MAX_SOCKETS + V2 TCP tuning).
+CONFIG_LWIP_MAX_SOCKETS=16
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=16
 CONFIG_LWIP_TCP_MSS=1440
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534

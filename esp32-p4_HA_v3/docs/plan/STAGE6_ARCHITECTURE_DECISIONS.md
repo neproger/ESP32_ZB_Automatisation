@@ -82,8 +82,16 @@ SNAPSHOT_STATE:
 ## 2. Web delivery
 
 - `seq` — отдельный счётчик на каждого клиента, начиная с 0.
-- Bounded queue: одновременно **64 кадра и 16 KB**; превышение закрывает сессию.
-- `MAX_CLIENTS = 8` как V2.
+- Bounded delta queue: одновременно **64 кадра и 16 KB**; превышение закрывает сессию.
+  Snapshot идёт отдельной очередью и не ограничен этим бюджетом (иначе полный
+  `SNAPSHOT_STATE`/`SNAPSHOT` на 32 устройства закрывал бы клиента при подключении).
+- `MAX_CLIENTS = 8` как V2. `max_open_sockets` считает только клиентские
+  сокеты; httpd добавляет 3 внутренних, т.е. 8 + 3 = 11 из 16 LWIP, и 5
+  остаются под DNS/SNTP/погоду/повторные подключения браузера.
+- Регистрация клиента и сборка snapshot выполняются атомарно под одним lock
+  очередей: дельта не может потеряться между регистрацией и чтением Domain.
+- `/model.bin` собирается из Domain на каждый запрос; кэш MODEL удалён, поэтому
+  клиент не может получить blob старше момента запроса.
 - `REMOVE` строится из Domain fact и broadcast независимо от какого-либо Web cache.
 - Web-owned MODEL cache удаляется: snapshot, delta и REMOVE не зависят от cache.
 - WebSocket send выполняется вне внутреннего mutex; очередь защищается mutex,
@@ -93,12 +101,12 @@ SNAPSHOT_STATE:
 - `EVENT` — canonical 24-byte `ha_event_t`, читается из Domain payload и отдаётся
   verbatim; не синтезируется из полей `Fact`.
 - Команды проверяют точные V2-размеры args; PUT дополнительно проверяет record по SCHEMA.
-- Web/Display drains выполняются в `clients` task (`ha-app/runtime.rs`), не в main.
+- Web drain выполняется в собственной задаче `web-client` (`ha-web-service`), не в main.
 - Web transport вынесен в `ha-web-service`, Display — в `ha-display`.
 
 ### Web code structure
 
-- `ha-web-service/src/lib.rs` ? HTTP/WS lifecycle and canonical projection facade.
-- `ha-web-service/src/session.rs` ? per-client bounded queue, `seq`, broadcast/flush.
-- `ha-web-service/src/snapshot.rs` ? full/state snapshots and `/model.bin`.
-- `ha-app/src/web_actions.rs` ? bridge from Web commands to app intake.
+- `ha-web-service/src/lib.rs` — HTTP/WS lifecycle and canonical projection facade.
+- `ha-web-service/src/session.rs` — per-client queues, `seq`, broadcast/flush.
+- `ha-web-service/src/snapshot.rs` — full/state snapshots and `/model.bin`.
+- `ha-web-actions/src/lib.rs` — bridge from Web commands to Domain/config/Device.

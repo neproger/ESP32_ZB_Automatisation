@@ -6,9 +6,8 @@
 
 use std::collections::VecDeque;
 use std::ffi::c_char;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use esp_idf_svc::sys::*;
@@ -18,7 +17,7 @@ use ha_domain::{DomainHandle, Fact, FactKind, Filter};
 mod session;
 mod snapshot;
 use ha_web::{command, control, write_frame};
-use session::{broadcast_one, close_client, enqueue_locked};
+use session::{broadcast_one, close_client, enqueue_snapshot_frame};
 use snapshot::*;
 
 const INDEX: &[u8] = include_bytes!("../../../web/ui/index.html.gz");
@@ -26,12 +25,15 @@ const APP_JS: &[u8] = include_bytes!("../../../web/ui/app.js.gz");
 const APP_CSS: &[u8] = include_bytes!("../../../web/ui/app.css.gz");
 
 const GET_METHOD: httpd_method_t = http_method_HTTP_GET as httpd_method_t;
-const MAX_CLIENTS: usize = 6;
+const MAX_CLIENTS: usize = 8;
 const CLIENT_QUEUE: usize = 64;
 const CLIENT_BYTES: usize = 16 * 1024;
 
 struct Client {
     fd: i32,
+    /// Snapshot frames are sent before live deltas and do not count toward the
+    /// slow-client delta budget.
+    snapshot: Vec<Vec<u8>>,
     queue: VecDeque<Vec<u8>>,
     bytes: usize,
     seq: u16,
@@ -39,8 +41,7 @@ struct Client {
 
 static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
-static MODEL_BLOB: Mutex<Option<Arc<Vec<u8>>>> = Mutex::new(None);
-static MODEL_DIRTY: AtomicBool = AtomicBool::new(true);
+static MODEL_DOMAIN: Mutex<Option<DomainHandle>> = Mutex::new(None);
 static ACTIONS: Mutex<Option<&'static dyn Actions>> = Mutex::new(None);
 static ACTION_TX: Mutex<Option<SyncSender<ActionRequest>>> = Mutex::new(None);
 static SNAPSHOT_TX: Mutex<Option<SyncSender<SnapshotRequest>>> = Mutex::new(None);
@@ -104,37 +105,34 @@ fn actions() -> Option<&'static dyn Actions> {
 
 pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     *ACTIONS.lock().unwrap() = Some(actions);
-    match build_model_blob(&domain) {
-        Ok(blob) => {
-            *MODEL_BLOB.lock().unwrap() = Some(Arc::new(blob));
-            MODEL_DIRTY.store(false, Ordering::Relaxed);
-        }
-        Err(()) => MODEL_DIRTY.store(true, Ordering::Relaxed),
-    }
+    // `/model.bin` is rebuilt from Domain on demand, so the handler needs a handle.
+    *MODEL_DOMAIN.lock().unwrap() = Some(domain.clone());
     let (action_tx, action_rx) = sync_channel(16);
     *ACTION_TX.lock().unwrap() = Some(action_tx);
     std::thread::Builder::new()
         .name("web-actions".into())
-        .stack_size(16384)
+        .stack_size(8192)
         .spawn(move || action_worker(action_rx))
         .expect("web action worker");
     let mut config: httpd_config_t = unsafe { std::mem::zeroed() };
     config.server_port = 80;
     config.ctrl_port = 32768;
-    // 3 internal httpd sockets + 6 clients; 3 of LWIP's 12 remain for DNS/weather.
-    config.max_open_sockets = MAX_CLIENTS as u16 + 3;
+    // `max_open_sockets` counts client sockets; httpd adds 3 internal ones.
+    // 8 clients + 3 internal = 11 of LWIP's 16, leaving DNS/weather/SNTP room.
+    config.max_open_sockets = MAX_CLIENTS as u16;
     config.max_uri_handlers = 8;
     config.max_resp_headers = 8;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 5;
-    config.send_wait_timeout = 5;
-    config.stack_size = 16384;
+    config.send_wait_timeout = 2;
+    // V2 used the HTTPD_DEFAULT_CONFIG stack/caps (4 KB, MALLOC_CAP_DEFAULT).
+    // 8 KB is enough for our handlers; forcing 16 KB into internal RAM starved
+    // the ESP-Hosted SPI path under parallel browser requests.
+    config.stack_size = 8192;
     config.task_priority = 5;
     config.core_id = 0x7fff_ffff; // tskNO_AFFINITY
-    // Keep the network task in internal RAM so it does not depend on PSRAM
-    // while the flash cache is disabled.
-    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    config.task_caps = MALLOC_CAP_DEFAULT;
 
     let mut handle: httpd_handle_t = std::ptr::null_mut();
     let err = unsafe { httpd_start(&mut handle, &config) };
@@ -158,7 +156,7 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     *SNAPSHOT_TX.lock().unwrap() = Some(snapshot_tx);
     std::thread::Builder::new()
         .name("web-client".into())
-        .stack_size(16384)
+        .stack_size(8192)
         .spawn(move || web_client(domain, rx, snapshot_rx))
         .expect("web client thread");
 
@@ -170,7 +168,10 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     if !ok {
         log::error!("httpd handler registration failed");
     }
-    log::info!("web server on :80 (/ws)");
+    log::info!(
+        "web server on :80 (/ws), internal free={}",
+        unsafe { heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) }
+    );
     ok
 }
 
@@ -266,12 +267,6 @@ fn web_client(
             }
         }
         drain(&domain, &receiver);
-        if MODEL_DIRTY.swap(false, Ordering::Relaxed) {
-            match build_model_blob(&domain) {
-                Ok(blob) => *MODEL_BLOB.lock().unwrap() = Some(Arc::new(blob)),
-                Err(()) => MODEL_DIRTY.store(true, Ordering::Relaxed),
-            }
-        }
         session::flush();
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -341,9 +336,6 @@ fn upsert(frame_type: u8, key: &[u8], record: &[u8]) {
         );
         return;
     }
-    if schema.model {
-        MODEL_DIRTY.store(true, Ordering::Relaxed);
-    }
     let mut payload = Vec::with_capacity(key.len() + record.len());
     payload.extend_from_slice(key);
     payload.extend_from_slice(record);
@@ -357,9 +349,6 @@ fn remove(frame_type: u8, key: &[u8]) {
     };
     if key.len() != schema.key_size {
         return;
-    }
-    if schema.model {
-        MODEL_DIRTY.store(true, Ordering::Relaxed);
     }
     let mut payload = Vec::with_capacity(1 + key.len());
     payload.push(frame_type);
@@ -421,11 +410,27 @@ unsafe extern "C" fn css_handler(req: *mut httpd_req_t) -> esp_err_t {
 }
 
 unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
-    let blob = MODEL_BLOB.lock().unwrap().clone();
-    let Some(blob) = blob else {
-        // Built off the HTTP task; retry after the web task rebuilds it.
-        httpd_resp_send_err(req, 0, b"Service Unavailable\0".as_ptr() as *const c_char);
+    let domain = MODEL_DOMAIN.lock().unwrap().clone();
+    // Build from Domain on every request: a cached blob can lag model deltas
+    // that the client has not been registered for yet.
+    let Some(domain) = domain else {
+        httpd_resp_send_err(
+            req,
+            httpd_err_code_t_HTTPD_500_INTERNAL_SERVER_ERROR,
+            b"model unavailable\0".as_ptr() as *const c_char,
+        );
         return ESP_FAIL;
+    };
+    let blob = match build_model_blob(&domain) {
+        Ok(blob) => blob,
+        Err(()) => {
+            httpd_resp_send_err(
+                req,
+                httpd_err_code_t_HTTPD_500_INTERNAL_SERVER_ERROR,
+                b"model unavailable\0".as_ptr() as *const c_char,
+            );
+            return ESP_FAIL;
+        }
     };
     httpd_resp_set_type(req, b"application/octet-stream\0".as_ptr() as *const c_char);
     httpd_resp_set_hdr(
@@ -433,12 +438,15 @@ unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
         b"Cache-Control\0".as_ptr() as *const c_char,
         b"no-store\0".as_ptr() as *const c_char,
     );
-    httpd_resp_set_hdr(
-        req,
-        b"Connection\0".as_ptr() as *const c_char,
-        b"close\0".as_ptr() as *const c_char,
-    );
-    send_body(req, &blob)
+    let internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    let err = send_body(req, &blob);
+    if err != ESP_OK {
+        log::error!(
+            "web: model send len={} err={err} internal={internal}",
+            blob.len()
+        );
+    }
+    err
 }
 
 unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
@@ -457,22 +465,9 @@ unsafe extern "C" fn ws_handler(req: *mut httpd_req_t) -> esp_err_t {
     }
     match buf[8] {
         command::SNAPSHOT | command::SNAPSHOT_STATE => {
+            // The web task registers the client atomically with the snapshot so
+            // no delta can fall between registration and the snapshot read.
             let fd = httpd_req_to_sockfd(req);
-            {
-                let mut clients = CLIENTS.lock().unwrap();
-                if !clients.iter().any(|client| client.fd == fd) {
-                    if clients.len() < MAX_CLIENTS {
-                        clients.push(Client {
-                            fd,
-                            queue: VecDeque::new(),
-                            bytes: 0,
-                            seq: 0,
-                        });
-                    } else {
-                        log::warn!("ws: client limit reached, {fd} ignored");
-                    }
-                }
-            }
             let state_only = buf[8] == command::SNAPSHOT_STATE;
             if !request_snapshot(fd, state_only) {
                 log::warn!("ws snapshot queue full, closing {fd}");
@@ -623,20 +618,23 @@ unsafe fn serve(req: *mut httpd_req_t, content_type: &str, body: &'static [u8]) 
         b"Cache-Control\0".as_ptr() as *const c_char,
         b"no-store\0".as_ptr() as *const c_char,
     );
-    httpd_resp_set_hdr(
-        req,
-        b"Connection\0".as_ptr() as *const c_char,
-        b"close\0".as_ptr() as *const c_char,
-    );
+    let internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     let err = send_body(req, body);
+    if err != ESP_OK {
+        log::error!(
+            "web: send {content_type} len={} err={err} internal={internal}",
+            body.len()
+        );
+    }
     drop(ct);
     err
 }
 
-/// httpd_resp_send blocks when one call queues more than lwIP's 16 TCP segments.
-/// Send bounded chunks so the stack drains between writes.
+/// ESP-Hosted TX flow control chokes when one task queues a whole 25 KB
+/// response: parallel browser connections then stall the httpd task. Feed the
+/// stack small chunks with a short yield so the C3 SPI/Wi-Fi path drains.
 unsafe fn send_body(req: *mut httpd_req_t, body: &[u8]) -> esp_err_t {
-    const CHUNK: usize = 4096;
+    const CHUNK: usize = 1024;
     let mut offset = 0;
     while offset < body.len() {
         let end = (offset + CHUNK).min(body.len());
@@ -649,6 +647,9 @@ unsafe fn send_body(req: *mut httpd_req_t, body: &[u8]) -> esp_err_t {
             return err;
         }
         offset = end;
+        if offset < body.len() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
     httpd_resp_send_chunk(req, std::ptr::null(), 0)
 }

@@ -1,4 +1,4 @@
-//! Snapshot records and the static /model.bin blob.
+//! Snapshot records and the on-demand /model.bin blob.
 
 use super::*;
 
@@ -33,21 +33,51 @@ pub(super) fn snapshot_records(
     (count, records)
 }
 
+/// Registers the client and enqueues the snapshot under one CLIENTS lock, so no
+/// delta can be skipped between registration and the Domain read. Snapshot
+/// frames use their own queue and are not limited by the slow-client budget.
 pub(super) fn enqueue_snapshot(fd: i32, domain: &DomainHandle, state_only: bool) -> bool {
-    let (count, records) = snapshot_records(domain, state_only);
-    let mut clients = CLIENTS.lock().unwrap();
-    let Some(client) = clients.iter_mut().find(|client| client.fd == fd) else {
-        return false;
-    };
-    if !enqueue_locked(client, control::SYNC_BEGIN, &count.to_le_bytes()) {
-        return false;
-    }
-    for (frame_type, payload) in records {
-        if !enqueue_locked(client, frame_type, &payload) {
+    let mut victim = None;
+    let result = {
+        let mut clients = CLIENTS.lock().unwrap();
+        if !clients.iter().any(|client| client.fd == fd) {
+            if clients.len() >= MAX_CLIENTS {
+                // Browsers reconnect/reload; drop the oldest session instead of
+                // refusing the new one forever.
+                let old = clients.remove(0);
+                victim = Some(old.fd);
+                log::warn!("ws: evicting stale client {} for {fd}", old.fd);
+            }
+            clients.push(Client {
+                fd,
+                snapshot: Vec::new(),
+                queue: VecDeque::new(),
+                bytes: 0,
+                seq: 0,
+            });
+        }
+        let (count, records) = snapshot_records(domain, state_only);
+        let Some(client) = clients.iter_mut().find(|client| client.fd == fd) else {
+            return false;
+        };
+        // A re-request supersedes anything queued before the snapshot.
+        client.snapshot.clear();
+        client.queue.clear();
+        client.bytes = 0;
+        if !enqueue_snapshot_frame(client, control::SYNC_BEGIN, &count.to_le_bytes()) {
             return false;
         }
+        for (frame_type, payload) in records {
+            if !enqueue_snapshot_frame(client, frame_type, &payload) {
+                return false;
+            }
+        }
+        enqueue_snapshot_frame(client, control::SYNC_END, &count.to_le_bytes())
+    };
+    if let Some(fd) = victim {
+        close_client(fd);
     }
-    enqueue_locked(client, control::SYNC_END, &count.to_le_bytes())
+    result
 }
 pub(super) fn build_model_blob(domain: &DomainHandle) -> Result<Vec<u8>, ()> {
     let mut out = Vec::new();

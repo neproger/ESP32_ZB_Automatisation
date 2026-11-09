@@ -57,7 +57,7 @@ fn main() {
     let web_domain = domain.clone();
     std::thread::Builder::new()
         .name("web-start".into())
-        .stack_size(16384)
+        .stack_size(8192)
         .spawn(move || {
             if !ha_wifi::wait_connected(std::time::Duration::from_secs(60)) {
                 log::warn!("web: Wi-Fi not connected; starting anyway");
@@ -93,6 +93,16 @@ fn main() {
     ha_platform::p4_probe::start(domain.clone());
     log::info!("ha-app ready: device table + journal, waiting for button events");
     ha_config::seed_defaults(&domain);
+    unsafe {
+        log::info!(
+            "heap: free={} internal={} psram={}",
+            esp_idf_svc::sys::esp_get_free_heap_size(),
+            esp_idf_svc::sys::heap_caps_get_free_size(
+                esp_idf_svc::sys::MALLOC_CAP_INTERNAL | esp_idf_svc::sys::MALLOC_CAP_8BIT
+            ),
+            esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_SPIRAM),
+        );
+    }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }

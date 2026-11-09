@@ -168,9 +168,17 @@ fn emit_ticks(domain: &DomainHandle, minutes: u16) {
     }
 }
 
+/// V2 `ha_event_t`: id u32@0, source_entity u64@8, value @16 (24 bytes).
+fn event_payload(event: u32, source: u64) -> [u8; 24] {
+    let mut payload = [0u8; 24];
+    payload[0..4].copy_from_slice(&event.to_le_bytes());
+    payload[8..16].copy_from_slice(&source.to_le_bytes());
+    payload
+}
+
 fn publish_event(domain: &DomainHandle, event: u32) {
     let key = ENTITY_SYSTEM.to_le_bytes();
-    let payload = event.to_le_bytes();
+    let payload = event_payload(event, ENTITY_SYSTEM);
     if let Err(error) = domain.payload_put(
         Some(FactTarget {
             entity: ENTITY_ENTITY,
@@ -261,5 +269,14 @@ mod tests {
         assert_eq!(local_parts(0, 0), Some((0, 3)));
         assert_eq!(local_parts(86_400, 0), Some((0, 4)));
         assert_eq!(local_parts(3_600 + 61, 180), Some((4 * 60 + 1, 3)));
+    }
+
+    #[test]
+    fn events_are_full_ha_event_t() {
+        let payload = event_payload(EVENT_MINUTE_TICK, ENTITY_SYSTEM);
+        assert_eq!(payload.len(), 24);
+        assert_eq!(&payload[0..4], &EVENT_MINUTE_TICK.to_le_bytes());
+        assert_eq!(&payload[8..16], &ENTITY_SYSTEM.to_le_bytes());
+        assert_eq!(&payload[16..24], &[0u8; 8]);
     }
 }

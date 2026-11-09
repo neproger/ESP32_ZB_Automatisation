@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// Snapshot frames bypass the slow-client delta budget; the SCHEMA bound keeps
+/// the total well under 64 KB per client.
+const SNAPSHOT_FRAMES_MAX: usize = 2048;
+
 pub(super) fn enqueue_locked(client: &mut Client, frame_type: u8, payload: &[u8]) -> bool {
     let mut frame = Vec::new();
     write_frame(&mut frame, client.seq, frame_type, payload);
@@ -11,6 +15,18 @@ pub(super) fn enqueue_locked(client: &mut Client, frame_type: u8, payload: &[u8]
     }
     client.bytes += frame.len();
     client.queue.push_back(frame);
+    true
+}
+
+/// Snapshot queue: sent before live deltas, no per-frame delta cap.
+pub(super) fn enqueue_snapshot_frame(client: &mut Client, frame_type: u8, payload: &[u8]) -> bool {
+    if client.snapshot.len() >= SNAPSHOT_FRAMES_MAX {
+        return false;
+    }
+    let mut frame = Vec::new();
+    write_frame(&mut frame, client.seq, frame_type, payload);
+    client.seq = client.seq.wrapping_add(1);
+    client.snapshot.push(frame);
     true
 }
 
@@ -51,6 +67,10 @@ pub(super) fn flush() {
     {
         let mut clients = CLIENTS.lock().unwrap();
         for client in clients.iter_mut() {
+            // The initial snapshot always goes out before any live delta.
+            for bytes in client.snapshot.drain(..) {
+                sends.push((client.fd, bytes));
+            }
             while let Some(bytes) = client.queue.pop_front() {
                 client.bytes -= bytes.len();
                 sends.push((client.fd, bytes));

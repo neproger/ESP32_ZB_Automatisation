@@ -84,16 +84,18 @@ espflash flash --port COM11 --baud 921600 `
 
 ### Web/TCP (V2 parity)
 
-- `CONFIG_LWIP_MAX_SOCKETS=12`, `httpd max_open_sockets=9` = 3 internal + 6
-  web-клиентов; остаётся 3 сокета под DNS/weather.
-- `CONFIG_LWIP_TCP_RECVMBOX_SIZE=16` обязателен. При `6` большие ответы
-  (`app.js` 24.9 КБ) отдают заголовки, но тело встаёт; httpd-задача залипает.
-- static/model отдаются чанками по 4 КБ: `MEMP_NUM_TCP_SEG=16`, один
-  `httpd_resp_send` на 24 КБ блокирует TCP-очередь.
+- `CONFIG_LWIP_MAX_SOCKETS=16`, `httpd max_open_sockets=8`: это 8 клиентских
+  сокетов + 3 внутренних httpd = 11 из 16; пять остаются DNS/weather/SNTP. `+3` в
+  `max_open_sockets` добавлять нельзя — тогда httpd займёт все 16.
+- `app.js` — ~25 КБ gzip. Отдавать его одним `httpd_resp_send` нельзя:
+  ESP-Hosted TX-flow-control забивается, и при двух параллельных запросах
+  браузера httpd-задача встаёт навсегда. `send_body` режет ответ на 1 КБ и
+  делает yield 2 мс между чанками.
+- `send_wait_timeout=2`, `recv_wait_timeout=5`.
 - HTTP-сервер стартует после `IP_EVENT_STA_GOT_IP`. Слушатель, созданный до
   выдачи IP, соединения не принимает.
-- `httpd` stack — 16 КБ в internal RAM. При 32 КБ `httpd_start` возвращает
-  `ESP_ERR_HTTPD_TASK` (`45064`).
+- `httpd` stack — 8 КБ, `MALLOC_CAP_DEFAULT` (как V2). 16 КБ в internal RAM
+  оставляли слишком мало памяти ESP-Hosted и усугубляли зависание.
 
 ### Типовые ошибки
 

@@ -97,7 +97,7 @@ EUI64/ZCL; adapter регистрирует в нём remover для своег�
   display-задачи нет.
 - `ha-web-service` сам подписывается и держит `web-client`/`web-actions`;
   HTTP/WS handlers только парсят и кладут запросы в bounded-очереди,
-  `/model.bin` отдаётся из кэша, а строится в `web-client`; `drain`/`flush`
+  `/model.bin` и snapshot-очередь строятся из Domain без Web-кэша; `drain`/`flush`
   приватны. Сервер стартует после Wi-Fi IP. `ha-web-actions` реализует
   `Actions`.
 - `ha-zigbee-service` держит interviewer/commands/capabilities, C radio

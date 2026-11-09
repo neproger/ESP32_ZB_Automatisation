@@ -7,14 +7,13 @@ import { getEvents, setLive } from './events.js'
 // журнал — events.js; здесь транспорт, порядок синхронизации и «версия».
 //
 // Порядок (не теряем изменения):
-//   1) WS open → буферизуем кадры
-//   2) GET /model.bin → применяем MODEL
-//   3) WS SNAPSHOT_STATE → применяем STATE (актуальнее буфера)
-//   4) проигрываем буфер → live
-// MODEL-изменения живых клиентов приходят дельтами (re-GET не нужен); файл сервер
-// пересобирает в фоне для новых подключений. Fallback: полный WS-snapshot.
+//   1) WS open → SNAPSHOT_STATE. Сервер атомарно регистрирует клиента и шлёт STATE,
+//      поэтому дельты не теряются между регистрацией и снапшотом.
+//   2) по SYNC_BEGIN (регистрация уже произошла) → GET /model.bin, применяем MODEL.
+//   3) применяем буферизованные кадры: STATE-снапшот, затем live-дельты.
+//   4) /model.bin недоступен → полный WS-snapshot (fallback).
 
-let phase = 'live' // 'model' | 'state' | 'fallback' | 'live'
+let mode = 'live' // 'sync' | 'live'
 let pending = []
 let version = 0
 let status = 'connecting'
@@ -22,12 +21,15 @@ let socket = null
 const listeners = new Set()
 let lastSeq = -1
 let reconnectDelay = 500
+let syncId = 0
+let modelRequested = false
+let modelReady = false
+let snapshotDone = false
+let fullSync = false
+let postSnapshotAt = null
+let discardUntilEnd = false
 
-function setPhase(next) {
-  phase = next
-  setLive(next === 'live')
-}
-setPhase('live')
+setLive(false)
 
 const emit = () => {
   version++
@@ -46,56 +48,109 @@ function wsUrl() {
   return `${proto}://${location.host}/ws`
 }
 
+function applyFrame(type, payload) {
+  if (type === MSG.REMOVE) model.applyRemove(payload)
+  else model.applyFrame(type, payload)
+}
+
+function finishSync() {
+  if (mode === 'live') return
+  const frames = pending
+  pending = []
+  for (let i = 0; i < frames.length; i++) {
+    // Всё после SYNC_END — уже live-дельты, а не часть снапшота.
+    if (i === postSnapshotAt) setLive(true)
+    applyFrame(frames[i].type, new DataView(frames[i].bytes.buffer))
+  }
+  mode = 'live'
+  setLive(true)
+  emit()
+}
+
+function requestModel() {
+  if (modelRequested) return
+  modelRequested = true
+  const id = syncId
+  fetch(`${location.origin}/model.bin`, { cache: 'no-store' })
+    .then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.arrayBuffer() })
+    .then((buf) => {
+      if (id !== syncId) return
+      const recs = parseSnapshot(buf)
+      if (!recs) throw new Error('bad model')
+      model.clearModel()
+      for (const r of recs) model.applyEntity(r.type, r.view)
+      modelReady = true
+      if (snapshotDone) finishSync()
+    })
+    .catch((err) => {
+      if (id !== syncId) return
+      console.warn('model.bin unavailable, full WS snapshot:', err)
+      // Старый STATE-снапшот мог прийти не до конца: его хвост отбрасываем,
+      // полный снапшот авторитетнее.
+      discardUntilEnd = !snapshotDone
+      fullSync = true
+      modelReady = true
+      snapshotDone = false
+      postSnapshotAt = null
+      pending = []
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshot().bytes)
+    })
+}
+
+function beginSync() {
+  syncId++
+  mode = 'sync'
+  pending = []
+  modelRequested = false
+  modelReady = false
+  snapshotDone = false
+  fullSync = false
+  postSnapshotAt = null
+  discardUntilEnd = false
+  setLive(false)
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshotState().bytes)
+}
+
 function onFrame(buf) {
   const frame = decodeFrame(buf)
   if (!frame) return
   if (frame.seq === lastSeq) return
   lastSeq = frame.seq
 
-  if (frame.type === MSG.SYNC_BEGIN) {
-    if (phase === 'state') model.clearState()
-    else model.clearAll()
-    return
-  }
-  if (frame.type === MSG.SYNC_END) {
-    for (const e of pending) {
-      const view = new DataView(e.bytes.buffer)
-      if (e.type === MSG.REMOVE) model.applyRemove(view)
-      else model.applyFrame(e.type, view)
-    }
-    pending = []
-    setPhase('live')
+  if (mode === 'live') {
+    applyFrame(frame.type, frame.payload)
     emit()
     return
   }
-  if (phase !== 'live') {
-    pending.push({ type: frame.type, bytes: copyPayload(frame.payload) })
+
+  if (discardUntilEnd) {
+    if (frame.type === MSG.SYNC_END) {
+      discardUntilEnd = false
+      return
+    }
+    // Если хвост старого снапшота потерялся, новый SYNC_BEGIN не глотаем.
+    if (frame.type !== MSG.SYNC_BEGIN) return
+    discardUntilEnd = false
+  }
+
+  if (frame.type === MSG.SYNC_BEGIN) {
+    // Снапшот и регистрация на сервере атомарны; всё, что пришло раньше,
+    // старше снапшота и отбрасывается.
+    pending = []
+    postSnapshotAt = null
+    if (fullSync) model.clearAll()
+    else model.clearState()
+    // Регистрация уже произошла — model.bin, собранный после неё, не отстанет.
+    if (!fullSync) requestModel()
     return
   }
-  if (frame.type === MSG.REMOVE) model.applyRemove(frame.payload)
-  else model.applyFrame(frame.type, frame.payload)
-  emit()
-}
-
-function startSync() {
-  setPhase('model')
-  pending = []
-  fetch(`${location.origin}/model.bin`, { cache: 'no-store' })
-    .then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.arrayBuffer() })
-    .then((buf) => {
-      const recs = parseSnapshot(buf)
-      if (!recs) throw new Error('bad model')
-      model.clearModel()
-      for (const r of recs) model.applyEntity(r.type, r.view)
-      setPhase('state')
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshotState().bytes)
-    })
-    .catch((err) => {
-      console.warn('model.bin unavailable, full WS snapshot:', err)
-      setPhase('fallback')
-      pending = []
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(snapshot().bytes)
-    })
+  if (frame.type === MSG.SYNC_END) {
+    snapshotDone = true
+    postSnapshotAt = pending.length
+    if (modelReady) finishSync()
+    return
+  }
+  pending.push({ type: frame.type, bytes: copyPayload(frame.payload) })
 }
 
 function connect() {
@@ -106,11 +161,14 @@ function connect() {
     lastSeq = -1
     reconnectDelay = 500
     emit()
-    startSync()
+    beginSync()
   }
   socket.onclose = () => {
     status = 'offline'
-    setPhase('live')
+    syncId++ // инвалидирует незавершённый /model.bin
+    mode = 'live'
+    pending = []
+    setLive(false)
     emit()
     setTimeout(connect, reconnectDelay)
     reconnectDelay = Math.min(reconnectDelay * 2, 5000)

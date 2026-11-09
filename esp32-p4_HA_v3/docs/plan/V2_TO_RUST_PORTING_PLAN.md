@@ -293,7 +293,7 @@ metadata, Display/System без direct C radio calls.
 только model-типы; full snapshot — только SCHEMA (без `WIFI_SCAN`/`WIFI_KNOWN`);
 `SNAPSHOT_STATE` — только `WEATHER`/`WIFI_STATUS`/`PROPERTY_STATE`, counts 0/0.
 6.2 P4 smoke: два клиента получили независимые `seq` 0..N; `MAX_CLIENTS=8`
-поднят вместе с `CONFIG_LWIP_MAX_SOCKETS=12`; send вынесен из mutex.
+поднят вместе с `CONFIG_LWIP_MAX_SOCKETS=16`; send вынесен из mutex.
 6.3: `display::start(domain)` делает initial Domain read/rebuild; команды идут
 Domain/Device path; `main` больше не вызывает скрытый `rebuild`.
 6.4: Display использует `ha_model` decoders; automation и Wi-Fi обновляются
