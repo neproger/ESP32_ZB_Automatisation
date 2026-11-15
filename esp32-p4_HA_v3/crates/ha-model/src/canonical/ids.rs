@@ -74,6 +74,8 @@ pub const COMMAND_DISCOVERY: u32 = 3;
 pub const COMMAND_PROPERTY: u32 = 6;
 pub const COMMAND_WIFI_SCAN: u32 = 4;
 pub const COMMAND_WIFI_CONNECT: u32 = 5;
+pub const COMMAND_AUTOMATION_ENABLE: u32 = 7;
+pub const COMMAND_SETTINGS: u32 = 8;
 pub const COMMAND_RECORD_LEN: usize = 32;
 
 pub const EVENT_SINGLE_PRESS: EventId = 1;

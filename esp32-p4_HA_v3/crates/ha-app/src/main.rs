@@ -52,6 +52,9 @@ fn main() {
         }
     }
     let domain = DomainHandle::new(domain);
+    if let Err(error) = ha_config::start(domain.clone()) {
+        log::error!("config: start failed: {error}");
+    }
     zigbee_service::start(domain.clone());
     ha_wifi::start(domain.clone());
     let web_domain = domain.clone();

@@ -451,3 +451,107 @@ pub(crate) unsafe fn replace_page(page: Page) {
     }
     *PAGE.lock().unwrap() = Some(page);
 }
+
+unsafe extern "C" fn on_control(event: *mut lv_event_t) {
+    let target = lv_event_get_target_obj(event);
+    let context = lv_event_get_user_data(event) as *const CmdCtx;
+    if target.is_null() || context.is_null() {
+        return;
+    }
+    let context = &*context;
+    log::debug!(
+        "display: control entity={:016x} property={} syncing={} locked={}",
+        context.entity,
+        context.property,
+        context.syncing.load(Ordering::Relaxed),
+        context.locked.load(Ordering::Relaxed)
+    );
+    if context.syncing.load(Ordering::Relaxed) || context.locked.load(Ordering::Relaxed) {
+        return;
+    }
+    let result = if context.property == PROPERTY_POWER {
+        let on = lv_obj_has_state(target, lv_state_t_LV_STATE_CHECKED);
+        post_property(
+            context.entity,
+            PROPERTY_POWER,
+            if on { ACTION_ON } else { ACTION_OFF },
+            CommandValue::None,
+        )
+    } else {
+        let value = lv_slider_get_value(target) as f32;
+        post_property(
+            context.entity,
+            context.property,
+            ACTION_SET,
+            CommandValue::Scalar(Value::f32(value)),
+        )
+    };
+    if let Err(error) = result {
+        log::warn!("display: command rejected: {error:?}");
+    }
+    if context.property == PROPERTY_POWER {
+        context.locked.store(true, Ordering::Relaxed);
+        *context.deadline.lock().unwrap() =
+            Some(Instant::now() + Duration::from_millis(SWITCH_LOCK_MS));
+        lv_obj_add_state(target, lv_state_t_LV_STATE_DISABLED);
+    }
+}
+
+unsafe extern "C" fn free_context(event: *mut lv_event_t) {
+    let context = lv_event_get_user_data(event) as *mut CmdCtx;
+    if !context.is_null() {
+        drop(Box::from_raw(context));
+    }
+}
+
+unsafe extern "C" fn on_color(event: *mut lv_event_t) {
+    let context = lv_event_get_user_data(event) as *const ColorCtx;
+    if context.is_null() {
+        return;
+    }
+    let context = &*context;
+    let hue = lv_slider_get_value(context.hue) as f32;
+    let sat = lv_slider_get_value(context.sat) as f32;
+    let (r, g, b) = hsv_to_rgb8(hue, sat / 100.0, 1.0);
+    lv_obj_set_style_bg_color(context.swatch, color(rgb_hex(r, g, b)), 0);
+    set_label(context.hue_label, &format!("{}°", hue.round() as i32));
+    set_label(context.sat_label, &format!("{} %", sat.round() as i32));
+    if lv_event_get_code(event) != lv_event_code_t_LV_EVENT_RELEASED {
+        return;
+    }
+    let (x, y) = rgb8_to_xy(r, g, b);
+    if let Err(error) = post_property(
+        context.entity,
+        PROPERTY_COLOR,
+        ACTION_SET,
+        CommandValue::Xy { x, y },
+    ) {
+        log::warn!("display: color rejected: {error:?}");
+    }
+}
+
+unsafe extern "C" fn free_color_context(event: *mut lv_event_t) {
+    let context = lv_event_get_user_data(event) as *mut ColorCtx;
+    if !context.is_null() {
+        drop(Box::from_raw(context));
+    }
+}
+
+unsafe extern "C" fn on_automation(event: *mut lv_event_t) {
+    let target = lv_event_get_target_obj(event);
+    let context = lv_event_get_user_data(event) as *const AutoCtx;
+    if target.is_null() || context.is_null() {
+        return;
+    }
+    let on = lv_obj_has_state(target, lv_state_t_LV_STATE_CHECKED);
+    if let Err(error) = post_automation((*context).automation, on) {
+        log::warn!("display: automation toggle rejected: {error:?}");
+    }
+}
+
+unsafe extern "C" fn free_auto_context(event: *mut lv_event_t) {
+    let context = lv_event_get_user_data(event) as *mut AutoCtx;
+    if !context.is_null() {
+        drop(Box::from_raw(context));
+    }
+}

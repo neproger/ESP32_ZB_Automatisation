@@ -4,14 +4,16 @@
 //! Dispatcher. It reads current state from Domain and posts canonical commands
 //! through Domain.post, so the adapter executor receives them from Domain.
 
-use std::sync::mpsc::{sync_channel, Receiver};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 use ha_domain::canonical::{
-    StateKey, COMMAND_PROPERTY, ENTITY_AUTOMATION, ENTITY_ENTITY, ENTITY_PROPERTY_STATE,
-    ENTITY_SYSTEM, EVENT_MINUTE_TICK, PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_WEEKDAY_MASK,
-    SOURCE_AUTOMATION, STATE_KEY_LEN, STATE_RECORD_LEN,
+    StateKey, AUTOMATION_RECORD_LEN, COMMAND_AUTOMATION_ENABLE, COMMAND_PROPERTY,
+    ENTITY_AUTOMATION, ENTITY_ENTITY, ENTITY_PROPERTY_STATE, ENTITY_SYSTEM, EVENT_MINUTE_TICK,
+    PROPERTY_SYSTEM_MINUTES_OF_DAY, PROPERTY_SYSTEM_WEEKDAY_MASK, SOURCE_AUTOMATION, SOURCE_UI,
+    STATE_KEY_LEN, STATE_RECORD_LEN,
 };
-use ha_domain::{DomainHandle, Fact, FactKind, Filter};
+use ha_domain::{DomainHandle, Fact, FactKind, FactMeta, Filter, Value};
 
 const INBOX_CAPACITY: usize = 32;
 const TASK_STACK: usize = 8192;
@@ -152,12 +154,47 @@ fn handle_fact(domain: &DomainHandle, engine: &mut crate::RuleEngine, fact: Fact
     }
 }
 
-fn run(domain: DomainHandle, facts: Receiver<Fact>) {
+fn run(domain: DomainHandle, facts: Receiver<Fact>, commands: Receiver<(u64, bool)>) {
     let mut engine = crate::RuleEngine::boxed();
     reload(&domain, &mut engine);
-    while let Ok(fact) = facts.recv() {
-        handle_fact(&domain, &mut engine, fact);
+    loop {
+        while let Ok((automation, enabled)) = commands.try_recv() {
+            if let Err(error) = apply_enable(&domain, automation, enabled) {
+                log::warn!("automation: enable {automation} failed: {error:?}");
+            }
+        }
+        match facts.recv_timeout(Duration::from_millis(20)) {
+            Ok(fact) => handle_fact(&domain, &mut engine, fact),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
+}
+
+/// Read-modify-write of the persistent automation record, outside the command
+/// executor (service task owns config writes).
+fn apply_enable(
+    domain: &DomainHandle,
+    automation: u64,
+    enabled: bool,
+) -> Result<(), ha_domain::Error> {
+    domain.transaction::<(), ha_domain::Error>(|transaction| {
+        let key = automation.to_le_bytes();
+        let mut bytes = [0u8; AUTOMATION_RECORD_LEN];
+        transaction.entity_get(ENTITY_AUTOMATION, &key, &mut bytes)?;
+        let record = ha_domain::canonical::set_rule_enabled(&bytes, enabled)
+            .map_err(|_| ha_domain::Error::InvalidState)?;
+        transaction.entity_put(
+            ENTITY_AUTOMATION,
+            &key,
+            &record,
+            FactMeta {
+                source: SOURCE_UI as u8,
+                value: Value::NONE,
+            },
+        )?;
+        Ok(())
+    })
 }
 
 /// Start the Automation service: one bounded inbox, three V2 subscriptions,
@@ -178,10 +215,24 @@ pub fn start(domain: DomainHandle) -> Result<(), String> {
     }
     drop(sender);
 
+    let (command_tx, command_rx) = sync_channel(8);
+    domain
+        .register_command(COMMAND_AUTOMATION_ENABLE, move |args| {
+            if args.len() != 9 {
+                return Err(ha_domain::Error::InvalidSize);
+            }
+            let automation = u64::from_le_bytes(args[..8].try_into().expect("automation id"));
+            let enabled = args[8] != 0;
+            command_tx
+                .try_send((automation, enabled))
+                .map_err(|_| ha_domain::Error::NoSpace)
+        })
+        .map_err(|error| format!("automation command: {error:?}"))?;
+
     std::thread::Builder::new()
         .name("automation".into())
         .stack_size(TASK_STACK)
-        .spawn(move || run(domain, receiver))
+        .spawn(move || run(domain, receiver, command_rx))
         .map_err(|error| format!("automation task: {error:?}"))?;
     Ok(())
 }
@@ -490,5 +541,57 @@ mod tests {
         handle.dispatch_once().unwrap();
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(commands.lock().unwrap().len(), 1);
+    }
+    #[test]
+    fn enable_command_updates_rule_record() {
+        let (domain, _, _) = setup();
+        let bytes = time_rule();
+        put_rule(&domain, 7, &bytes);
+
+        apply_enable(&domain, 7, false).unwrap();
+        let mut out = [0u8; RULE_RECORD_LEN];
+        domain
+            .entity_get(ENTITY_AUTOMATION, &7u64.to_le_bytes(), &mut out)
+            .unwrap();
+        assert_eq!(RuleRecord::decode(&out).unwrap().enabled, 0);
+
+        apply_enable(&domain, 7, true).unwrap();
+        domain
+            .entity_get(ENTITY_AUTOMATION, &7u64.to_le_bytes(), &mut out)
+            .unwrap();
+        assert_eq!(RuleRecord::decode(&out).unwrap().enabled, 1);
+        assert!(apply_enable(&domain, 99, true).is_err());
+    }
+    #[test]
+    fn enable_command_is_handled_by_service() {
+        let (domain, _, _) = setup();
+        put_rule(&domain, 9, &time_rule());
+        start(domain.clone()).unwrap();
+
+        let mut args = [0u8; 9];
+        args[..8].copy_from_slice(&9u64.to_le_bytes());
+        domain
+            .post(
+                COMMAND_AUTOMATION_ENABLE,
+                &args,
+                None,
+                FactMeta {
+                    source: SOURCE_SYSTEM as u8,
+                    value: Value::NONE,
+                },
+            )
+            .unwrap();
+
+        let mut out = [0u8; RULE_RECORD_LEN];
+        for _ in 0..50 {
+            domain
+                .entity_get(ENTITY_AUTOMATION, &9u64.to_le_bytes(), &mut out)
+                .unwrap();
+            if RuleRecord::decode(&out).unwrap().enabled == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(RuleRecord::decode(&out).unwrap().enabled, 0);
     }
 }

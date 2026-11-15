@@ -1,11 +1,65 @@
 #![forbid(unsafe_code)]
 
+use std::sync::mpsc::{sync_channel, Receiver};
+
 use ha_domain::canonical::{
-    LocationRecord, SettingsRecord, ENTITY_AUTOMATION, ENTITY_GROUP, ENTITY_GROUP_AUTOMATION,
-    ENTITY_GROUP_ITEM, ENTITY_LOCATION, ENTITY_SETTINGS, GROUP_ITEM_KEY_LEN, LOCATION_RECORD_LEN,
-    SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
+    LocationRecord, SettingsRecord, COMMAND_SETTINGS, ENTITY_AUTOMATION, ENTITY_GROUP,
+    ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM, ENTITY_LOCATION, ENTITY_SETTINGS,
+    GROUP_ITEM_KEY_LEN, LOCATION_RECORD_LEN, SETTINGS_ID, SETTINGS_RECORD_LEN, SOURCE_SYSTEM,
+    SOURCE_UI, SOURCE_ZIGBEE, SYSTEM_DEVICE_UID,
 };
 use ha_domain::{DomainHandle, DomainTransaction, FactMeta, Value};
+
+/// Config service: owns persistent settings writes. Display posts a command;
+/// this task performs the read-modify-write outside the command executor.
+pub fn start(domain: DomainHandle) -> Result<(), String> {
+    let (sender, receiver) = sync_channel(8);
+    domain
+        .register_command(COMMAND_SETTINGS, move |args| {
+            let brightness = *args.first().ok_or(ha_domain::Error::InvalidSize)?;
+            sender
+                .try_send(brightness)
+                .map_err(|_| ha_domain::Error::NoSpace)
+        })
+        .map_err(|error| format!("config command: {error:?}"))?;
+    std::thread::Builder::new()
+        .name("config".into())
+        .stack_size(4096)
+        .spawn(move || run(domain, receiver))
+        .map_err(|error| format!("config task: {error:?}"))?;
+    Ok(())
+}
+
+fn run(domain: DomainHandle, receiver: Receiver<u8>) {
+    while let Ok(brightness) = receiver.recv() {
+        if let Err(error) = apply_settings(&domain, brightness) {
+            log::warn!("config: settings update failed: {error:?}");
+        }
+    }
+}
+
+fn apply_settings(domain: &DomainHandle, brightness: u8) -> Result<(), ha_domain::Error> {
+    domain.transaction::<(), ha_domain::Error>(|transaction| {
+        let key = [SETTINGS_ID];
+        let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+        let mut settings = match transaction.entity_get(ENTITY_SETTINGS, &key, &mut bytes) {
+            Ok(()) => SettingsRecord::decode(&bytes).unwrap_or_default(),
+            Err(ha_domain::Error::NotFound) => SettingsRecord::default(),
+            Err(error) => return Err(error),
+        };
+        settings.brightness_pct = brightness.min(100);
+        transaction.entity_put(
+            ENTITY_SETTINGS,
+            &key,
+            &settings.encode(),
+            FactMeta {
+                source: SOURCE_UI as u8,
+                value: Value::NONE,
+            },
+        )?;
+        Ok(())
+    })
+}
 
 fn meta() -> FactMeta {
     FactMeta {
@@ -323,5 +377,57 @@ mod tests {
     fn failed_transaction_returns_no_cleanup_plan() {
         let domain = DomainHandle::new(Domain::new(8, 2, 8).unwrap());
         assert!(remove_group_plan(&domain, 1).is_err());
+    }
+    fn settings_domain() -> DomainHandle {
+        let mut domain = Domain::new(64, 8, 64).unwrap();
+        domain
+            .register_entity(EntityDesc {
+                entity: ENTITY_SETTINGS,
+                key_size: 1,
+                record_size: SETTINGS_RECORD_LEN,
+                capacity: 1,
+                backing: Backing::Ram,
+                persist_key: None,
+            })
+            .unwrap();
+        DomainHandle::new(domain)
+    }
+
+    fn brightness(domain: &DomainHandle) -> Option<u8> {
+        let mut bytes = [0u8; SETTINGS_RECORD_LEN];
+        domain.entity_get(ENTITY_SETTINGS, &[SETTINGS_ID], &mut bytes).ok()?;
+        SettingsRecord::decode(&bytes).map(|record| record.brightness_pct)
+    }
+
+    #[test]
+    fn settings_update_clamps_brightness() {
+        let domain = settings_domain();
+        apply_settings(&domain, 42).unwrap();
+        assert_eq!(brightness(&domain), Some(42));
+        apply_settings(&domain, 250).unwrap();
+        assert_eq!(brightness(&domain), Some(100));
+    }
+    #[test]
+    fn settings_command_is_handled_by_service() {
+        let domain = settings_domain();
+        start(domain.clone()).unwrap();
+        domain
+            .post(
+                COMMAND_SETTINGS,
+                &[57],
+                None,
+                FactMeta {
+                    source: SOURCE_UI as u8,
+                    value: Value::NONE,
+                },
+            )
+            .unwrap();
+        for _ in 0..50 {
+            if brightness(&domain) == Some(57) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(brightness(&domain), Some(57));
     }
 }

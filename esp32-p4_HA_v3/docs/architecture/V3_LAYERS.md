@@ -319,6 +319,8 @@ Display:
 - на trigger читает актуальное state;
 - условия/правила — Domain entity;
 - при срабатывании `Domain.post(command)`;
+- включение правила приходит как `COMMAND_AUTOMATION_ENABLE`; запись
+  `RuleRecord` делает task сервиса, не UI;
 - не вызывает Zigbee напрямую;
 - не исполняется в Dispatcher.
 
@@ -343,6 +345,8 @@ Display:
 - per-client bounded TX queue;
 - медленный клиент убивается, Domain не блокируется;
 - команды/CRUD → Domain/Device service;
+- настройки display приходят как `COMMAND_SETTINGS`; запись `SettingsRecord`
+  делает config-service;
 - не source of truth.
 
 ### Display
@@ -351,7 +355,8 @@ Display:
 - подписка на Domain facts;
 - начальный render — разовое чтение Domain;
 - widgets по capabilities;
-- команды через Domain.
+- команды через Domain (`COMMAND_PROPERTY`, `COMMAND_WIFI_*`,
+  `COMMAND_SETTINGS`, `COMMAND_AUTOMATION_ENABLE`).
 
 ## 10. Composition root
 
@@ -359,7 +364,7 @@ Display:
 
 - регистрирует entity descriptors: type/key/payload/capacity/backing/persist_key;
 - создаёт Domain;
-- регистрирует command executors;
+- запускает сервисы, которые регистрируют command executors;
 - запускает Dispatcher;
 - создаёт adapter;
 - запускает services/clients;

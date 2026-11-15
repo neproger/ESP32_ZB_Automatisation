@@ -89,8 +89,10 @@ espflash flash --port COM11 --baud 921600 `
   `max_open_sockets` добавлять нельзя — тогда httpd займёт все 16.
 - `app.js` — ~25 КБ gzip. Отдавать его одним `httpd_resp_send` нельзя:
   ESP-Hosted TX-flow-control забивается, и при двух параллельных запросах
-  браузера httpd-задача встаёт навсегда. `send_body` режет ответ на 1 КБ и
-  делает yield 2 мс между чанками.
+  браузера httpd-задача встаёт. `send_body` режет ответ на 1 КБ и делает
+  yield 10 мс между чанками.
+- Статика (`index.html`, `app.js`, `app.css`) копируется в heap при старте и
+  отдаётся из RAM: layout/адреса flash больше не влияют на TCP-отправку.
 - `send_wait_timeout=2`, `recv_wait_timeout=5`.
 - HTTP-сервер стартует после `IP_EVENT_STA_GOT_IP`. Слушатель, созданный до
   выдачи IP, соединения не принимает.

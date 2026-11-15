@@ -43,6 +43,13 @@ static CLIENTS: Mutex<Vec<Client>> = Mutex::new(Vec::new());
 static SERVER: Mutex<Option<usize>> = Mutex::new(None);
 static MODEL_DOMAIN: Mutex<Option<DomainHandle>> = Mutex::new(None);
 static ACTIONS: Mutex<Option<&'static dyn Actions>> = Mutex::new(None);
+static ASSETS: Mutex<Option<Assets>> = Mutex::new(None);
+struct Assets {
+    index: Vec<u8>,
+    js: Vec<u8>,
+    css: Vec<u8>,
+}
+
 static ACTION_TX: Mutex<Option<SyncSender<ActionRequest>>> = Mutex::new(None);
 static SNAPSHOT_TX: Mutex<Option<SyncSender<SnapshotRequest>>> = Mutex::new(None);
 
@@ -89,6 +96,11 @@ pub fn start(domain: DomainHandle, actions: &'static dyn Actions) -> bool {
     *ACTIONS.lock().unwrap() = Some(actions);
     // `/model.bin` is rebuilt from Domain on demand, so the handler needs a handle.
     *MODEL_DOMAIN.lock().unwrap() = Some(domain.clone());
+    *ASSETS.lock().unwrap() = Some(Assets {
+        index: INDEX.to_vec(),
+        js: APP_JS.to_vec(),
+        css: APP_CSS.to_vec(),
+    });
     let (action_tx, action_rx) = sync_channel(16);
     *ACTION_TX.lock().unwrap() = Some(action_tx);
     std::thread::Builder::new()
@@ -380,15 +392,27 @@ fn register_ws(
 }
 
 unsafe extern "C" fn index_handler(req: *mut httpd_req_t) -> esp_err_t {
-    serve(req, "text/html", INDEX)
+    let assets = ASSETS.lock().unwrap();
+    let Some(assets) = assets.as_ref() else {
+        return ESP_FAIL;
+    };
+    serve(req, "text/html", &assets.index)
 }
 
 unsafe extern "C" fn js_handler(req: *mut httpd_req_t) -> esp_err_t {
-    serve(req, "text/javascript", APP_JS)
+    let assets = ASSETS.lock().unwrap();
+    let Some(assets) = assets.as_ref() else {
+        return ESP_FAIL;
+    };
+    serve(req, "text/javascript", &assets.js)
 }
 
 unsafe extern "C" fn css_handler(req: *mut httpd_req_t) -> esp_err_t {
-    serve(req, "text/css", APP_CSS)
+    let assets = ASSETS.lock().unwrap();
+    let Some(assets) = assets.as_ref() else {
+        return ESP_FAIL;
+    };
+    serve(req, "text/css", &assets.css)
 }
 
 unsafe extern "C" fn model_handler(req: *mut httpd_req_t) -> esp_err_t {
@@ -587,7 +611,7 @@ fn ws_frame(bytes: &[u8]) -> httpd_ws_frame_t {
     frame
 }
 
-unsafe fn serve(req: *mut httpd_req_t, content_type: &str, body: &'static [u8]) -> esp_err_t {
+unsafe fn serve(req: *mut httpd_req_t, content_type: &str, body: &[u8]) -> esp_err_t {
     let ct = std::ffi::CString::new(content_type).unwrap();
     httpd_resp_set_type(req, ct.as_ptr());
     httpd_resp_set_hdr(
@@ -630,7 +654,7 @@ unsafe fn send_body(req: *mut httpd_req_t, body: &[u8]) -> esp_err_t {
         }
         offset = end;
         if offset < body.len() {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
     httpd_resp_send_chunk(req, std::ptr::null(), 0)
