@@ -92,7 +92,7 @@ impl FlashTable {
 
     fn bank_size_for<F: NorFlash>(flash: &F) -> Result<usize, FlashError> {
         let size = flash.capacity() / 2;
-        if size == 0 || size % flash.erase_size() != 0 {
+        if size == 0 || !size.is_multiple_of(flash.erase_size()) {
             return Err(FlashError::InvalidSize);
         }
         Ok(size)
@@ -469,8 +469,8 @@ impl FlashTable {
 
         let mut new_latest = vec![None; self.geometry.capacity];
         let mut cursor = HEADER_SIZE;
-        for slot in 0..self.geometry.capacity {
-            let Some(entry) = self.latest[slot] else {
+        for (slot, entry) in self.latest.iter().copied().enumerate() {
+            let Some(entry) = entry else {
                 continue;
             };
             let (len, kind) = if clear {
@@ -686,7 +686,7 @@ pub mod sim {
         }
 
         fn erase(&mut self, offset: usize, len: usize) -> Result<(), FlashError> {
-            if offset % self.erase_size != 0 || len % self.erase_size != 0 {
+            if !offset.is_multiple_of(self.erase_size) || !len.is_multiple_of(self.erase_size) {
                 return Err(FlashError::InvalidSize);
             }
             let end = offset + len;
@@ -740,12 +740,12 @@ mod tests {
         let mut restarted = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         assert_eq!(restarted.id(), persist_id_bytes("devices"));
         let (read, kind) = restarted
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut [0; 12])
+            .read_slot(&flash, 0, &mut [0; 8], &mut [0; 12])
             .unwrap();
         assert_eq!(read, meta);
         assert_eq!(kind, KIND_SET);
         let (_, _) = restarted
-            .read_slot(&mut flash, 1, &mut [0; 8], &mut [0; 12])
+            .read_slot(&flash, 1, &mut [0; 8], &mut [0; 12])
             .unwrap();
 
         let next = FlashMeta {
@@ -759,7 +759,7 @@ mod tests {
         let after = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         let mut payload = [0u8; 12];
         let (meta, _) = after
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(meta, next);
         assert_eq!(payload, [9; 12]);
@@ -791,10 +791,10 @@ mod tests {
         flash.corrupt(offset, &[0xFF, 0xFF, 0xFF, 0xFF]);
         let restarted = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         assert!(restarted
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut [0; 12])
+            .read_slot(&flash, 0, &mut [0; 8], &mut [0; 12])
             .is_ok());
         assert_eq!(
-            restarted.read_slot(&mut flash, 1, &mut [0; 8], &mut [0; 12]),
+            restarted.read_slot(&flash, 1, &mut [0; 8], &mut [0; 12]),
             Err(FlashError::NotFound)
         );
     }
@@ -1026,13 +1026,13 @@ mod tests {
 
         let mut read_key = [0u8; 8];
         let (meta, _) = table
-            .read_slot(&mut flash, 0, &mut read_key, &mut [])
+            .read_slot(&flash, 0, &mut read_key, &mut [])
             .unwrap();
         assert_eq!(meta.version, 19);
 
         let mut reopened = FlashTable::open(&mut flash, zero, "zero").unwrap();
         let (meta, _) = reopened
-            .read_slot(&mut flash, 0, &mut read_key, &mut [])
+            .read_slot(&flash, 0, &mut read_key, &mut [])
             .unwrap();
         assert_eq!(meta.version, 19);
         reopened.clear(&mut flash).unwrap();
@@ -1079,7 +1079,7 @@ mod tests {
         let after = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         let mut payload = [0u8; 12];
         let (meta, _) = after
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(meta.generation, 2);
         assert_eq!(meta.version, 2);
@@ -1123,17 +1123,17 @@ mod tests {
         let reopened = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         let mut payload = [0u8; 12];
         let (read, kind) = reopened
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(read, meta(2, 3));
         assert_eq!(kind, KIND_SET);
         assert_eq!(payload, [9; 12]);
         let (read, _) = reopened
-            .read_slot(&mut flash, 1, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 1, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(read, meta(1, 1));
         let (read, kind) = reopened
-            .read_slot(&mut flash, 2, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 2, &mut [0; 8], &mut payload)
             .unwrap();
         assert!(!read.used);
         assert_eq!(read.generation, 2);
@@ -1214,7 +1214,7 @@ mod tests {
         let reopened = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         let mut payload = [0u8; 12];
         let (meta, _) = reopened
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(meta.generation, 1);
         assert_eq!(meta.version, 1);
@@ -1263,7 +1263,7 @@ mod tests {
         assert_eq!(reopened.active_bank, 1);
         let mut payload = [0u8; 12];
         let (meta, _) = reopened
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(meta.version, 1);
         assert_eq!(payload, [7; 12]);
@@ -1293,7 +1293,7 @@ mod tests {
         let reopened = FlashTable::open(&mut flash, geometry(), "devices").unwrap();
         let mut payload = [0u8; 12];
         let (meta, _) = reopened
-            .read_slot(&mut flash, 0, &mut [0; 8], &mut payload)
+            .read_slot(&flash, 0, &mut [0; 8], &mut payload)
             .unwrap();
         assert_eq!(meta.version, 6);
         assert_eq!(payload, [6; 12]);

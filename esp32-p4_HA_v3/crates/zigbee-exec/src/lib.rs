@@ -15,6 +15,7 @@
 //! * `Expect::None` finishes as `Acknowledged` on a successful AF confirm;
 //! * `ZclResponse`/`DefaultResponse` finishes as `Confirmed` (or `Failed`);
 //! * ZDO bind finishes on the SDK callback, without a TSN.
+//!
 //! Acknowledged delivery is never treated as confirmed device state.
 
 use std::collections::VecDeque;
@@ -213,6 +214,15 @@ impl EndpointList {
     pub fn len(&self) -> usize {
         usize::from(self.len)
     }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for EndpointList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,6 +252,15 @@ impl ClusterList {
     }
     pub fn len(&self) -> usize {
         usize::from(self.len)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Default for ClusterList {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

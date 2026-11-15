@@ -302,7 +302,7 @@ impl NorFlash for RegionView {
         state
             .device
             .read(self.base + offset, out)
-            .map_err(|error| error)
+            
     }
 
     fn write(&mut self, offset: usize, data: &[u8]) -> core::result::Result<(), FlashError> {
@@ -316,11 +316,11 @@ impl NorFlash for RegionView {
         state
             .device
             .write(self.base + offset, data)
-            .map_err(|error| error)
+            
     }
 
     fn erase(&mut self, offset: usize, len: usize) -> core::result::Result<(), FlashError> {
-        if offset % self.erase_size != 0 || len % self.erase_size != 0 {
+        if !offset.is_multiple_of(self.erase_size) || !len.is_multiple_of(self.erase_size) {
             return Err(FlashError::InvalidSize);
         }
         let end = offset.checked_add(len).ok_or(FlashError::InvalidSize)?;
@@ -331,7 +331,7 @@ impl NorFlash for RegionView {
         state
             .device
             .erase(self.base + offset, len)
-            .map_err(|error| error)
+            
     }
 }
 
@@ -350,7 +350,7 @@ pub fn region_size(
     {
         return Err(Error::InvalidSize);
     }
-    if erase_size < DIRECTORY_SLOT_BYTES || erase_size > usize::MAX / 2 {
+    if !(DIRECTORY_SLOT_BYTES..=usize::MAX / 2).contains(&erase_size) {
         return Err(Error::InvalidSize);
     }
     let max_record = 16usize

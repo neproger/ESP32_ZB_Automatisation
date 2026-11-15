@@ -9,6 +9,12 @@ pub struct RemovalQueue {
     len: usize,
 }
 
+impl Default for RemovalQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RemovalQueue {
     pub const fn new() -> Self {
         Self {

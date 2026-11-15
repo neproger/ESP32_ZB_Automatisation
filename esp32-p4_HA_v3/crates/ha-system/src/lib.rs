@@ -157,10 +157,10 @@ fn publish_time(domain: &DomainHandle, minutes: u16, weekday: u8) {
 
 fn emit_ticks(domain: &DomainHandle, minutes: u16) {
     publish_event(domain, EVENT_MINUTE_TICK);
-    if minutes % 30 == 0 {
+    if minutes.is_multiple_of(30) {
         publish_event(domain, EVENT_HALF_HOUR_TICK);
     }
-    if minutes % 60 == 0 {
+    if minutes.is_multiple_of(60) {
         publish_event(domain, EVENT_HOUR_TICK);
         if minutes == 0 {
             publish_event(domain, EVENT_DAY_TICK);

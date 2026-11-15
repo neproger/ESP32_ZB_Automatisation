@@ -202,7 +202,8 @@ mod tests {
     const TARGET: u64 = 100;
     const POWER: u32 = PROPERTY_POWER;
 
-    fn setup() -> (DomainHandle, Arc<Mutex<Vec<Vec<u8>>>>, Receiver<Fact>) {
+    type Setup = (DomainHandle, Arc<Mutex<Vec<Vec<u8>>>>, Receiver<Fact>);
+    fn setup() -> Setup {
         let mut domain = Domain::new(64, 8, 64).unwrap();
         for desc in [
             EntityDesc {

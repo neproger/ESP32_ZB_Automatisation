@@ -1,4 +1,5 @@
 use super::*;
+pub(crate) type CommandHandler = Arc<dyn Fn(&[u8]) -> Result<()> + Send + Sync>;
 
 pub(crate) fn check_source(meta: &FactMeta) -> Result<()> {
     if meta.source >= 32 {
@@ -9,7 +10,7 @@ pub(crate) fn check_source(meta: &FactMeta) -> Result<()> {
 
 pub(crate) struct Command {
     command_type: u32,
-    handler: Arc<dyn Fn(&[u8]) -> Result<()> + Send + Sync>,
+    handler: CommandHandler,
 }
 
 #[derive(Clone)]
@@ -19,7 +20,7 @@ struct OwnedTarget {
 }
 
 pub(crate) struct PreparedCommand {
-    pub(crate) handler: Arc<dyn Fn(&[u8]) -> Result<()> + Send + Sync>,
+    pub(crate) handler: CommandHandler,
     pub(crate) args: Vec<u8>,
     target: Option<OwnedTarget>,
     meta: FactMeta,

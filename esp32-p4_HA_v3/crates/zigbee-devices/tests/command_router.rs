@@ -59,7 +59,6 @@ fn submits_by_entity_without_exposing_eui_or_zcl() {
             0,
         )
         .unwrap();
-    drop(router);
 
     let mut transport = FakeTransport::new();
     exec.tick(&mut transport, 0);
@@ -93,7 +92,6 @@ fn power_value_selects_on_action() {
             0,
         )
         .unwrap();
-    drop(router);
 
     let mut transport = FakeTransport::new();
     exec.tick(&mut transport, 0);
@@ -123,7 +121,6 @@ fn toggle_selects_onoff_toggle_command() {
             0,
         )
         .unwrap();
-    drop(router);
 
     let mut transport = FakeTransport::new();
     exec.tick(&mut transport, 0);

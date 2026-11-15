@@ -139,7 +139,7 @@ impl Claims {
             if claim.suppresses_standard {
                 suppressed = true;
             }
-            if best.map_or(true, |old| claim.owner > old.owner) {
+            if best.is_none_or(|old| claim.owner > old.owner) {
                 best = Some(claim);
             }
         }

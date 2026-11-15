@@ -738,6 +738,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn trigger(
             mut self,
             kind: u8,
@@ -812,7 +813,7 @@ mod tests {
         engine.on_event(50, 1, &Values::default(), &mut |command| {
             actions.push(command)
         });
-        let action = actions.iter().next().copied().unwrap();
+        let action = actions.first().copied().unwrap();
         assert_eq!(action.entity, 100);
         assert_eq!(action.action, ACTION_ON);
     }
@@ -943,7 +944,7 @@ mod tests {
                 );
             }
             engine
-                .add_rule(rule_index as u64, &builder.build())
+                .add_rule(rule_index, &builder.build())
                 .unwrap();
         }
         engine.build_index();

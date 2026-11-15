@@ -60,6 +60,7 @@ impl Fact {
         &self.key[..self.key_len as usize]
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         event_id: EventId,
         ts: u64,

@@ -337,7 +337,7 @@ fn restore_failure_is_atomic_and_retryable() {
         Err(Error::InvalidState)
     );
 
-    assert_eq!(*fail.lock().unwrap(), false);
+    assert!(!*fail.lock().unwrap());
     let report = domain.restore().unwrap();
     assert_eq!(report.entities.len(), 3);
     assert!(domain.take_maintenance().is_some());
@@ -677,7 +677,7 @@ fn restore_table_open_error_releases_region_and_retries() {
     assert_eq!(error.entity, ENTITY_GROUP);
     assert_eq!(error.phase, RestorePhase::TableOpen);
     assert_eq!(error.error, Error::InvalidState);
-    assert_eq!(*fail.lock().unwrap(), false);
+    assert!(!*fail.lock().unwrap());
 
     let report = domain.restore().unwrap();
     assert_eq!(report.entities.len(), 3);

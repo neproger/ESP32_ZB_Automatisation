@@ -158,7 +158,7 @@ pub fn match_definition(device: &DeviceIdentity<'_>) -> Option<&'static Definiti
         let definition = candidate(*index);
         for fingerprint in definition.fingerprints {
             let matched = fingerprint_matches(fingerprint, device);
-            if matched && selected.map_or(true, |(_, priority)| fingerprint.priority > priority) {
+            if matched && selected.is_none_or(|(_, priority)| fingerprint.priority > priority) {
                 selected = Some((definition, fingerprint.priority));
             }
         }

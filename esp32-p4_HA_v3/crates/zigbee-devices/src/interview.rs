@@ -210,7 +210,7 @@ impl InterviewManager {
                     let Some(ZdoData::ActiveEndpoints(endpoints)) = result.zdo else {
                         return self.failed(slot, now);
                     };
-                    if endpoints.len() == 0 || endpoints.len() > job.active.len() {
+                    if endpoints.is_empty() || endpoints.len() > job.active.len() {
                         return self.failed(slot, now);
                     }
                     for (index, endpoint) in endpoints.as_slice().iter().enumerate() {
@@ -263,8 +263,8 @@ impl InterviewManager {
     /// never delivered (bounded executor result queue or a lost event).
     pub fn tick(&mut self, exec: &mut Executor, now: u64) {
         let mut expired: [Option<(usize, u64)>; JOB_SLOTS] = [None; JOB_SLOTS];
-        for slot in 0..JOB_SLOTS {
-            let Some(job) = self.jobs[slot].as_mut() else {
+        for (slot, job) in self.jobs.iter_mut().enumerate() {
+            let Some(job) = job.as_mut() else {
                 continue;
             };
             if job.pending.is_some() && now.saturating_sub(job.started_at) >= OP_DEADLINE_MS {

@@ -551,7 +551,7 @@ mod tests {
             .union(Support::CONTROLLED),
     };
 
-    fn color_updates<'a>(profile: &Profile, payload: &'a [u8]) -> Vec<Update> {
+    fn color_updates(profile: &Profile, payload: &[u8]) -> Vec<Update> {
         let frame = AttributeFrameView::parse(0x0300, 1, 0x0A, payload).unwrap();
         let mut decoded = crate::Decoded::default();
         crate::decode_frame(profile, &frame, &mut decoded);
