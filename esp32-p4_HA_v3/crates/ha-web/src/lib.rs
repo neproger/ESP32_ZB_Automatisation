@@ -6,6 +6,8 @@
 //! payload. Interpretation stays in the browser, so no DTOs exist here either.
 //! `seq` belongs to a client session and is assigned by the sender.
 
+use ha_domain::canonical::{ActionId, CommandValue, EntityId, PropertyId};
+
 pub const VER: u8 = 3;
 
 /// Control frame types (outside the `ha_entity_t` range).
@@ -246,6 +248,24 @@ pub fn write_frame(out: &mut Vec<u8>, seq: u16, frame_type: u8, payload: &[u8]) 
     out.extend_from_slice(&seq.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(payload);
+}
+
+/// Inbound application callbacks. The transport owns framing; the app owner
+/// decides how commands and CRUD reach Domain/config/Device.
+pub trait Actions: Send + Sync {
+    fn command(
+        &self,
+        entity: EntityId,
+        property: PropertyId,
+        action: ActionId,
+        value: CommandValue,
+    ) -> Result<(), ha_domain::Error>;
+    fn upsert(&self, entity: u32, key: Vec<u8>, record: Vec<u8>) -> Result<(), ha_domain::Error>;
+    fn remove(&self, entity: u32, key: Vec<u8>) -> Result<(), ha_domain::Error>;
+    fn rename_entity(&self, entity: EntityId, name: String) -> Result<(), ha_domain::Error>;
+    fn rename_device(&self, device: u64, name: String) -> Result<(), ha_domain::Error>;
+    fn remove_device(&self, device: u64) -> Result<(), ha_domain::Error>;
+    fn open_network(&self, seconds: u8) -> i32;
 }
 
 /// `u32 count` payload of SYNC_BEGIN / SYNC_END.

@@ -441,9 +441,7 @@ pub fn decode_rule(record: &[u8]) -> AbiResult<RuleRecord> {
 /// V2 `SetAutomationEnabled`: decode the canonical rule, change only `enabled`,
 /// then encode it again. The same V2 normalization/malformed policy applies.
 pub fn set_enabled(record: &[u8], enabled: bool) -> AbiResult<[u8; RULE_RECORD_LEN]> {
-    let mut rule = decode_rule(record)?;
-    rule.enabled = u8::from(enabled);
-    rule.encode()
+    ha_domain::canonical::set_rule_enabled(record, enabled)
 }
 fn conditions_pass(rule: &Rule, source: EntityId, state: &dyn StateSource) -> bool {
     for condition in rule.conditions[..rule.condition_count].iter().flatten() {

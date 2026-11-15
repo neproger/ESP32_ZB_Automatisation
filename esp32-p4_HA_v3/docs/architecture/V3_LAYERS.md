@@ -79,7 +79,7 @@ app_main ──────────── собирает всё
 | `Zigbee adapter` | физический протокол | EUI64, endpoints, clusters, interview, bindings, ZCL, radio, private registry, commands, capability drain | Web, Display, Automation, Domain semantics |
 | `Automation` | сервис правил | правила, RAM-индекс, задача/inbox | Zigbee, Web, Display |
 | `Web` | транспорт canonical-модели | HTTP/WS, snapshot/delta, per-client delivery, своя задача/inbox | state ownership, Zigbee |
-| `ha-web-actions` | inbound web adapter | `Actions` → Domain/config/Device; discovery через Domain | Zigbee/radio, transport assertions |
+| `ha-web-actions` | inbound web adapter | `ha_web::Actions` → Domain/config/Device; discovery через Domain | Zigbee/radio, transport assertions |
 | `Display` | LVGL client | экраны, виджеты, Domain subscription, LVGL-таймер 20 мс (как V2), без отдельного потока | mstore, Zigbee |
 | `System` | системный сервис | SNTP, GeoIP, погода; canonical state/event | Zigbee, Web, Display |
 | `Wi-Fi` | владелец радио | scan/connect, Wi-Fi Domain-сущности, регистрирует свои команды | Zigbee, Web, Display |
@@ -99,7 +99,9 @@ EUI64/ZCL; adapter регистрирует в нём remover для своег�
   HTTP/WS handlers только парсят и кладут запросы в bounded-очереди,
   `/model.bin` и snapshot-очередь строятся из Domain без Web-кэша; `drain`/`flush`
   приватны. Сервер стартует после Wi-Fi IP. `ha-web-actions` реализует
-  `Actions`.
+  `ha_web::Actions` (trait живёт в ha-web, adapter не зависит от сервиса).
+- `ha-display` зависит только от Domain/ha-model; включение автоматизации и
+  Wi-Fi connect кодируются canonical-хелперами, а не сервисами.
 - `ha-zigbee-service` держит interviewer/commands/capabilities, C radio
   start/run; `State` приватный.
 - `ha-wifi` держит Wi-Fi task и регистрирует `COMMAND_WIFI_*`.

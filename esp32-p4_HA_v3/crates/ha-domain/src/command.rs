@@ -98,7 +98,7 @@ impl Domain {
 
     /// Crate-internal direct hand-off for unit tests only; production clients
     /// must use `DomainHandle::post` so the executor runs outside the mutex.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn post(
         &mut self,
         command_type: u32,

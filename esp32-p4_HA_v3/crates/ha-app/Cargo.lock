@@ -838,9 +838,7 @@ dependencies = [
  "bindgen 0.71.1",
  "embuild",
  "esp-idf-svc",
- "ha-automation",
  "ha-domain",
- "ha-wifi",
  "log",
 ]
 
@@ -896,7 +894,7 @@ dependencies = [
  "ha-config",
  "ha-device",
  "ha-domain",
- "ha-web-service",
+ "ha-web",
  "log",
 ]
 

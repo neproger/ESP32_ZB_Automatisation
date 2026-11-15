@@ -6,7 +6,6 @@
 //! service only enqueues scan/connect intents and publishes canonical
 //! WIFI_STATUS/SCAN records for Display/Web consumers.
 
-use std::ffi::CStr;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -93,34 +92,9 @@ fn send(command: Command) -> Result<(), ha_domain::Error> {
         .map_err(|_| ha_domain::Error::NoSpace)
 }
 
-/// `ha_wifi_connect_args_t` (96 bytes): ssid[32], password[64].
-pub fn encode_connect(ssid: &str, password: &str) -> [u8; 96] {
-    let mut out = [0u8; 96];
-    let ssid = ssid.as_bytes();
-    let password = password.as_bytes();
-    out[..ssid.len().min(WIFI_SSID_MAX)].copy_from_slice(&ssid[..ssid.len().min(WIFI_SSID_MAX)]);
-    out[WIFI_SSID_MAX..WIFI_SSID_MAX + password.len().min(WIFI_PASSWORD_MAX)]
-        .copy_from_slice(&password[..password.len().min(WIFI_PASSWORD_MAX)]);
-    out
-}
-
-pub fn decode_connect(args: &[u8]) -> Option<(String, String)> {
-    if args.len() != 96 {
-        return None;
-    }
-    let ssid = CStr::from_bytes_until_nul(&args[..WIFI_SSID_MAX])
-        .ok()?
-        .to_string_lossy()
-        .into_owned();
-    let password = CStr::from_bytes_until_nul(&args[WIFI_SSID_MAX..])
-        .ok()?
-        .to_string_lossy()
-        .into_owned();
-    Some((ssid, password))
-}
-
 pub fn connect_from_args(args: &[u8]) -> Result<(), ha_domain::Error> {
-    let (ssid, password) = decode_connect(args).ok_or(ha_domain::Error::InvalidSize)?;
+    let (ssid, password) =
+        ha_domain::canonical::decode_wifi_connect(args).ok_or(ha_domain::Error::InvalidSize)?;
     if ssid.is_empty() {
         return Err(ha_domain::Error::InvalidArg);
     }

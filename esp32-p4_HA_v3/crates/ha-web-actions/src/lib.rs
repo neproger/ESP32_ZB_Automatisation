@@ -5,7 +5,7 @@ use ha_domain::canonical::{
     COMMAND_PROPERTY, SOURCE_UI,
 };
 use ha_domain::{DomainHandle, FactMeta, Value};
-use ha_web_service::Actions;
+use ha_web::Actions;
 
 pub struct WebActions {
     domain: DomainHandle,

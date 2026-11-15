@@ -343,7 +343,7 @@ fn post_automation(automation: u64, enabled: bool) -> Result<(), ha_domain::Erro
     let mut record = [0u8; AUTOMATION_RECORD_LEN];
     domain.entity_get(ENTITY_AUTOMATION, &key, &mut record)?;
     let record =
-        ha_automation::set_enabled(&record, enabled).map_err(|_| ha_domain::Error::InvalidState)?;
+        ha_domain::canonical::set_rule_enabled(&record, enabled).map_err(|_| ha_domain::Error::InvalidState)?;
     domain.entity_put(
         ENTITY_AUTOMATION,
         &key,
@@ -359,7 +359,7 @@ fn post_automation(automation: u64, enabled: bool) -> Result<(), ha_domain::Erro
 fn post_wifi_connect(ssid: &str, password: &str) -> Result<(), ha_domain::Error> {
     domain()?.post(
         COMMAND_WIFI_CONNECT,
-        &ha_wifi::encode_connect(ssid, password),
+        &ha_domain::canonical::encode_wifi_connect(ssid, password),
         None,
         FactMeta {
             source: SOURCE_UI as u8,

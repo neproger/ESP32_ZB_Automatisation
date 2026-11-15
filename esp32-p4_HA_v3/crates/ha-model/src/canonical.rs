@@ -257,6 +257,7 @@ pub const WIFI_SCAN_MAX: usize = 16;
 pub const WIFI_KNOWN_MAX: usize = 8;
 pub const WIFI_SCAN_RECORD_LEN: usize = 4 + WIFI_SCAN_MAX * 36;
 pub const WIFI_KNOWN_RECORD_LEN: usize = 96;
+pub const WIFI_CONNECT_ARGS_LEN: usize = WIFI_SSID_MAX + WIFI_PASSWORD_MAX;
 pub const WIFI_STATUS_RECORD_LEN: usize = 36;
 pub const SETTINGS_KEY_LEN: usize = 1;
 pub const SETTINGS_RECORD_LEN: usize = 8;
@@ -873,6 +874,35 @@ impl WifiKnownRecord {
                 .ok()?,
         })
     }
+}
+
+/// `ha_wifi_connect_args_t` (96): ssid[32], password[64].
+pub fn encode_wifi_connect(ssid: &str, password: &str) -> [u8; WIFI_CONNECT_ARGS_LEN] {
+    let mut out = [0u8; WIFI_CONNECT_ARGS_LEN];
+    let ssid = ssid.as_bytes();
+    let password = password.as_bytes();
+    // Keep one byte for the NUL terminator so decode_wifi_connect can read it.
+    let ssid_len = ssid.len().min(WIFI_SSID_MAX - 1);
+    let password_len = password.len().min(WIFI_PASSWORD_MAX - 1);
+    out[..ssid_len].copy_from_slice(&ssid[..ssid_len]);
+    out[WIFI_SSID_MAX..WIFI_SSID_MAX + password_len]
+        .copy_from_slice(&password[..password_len]);
+    out
+}
+
+pub fn decode_wifi_connect(args: &[u8]) -> Option<(String, String)> {
+    if args.len() != WIFI_CONNECT_ARGS_LEN {
+        return None;
+    }
+    let ssid = std::ffi::CStr::from_bytes_until_nul(&args[..WIFI_SSID_MAX])
+        .ok()?
+        .to_string_lossy()
+        .into_owned();
+    let password = std::ffi::CStr::from_bytes_until_nul(&args[WIFI_SSID_MAX..])
+        .ok()?
+        .to_string_lossy()
+        .into_owned();
+    Some((ssid, password))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1528,6 +1558,12 @@ impl RuleRecord {
     }
 }
 
+pub fn set_rule_enabled(record: &[u8], enabled: bool) -> AbiResult<[u8; RULE_RECORD_LEN]> {
+    let mut rule = RuleRecord::decode(record)?;
+    rule.enabled = u8::from(enabled);
+    rule.encode()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1581,6 +1617,22 @@ mod tests {
         let bytes = known.encode();
         assert_eq!(bytes.len(), WIFI_KNOWN_RECORD_LEN);
         assert_eq!(WifiKnownRecord::decode(&bytes), Some(known));
+    }
+
+    #[test]
+    fn wifi_connect_args_roundtrip_and_truncate() {
+        let bytes = encode_wifi_connect("HomeNet", "secret");
+        assert_eq!(bytes.len(), WIFI_CONNECT_ARGS_LEN);
+        assert_eq!(
+            decode_wifi_connect(&bytes),
+            Some(("HomeNet".to_string(), "secret".to_string()))
+        );
+
+        let long = "x".repeat(100);
+        let bytes = encode_wifi_connect(&long, &long);
+        let (ssid, password) = decode_wifi_connect(&bytes).unwrap();
+        assert_eq!(ssid.len(), WIFI_SSID_MAX - 1);
+        assert_eq!(password.len(), WIFI_PASSWORD_MAX - 1);
     }
 
     #[test]

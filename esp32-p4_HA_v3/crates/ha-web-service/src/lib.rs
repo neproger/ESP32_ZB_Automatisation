@@ -16,7 +16,7 @@ use ha_domain::{DomainHandle, Fact, FactKind, Filter};
 
 mod session;
 mod snapshot;
-use ha_web::{command, control, write_frame};
+use ha_web::{command, control, write_frame, Actions};
 use session::{broadcast_one, close_client, enqueue_snapshot_frame};
 use snapshot::*;
 
@@ -79,24 +79,6 @@ enum ActionRequest {
 struct SnapshotRequest {
     fd: i32,
     state_only: bool,
-}
-
-/// Application callbacks the transport delegates to. Web never mutates Domain
-/// directly; the owner handles commands through its service queue.
-pub trait Actions: Send + Sync {
-    fn command(
-        &self,
-        entity: EntityId,
-        property: PropertyId,
-        action: ActionId,
-        value: CommandValue,
-    ) -> Result<(), ha_domain::Error>;
-    fn upsert(&self, entity: u32, key: Vec<u8>, record: Vec<u8>) -> Result<(), ha_domain::Error>;
-    fn remove(&self, entity: u32, key: Vec<u8>) -> Result<(), ha_domain::Error>;
-    fn rename_entity(&self, entity: EntityId, name: String) -> Result<(), ha_domain::Error>;
-    fn rename_device(&self, device: u64, name: String) -> Result<(), ha_domain::Error>;
-    fn remove_device(&self, device: u64) -> Result<(), ha_domain::Error>;
-    fn open_network(&self, seconds: u8) -> i32;
 }
 
 fn actions() -> Option<&'static dyn Actions> {
