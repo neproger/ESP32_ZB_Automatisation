@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ha_domain::canonical::{
-    CanonicalCommand, COMMAND_DISCOVERY, COMMAND_PROPERTY, ENTITY_CAPABILITIES, ENTITY_ENTITY,
+    CanonicalCommand, COMMAND_DISCOVERY, COMMAND_PROPERTY, ENTITY_ENTITY,
     SOURCE_ZIGBEE,
 };
 use ha_domain::{DomainHandle, FactMeta, FactTarget, Value};
@@ -409,18 +409,13 @@ fn register_domain(
             ha_device::ensure_entity(transaction, SOURCE_ZIGBEE as u8, device, entity, name)?;
         let caps_changed = match standard_endpoint {
             Some(descriptor) => {
-                if transaction
-                    .entity_meta(ENTITY_CAPABILITIES, &entity.to_le_bytes())
-                    .is_ok()
-                {
-                    false
-                } else {
-                    let caps = zigbee_devices::standard::capabilities_confirmed(
-                        &descriptor,
-                        &zigbee_devices::standard::Confirmed::new(),
-                    );
-                    ha_device::set_capabilities(transaction, SOURCE_ZIGBEE as u8, entity, &caps)?
-                }
+                let caps = zigbee_devices::standard::capabilities_advertised(&descriptor);
+                log::info!(
+                    "domain: caps entity={entity:016x} properties={} events={}",
+                    caps.property_count,
+                    caps.event_count
+                );
+                ha_device::set_capabilities(transaction, SOURCE_ZIGBEE as u8, entity, &caps)?
             }
             None => {
                 let caps = zigbee_devices::profile_capabilities(profile);

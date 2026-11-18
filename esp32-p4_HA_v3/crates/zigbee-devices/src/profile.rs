@@ -15,10 +15,10 @@ use crate::descriptor::EndpointDescriptor;
 use crate::projection::profile_capabilities;
 use crate::zcl::{self, Confirmed};
 
-pub fn capabilities_for(
+fn capabilities(
     profile: &Profile,
     endpoint: Option<&EndpointDescriptor>,
-    confirmed: &Confirmed,
+    confirmed: Option<&Confirmed>,
 ) -> CapabilitiesRecord {
     let all = profile_capabilities(profile);
     let mut out = CapabilitiesRecord::default();
@@ -30,16 +30,18 @@ pub fn capabilities_for(
             if !endpoint.has_server(cluster) {
                 continue;
             }
-            // OnOff OnOff is mandatory for an OnOff server. Requiring a read
-            // before the first automation command makes startup/button presses
-            // fail with InvalidArg until the configure walk reaches the device.
-            let onoff_is_mandatory = capability.property == PROPERTY_POWER && cluster == zcl::ONOFF;
-            if !onoff_is_mandatory
-                && !attributes
-                    .iter()
-                    .any(|attribute| confirmed.is_confirmed(endpoint.endpoint, cluster, *attribute))
-            {
-                continue;
+            if let Some(confirmed) = confirmed {
+                // Commands need a confirmed attribute; the UI must not wait
+                // for a state report to show an advertised control.
+                let onoff_is_mandatory =
+                    capability.property == PROPERTY_POWER && cluster == zcl::ONOFF;
+                if !onoff_is_mandatory
+                    && !attributes.iter().any(|attribute| {
+                        confirmed.is_confirmed(endpoint.endpoint, cluster, *attribute)
+                    })
+                {
+                    continue;
+                }
             }
         }
         out.push(*capability);
@@ -48,6 +50,18 @@ pub fn capabilities_for(
         out.push_event(*event);
     }
     out
+}
+
+pub fn capabilities_for(
+    profile: &Profile,
+    endpoint: Option<&EndpointDescriptor>,
+    confirmed: &Confirmed,
+) -> CapabilitiesRecord {
+    capabilities(profile, endpoint, Some(confirmed))
+}
+
+pub fn capabilities_advertised(endpoint: &EndpointDescriptor) -> CapabilitiesRecord {
+    capabilities(&STANDARD_PROFILE, Some(endpoint), None)
 }
 
 pub fn capabilities_confirmed(
@@ -140,4 +154,43 @@ pub fn decode_standard(
         return None;
     }
     z2m_rs::decode(&STANDARD_PROFILE, event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::descriptor::ClusterRole;
+    use crate::zcl::{COLOR, LEVEL, ONOFF};
+
+    fn color_endpoint() -> EndpointDescriptor {
+        let mut endpoint = EndpointDescriptor::new(1, 0x0104, 0x0102);
+        assert!(endpoint.push(ONOFF, ClusterRole::Server));
+        assert!(endpoint.push(LEVEL, ClusterRole::Server));
+        assert!(endpoint.push(COLOR, ClusterRole::Server));
+        endpoint
+    }
+
+    fn properties(caps: &CapabilitiesRecord) -> Vec<PropertyId> {
+        caps.properties[..usize::from(caps.property_count)]
+            .iter()
+            .map(|capability| capability.property)
+            .collect()
+    }
+
+    #[test]
+    fn advertised_capabilities_do_not_wait_for_state_reports() {
+        let caps = capabilities_advertised(&color_endpoint());
+        let properties = properties(&caps);
+        assert!(properties.contains(&PROPERTY_POWER));
+        assert!(properties.contains(&PROPERTY_BRIGHTNESS));
+        assert!(properties.contains(&PROPERTY_COLOR_TEMPERATURE));
+        assert!(properties.contains(&PROPERTY_COLOR));
+    }
+
+    #[test]
+    fn command_capabilities_still_require_confirmation() {
+        let caps = capabilities_confirmed(&color_endpoint(), &Confirmed::new());
+        assert_eq!(caps.property_count, 1);
+        assert_eq!(properties(&caps), vec![PROPERTY_POWER]);
+    }
 }

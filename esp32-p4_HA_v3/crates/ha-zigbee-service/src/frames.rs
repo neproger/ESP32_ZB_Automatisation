@@ -169,10 +169,9 @@ pub fn ingest(
                     }
                 }
             }
-            let confirmed = crate::interview::confirmed(eui);
             sink.capabilities(
                 entity,
-                zigbee_devices::standard::capabilities_confirmed(ep, &confirmed),
+                zigbee_devices::standard::capabilities_advertised(ep),
             );
         }
     }

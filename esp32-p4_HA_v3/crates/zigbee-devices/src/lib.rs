@@ -46,7 +46,7 @@ pub use registry::{RecordSlot, Registry};
 pub use removal_queue::{RemovalQueue, REMOVAL_QUEUE_CAPACITY};
 pub mod standard {
     pub use crate::profile::{
-        capabilities_confirmed, capability_allows, decode_standard, update_capability,
+        capabilities_advertised, capabilities_confirmed, capability_allows, decode_standard, update_capability,
         update_is_discovered,
     };
     pub use crate::zcl::{
@@ -60,7 +60,7 @@ pub use profile::{capabilities_for, command_allowed};
 #[allow(unused_imports)]
 pub use standard::STANDARD_PROFILE;
 pub use standard::{
-    attribute_capability, capabilities_confirmed, capability_allows, decode_standard,
+    attribute_capability, capabilities_advertised, capabilities_confirmed, capability_allows, decode_standard,
     update_capability, update_is_discovered, Confirmed, MAX_CONFIRMED_ATTRIBUTES,
     STANDARD_PROFILE_ID,
 };
