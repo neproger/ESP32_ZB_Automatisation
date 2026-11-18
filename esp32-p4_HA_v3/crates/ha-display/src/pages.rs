@@ -1,5 +1,36 @@
 use super::*;
 
+unsafe fn control_context(
+    entity: EntityId,
+    property: PropertyId,
+    control: *mut lv_obj_t,
+) -> *mut CmdCtx {
+    Box::into_raw(Box::new(CmdCtx {
+        entity,
+        property,
+        control,
+        locked: AtomicBool::new(false),
+        syncing: AtomicBool::new(false),
+        has_last: AtomicBool::new(false),
+        last_bits: AtomicU32::new(0),
+        deadline: Mutex::new(None),
+    }))
+}
+
+unsafe fn attach_control(
+    control: *mut lv_obj_t,
+    context: *mut CmdCtx,
+    code: lv_event_code_t,
+) {
+    lv_obj_add_event_cb(control, Some(on_control), code, context as *mut _);
+    lv_obj_add_event_cb(
+        control,
+        Some(free_context),
+        lv_event_code_t_LV_EVENT_DELETE,
+        context as *mut _,
+    );
+}
+
 unsafe fn build_widget(
     domain: &DomainHandle,
     row: *mut lv_obj_t,
@@ -11,33 +42,12 @@ unsafe fn build_widget(
     let state = read_state(domain, entity, property);
     match kind {
         WidgetKind::Switch => {
-            let control = lv_switch_create(row);
-            lv_obj_set_size(control, 80, 40);
-            if state.as_ref().and_then(Value::as_bool).unwrap_or(false) {
-                lv_obj_add_state(control, lv_state_t_LV_STATE_CHECKED);
-            }
-            let context = Box::into_raw(Box::new(CmdCtx {
-                entity,
-                property,
-                control,
-                locked: AtomicBool::new(false),
-                syncing: AtomicBool::new(false),
-                has_last: AtomicBool::new(false),
-                last_bits: AtomicU32::new(0),
-                deadline: Mutex::new(None),
-            }));
-            lv_obj_add_event_cb(
-                control,
-                Some(on_control),
-                lv_event_code_t_LV_EVENT_VALUE_CHANGED,
-                context as *mut _,
+            let control = switch_control(
+                row,
+                state.as_ref().and_then(Value::as_bool).unwrap_or(false),
             );
-            lv_obj_add_event_cb(
-                control,
-                Some(free_context),
-                lv_event_code_t_LV_EVENT_DELETE,
-                context as *mut _,
-            );
+            let context = control_context(entity, property, control);
+            attach_control(control, context, lv_event_code_t_LV_EVENT_VALUE_CHANGED);
             widgets.push(WidgetEntry {
                 entity,
                 property,
@@ -48,47 +58,24 @@ unsafe fn build_widget(
             });
         }
         WidgetKind::Slider => {
-            let control = lv_slider_create(row);
-            lv_obj_set_size(control, 170, 16);
             let (min, max) = if property == PROPERTY_COLOR_TEMPERATURE {
                 (2000, 6500)
             } else {
                 (0, 100)
             };
-            lv_slider_set_range(control, min, max);
             let initial = state
                 .as_ref()
                 .and_then(numeric)
                 .unwrap_or(min as f32)
                 .round() as i32;
-            lv_slider_set_value(control, initial.clamp(min, max), false);
             let text = state
                 .as_ref()
                 .map(|value| format_value(property, value))
                 .unwrap_or_else(|| "—".into());
-            let value_label = label(row, &text, font_20(), COL_TEXT);
-            let context = Box::into_raw(Box::new(CmdCtx {
-                entity,
-                property,
-                control,
-                locked: AtomicBool::new(false),
-                syncing: AtomicBool::new(false),
-                has_last: AtomicBool::new(false),
-                last_bits: AtomicU32::new(0),
-                deadline: Mutex::new(None),
-            }));
-            lv_obj_add_event_cb(
-                control,
-                Some(on_control),
-                lv_event_code_t_LV_EVENT_RELEASED,
-                context as *mut _,
-            );
-            lv_obj_add_event_cb(
-                control,
-                Some(free_context),
-                lv_event_code_t_LV_EVENT_DELETE,
-                context as *mut _,
-            );
+            let (control, value_label) =
+                slider_control(row, 170, min, max, initial, &text);
+            let context = control_context(entity, property, control);
+            attach_control(control, context, lv_event_code_t_LV_EVENT_RELEASED);
             widgets.push(WidgetEntry {
                 entity,
                 property,
@@ -103,7 +90,7 @@ unsafe fn build_widget(
                 .as_ref()
                 .map(|value| format_value(property, value))
                 .unwrap_or_else(|| "—".into());
-            let value_label = label(row, &text, font_32(), COL_TEXT);
+            let value_label = value_control(row, &text);
             widgets.push(WidgetEntry {
                 entity,
                 property,
@@ -120,10 +107,9 @@ unsafe fn build_color_widget(
     domain: &DomainHandle,
     card: *mut lv_obj_t,
     entity: EntityId,
-    widgets: &mut Vec<WidgetEntry>,
     colors: &mut Vec<ColorEntry>,
 ) {
-    let column = transparent_box(card, 400, 200);
+    let column = transparent_box(card, 400, 170);
     lv_obj_set_flex_flow(column, lv_flex_flow_t_LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(column, 8, 0);
     lv_obj_set_flex_align(
@@ -152,56 +138,25 @@ unsafe fn build_color_widget(
     lv_obj_set_style_bg_color(swatch, color(rgb_hex(r, g, b)), 0);
     let (hue, sat, _) = rgb8_to_hsv(r, g, b);
 
-    let hue_row = transparent_box(column, 400, 40);
-    lv_obj_set_flex_flow(hue_row, lv_flex_flow_t_LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
+    let hue_row = widget_row(column, "Оттенок");
+    let (hue_slider, hue_label) = slider_control(
         hue_row,
-        lv_flex_align_t_LV_FLEX_ALIGN_SPACE_BETWEEN,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-    );
-    label(hue_row, "Оттенок", font_20(), COL_MUTED);
-    let hue_slider = lv_slider_create(hue_row);
-    lv_obj_set_size(hue_slider, 190, 16);
-    lv_slider_set_range(hue_slider, 0, 359);
-    lv_slider_set_value(hue_slider, hue.round() as i32, false);
-    let hue_label = label(
-        hue_row,
+        190,
+        0,
+        359,
+        hue.round() as i32,
         &format!("{}°", hue.round() as i32),
-        font_20(),
-        COL_TEXT,
     );
 
-    let sat_row = transparent_box(column, 400, 40);
-    lv_obj_set_flex_flow(sat_row, lv_flex_flow_t_LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
+    let sat_row = widget_row(column, "Насыщенность");
+    let (sat_slider, sat_label) = slider_control(
         sat_row,
-        lv_flex_align_t_LV_FLEX_ALIGN_SPACE_BETWEEN,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-    );
-    label(sat_row, "Насыщенность", font_20(), COL_MUTED);
-    let sat_slider = lv_slider_create(sat_row);
-    lv_obj_set_size(sat_slider, 160, 16);
-    lv_slider_set_range(sat_slider, 0, 100);
-    lv_slider_set_value(sat_slider, (sat * 100.0).round() as i32, false);
-    let sat_label = label(
-        sat_row,
+        160,
+        0,
+        100,
+        (sat * 100.0).round() as i32,
         &format!("{} %", (sat * 100.0).round() as i32),
-        font_20(),
-        COL_TEXT,
     );
-
-    let bright_row = transparent_box(column, 400, 40);
-    lv_obj_set_flex_flow(bright_row, lv_flex_flow_t_LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
-        bright_row,
-        lv_flex_align_t_LV_FLEX_ALIGN_SPACE_BETWEEN,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-    );
-    label(bright_row, "Яркость", font_20(), COL_MUTED);
-    build_widget(domain, bright_row, entity, PROPERTY_BRIGHTNESS, widgets);
 
     for slider in [hue_slider, sat_slider] {
         let context = Box::into_raw(Box::new(ColorCtx {
@@ -245,32 +200,17 @@ unsafe fn build_color_widget(
 }
 
 unsafe fn build_automation_card(
-    domain: &DomainHandle,
     parent: *mut lv_obj_t,
-    automation: u64,
-    title: &str,
+    item: &AutomationItem,
     automations: &mut Vec<AutoEntry>,
 ) {
-    let card = transparent_box(parent, CARD_W, 76);
-    lv_obj_set_style_bg_color(card, color(COL_CARD), 0);
-    lv_obj_set_style_bg_opa(card, 255, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 12, 0);
-    lv_obj_set_flex_flow(card, lv_flex_flow_t_LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
-        card,
-        lv_flex_align_t_LV_FLEX_ALIGN_SPACE_BETWEEN,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-    );
-    let title_label = label(card, title, font_20(), COL_TEXT);
+    let (card, title_label) = widget_card(parent, &item.title, 138);
+    let row = widget_row(card, "Активировать");
+    let control = switch_control(row, item.enabled);
 
-    let control = lv_switch_create(card);
-    lv_obj_set_size(control, 80, 40);
-    if automation_enabled(domain, automation) {
-        lv_obj_add_state(control, lv_state_t_LV_STATE_CHECKED);
-    }
-    let context = Box::into_raw(Box::new(AutoCtx { automation }));
+    let context = Box::into_raw(Box::new(AutoCtx {
+        automation: item.automation,
+    }));
     lv_obj_add_event_cb(
         control,
         Some(on_automation),
@@ -284,7 +224,7 @@ unsafe fn build_automation_card(
         context as *mut _,
     );
     automations.push(AutoEntry {
-        automation,
+        automation: item.automation,
         title: title_label,
         switch: control,
     });
@@ -306,39 +246,17 @@ unsafe fn build_card(
     };
     let mut rows_height = 0;
     for property in &properties {
-        rows_height += if *property == PROPERTY_COLOR { 200 } else { 46 };
+        rows_height += if *property == PROPERTY_COLOR { 170 } else { 46 };
     }
     let spacing = properties.len() as i32 * 8;
-    let card = transparent_box(parent, CARD_W, 72 + rows_height + spacing);
-    lv_obj_set_style_bg_color(card, color(COL_CARD), 0);
-    lv_obj_set_style_bg_opa(card, 255, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 12, 0);
-    lv_obj_set_style_pad_row(card, 8, 0);
-    lv_obj_set_flex_flow(card, lv_flex_flow_t_LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(
-        card,
-        0,
-        lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        lv_flex_align_t_LV_FLEX_ALIGN_START,
-    );
-
-    label(card, &name, font_20(), COL_TEXT);
+    let (card, _) = widget_card(parent, &name, 84 + rows_height + spacing);
 
     for property in properties {
         if property == PROPERTY_COLOR {
-            build_color_widget(domain, card, entity, widgets, colors);
+            build_color_widget(domain, card, entity, colors);
             continue;
         }
-        let row = transparent_box(card, 400, 46);
-        lv_obj_set_flex_flow(row, lv_flex_flow_t_LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(
-            row,
-            lv_flex_align_t_LV_FLEX_ALIGN_SPACE_BETWEEN,
-            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
-        );
-        label(row, property_name(property), font_20(), COL_MUTED);
+        let row = widget_row(card, property_name(property));
         build_widget(domain, row, entity, property, widgets);
     }
 }
@@ -394,13 +312,9 @@ pub(crate) unsafe fn build_page(domain: &DomainHandle, groups: &[GroupRef], inde
                     &mut widgets,
                     &mut colors,
                 ),
-                PageItem::Automation(item) => build_automation_card(
-                    domain,
-                    list,
-                    item.automation,
-                    &item.title,
-                    &mut automations,
-                ),
+                PageItem::Automation(item) => {
+                    build_automation_card(list, &item, &mut automations)
+                }
             }
         }
 

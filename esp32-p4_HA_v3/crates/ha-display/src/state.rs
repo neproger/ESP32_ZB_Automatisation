@@ -406,7 +406,7 @@ fn refresh_automation(domain: &DomainHandle, automation: u64) {
     unsafe {
         for (title, switch) in entries {
             if rule.name[0] != 0 {
-                set_label(title, &c_string(&rule.name));
+                set_label(title, &shorten(&c_string(&rule.name), 24));
             }
             if rule.enabled != 0 {
                 lv_obj_add_state(switch, lv_state_t_LV_STATE_CHECKED);

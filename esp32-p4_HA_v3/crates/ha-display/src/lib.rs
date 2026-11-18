@@ -22,9 +22,12 @@ use std::time::{Duration, Instant};
 
 use ha_domain::canonical::{
     CanonicalCommand, CapabilitiesRecord, CommandValue, EntityId, EntityRecord, GroupAutomationKey,
-    GroupItemKey, GroupItemRecord, GroupKey, GroupRecord, LocationRecord, PropertyId, RuleRecord,
-    SettingsRecord, StateKey, WeatherRecord, WifiScanRecord, WifiStatusRecord, ACTION_OFF,
-    ACTION_ON, ACTION_SET, AUTOMATION_RECORD_LEN, CAPABILITIES_LEN, COMMAND_AUTOMATION_ENABLE, COMMAND_PROPERTY, COMMAND_SETTINGS, COMMAND_WIFI_CONNECT, COMMAND_WIFI_SCAN, ENTITY_AUTOMATION, ENTITY_CAPABILITIES, ENTITY_ENTITY,
+    GroupItemKey, GroupItemRecord, GroupKey, GroupRecord, LocationRecord, PropertyId,
+    RuleRecord, SettingsRecord, StateKey, WeatherRecord, WifiScanRecord,
+    WifiStatusRecord, ACTION_OFF, ACTION_ON, ACTION_SET, AUTOMATION_RECORD_LEN,
+    CAPABILITIES_LEN, COMMAND_AUTOMATION_ENABLE, COMMAND_PROPERTY, COMMAND_SETTINGS,
+    COMMAND_WIFI_CONNECT, COMMAND_WIFI_SCAN, ENTITY_AUTOMATION, ENTITY_CAPABILITIES,
+    ENTITY_ENTITY,
     ENTITY_GROUP, ENTITY_GROUP_AUTOMATION, ENTITY_GROUP_ITEM, ENTITY_LOCATION,
     ENTITY_LOGICAL_DEVICE, ENTITY_PROPERTY_STATE, ENTITY_SETTINGS, ENTITY_SYSTEM, ENTITY_WEATHER,
     ENTITY_WIFI_SCAN, ENTITY_WIFI_STATUS, LOCATION_RECORD_LEN, PROPERTY_BATTERY_PERCENT,
@@ -45,6 +48,7 @@ mod model;
 mod settings;
 mod wifi;
 mod pages;
+mod widgets;
 mod commands;
 mod menu;
 mod status;
@@ -54,6 +58,7 @@ use model::*;
 use settings::*;
 use wifi::*;
 use pages::{build_page, replace_page};
+use widgets::*;
 use commands::{post_automation, post_property, post_settings, post_wifi_connect};
 use menu::{build_menu, hide_menu, on_bar_pressed, on_bar_released};
 use status::{build_status_bar, set_clock, set_location, set_weather, set_wifi, sync_clock};

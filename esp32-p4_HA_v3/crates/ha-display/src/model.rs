@@ -88,6 +88,7 @@ pub(super) struct AutomationItem {
     pub(super) order: u16,
     pub(super) automation: u64,
     pub(super) title: String,
+    pub(super) enabled: bool,
 }
 
 pub(super) fn collect_group_automations(domain: &DomainHandle, group: u64) -> Vec<AutomationItem> {
@@ -108,14 +109,42 @@ pub(super) fn collect_group_automations(domain: &DomainHandle, group: u64) -> Ve
         if key.group_id != group {
             continue;
         }
+        let mut bytes = [0u8; AUTOMATION_RECORD_LEN];
+        let rule = domain
+            .entity_get(ENTITY_AUTOMATION, &key.automation_id.to_le_bytes(), &mut bytes)
+            .ok()
+            .and_then(|_| RuleRecord::decode(&bytes).ok());
+        let mut title = rule
+            .as_ref()
+            .map(|rule| c_string(&rule.name))
+            .unwrap_or_default();
+        if title.is_empty() {
+            title = c_string(&record.title);
+        }
+        if title.is_empty() {
+            title = "Автоматизация".into();
+        }
         items.push(AutomationItem {
             automation: key.automation_id,
             order: record.order,
-            title: c_string(&record.title),
+            title,
+            enabled: rule.as_ref().is_some_and(|rule| rule.enabled != 0),
         });
     }
     items.sort_by_key(|item| item.order);
     items
+}
+
+pub(super) fn shorten(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 pub(super) enum PageItem {
@@ -144,16 +173,6 @@ pub(super) fn collect_page_items(domain: &DomainHandle, group: u64) -> Vec<PageI
     out
 }
 
-pub(super) fn automation_enabled(domain: &DomainHandle, automation: u64) -> bool {
-    let mut bytes = [0u8; AUTOMATION_RECORD_LEN];
-    if domain
-        .entity_get(ENTITY_AUTOMATION, &automation.to_le_bytes(), &mut bytes)
-        .is_err()
-    {
-        return false;
-    }
-    RuleRecord::decode(&bytes).is_ok_and(|rule| rule.enabled != 0)
-}
 
 pub(super) fn entity_name(domain: &DomainHandle, entity: EntityId) -> String {
     let mut bytes = [0u8; ha_domain::canonical::ENTITY_RECORD_LEN];
